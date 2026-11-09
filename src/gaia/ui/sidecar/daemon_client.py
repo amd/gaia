@@ -62,22 +62,14 @@ class SidecarHandle:
     agent_version: Optional[str]
     mode: Optional[str]
     pid: Optional[int]
-    #: Which sidecar this handle is for. Defaults to email so every
-    #: pre-#4161 construction (tests, the email REST router) is unchanged.
-    agent_id: str = "email"
+    #: Which sidecar this handle is for.
+    agent_id: str
 
     def proxy(self, **kwargs):
-        """Build the request proxy for THIS handle's agent.
-
-        Email gets its mailbox/calendar subclass; every other sidecar gets the
-        agent-agnostic transport, so a flagship proxy cannot offer a mailbox
-        route it would only 404 on.
-        """
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy, SidecarProxy
+        """Build the request proxy for THIS handle's agent."""
+        from gaia.ui.sidecar.proxy import SidecarProxy
 
         kwargs.setdefault("auth_token", self.token)
-        if self.agent_id == "email":
-            return EmailSidecarProxy(self.base_url, **kwargs)
         return SidecarProxy(self.base_url, agent_id=self.agent_id, **kwargs)
 
 
@@ -119,7 +111,7 @@ def _error_detail(response) -> str:
     return f"HTTP {response.status_code}"
 
 
-def acquire_handle(agent_id: str = "email") -> SidecarHandle:
+def acquire_handle(agent_id: str) -> SidecarHandle:
     """Spawn-or-attach *agent_id*'s sidecar via the daemon; return a handle.
 
     Blocking (daemon start + sidecar spawn + possible first-run binary fetch)
@@ -170,7 +162,7 @@ def acquire_handle(agent_id: str = "email") -> SidecarHandle:
     )
 
 
-def stop_sidecar(agent_id: str = "email") -> None:
+def stop_sidecar(agent_id: str) -> None:
     """Stop *agent_id*'s sidecar via the daemon. Attach-only.
 
     No live daemon → genuine no-op (never auto-starts a daemon just to stop

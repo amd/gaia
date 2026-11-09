@@ -31,15 +31,14 @@ from gaia.ui import permissions as session_permissions
 from gaia.ui import session_environment
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client as daemon_client_module
-from gaia.ui.sidecar import relay
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     documents_supported,
 )
 from gaia.ui.sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
 
 pytestmark = pytest.mark.allow_network
 
@@ -52,8 +51,8 @@ def test_only_a_flagship_at_2_16_takes_documents(version, expected):
     assert documents_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_documents():
-    assert documents_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_documents():
+    assert documents_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Rag:
@@ -495,32 +494,3 @@ def test_gaia_allowed_paths_still_narrows_a_relayed_folder(
 
     [agent] = agents
     assert str(folder.resolve()) not in agent.built_with["allowed_paths"]
-
-
-def test_email_turns_never_carry_documents(monkeypatch, tmp_path):
-    class _Handle:
-        api_version = "2.99"
-
-        def proxy(self):
-            class _Proxy:
-                def init(self):
-                    return 200, {}
-
-            return _Proxy()
-
-    monkeypatch.setattr(daemon_client_module, "acquire_handle", lambda _id: _Handle())
-    calls: list = []
-    monkeypatch.setattr(relay, "relay_query", lambda *a, **k: calls.append(k))
-    from gaia.ui.sse_handler import SSEOutputHandler
-
-    chat_helpers_module._dispatch_sidecar_query(
-        SSEOutputHandler(),
-        ChatRequest(session_id="s", message="triage", agent_type="email"),
-        [],
-        None,
-        "email",
-        documents=[str(tmp_path / "a.txt")],
-    )
-
-    [kwargs] = calls
-    assert kwargs["documents"] is None

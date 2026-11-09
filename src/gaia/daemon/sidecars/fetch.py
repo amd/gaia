@@ -70,7 +70,7 @@ def verify_sha256(data: bytes, expected: str, source_label: str) -> str:
     return actual
 
 
-def default_cache_dir(agent_dir_name: str = "email") -> Path:
+def default_cache_dir(agent_dir_name: str = "gaia") -> Path:
     return gaia_agents_dir() / agent_dir_name
 
 
@@ -195,7 +195,7 @@ def fetch_binary(
     force: bool = False,
     timeout: float = 120.0,
     session=None,
-    agent_dir_name: str = "email",
+    agent_dir_name: str = "gaia",
 ) -> FetchResult:
     """Fetch + verify + cache a sidecar agent's binary for the current platform.
 

@@ -4,8 +4,7 @@
 """
 Single-source version stamping for the ``gaia-agent-chat`` package.
 
-Unlike the email agent's ``stamp_version.py`` (``hub/agents/email/python/
-packaging/stamp_version.py``), chat has no ``version.py`` / no npm side / no
+Unlike the flagship's ``stamp_version.py``, chat has no ``version.py`` / no npm side / no
 ``binaries.lock.json`` / no version-pinned doc links -- it is a single Python
 wheel with exactly two version references that must agree:
 

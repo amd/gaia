@@ -22,12 +22,12 @@ import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     turns_supported,
 )
-from gaia.ui.models import ChatRequest
 from tests.unit.test_relay_flagship_documents import (  # noqa: F401  (fixture)
     _answer,
     _point_ui_at,
@@ -213,8 +213,8 @@ def test_only_a_flagship_at_2_25_takes_turns(version, expected):
     assert turns_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_turns():
-    assert turns_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_turns():
+    assert turns_supported(_NO_PROFILE, "9.9") is False
 
 
 def test_the_next_turn_sees_the_refused_tool_call(monkeypatch, live_sidecar, chat):

@@ -148,7 +148,7 @@ def hub_unreachable_message(
 
 
 # Hub agent ids `gaia init` installs for its profile. Everything else
-# (sd/vlm/email/...) owns its own install lifecycle; a generic "install the
+# (sd/vlm/...) owns its own install lifecycle; a generic "install the
 # profile's agent" would hard-fail on agents the hub index doesn't carry.
 #
 # `chat` is NOT here: it is not a catalog agent, so there is nothing for the
@@ -229,14 +229,6 @@ INIT_PROFILES = {
     "vlm": {
         "description": "Vision pipeline for document and image extraction",
         "agent": "vlm",
-        "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~6 GB",
-        "min_context_size": 32768,
-        "pip_extras": [],
-    },
-    "email": {
-        "description": "Email triage for Gmail/Outlook (local inference)",
-        "agent": "email",
         "models": ["Gemma-4-E4B-it-GGUF"],
         "approx_size": "~6 GB",
         "min_context_size": 32768,
@@ -604,7 +596,7 @@ def _size_note(size_gb) -> str:
 
 
 # Profiles whose chat model follows the hardware. ``minimal`` promises a small
-# setup, and the vlm, email and sd agents pin Gemma themselves.
+# setup, and the vlm and sd agents pin Gemma themselves.
 HARDWARE_CHAT_PROFILES = frozenset({"gaia", "chat", "rag", "all"})
 
 
@@ -1778,7 +1770,7 @@ class InitCommand:
         )
         # Data-driven scope (#2358): keyed off the declared agent, not a
         # hardcoded profile-name literal, so it never touches profiles for
-        # agents outside the catalog (chat/sd/vlm/email/...), each of which
+        # agents outside the catalog (chat/sd/vlm/...), each of which
         # has its own, separately-owned install lifecycle.
         has_hub_agent_check = profile_config.get("agent") in HUB_INSTALL_AGENTS
 

@@ -69,16 +69,6 @@ sidecar:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/daemon/sidecars/**/*', 'hub/agents/*/python/packaging/**/*']
 
-# ---------------------------------------------------------------------------
-# Hub agents (hub/agents/<id>/python, hub/agents/<id>/npm). One label per
-# packaged agent so a PR touching a single agent's sources is labelled for it.
-# ---------------------------------------------------------------------------
-
-# Email agent changes (hub package: frozen Python sidecar + npm client)
-agent::email:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/email/python/**/*', 'hub/agents/email/npm/**/*', 'docs/guides/email.mdx']
-
 # Evaluation framework changes
 eval:
   - changed-files:

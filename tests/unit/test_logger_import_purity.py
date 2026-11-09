@@ -205,8 +205,6 @@ _ENTRY_POINTS_HELP = [
     ("gaia.mcp.servers.engineering_mcp", "main", ["--help"]),
     ("gaia.connectors.cli", "main", ["--help"]),
     ("gaia_agent_chat.app", "main", None),
-    ("gaia_agent_email.server", "main", ["--help"]),
-    ("gaia_agent_email.mcp_server", "main", None),
 ]
 
 
@@ -369,7 +367,7 @@ def test_server_entry_point_calls_configure(rel_path, func_name):
     assert _calls_configure(funcs[0]), f"{rel_path}:{func_name} skips configure()"
 
 
-@pytest.mark.parametrize("agent", ["gaia", "email"])
+@pytest.mark.parametrize("agent", ["gaia"])
 def test_sidecar_packaging_entry_configures_at_module_level(agent):
     """The frozen binary and daemon dev mode (``uvicorn server:app``) load this
     module without calling any main(), so configure() must be top-level."""

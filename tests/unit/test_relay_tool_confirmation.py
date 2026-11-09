@@ -25,14 +25,14 @@ from fastapi.testclient import TestClient
 
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
+from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sidecar import relay
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     confirmations_supported,
 )
-from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -88,9 +88,9 @@ def test_only_a_flagship_that_has_tool_decision_is_answerable(version, expected)
     assert confirmations_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_confirmations_stay_informational():
-    """Email's /query ends the run on a confirmation; there is nothing to answer."""
-    assert confirmations_supported(EMAIL_PROFILE, "2.99") is False
+def test_a_profile_without_the_floor_keeps_confirmations_informational():
+    """Without the floor a confirmation ends the run; there is nothing to answer."""
+    assert confirmations_supported(_NO_PROFILE, "2.99") is False
 
 
 # ── Relay event mapping ────────────────────────────────────────────────────

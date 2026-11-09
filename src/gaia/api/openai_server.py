@@ -198,15 +198,6 @@ app = FastAPI(
 app.add_middleware(CORSMiddleware, **cors_config())
 
 
-# The email agent's REST surface (POST /v1/email/*) is no longer mounted
-# in-process (#2176). It was the last in-process agent mount after the v2
-# thin-host migration (#1896); the API server now reaches every agent —
-# email included — the same way the UI does: as a thin client of the
-# always-on daemon, via the /v1/<agent>/* relay mounted below (#2178 / V2-17).
-# So `gaia api` exposes /v1/email/{triage,draft,send,...} by relaying to the
-# out-of-process email sidecar, never by importing that wheel in-process.
-
-
 # Raw request logging middleware (debug mode only)
 @app.middleware("http")
 async def log_raw_requests(request: Request, call_next):
@@ -771,11 +762,11 @@ def _loaded_llm_model(payload):
 
 
 # Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams
-# through the always-on daemon relay (#2150); the fixed-function agent routes
-# (e.g. the email agent's /v1/email/{triage,draft,send,…}) relay buffered.
+# through the always-on daemon relay (#2150); an agent's fixed-function routes
+# relay buffered.
 # Mounted after the OpenAI-compatible routes are declared; the router refuses the
 # reserved chat/models ids at routing time, so it never shadows
 # /v1/chat/completions or /v1/models (nor their 404/405). The API server stays a
 # thin client — it forwards only the daemon client token, never a sidecar
-# bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
+# bearer. Gated by GAIA_API_KEY (§0.33).
 app.include_router(build_agent_proxy_router())

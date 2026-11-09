@@ -31,7 +31,6 @@ from urllib.request import url2pathname
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
     "gaia-agent-chat": "chat",
-    "gaia-agent-email": "email",
     "gaia-agent-gaia": "gaia",
 }
 
@@ -40,7 +39,6 @@ _AGENT_SOURCE_SUBDIRS = {
 # and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
 _WHEEL_TOP_LEVEL_PACKAGE = {
     "gaia-agent-chat": "gaia_agent_chat",
-    "gaia-agent-email": "gaia_agent_email",
     "gaia-agent-gaia": "gaia_agent",
 }
 

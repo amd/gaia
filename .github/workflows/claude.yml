@@ -1099,7 +1099,7 @@ jobs:
             - `question` — a usage question with no defect claimed.
 
             Apply AT MOST ONE component label, only if the issue clearly belongs to it:
-            `agent::email`, `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
+            `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
             `mcp`, `llm`, `audio`, `electron`, `lemonade 🍋` (the emoji is part of the name),
             `performance`, `security`.
 
@@ -1124,7 +1124,7 @@ jobs:
             Search for prior art before commenting:
               `gh issue list --repo ${{ github.repository }} --state all --limit 40 --search "<key terms from the title>" --json number,title,state`
             A duplicate means the SAME underlying defect, not merely the same subsystem —
-            two different email-agent bugs are not duplicates. If you find one you are
+            two different RAG bugs are not duplicates. If you find one you are
             genuinely confident about, mention it in the comment as a possibility and
             link it. Do NOT apply the `duplicate` label and do NOT close anything.
 

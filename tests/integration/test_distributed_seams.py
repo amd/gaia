@@ -7,7 +7,7 @@ Design §0.17: ``/query`` is the most LLM-affecting surface v2 adds, and the
 relay / broker / auth / custody seams each have deterministic failure modes unit
 tests must pin *before* third-party agents amplify them. Individual issues ship
 their own tests (the relay's live suite is ``tests/unit/test_daemon_relay.py``;
-``/query`` is ``hub/agents/email/python/tests/test_query_route.py``); THIS suite
+``/query`` is ``hub/agents/gaia/python/tests/``); THIS suite
 is the cross-seam layer nothing else owns:
 
 - **cross-seam vocabulary coherence** — the frozen §0.2 seven-event set must be
@@ -50,6 +50,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -166,13 +167,10 @@ def test_terminal_types_identical_across_relay_translator_harness():
     from gaia.daemon.relay import TERMINAL_TYPES as relay_terminal
     from gaia.eval.sidecar_harness import TERMINAL_TYPES as harness_terminal
 
+    from gaia.ui.sse_translation import TERMINAL_TYPES as sidecar_terminal
+
     assert relay_terminal == harness_terminal == frozenset({"final", "error"})
-
-    # The sidecar's translator ships in the email package; import it when present.
-    if _module_exists("gaia_agent_email.sse_translation"):
-        from gaia_agent_email.sse_translation import TERMINAL_TYPES as sidecar_terminal
-
-        assert sidecar_terminal == relay_terminal
+    assert sidecar_terminal == relay_terminal
 
 
 def test_canonical_event_set_matches_translator_outputs():
@@ -180,11 +178,7 @@ def test_canonical_event_set_matches_translator_outputs():
     sidecar translator can actually PRODUCE — otherwise the harness would pass
     runs that emit a type the wire contract forbids, or reject a legal one."""
     from gaia.eval.sidecar_harness import CANONICAL_EVENT_TYPES
-
-    if not _module_exists("gaia_agent_email.sse_translation"):
-        pytest.skip("email package (gaia_agent_email) not importable in this env")
-
-    from gaia_agent_email import sse_translation
+    from gaia.ui import sse_translation
 
     # The translator's producible types: the terminal set + every type its
     # per-event maps can emit. We assert the harness's set is exactly the frozen
@@ -205,18 +199,18 @@ def test_canonical_event_set_matches_translator_outputs():
     )
     # Drive the translator across its whole source vocabulary and assert every
     # emitted type is canonical (a source-vocab leak would fail here).
-    translator = sse_translation.CanonicalTranslator("run-coherence")
+    translator = sse_translation.CanonicalTranslator("run-coherence", agent_id="gaia")
     source_events = [
         {"type": "status", "message": "s"},
         {"type": "step", "step": 1, "total": 3},
         {"type": "thinking", "content": "hmm"},
         {"type": "plan", "steps": ["a", "b"]},
-        {"type": "tool_start", "tool": "triage_inbox"},
+        {"type": "tool_start", "tool": "list_inbox"},
         {"type": "tool_args", "args": {"x": 1}},
         {"type": "tool_result", "result_data": {"ok": True}},
         {"type": "tool_end"},
         {"type": "chunk", "content": "tok"},
-        {"type": "permission_request", "tool": "send_now", "args": {}},
+        {"type": "permission_request", "tool": "write_file", "args": {}},
         {"type": "user_input_request", "message": "which?"},
         {"type": "tool_confirm_denied", "message": "denied"},
         {"type": "policy_alert", "reason": "nope"},
@@ -252,7 +246,7 @@ def test_relay_synthetic_crash_error_parses_as_canonical_error():
     )
     from gaia.eval.sidecar_harness import CANONICAL_EVENT_TYPES, parse_sse
 
-    detail = stream_ended_unexpectedly_detail("email")
+    detail = stream_ended_unexpectedly_detail("gaia")
     frame = _synthetic_error_frame(detail, terminate_partial=False)
     events = parse_sse(frame.decode("utf-8"))
 
@@ -269,8 +263,8 @@ def test_relay_synthetic_error_detail_is_actionable():
     """No silent fallbacks: the crash terminal names what to check and where."""
     from gaia.daemon.relay import stream_ended_unexpectedly_detail
 
-    detail = stream_ended_unexpectedly_detail("email")
-    assert "email" in detail
+    detail = stream_ended_unexpectedly_detail("gaia")
+    assert "gaia" in detail
     assert "ensure" in detail  # the remedy
     assert "logs" in detail  # where to look
 
@@ -284,10 +278,10 @@ def test_relay_synthetic_error_detail_is_actionable():
     not _module_exists("gaia.daemon.sidecars.manager"),
     reason="daemon sidecar manager not importable in this env",
 )
-def test_sidecar_bearer_delivered_via_private_env_never_on_argv(monkeypatch):
-    """The manager hands the sidecar its per-session bearer over the private env
-    channel (spec.token_env_var), NOT on the command line — argv is world-
-    readable via ``ps`` / Task Manager, so a token there would leak."""
+def test_sidecar_bearer_delivered_via_owner_only_file_never_on_argv(monkeypatch):
+    """The manager hands the sidecar its per-session bearer in an owner-only
+    file named by spec.token_file_env_var — never on the command line (argv is
+    world-readable via ``ps`` / Task Manager) and never as a bare env var."""
     from gaia.daemon.sidecars.manager import AgentSidecarManager
     from gaia.daemon.sidecars.spec import AgentSidecarSpec
 
@@ -297,10 +291,13 @@ def test_sidecar_bearer_delivered_via_private_env_never_on_argv(monkeypatch):
         display_name="Toy Agent",
         expected_api_major="1",
         token_env_var="GAIA_TOY_SIDECAR_TOKEN",
+        token_file_env_var="GAIA_TOY_SIDECAR_TOKEN_FILE",
+        secret_file_min_version="0.1.0",
         mode_env_var="GAIA_TOY_AGENT_MODE",
         cache_dir_name="toy",
     )
     manager = AgentSidecarManager(spec, mode="user")
+    manager.installed_binary_version = "1.0.0"
 
     captured = {}
 
@@ -325,8 +322,10 @@ def test_sidecar_bearer_delivered_via_private_env_never_on_argv(monkeypatch):
     manager._spawn_process(["sidecar-bin", "--port", "12345"], {}, 12345)
 
     token = manager.auth_token
-    # Delivered via the private env channel...
-    assert captured["env"].get("GAIA_TOY_SIDECAR_TOKEN") == token
+    # Delivered through the owner-only file, not a bare env var...
+    secret_file = Path(captured["env"]["GAIA_TOY_SIDECAR_TOKEN_FILE"])
+    assert secret_file.read_text(encoding="utf-8") == token
+    assert "GAIA_TOY_SIDECAR_TOKEN" not in captured["env"]
     # ...and NEVER on argv (a ps/Task-Manager leak).
     assert all(
         token not in str(arg) for arg in captured["argv"]

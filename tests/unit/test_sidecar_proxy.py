@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""EmailSidecarProxy: forward the full schema-2.1 contract unchanged."""
+"""SidecarProxy: the HTTP transport onto one sidecar's ``/v1/<agent_id>/`` routes."""
 
 import importlib.util
 
@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.allow_network
 
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.sidecar.proxy import EmailSidecarProxy
+from gaia.ui.sidecar.proxy import SidecarProxy
 
 
 class _Resp:
@@ -60,8 +60,8 @@ def test_proxy_sets_bearer_auth_header_when_token_given():
     # #1706: the proxy replays the per-session token as a bearer header on every
     # request so the token-gated sidecar accepts UI-originated calls.
     sess = _HeaderSession()
-    proxy = EmailSidecarProxy(
-        "http://127.0.0.1:9100", session=sess, auth_token="tok-123"
+    proxy = SidecarProxy(
+        "http://127.0.0.1:9100", agent_id="gaia", session=sess, auth_token="tok-123"
     )
     assert proxy._auth_token == "tok-123"
     assert sess.headers.get("Authorization") == "Bearer tok-123"
@@ -69,60 +69,41 @@ def test_proxy_sets_bearer_auth_header_when_token_given():
 
 def test_proxy_omits_auth_header_without_token():
     sess = _HeaderSession()
-    EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     assert "Authorization" not in sess.headers
 
 
 def test_default_timeout_from_env(monkeypatch):
-    # Fix F: no explicit timeout → reads GAIA_EMAIL_SIDECAR_TIMEOUT (default 300).
-    monkeypatch.delenv("GAIA_EMAIL_SIDECAR_TIMEOUT", raising=False)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
+    # Fix F: no explicit timeout → reads GAIA_GAIA_SIDECAR_TIMEOUT (default 300).
+    monkeypatch.delenv("GAIA_GAIA_SIDECAR_TIMEOUT", raising=False)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=_Session({}))
     assert proxy.timeout == 300.0
 
-    monkeypatch.setenv("GAIA_EMAIL_SIDECAR_TIMEOUT", "120")
-    proxy2 = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TIMEOUT", "120")
+    proxy2 = SidecarProxy(
+        "http://127.0.0.1:9100", agent_id="gaia", session=_Session({})
+    )
     assert proxy2.timeout == 120.0
 
 
 def test_explicit_timeout_overrides_env(monkeypatch):
-    monkeypatch.setenv("GAIA_EMAIL_SIDECAR_TIMEOUT", "999")
-    proxy = EmailSidecarProxy(
-        "http://127.0.0.1:9100", session=_Session({}), timeout=60.0
+    monkeypatch.setenv("GAIA_GAIA_SIDECAR_TIMEOUT", "999")
+    proxy = SidecarProxy(
+        "http://127.0.0.1:9100", agent_id="gaia", session=_Session({}), timeout=60.0
     )
     assert proxy.timeout == 60.0
 
 
-def test_triage_forwards_and_returns_envelope_unchanged():
-    envelope = {"request_kind": "single", "result": {"category": "primary"}}
-    sess = _Session(envelope)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    out = proxy.triage({"payload": {"kind": "single"}})
-    assert out == envelope
-    assert sess.posts[0][0] == "http://127.0.0.1:9100/v1/email/triage"
-    assert sess.posts[0][1] == {"payload": {"kind": "single"}}
-
-
 def test_base_url_trailing_slash_normalized():
     sess = _Session({"ok": True})
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100/", session=sess)
-    proxy.triage({})
-    assert sess.posts[0][0] == "http://127.0.0.1:9100/v1/email/triage"
-
-
-def test_draft_and_send_target_correct_routes():
-    sess = _Session({"ok": True})
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    proxy.draft({"to": [], "subject": "s", "body": "b"})
-    proxy.send({"to": [], "subject": "s", "body": "b", "confirmation_token": "t"})
-    assert [u for u, _ in sess.posts] == [
-        "http://127.0.0.1:9100/v1/email/draft",
-        "http://127.0.0.1:9100/v1/email/send",
-    ]
+    proxy = SidecarProxy("http://127.0.0.1:9100/", agent_id="gaia", session=sess)
+    proxy.init()
+    assert sess.gets[0][0] == "http://127.0.0.1:9100/v1/gaia/init"
 
 
 def test_health_and_version_get_routes():
     sess = _Session({"status": "ok"})
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     assert proxy.health()["status"] == "ok"
     proxy.version()
     assert sess.gets == [
@@ -135,9 +116,9 @@ def test_init_get_route_returns_status_and_body_on_200():
     # #1888: init returns (status, body) — never raises on the contract statuses.
     body = {"ready": True, "lemonade": {"base_url": "http://127.0.0.1:8555/api/v1"}}
     sess = _Session(body)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     assert proxy.init() == (200, body)
-    assert sess.gets == [("http://127.0.0.1:9100/v1/email/init", None)]
+    assert sess.gets == [("http://127.0.0.1:9100/v1/gaia/init", None)]
 
 
 def test_init_503_not_ready_passes_body_through_without_raising():
@@ -145,7 +126,7 @@ def test_init_503_not_ready_passes_body_through_without_raising():
     # failure — it must NOT be flattened into a SidecarHTTPError.
     body = {"ready": False, "hint": "Lemonade Server not reachable"}
     sess = _Session(None, resp=_Resp(body, status=503))
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     assert proxy.init() == (503, body)
 
 
@@ -154,37 +135,11 @@ def test_init_unexpected_status_still_raises_loudly():
     # keeps the loud SidecarHTTPError boundary.
     err = _Resp({"detail": "Missing bearer token"}, status=401)
     sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as ei:
         proxy.init()
     assert ei.value.status_code == 401
     assert "bearer token" in ei.value.detail.lower()
-
-
-class _StreamResp:
-    """Fake ``requests`` streamed response (``stream=True`` shape)."""
-
-    def __init__(self, chunks, status=200, *, payload=None):
-        self.status_code = status
-        self.headers = {"Content-Type": "text/plain; charset=utf-8"}
-        self._chunks = chunks
-        self._payload = payload
-        self.text = str(payload) if payload is not None else ""
-        self.closed = False
-        self.pulled = 0  # chunks consumed from the source so far
-
-    def iter_content(self, chunk_size=None):
-        for c in self._chunks:
-            self.pulled += 1
-            yield c
-
-    def json(self):
-        if self._payload is None:
-            raise ValueError("not json")
-        return self._payload
-
-    def close(self):
-        self.closed = True
 
 
 class _StreamSession:
@@ -197,132 +152,27 @@ class _StreamSession:
         return self._resp
 
 
-def test_provision_streams_chunks_incrementally_on_200():
-    # #2054: POST /v1/email/init must stream through — a multi-minute model
-    # pull cannot be buffered to completion in memory.
-    resp = _StreamResp([b"line 1\n", b"line 2\n", b"done\n"])
-    sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    status, media_type, chunks = proxy.provision()
-    assert status == 200
-    assert media_type == "text/plain; charset=utf-8"
-    # Lazy passthrough: pulling one chunk consumes exactly one from the source.
-    assert next(chunks) == b"line 1\n"
-    assert resp.pulled == 1
-    assert list(chunks) == [b"line 2\n", b"done\n"]
-    assert resp.closed  # underlying response released once the stream ends
-    url, kwargs = sess.posts[0]
-    assert url == "http://127.0.0.1:9100/v1/email/init"
-    assert kwargs["stream"] is True
-
-
-def test_provision_read_timeout_outlasts_model_pull():
-    # The sidecar's stream can stay silent for the whole pull (its own pull
-    # read timeout is 1800s) — the proxy's read timeout must outlast it even
-    # when the general sidecar timeout is short.
-    resp = _StreamResp([b"ok\n"])
-    sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=60.0)
-    proxy.provision()
-    connect, read = sess.posts[0][1]["timeout"]
-    assert connect == 60.0
-    assert read >= 1800.0
-
-
-def test_provision_503_unreachable_streams_body_through():
-    # 503 (Lemonade unreachable) is contract — the actionable streamed lines
-    # must pass through verbatim, not be flattened into a SidecarHTTPError.
-    resp = _StreamResp(
-        [
-            b"Lemonade Server is not reachable\n",
-            b"Install and start it with `gaia init`\n",
-        ],
-        status=503,
-    )
-    sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    status, _media_type, chunks = proxy.provision()
-    assert status == 503
-    assert b"".join(chunks) == (
-        b"Lemonade Server is not reachable\nInstall and start it with `gaia init`\n"
-    )
-
-
-def test_provision_unexpected_status_raises_loudly_and_closes():
-    # Anything outside the 200/503 contract keeps the loud SidecarHTTPError
-    # boundary — raised BEFORE any chunk is handed out.
-    resp = _StreamResp([], status=401, payload={"detail": "Missing bearer token"})
-    sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    with pytest.raises(SidecarHTTPError) as ei:
-        proxy.provision()
-    assert ei.value.status_code == 401
-    assert "bearer token" in ei.value.detail.lower()
-    assert resp.closed
-
-
 def test_non_2xx_with_json_detail_raises_actionable_error():
     # The sidecar's actionable detail (e.g. Lemonade down) must survive, not be
     # flattened into a generic HTTPError.
-    err = _Resp(
-        {"detail": "local LLM triage failed: Lemonade not reachable"}, status=502
-    )
+    err = _Resp({"detail": "local LLM failed: Lemonade not reachable"}, status=502)
     sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as ei:
-        proxy.triage({"payload": {}})
+        proxy.skills()
     assert ei.value.status_code == 502
     assert "Lemonade not reachable" in ei.value.detail
-    assert "/v1/email/triage" in str(ei.value)
+    assert "/v1/gaia/skills" in str(ei.value)
 
 
 def test_non_2xx_non_json_body_uses_text():
     err = _Resp(None, status=500, raw_text="Internal Server Error", json_raises=True)
     sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as ei:
-        proxy.send({"to": []})
+        proxy.skills()
     assert ei.value.status_code == 500
     assert "Internal Server Error" in ei.value.detail
-
-
-def test_403_send_gate_detail_preserved():
-    err = _Resp(
-        {"detail": "Send rejected: missing or invalid confirmation token"}, status=403
-    )
-    sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    with pytest.raises(SidecarHTTPError) as ei:
-        proxy.send({"to": []})
-    assert ei.value.status_code == 403
-    assert "confirmation token" in ei.value.detail
-
-
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        ("triage_batch", "/v1/email/triage/batch"),
-        ("search_inbox", "/v1/email/search"),
-        ("pre_scan_inbox", "/v1/email/prescan"),
-        ("confirm", "/v1/email/confirm"),
-        ("archive", "/v1/email/archive"),
-        ("unarchive", "/v1/email/unarchive"),
-        ("quarantine", "/v1/email/quarantine"),
-        ("unquarantine", "/v1/email/unquarantine"),
-        ("calendar_preview", "/v1/email/calendar/events/preview"),
-        ("calendar_create", "/v1/email/calendar/events"),
-        ("calendar_respond", "/v1/email/calendar/events/respond"),
-    ],
-)
-def test_schema21_post_routes_forward_to_real_endpoints(method, path):
-    # Previously-gated routes now FORWARD to the live schema-2.1 endpoints and
-    # return the sidecar's envelope unchanged.
-    envelope = {"ok": True, "echo": "payload"}
-    sess = _Session(envelope)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    out = getattr(proxy, method)({"x": 1})
-    assert out == envelope
-    assert sess.posts[0] == (f"http://127.0.0.1:9100{path}", {"x": 1})
 
 
 def test_respond_query_posts_request_id_and_value_to_run_scoped_route():
@@ -336,11 +186,11 @@ def test_respond_query_posts_request_id_and_value_to_run_scoped_route():
         "status": "ok",
     }
     sess = _Session(envelope)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     out = proxy.respond_query("rid-1", "req-1", "gmail")
     assert out == envelope
     assert sess.posts[0] == (
-        "http://127.0.0.1:9100/v1/email/query/rid-1/respond",
+        "http://127.0.0.1:9100/v1/gaia/query/rid-1/respond",
         {"request_id": "req-1", "value": "gmail"},
     )
 
@@ -349,118 +199,10 @@ def test_respond_query_raises_loudly_on_non_2xx():
     # A 409 (question no longer pending) must surface as SidecarHTTPError,
     # never be swallowed into a fake "accepted".
     sess = _Session({}, resp=_Resp({"detail": "no such pending question"}, status=409))
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as exc_info:
         proxy.respond_query("rid-1", "req-stale", "gmail")
     assert exc_info.value.status_code == 409
-
-
-def test_pre_scan_inbox_forwards_prescan_envelope_unchanged():
-    # The card pipeline depends on this exact shape: /prescan returns
-    # {"result": {"kind": "email_pre_scan", ...}} and the proxy passes it through
-    # untouched so the chat tool can wrap result in the email_pre_scan envelope.
-    envelope = {"result": {"kind": "email_pre_scan", "urgent": [], "actionable": []}}
-    sess = _Session(envelope)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    out = proxy.pre_scan_inbox({"max_messages": 25})
-    assert out == envelope
-    assert out["result"]["kind"] == "email_pre_scan"
-
-
-def test_calendar_events_get_forwards_query_params():
-    events = {"events": [{"id": "e1", "summary": "Standup"}]}
-    sess = _Session(events)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
-    out = proxy.calendar_events({"time_min": "2026-06-30T00:00:00Z"})
-    assert out == events
-    assert sess.gets[0] == (
-        "http://127.0.0.1:9100/v1/email/calendar/events",
-        {"time_min": "2026-06-30T00:00:00Z"},
-    )
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("gaia_agent_email") is None
-    or importlib.util.find_spec("uvicorn") is None,
-    reason="email agent + uvicorn required for live proxy round-trip",
-)
-def test_live_proxy_health_and_version_roundtrip():
-    # Boundary check (mocks prove 'we called it', not 'the call is valid'): spawn
-    # a real dev-mode sidecar and round-trip /health + /version through the proxy
-    # over real HTTP to prove the wire contract holds.
-    from gaia.daemon.sidecars.manager import AgentSidecarManager
-    from gaia.daemon.sidecars.spec import builtin_specs
-
-    m = AgentSidecarManager(builtin_specs()["email"], mode="dev", health_timeout=60.0)
-    base = m.start()
-    try:
-        proxy = EmailSidecarProxy(base, auth_token=m.auth_token, timeout=10.0)
-        assert proxy.health()["status"] == "ok"
-        version = proxy.version()
-        assert "apiVersion" in version and "agentVersion" in version
-    finally:
-        m.shutdown()
-
-
-def _lemonade_up() -> bool:
-    try:
-        import requests
-
-        from gaia.llm.lemonade_client import _get_lemonade_config
-
-        _, _, base = _get_lemonade_config()
-        return requests.get(base.rstrip("/") + "/health", timeout=2).status_code == 200
-    except Exception:  # noqa: BLE001
-        return False
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("gaia_agent_email") is None
-    or importlib.util.find_spec("uvicorn") is None,
-    reason="email agent + uvicorn required for live triage round-trip",
-)
-def test_live_triage_roundtrip_through_manager_proxy():
-    # End-to-end 'the call is valid' proof: real dev sidecar + a proxy bound to
-    # the manager's sidecar + the FROZEN triage contract. With Lemonade up we get
-    # a structured result; with it down we get the sidecar's actionable 502
-    # surfaced verbatim via SidecarHTTPError. Either outcome proves the wire +
-    # error path, not a mock.
-    from gaia_agent_email.contract import (
-        EmailAddress,
-        EmailMessage,
-        EmailTriageRequest,
-        SingleEmailInput,
-    )
-
-    from gaia.daemon.sidecars.manager import AgentSidecarManager
-    from gaia.daemon.sidecars.spec import builtin_specs
-    from gaia.ui.sidecar.errors import SidecarHTTPError
-
-    payload = SingleEmailInput(
-        message=EmailMessage(
-            message_id="msg-roundtrip-1",
-            subject="Team lunch tomorrow?",
-            from_=EmailAddress(email="alice@example.com"),
-            body="Hey, are you joining us for lunch tomorrow at noon? Please reply by EOD.",
-        ),
-        principal=EmailAddress(email="bob@example.com"),
-    )
-    body = EmailTriageRequest(payload=payload).model_dump(by_alias=True, mode="json")
-
-    with AgentSidecarManager(
-        builtin_specs()["email"], mode="dev", health_timeout=60.0
-    ) as m:
-        proxy = EmailSidecarProxy(m.base_url, auth_token=m.auth_token, timeout=180.0)
-        if _lemonade_up():
-            result = proxy.triage(body)
-            assert result["request_kind"] == "single"
-            assert "category" in result["result"]
-            assert result["result"]["summary"]
-        else:
-            with pytest.raises(SidecarHTTPError) as ei:
-                proxy.triage(body)
-            assert ei.value.status_code == 502
-            assert "triage failed" in ei.value.detail.lower()
 
 
 # -- query_stream / cancel_query (#2109 query relay) -----------------------------
@@ -469,8 +211,8 @@ def test_live_triage_roundtrip_through_manager_proxy():
 class _SSERespLines:
     """Fake ``requests`` streamed response exposing ``iter_lines()`` (SSE shape).
 
-    Mirrors ``_StreamResp`` above but yields whole lines (some blank, per SSE
-    double-newline framing) instead of raw content chunks.
+    Yields whole lines (some blank, per SSE
+    double-newline framing).
     """
 
     def __init__(self, lines, status=200, *, payload=None):
@@ -498,10 +240,12 @@ def test_query_stream_posts_to_query_route_with_connect_and_read_timeout():
     # sidecar timeout; the read timeout is the caller-supplied read_timeout.
     resp = _SSERespLines([b'data: {"type": "final", "answer": "ok"}'])
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=60.0)
+    proxy = SidecarProxy(
+        "http://127.0.0.1:9100", agent_id="gaia", session=sess, timeout=60.0
+    )
     list(proxy.query_stream({"question": "hi"}, read_timeout=5.0))
     url, kwargs = sess.posts[0]
-    assert url == "http://127.0.0.1:9100/v1/email/query"
+    assert url == "http://127.0.0.1:9100/v1/gaia/query"
     assert kwargs["json"] == {"question": "hi"}
     assert kwargs["stream"] is True
     assert kwargs["timeout"] == (10.0, 5.0)
@@ -510,13 +254,13 @@ def test_query_stream_posts_to_query_route_with_connect_and_read_timeout():
 def test_query_stream_default_read_timeout_is_300():
     resp = _SSERespLines([b'data: {"type": "final", "answer": "ok"}'])
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     list(proxy.query_stream({}))
     assert sess.posts[0][1]["timeout"] == (10.0, 300.0)
 
 
 def test_query_stream_non_2xx_raises_before_any_event_and_closes():
-    # Mirrors test_provision_unexpected_status_raises_loudly_and_closes: the
+    # The
     # sidecar's actionable detail must survive, raised before any event escapes.
     resp = _SSERespLines(
         [b'data: {"type": "status", "message": "should not appear"}'],
@@ -524,7 +268,7 @@ def test_query_stream_non_2xx_raises_before_any_event_and_closes():
         payload={"detail": "local LLM query failed: Lemonade not reachable"},
     )
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as ei:
         list(proxy.query_stream({"question": "hi"}))
     assert ei.value.status_code == 502
@@ -541,7 +285,7 @@ def test_query_stream_yields_parsed_events_in_order_skipping_blank_lines():
     ]
     resp = _SSERespLines(lines)
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     events = list(proxy.query_stream({"question": "hi"}))
     assert events == [
         {"type": "status", "message": "hi"},
@@ -553,7 +297,7 @@ def test_query_stream_yields_parsed_events_in_order_skipping_blank_lines():
 def test_query_stream_closes_response_when_exhausted():
     resp = _SSERespLines([b'data: {"type": "final", "answer": "done"}'])
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     assert list(proxy.query_stream({})) == [{"type": "final", "answer": "done"}]
     assert resp.closed
 
@@ -568,7 +312,7 @@ def test_query_stream_malformed_json_line_raises_loudly_and_stops():
     ]
     resp = _SSERespLines(lines)
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     gen = proxy.query_stream({"question": "hi"})
     first = next(gen)
     assert first == {"type": "status", "message": "hi"}
@@ -595,7 +339,7 @@ def test_query_stream_posts_and_registers_response_eagerly_at_call_time():
     ]
     resp = _SSERespLines(lines)
     sess = _StreamSession(resp)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
 
     calls = []
     gen = proxy.query_stream({"question": "hi"}, on_response=calls.append)
@@ -616,17 +360,17 @@ def test_query_stream_posts_and_registers_response_eagerly_at_call_time():
 
 def test_cancel_query_posts_to_correct_url_and_returns_none_on_2xx():
     sess = _Session({"ok": True})
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     result = proxy.cancel_query("run-123")
     assert result is None
-    assert sess.posts[0][0] == "http://127.0.0.1:9100/v1/email/query/run-123/cancel"
+    assert sess.posts[0][0] == "http://127.0.0.1:9100/v1/gaia/query/run-123/cancel"
 
 
 def test_cancel_query_404_is_benign_and_returns_none():
     # The run already finished by the time the cancel lands -- not an error.
     err = _Resp({"detail": "run not found"}, status=404)
     sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     result = proxy.cancel_query("run-already-done")
     assert result is None
 
@@ -634,7 +378,7 @@ def test_cancel_query_404_is_benign_and_returns_none():
 def test_cancel_query_other_non_2xx_raises_sidecar_http_error():
     err = _Resp({"detail": "internal error cancelling run"}, status=500)
     sess = _Session(None, resp=err)
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     with pytest.raises(SidecarHTTPError) as ei:
         proxy.cancel_query("run-xyz")
     assert ei.value.status_code == 500
@@ -663,7 +407,9 @@ def test_cancel_query_uses_short_dedicated_timeout_not_general_timeout():
     # unblocked the relay's reader), so it gets its own short timeout instead
     # of the general 300s sidecar timeout.
     sess = _TimeoutRecordingSession({"ok": True})
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=300.0)
+    proxy = SidecarProxy(
+        "http://127.0.0.1:9100", agent_id="gaia", session=sess, timeout=300.0
+    )
     proxy.cancel_query("run-1")
     assert sess.post_timeouts == [10.0]
 
@@ -674,7 +420,7 @@ def test_cancel_query_timeout_is_swallowed_not_raised():
     sess = _TimeoutRecordingSession(
         {"ok": True}, post_raises=requests.exceptions.Timeout("read timed out")
     )
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     # Must not raise: the reader is already unblocked; a hung sidecar can't
     # honour the cancel anyway.
     assert proxy.cancel_query("run-hung") is None
@@ -687,7 +433,7 @@ def test_cancel_query_connection_error_is_swallowed_not_raised():
         {"ok": True},
         post_raises=requests.exceptions.ConnectionError("connection refused"),
     )
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    proxy = SidecarProxy("http://127.0.0.1:9100", agent_id="gaia", session=sess)
     # A dead sidecar has nothing left to cancel — best-effort, never fatal.
     assert proxy.cancel_query("run-dead") is None
 
@@ -747,7 +493,7 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
     server_thread.start()
 
     try:
-        proxy = EmailSidecarProxy(f"http://127.0.0.1:{port}")
+        proxy = SidecarProxy(f"http://127.0.0.1:{port}", agent_id="gaia")
         captured: dict = {}
         events: list = []
         outcome: dict = {}

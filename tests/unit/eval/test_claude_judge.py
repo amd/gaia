@@ -444,62 +444,6 @@ class TestAnalyzeFileWithUsageBinaryTemperature:
 
 
 # ---------------------------------------------------------------------------
-# Judge factories send no sampling params
-#
-# The judge model rejects `temperature` with a 400, which fails every judged
-# eval at its first API call. The factories pinned temperature=0.0 until that
-# parameter was removed from the model; these tests keep the pin from coming
-# back. Determinism is now a property of the judge prompt, not the request.
-# ---------------------------------------------------------------------------
-
-
-class TestJudgeFactoryTemperature:
-    @pytest.fixture(autouse=True)
-    def _sdk_transport(self, monkeypatch):
-        """Pin the SDK transport, whatever the machine's own credentials are.
-
-        The factories route through ``gaia.eval.judge_client``, which reads the
-        environment to choose a transport. Setting the key selects the SDK path
-        these tests spy on; clearing the token stops a developer's subscription
-        credential from silently sending them down the CLI path instead.
-        """
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-        # A CLI login comes before the key, so take the CLI off PATH.
-        monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
-
-    def test_action_item_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.action_item_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
-
-    def test_briefing_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.briefing_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
-
-    def test_draft_quality_sends_no_temperature(self, monkeypatch):
-        spy = MagicMock()
-        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
-
-        from gaia.eval.draft_quality import make_claude_judge
-
-        make_claude_judge(model="claude-sonnet-4-6")
-
-        spy.assert_called_once_with(model="claude-sonnet-4-6")
-
-
-# ---------------------------------------------------------------------------
 # Thinking blocks (#3884)
 #
 # The default judge is thinking-enabled and answers with [thinking, text], so

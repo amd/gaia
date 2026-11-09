@@ -22,6 +22,7 @@ on:
   pull_request:
     paths:
       - 'hub/agents/*/python/packaging/publish_to_r2.py'
+      - 'hub/components/*/publish_to_r2.py'
       - 'hub/agents/*/python/packaging/gen_binaries_lock.py'
       - 'workers/agent-hub/**'
       - 'util/verify_publish_pipeline.py'
@@ -83,8 +84,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # The publisher's unit tests are NOT re-run here. test_email_agent.yml
-      # already runs hub/agents/email/python/tests/ with the package installed,
-      # and test_email_agent_unit.yml triggers on the same paths a publisher
-      # change touches. Duplicating that dependency setup here would be a second
+      # The publisher's unit tests are NOT re-run here. test_gaia_agent.yml
+      # already runs hub/agents/gaia/python/tests/ with the package installed. Duplicating that dependency setup here would be a second
       # copy to drift -- which is the class of bug this workflow guards against.

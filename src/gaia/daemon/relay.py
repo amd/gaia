@@ -78,7 +78,7 @@ READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
 CANCEL_TIMEOUT = 10.0
 
 #: Canonical event types that terminate a ``/query`` stream (frozen 7-event
-#: contract, spec #2015/#2016 — mirrors ``gaia_agent_email.sse_translation``).
+#: contract, spec #2015/#2016).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 #: Methods the relay accepts — everything a sidecar route can serve.

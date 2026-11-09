@@ -556,7 +556,7 @@ def test_relayed_turn_streams_and_persists_the_audio_card(gaia_dir, monkeypatch)
         handler._emit({"type": "answer", "content": "Here is your track."})
 
     class _Handle:
-        api_version = "2.4"
+        api_version = "2.12"
 
         def proxy(self):
             return SimpleNamespace(init=lambda: (200, {}))
@@ -565,15 +565,19 @@ def test_relayed_turn_streams_and_persists_the_audio_card(gaia_dir, monkeypatch)
         return None
 
     monkeypatch.setattr(
-        daemon_client_module, "acquire_handle", lambda agent_id="email": _Handle()
+        daemon_client_module, "acquire_handle", lambda agent_id: _Handle()
     )
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
+    monkeypatch.setattr(
+        chat_helpers_module, "_should_relay_to_sidecar", lambda *_a: True
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_type_unknown", lambda *_a: False)
     monkeypatch.setattr(chat_helpers_module, "_maybe_update_session_title", _noop)
 
     db = ChatDatabase(":memory:")
-    session = db.create_session(agent_type="email")
+    session = db.create_session(agent_type="gaia")
     request = ChatRequest(
-        session_id=session["id"], message="make music", stream=True, agent_type="email"
+        session_id=session["id"], message="make music", stream=True, agent_type="gaia"
     )
     streamed = []
 

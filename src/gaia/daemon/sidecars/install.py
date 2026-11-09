@@ -735,3 +735,46 @@ def uninstall(
         _release_slot(agent_id)
     installer_mod.clear_progress(agent_id)
     return {"agent_id": agent_id, "status": "uninstalled"}
+
+
+# ---------------------------------------------------------------------------
+# Retired agents
+# ---------------------------------------------------------------------------
+
+#: Sidecar agents GAIA no longer ships. The daemon has no spec for them, so an
+#: install left over from an older GAIA could never start or be updated again.
+RETIRED_AGENT_IDS = ("email",)
+
+
+def remove_retired_agents(install_root: Optional[Path] = None) -> List[str]:
+    """Delete leftover installs of retired agents; return the ids removed.
+
+    Covers a Hub install and a lazily fetched binary alike — both live in
+    ``~/.gaia/agents/<id>/``. A directory a live process still runs from is
+    left alone and logged, and the next daemon start tries again.
+    """
+    import shutil
+
+    root = install_root or _installer().default_install_root()
+    removed: List[str] = []
+    for agent_id in RETIRED_AGENT_IDS:
+        agent_dir = root / agent_id
+        if not agent_dir.is_dir():
+            continue
+        try:
+            assert_no_live_process_in(agent_dir, agent_id)
+            shutil.rmtree(agent_dir)
+        except (StopFailedError, OSError) as exc:
+            logger.error(
+                "daemon: could not remove the retired '%s' agent at %s: %s. "
+                "GAIA will try again at its next start.",
+                agent_id,
+                agent_dir,
+                exc,
+            )
+            continue
+        logger.info(
+            "daemon: removed the retired '%s' agent from %s", agent_id, agent_dir
+        )
+        removed.append(agent_id)
+    return removed

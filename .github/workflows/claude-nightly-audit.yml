@@ -432,7 +432,7 @@ jobs:
               `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
             - **What each lens checks on a published agent** (apply only YOUR lens):
               - **docs**: the canonical README (the npm client README for npm agents, e.g.
-                `hub/agents/email/npm/README.md`) is high-quality and integrator-facing;
+                `hub/agents/gaia/npm/README.md`) is high-quality and integrator-facing;
                 `SPEC.md` is a complete technical reference; `SKILL.md` is a real AI-integration
                 playbook; `CHANGELOG.md` accurately names each version's change; any shipped
                 contract spec (`spec_html.py` / `specification.html` / `openapi.*.json`) matches

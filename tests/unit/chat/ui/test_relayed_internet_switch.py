@@ -25,15 +25,15 @@ import gaia.ui._chat_helpers as helpers
 from gaia.agents.base.agent import Agent
 from gaia.ui import session_environment, turn_insights
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client, relay
 from gaia.ui.sidecar.errors import SidecarError
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     internet_supported,
 )
 from gaia.ui.sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -44,9 +44,9 @@ def test_only_a_flagship_at_2_23_takes_the_switch(version, expected):
     assert internet_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_the_switch():
-    assert EMAIL_PROFILE.min_internet_api_version is None
-    assert internet_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_the_switch():
+    assert _NO_PROFILE.min_internet_api_version is None
+    assert internet_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:
@@ -117,16 +117,6 @@ def test_an_internet_on_turn_still_runs_on_an_older_flagship(monkeypatch):
     [body] = bodies
     assert "internet_off" not in body
     assert not [e for e in events if e["type"] == "agent_error"]
-
-
-def test_the_email_sidecar_is_never_sent_the_switch(monkeypatch):
-    proxy = _Proxy()
-    proxy.agent_id = "email"
-    relay.relay_query(
-        SSEOutputHandler(), proxy, query="q", context=[], profile=EMAIL_PROFILE
-    )
-    [body] = proxy.bodies
-    assert "internet_off" not in body
 
 
 def test_the_relay_omits_a_switch_it_was_not_given():
@@ -236,22 +226,6 @@ def test_a_relayed_flagship_chat_still_refuses_folder_removal(relayed_db, tmp_pa
     with pytest.raises(session_environment.EnvironmentChangeError) as refusal:
         session_environment.remove_folder(relayed_db, session["id"], str(tmp_path))
     assert "internet" not in str(refusal.value)
-
-
-def test_a_relayed_email_chat_keeps_its_own_network_rules(relayed_db, running_relays):
-    session = relayed_db.create_session(agent_type="email")
-    http = _running_relay(session["id"])
-
-    assert (
-        session_environment.describe(relayed_db, session)["internet_enforced"] is False
-    )
-
-    with pytest.raises(session_environment.EnvironmentChangeError) as refusal:
-        session_environment.set_internet(relayed_db, session["id"], False)
-    assert "network rules" in str(refusal.value)
-    assert "start a chat" not in str(refusal.value).lower()
-    assert session_environment.load(relayed_db, session["id"])["internet_off"] is False
-    assert http.posts == []
 
 
 def test_an_in_process_chat_enforces_both(monkeypatch):

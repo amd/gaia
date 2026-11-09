@@ -65,7 +65,7 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
     return f"{os_key}-{arch_key}"
 
 
-def default_lock_path(agent_id: str = "email") -> Path:
+def default_lock_path(agent_id: str = "gaia") -> Path:
     """Locate *agent_id*'s binaries.lock.json in the daemon's own checkout (the
     agent's npm package ships the canonical one).
 
@@ -73,16 +73,16 @@ def default_lock_path(agent_id: str = "email") -> Path:
     different checkout is compared against it in the registry (#2596).
     """
     from gaia.daemon.sidecars.spec import (
-        _default_email_src_dir,
+        _default_gaia_src_dir,
         agent_binary_lock_path,
         repo_root_from_agent_dev_src_dir,
     )
 
-    repo_root = repo_root_from_agent_dev_src_dir(_default_email_src_dir(), "email")
+    repo_root = repo_root_from_agent_dev_src_dir(_default_gaia_src_dir(), "gaia")
     return agent_binary_lock_path(repo_root, agent_id)
 
 
-def load_lock(lock_path: Optional[Path] = None, agent_id: str = "email") -> BinaryLock:
+def load_lock(lock_path: Optional[Path] = None, agent_id: str = "gaia") -> BinaryLock:
     path = Path(lock_path) if lock_path is not None else default_lock_path(agent_id)
     try:
         raw = path.read_text(encoding="utf-8")

@@ -5,11 +5,11 @@
 Since #2142 the GAIA daemon owns fetch/spawn/health/tree-kill
 (:mod:`gaia.daemon.sidecars`); the UI acquires a running sidecar through
 :mod:`gaia.ui.sidecar.daemon_client` and keeps only the request-side
-pieces here (proxy, relay, REST router).
+pieces here (proxy, relay, profiles, grants).
 """
 
 from gaia.ui.sidecar.daemon_client import SidecarHandle
-from gaia.ui.sidecar.errors import (
+from gaia.daemon.sidecars.errors import (
     BinaryNotFoundError,
     HealthTimeoutError,
     IntegrityError,
@@ -20,7 +20,7 @@ from gaia.ui.sidecar.errors import (
     SidecarSpawnError,
     VersionMismatchError,
 )
-from gaia.ui.sidecar.proxy import EmailSidecarProxy
+from gaia.ui.sidecar.proxy import SidecarProxy
 
 __all__ = [
     "SidecarError",
@@ -33,5 +33,5 @@ __all__ = [
     "SidecarHTTPError",
     "VersionMismatchError",
     "SidecarHandle",
-    "EmailSidecarProxy",
+    "SidecarProxy",
 ]

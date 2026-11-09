@@ -2,21 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Forward UI calls to a running daemon sidecar over HTTP.
 
-Two layers, because two agents now share this transport (#4161):
-
-- :class:`SidecarProxy` — the agent-agnostic part of the frozen wire contract
-  every sidecar serves under ``/v1/<agent_id>/``: readiness ``init``, the
-  canonical streaming ``query`` loop with its cancel/respond verbs, and
-  ``health``/``version``. Nothing here knows what the agent *does*.
-- :class:`EmailSidecarProxy` — email's own schema-2.1 surface on top (triage,
-  batch triage, search, inbox pre-scan, draft/send + confirm,
-  archive/unarchive, quarantine/unquarantine, calendar view/preview/create/
-  respond, streamed provisioning). Returns the sidecar's envelopes
-  **unchanged** so the existing SSE card pipeline (``pre_scan_inbox`` →
-  ``email_pre_scan``) keeps working byte-for-byte.
-
-Keeping the split means the flagship's proxy cannot advertise a mailbox route
-it would only 404 on.
+:class:`SidecarProxy` is the agent-agnostic part of the frozen wire contract
+every sidecar serves under ``/v1/<agent_id>/``: readiness ``init``, the
+canonical streaming ``query`` loop with its cancel/respond verbs, and
+``health``/``version``. Nothing here knows what the agent *does*.
 
 A non-2xx is translated loudly into :class:`SidecarHTTPError`, which carries the
 sidecar's own actionable ``detail`` (e.g. ``502 local LLM triage failed: …``)
@@ -35,10 +24,6 @@ from gaia.logger import get_logger
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
-
-# POST /init can stay silent for the whole model pull — the read timeout must
-# outlast the sidecar's own 30-min pull read timeout (_LEMONADE_PULL_TIMEOUT).
-_PROVISION_READ_TIMEOUT = 1830.0
 
 # /query connect timeout: fixed and short — a dead sidecar should fail fast on
 # TCP connect, independent of the (much longer) read_timeout that spans the
@@ -72,7 +57,7 @@ def _extract_detail(resp) -> str:
 
 
 def _timeout_env_var(agent_id: str) -> str:
-    """The per-agent request-timeout override, e.g. ``GAIA_EMAIL_SIDECAR_TIMEOUT``.
+    """The per-agent request-timeout override, e.g. ``GAIA_GAIA_SIDECAR_TIMEOUT``.
 
     Derived rather than listed so a new sidecar gets the same knob for free —
     and matches the token env vars the daemon spec already names this way
@@ -84,8 +69,8 @@ def _timeout_env_var(agent_id: str) -> str:
 class SidecarProxy:
     """HTTP transport onto one running sidecar's ``/v1/<agent_id>/`` contract.
 
-    ``agent_id`` is required, not defaulted: an implicitly-email transport is
-    the assumption that made a flagship turn unreachable in the first place.
+    ``agent_id`` is required, not defaulted, so a transport never guesses
+    which agent it is talking to.
     """
 
     def __init__(
@@ -156,8 +141,7 @@ class SidecarProxy:
         same ``InitResponse`` body either way — the 503 is contract, not a
         transport failure, so both must pass through verbatim instead of being
         flattened into a ``SidecarHTTPError`` detail string. Both shipped
-        sidecars answer this shape deliberately (see the flagship's ``/init``,
-        which cites the email contract it mirrors).
+        sidecars answer this shape deliberately.
         """
         path = f"{self.prefix}/init"
         resp = self._session.get(f"{self.base_url}{path}", timeout=self.timeout)
@@ -432,113 +416,4 @@ class SidecarProxy:
         self._raise_for_status(resp, path)
 
 
-class EmailSidecarProxy(SidecarProxy):
-    """:class:`SidecarProxy` plus email's own ``/v1/email/*`` schema-2.1 routes."""
-
-    def __init__(self, base_url: str, **kwargs):
-        # The mailbox routes below are hardcoded /v1/email, so aiming this
-        # class at another agent could only produce 404s. Refuse rather than
-        # silently ignore what the caller asked for.
-        if kwargs.pop("agent_id", "email") != "email":
-            raise TypeError(
-                "EmailSidecarProxy is email-only; use "
-                "SidecarProxy(base_url, agent_id=...) for another agent."
-            )
-        super().__init__(base_url, agent_id="email", **kwargs)
-
-    # -- Triage -------------------------------------------------------------
-    def triage(self, payload: dict) -> dict:
-        return self._post("/v1/email/triage", payload)
-
-    def triage_batch(self, payload: dict) -> dict:
-        return self._post("/v1/email/triage/batch", payload)
-
-    # -- Inbox read (search + pre-scan) -------------------------------------
-    def search_inbox(self, payload: dict) -> dict:
-        return self._post("/v1/email/search", payload)
-
-    def pre_scan_inbox(self, payload: dict) -> dict:
-        """Forward an inbox pre-scan to the sidecar's ``/prescan`` route.
-
-        Returns the sidecar's ``EmailPreScanResponse`` envelope unchanged
-        (``{"result": {"kind": "email_pre_scan", …}}``). The chat tool reshapes
-        ``result`` into the ``email_pre_scan`` card envelope the SSE handler
-        injects — the wire shape the renderer depends on is preserved here.
-        """
-        return self._post("/v1/email/prescan", payload)
-
-    # -- Reply (draft + send, confirmation-gated) ---------------------------
-    def draft(self, payload: dict) -> dict:
-        return self._post("/v1/email/draft", payload)
-
-    def send(self, payload: dict) -> dict:
-        return self._post("/v1/email/send", payload)
-
-    # -- Destructive mailbox actions (confirm-gated) + their undo -----------
-    def confirm(self, payload: dict) -> dict:
-        """Mint a single-use token for a destructive action (archive/quarantine)."""
-        return self._post("/v1/email/confirm", payload)
-
-    def archive(self, payload: dict) -> dict:
-        return self._post("/v1/email/archive", payload)
-
-    def unarchive(self, payload: dict) -> dict:
-        return self._post("/v1/email/unarchive", payload)
-
-    def quarantine(self, payload: dict) -> dict:
-        return self._post("/v1/email/quarantine", payload)
-
-    def unquarantine(self, payload: dict) -> dict:
-        return self._post("/v1/email/unquarantine", payload)
-
-    # -- Calendar -----------------------------------------------------------
-    def calendar_events(self, params: Optional[Dict[str, Any]] = None) -> dict:
-        """View calendar events (read-only). ``params`` → time_min/time_max/provider."""
-        return self._get("/v1/email/calendar/events", params=params)
-
-    def calendar_preview(self, payload: dict) -> dict:
-        return self._post("/v1/email/calendar/events/preview", payload)
-
-    def calendar_create(self, payload: dict) -> dict:
-        return self._post("/v1/email/calendar/events", payload)
-
-    def calendar_respond(self, payload: dict) -> dict:
-        return self._post("/v1/email/calendar/events/respond", payload)
-
-    def provision(self) -> tuple:
-        """Provisioning verb — ``POST /v1/email/init``, streamed passthrough.
-
-        Returns ``(status_code, media_type, chunk_iterator)``. The sidecar
-        streams newline-delimited ``text/plain`` progress: a committed **200**
-        whose final ``✓``/``✗`` line is the authoritative outcome, or a **503**
-        (Lemonade unreachable) whose actionable lines are equally contract —
-        both pass through verbatim. A model pull can take many minutes, so the
-        body is never buffered; anything outside 200/503 keeps the loud
-        :class:`SidecarHTTPError` boundary, raised before any chunk is yielded.
-
-        Email-only: the flagship's ``/init`` is a read-only GET with no
-        provisioning counterpart.
-        """
-        path = "/v1/email/init"
-        resp = self._session.post(
-            f"{self.base_url}{path}",
-            stream=True,
-            timeout=(self.timeout, max(self.timeout, _PROVISION_READ_TIMEOUT)),
-        )
-        if resp.status_code not in (200, 503):
-            try:
-                self._raise_for_status(resp, path)
-            finally:
-                resp.close()
-        media_type = resp.headers.get("Content-Type", "text/plain; charset=utf-8")
-
-        def _chunks():
-            try:
-                yield from resp.iter_content(chunk_size=None)
-            finally:
-                resp.close()
-
-        return resp.status_code, media_type, _chunks()
-
-
-__all__ = ["SidecarProxy", "EmailSidecarProxy"]
+__all__ = ["SidecarProxy"]

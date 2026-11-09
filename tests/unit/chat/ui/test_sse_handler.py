@@ -2335,43 +2335,21 @@ class TestRenderMapResultData:
         return {
             "ok": True,
             "data": {
-                "kind": "email_pre_scan",
-                "urgent": [],
-                "actionable": [
-                    {
-                        "message_id": "abc123",
-                        "thread_id": "thr1",
-                        "sender": "alice@example.com",
-                        "subject": "Q3 review",
-                        "why": "important + starred",
-                    }
-                ],
-                "informational_count": 0,
-                "suggested_archives": [],
-                "suggested_drafts": [],
-                "preferences_applied": {
-                    "priority_senders": [],
-                    "low_priority_senders": [],
-                    "category_defaults": {},
-                },
-                "totals": {
-                    "urgent": 0,
-                    "actionable": 1,
-                    "informational": 0,
-                    "suggested_archives": 0,
-                },
+                "kind": "table",
+                "columns": ["from", "subject"],
+                "rows": [["alice@example.com", "Q3 review"]],
             },
         }
 
     def test_dict_envelope_sets_result_data_to_inner_card(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         events = _drain(handler)
         assert len(events) == 1
         assert events[0]["type"] == "tool_result"
         assert events[0]["result_data"] == self._make_envelope()["data"]
-        assert events[0]["result_data"]["kind"] == "email_pre_scan"
+        assert events[0]["result_data"]["kind"] == "table"
 
     def test_json_string_envelope_sets_result_data_to_inner_card(self, handler):
         """``@tool``-decorated functions return JSON strings verbatim, so the
@@ -2379,14 +2357,14 @@ class TestRenderMapResultData:
         dict."""
         import json as _json
 
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(_json.dumps(self._make_envelope()), title="Result")
         events = _drain(handler)
         assert events[0]["result_data"] == self._make_envelope()["data"]
 
     def test_unparseable_string_does_not_crash_and_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json("not json at all", title="Result")
         events = _drain(handler)
@@ -2398,14 +2376,14 @@ class TestRenderMapResultData:
         assert "success" in event
 
     def test_failed_envelope_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json({"ok": False, "error": "Gmail 401"}, title="Result")
         events = _drain(handler)
         assert "result_data" not in events[0]
 
     def test_wrong_kind_omits_result_data(self, handler):
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(
             {"ok": True, "data": {"kind": "something_else"}}, title="Result"
@@ -2421,34 +2399,32 @@ class TestRenderMapResultData:
         events = _drain(handler)
         assert "result_data" not in events[0]
 
-    def test_final_answer_unmodified_after_pre_scan_result(self, handler):
+    def test_final_answer_unmodified_after_a_card_result(self, handler):
         """The hack is gone: print_final_answer no longer touches the answer
         text for cards — no fence prepended, no card duplicated."""
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         _drain(handler)
-        handler.print_final_answer("Here's your inbox pre-scan.")
+        handler.print_final_answer("Here's the thread.")
         events = _drain(handler)
         assert len(events) == 1
-        assert events[0]["content"] == "Here's your inbox pre-scan."
+        assert events[0]["content"] == "Here's the thread."
 
     def test_no_pending_render_payloads_attribute(self, handler):
         """The fence-injection buffer is gone entirely, not just unused."""
-        handler.print_tool_usage("pre_scan_inbox")
+        handler.print_tool_usage("get_thread")
         _drain(handler)
         handler.pretty_print_json(self._make_envelope(), title="Result")
         _drain(handler)
-        handler.print_final_answer("Here's your inbox pre-scan.")
+        handler.print_final_answer("Here's the thread.")
         _drain(handler)
         assert not hasattr(handler, "_pending_render_payloads")
 
     def test_render_tool_to_lang_map_still_exists(self):
         """Shared render-map source other code (the relay + the sidecar's own
         translator) still reads this class attribute."""
-        assert SSEOutputHandler._RENDER_TOOL_TO_LANG["pre_scan_inbox"] == (
-            "email_pre_scan"
-        )
+        assert SSEOutputHandler._RENDER_TOOL_TO_LANG["get_thread"] == "table"
 
 
 class TestStripBalancedJsonBlobs:

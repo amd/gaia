@@ -58,9 +58,9 @@ class AgentListError(Exception):
 class AgentPackage:
     """A production agent wheel and where its source package lives."""
 
-    dist_name: str  # e.g. "gaia-agent-email"
-    agent_id: str  # e.g. "email"
-    path: Path  # e.g. <repo>/hub/agents/email/python
+    dist_name: str  # e.g. "gaia-agent-gaia"
+    agent_id: str  # e.g. "gaia"
+    path: Path  # e.g. <repo>/hub/agents/gaia/python
 
     @property
     def rel_path(self) -> str:
@@ -150,7 +150,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--only",
         metavar="AGENT_ID",
-        help="filter output to a single agent by id (e.g. email); fails loudly "
+        help="filter output to a single agent by id (e.g. gaia); fails loudly "
         "if the id is not found in setup.py[agents]",
     )
     args = parser.parse_args(argv)

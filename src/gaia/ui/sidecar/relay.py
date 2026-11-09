@@ -13,23 +13,17 @@ terminated by exactly one ``final`` or ``error``. The Agent UI's own SSE
 consumer (``gaia.ui._chat_helpers``'s streaming trunk) speaks a different,
 older vocabulary (``status`` / ``chunk`` / ``tool_start`` / ``tool_args`` /
 ``tool_result`` / ``answer`` / ``agent_error`` / ...). This module is the
-translation layer between the two — the mirror image of
-# mirrors hub/agents/email/python/gaia_agent_email/sse_translation.py
-(which translates the in-process agent-loop vocabulary INTO the canonical
-one; this module translates the canonical vocabulary back OUT to the UI's own
-wire, one hop further downstream).
+translation layer between the two: it translates the canonical vocabulary
+back OUT to the UI's own wire.
 
 Events are emitted via direct, pinned ``handler._emit(...)`` shapes — NOT via
 ``SSEOutputHandler.print_streaming_text`` / ``print_tool_usage`` /
 ``pretty_print_json``, which add brace-buffering and tool-registry lookups
-meant for the in-process agent loop and would be label-dead here now that the
-prior in-process ``agent_type=email`` tool-calling loop has been fully
-retired in favor of this relay (#2109).
+meant for the in-process agent loop and would be label-dead here.
 
-Agent-agnostic since #4161: everything that differs between sidecars — the
-contract floor, the user-facing copy, tool labels, which tools mutate — lives
-in :mod:`gaia.ui.sidecar.profiles`, so the flagship relays through this
-same code path rather than a parallel one.
+Agent-agnostic: everything that differs between sidecars — the contract
+floor, the user-facing copy, tool labels, which tools mutate — lives in
+:mod:`gaia.ui.sidecar.profiles`.
 
 Cancellation: the relay registers the live (still-open) HTTP response on
 ``handler.active_relay_response`` via ``query_stream``'s ``on_response`` hook
@@ -53,7 +47,7 @@ from gaia.agents.base.tool_grants import (
 )
 from gaia.logger import get_logger
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.sidecar.profiles import EMAIL_PROFILE, RelayProfile
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
 from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
@@ -66,22 +60,6 @@ from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
 from gaia.ui.turn_insights import turn_record_problem
 
 logger = get_logger(__name__)
-
-#: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
-#: Hub binary passes the manager's MAJOR-only handshake, see
-#: ``profiles.api_version_supported``) AND here, as the
-#: backstop when a 404 on ``/query`` itself proves the same thing (the
-#: manager's captured ``api_version`` was missing/stale at pre-flight time).
-#: Both call sites must use this exact string.
-EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = EMAIL_PROFILE.version_upgrade_message
-
-#: Appended — never replacing the original text — to a terminal ``error``
-#: detail that looks like a connection/timeout failure. The sidecar emits
-#: ``str(exc)`` verbatim, so its most common failure (Lemonade Server down)
-#: otherwise reaches the user as a raw urllib3 repr with no next step.
-#: Root fix (actionable copy sidecar-side) ships via the agent release
-#: pipeline, not this repo — see the #2109 PR notes.
-LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
 
 #: ``source`` on the terminal ``error`` the daemon synthesizes when an agent's
 #: stream ends with no terminal event (``gaia.daemon.relay``).
@@ -126,7 +104,7 @@ _ALREADY_ADVISED_RE = re.compile(
 )
 
 
-def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
+def _augment_error_detail(detail: str, profile: RelayProfile = GAIA_PROFILE) -> str:
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front. Text that already names its next
@@ -140,12 +118,6 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
 
         return f"{detail}{profile.lemonade_hint} {server_down_advice()}"
     return detail
-
-
-#: Email's own maps, now owned by ``profiles.EMAIL_PROFILE``. Re-exported
-#: under their original names so existing importers keep working.
-_MUTATING_TOOLS = EMAIL_PROFILE.mutating_tools
-_TOOL_LABELS = EMAIL_PROFILE.tool_labels
 
 
 #: ``final.usage`` fields copied onto the UI's ``answer`` event, under the
@@ -167,7 +139,7 @@ def _humanize_tool(tool: str) -> str:
     return tool.replace("_", " ").strip() or "tool"
 
 
-def _tool_label(tool: str, profile: RelayProfile = EMAIL_PROFILE) -> str:
+def _tool_label(tool: str, profile: RelayProfile = GAIA_PROFILE) -> str:
     return profile.tool_labels.get(tool) or _humanize_tool(tool)
 
 
@@ -179,7 +151,7 @@ def _is_summary_view(data: Any) -> bool:
     )
 
 
-def _derive_summary(tool: str, data: Any, profile: RelayProfile = EMAIL_PROFILE) -> str:
+def _derive_summary(tool: str, data: Any, profile: RelayProfile = GAIA_PROFILE) -> str:
     """Short, human summary for a ``tool_result`` — never a bare "Done"."""
     if _is_summary_view(data) and data["summary"]:
         # The sidecar already summarized it; re-summarizing names its keys.
@@ -231,7 +203,7 @@ def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[s
 def _dispatch_one(
     handler: Any,
     event: Dict[str, Any],
-    profile: RelayProfile = EMAIL_PROFILE,
+    profile: RelayProfile = GAIA_PROFILE,
     answers_confirmations: bool = False,
     offers_always: bool = False,
 ) -> bool:
@@ -569,7 +541,7 @@ def relay_query(
     max_steps: Optional[int] = None,
     read_timeout: float = 300.0,
     full_access: Optional[bool] = None,
-    profile: RelayProfile = EMAIL_PROFILE,
+    profile: RelayProfile = GAIA_PROFILE,
     session_id: Optional[str] = None,
     answers_confirmations: bool = False,
     offers_always: bool = False,
@@ -655,8 +627,8 @@ def relay_query(
     """
     # A proxy pointed at one agent driven with another's profile would send
     # that agent's body shape to the wrong /v1/<agent> prefix and label its
-    # tools with the wrong names. ``profile`` still defaults to email for the
-    # existing callers, so check rather than trust it.
+    # tools with the wrong names. ``profile`` has a default, so check rather
+    # than trust it.
     proxy_agent = getattr(proxy, "agent_id", None)
     if proxy_agent is not None and proxy_agent != profile.agent_id:
         raise ValueError(
@@ -668,7 +640,7 @@ def relay_query(
     rid = run_id or str(uuid.uuid4())
     # can_answer_questions=True (#2595): this relay DOES render needs_input
     # and POST the answer back via POST /api/chat/user-input ->
-    # EmailSidecarProxy.respond_query. Omitting it defaults to the sidecar's
+    # SidecarProxy.respond_query. Omitting it defaults to the sidecar's
     # safe False (see query_routes.QueryRequest.can_answer_questions), which
     # makes ask() refuse every question with "use the Agent UI" -- even
     # though the Agent UI is the caller asking.
@@ -880,6 +852,4 @@ def relay_query(
 __all__ = [
     "relay_query",
     "RelayProfile",
-    "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
-    "LEMONADE_CONNECTION_HINT",
 ]

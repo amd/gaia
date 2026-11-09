@@ -103,15 +103,6 @@ def test_a_relayed_flagship_follow_up_gets_the_earlier_turns(
     assert captured["history_pairs"] == prior
 
 
-def test_email_still_gets_its_transcript(monkeypatch, sidecar_flagship_registry):
-    prior = [("Any mail from Ana?", "Two messages.")]
-    captured = _relay_one_turn(
-        monkeypatch, sidecar_flagship_registry, "email", prior, "Summarise them."
-    )
-
-    assert captured["history_pairs"] == prior
-
-
 def test_a_relayed_turn_is_measured_for_under_the_hood(
     monkeypatch, sidecar_flagship_registry
 ):

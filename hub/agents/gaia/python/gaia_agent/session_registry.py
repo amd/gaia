@@ -10,12 +10,9 @@ learned during the turn. A skill activated by ``load_skill`` lives on
 no skills loaded while the model, having just said "it's loaded", keeps
 promising otherwise.
 
-Started as a deliberate mirror of ``gaia_agent_email.agent_routes._SessionRegistry``
-— same idle-TTL + LRU bounds, same claim-the-lock eviction — and has since
-diverged: this one reserves a slot while an agent builds so the cap is a real
-bound, and tears agents down through ``close()``, which the email agent does not
-have. The duplication is a known cost; extracting one shared registry into core
-touches the email agent's tested paths and belongs in its own change.
+Idle-TTL + LRU bounds with claim-the-lock eviction. It reserves a slot while
+an agent builds so the cap is a real bound, and tears agents down through
+``close()``.
 """
 
 from __future__ import annotations

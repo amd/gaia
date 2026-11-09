@@ -868,17 +868,17 @@ class TestChatAgentNamespacedIdentity:
         assert not re.search(r"\bChatAgent\(", src)
 
 
-# ── Non-streaming email chat fails loud (#2109) ──────────────────────────────
+# ── Non-streaming sidecar chat fails loud (#2109) ────────────────────────────
 #
-# Email chat is served exclusively by the sidecar's streaming ``/query`` loop
-# (see ``_dispatch_email_query`` in the streaming producer). There is no
+# A sidecar agent is served exclusively by its streaming ``/query`` loop
+# (see ``_dispatch_sidecar_query`` in the streaming producer). There is no
 # non-streaming shape to relay, so the non-streaming ``_do_chat()`` closure
 # raises a real HTTP 400 instead of flattening the rejection into a friendly
 # chat-text string.
 
 
-class TestNonStreamingEmailFailsLoud:
-    """``_get_chat_response`` must reject ``agent_type=email`` with a real
+class TestNonStreamingSidecarFailsLoud:
+    """``_get_chat_response`` must reject a relayed sidecar agent with a real
     HTTP 400 when ``stream=False`` — never silently degrade to a chat-text
     error message."""
 
@@ -888,29 +888,33 @@ class TestNonStreamingEmailFailsLoud:
         from gaia.ui.models import ChatRequest
 
         db = ChatDatabase(":memory:")
-        session = db.create_session(agent_type="email")
+        session = db.create_session(agent_type="gaia")
         request = ChatRequest(
             session_id=session["id"],
             message="hi",
             stream=False,
-            agent_type="email",
+            agent_type="gaia",
         )
 
-        with pytest.raises(HTTPException) as exc_info:
+        with (
+            patch("gaia.ui._chat_helpers._agent_type_unknown", return_value=False),
+            patch("gaia.ui._chat_helpers._should_relay_to_sidecar", return_value=True),
+            pytest.raises(HTTPException) as exc_info,
+        ):
             asyncio.run(_get_chat_response(db, session, request))
 
         assert exc_info.value.status_code == 400
         # Pinned exact string — a future rewording must update this test
         # deliberately, not slip through unnoticed.
         assert exc_info.value.detail == (
-            "The email agent requires streaming (stream=true); "
-            "non-streaming email chat is not supported."
+            "The GAIA agent requires streaming (stream=true); "
+            "non-streaming GAIA chat is not supported."
         )
 
-    def test_non_email_agent_type_does_not_hit_email_400(self):
-        """A registered non-email agent_type must never raise the
-        email-only 400 — proves the rejection is scoped to agent_type=email,
-        not a broad regression that swallows every non-streaming request."""
+    def test_in_process_agent_type_does_not_hit_the_sidecar_400(self):
+        """A registered in-process agent_type must never raise the sidecar
+        400 — proves the rejection is scoped to relayed agents, not a broad
+        regression that swallows every non-streaming request."""
         from gaia.ui._chat_helpers import _get_chat_response
         from gaia.ui.database import ChatDatabase
         from gaia.ui.models import ChatRequest

@@ -419,8 +419,8 @@ class CreateSessionRequest(BaseModel):
     private: bool = False
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     device: Optional[str] = None
-    # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
-    # routes the email agent to the Outlook backend (see EmailAgentConfig).
+    # Mailbox the mail tools read; None reads every connected one, "microsoft"
+    # only Outlook.
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
     # Folders the chat may read and write from its first message.
     folders: List[str] = Field(default_factory=list)
@@ -613,7 +613,7 @@ class AgentStepResponse(BaseModel):
     mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
-    # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
+    # tool_result event carried a ``render`` kind (e.g. "table") —
     # render-less tool results keep today's summary-only persistence, a
     # deliberate retention cap since a full tool payload can carry raw email
     # bodies. Without these fields pydantic's default extra='ignore' would

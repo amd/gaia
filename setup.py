@@ -20,7 +20,6 @@ tkml_version = "5.0.4"
 # wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-email",
     "gaia-agent-chat",
     "gaia-agent-gaia",
 ]

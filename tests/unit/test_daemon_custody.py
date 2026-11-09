@@ -565,6 +565,8 @@ def test_manager_injects_custody_env_on_spawn(tmp_path, monkeypatch):
         display_name="Toy A",
         expected_api_major="1",
         token_env_var="GAIA_TOY_A_SIDECAR_TOKEN",
+        token_file_env_var="GAIA_TOY_A_SIDECAR_TOKEN_FILE",
+        secret_file_min_version="0.1.0",
         mode_env_var="GAIA_TOY_A_AGENT_MODE",
         cache_dir_name="toy-a",
         dev_src_dir=src,

@@ -11,13 +11,13 @@ from __future__ import annotations
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     surface_supported,
 )
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -28,8 +28,8 @@ def test_only_a_flagship_at_2_20_takes_the_surface(version, expected):
     assert surface_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_the_surface():
-    assert surface_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_the_surface():
+    assert surface_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:

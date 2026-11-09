@@ -28,18 +28,18 @@ from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.sidecar import grants as relayed_grants
 from gaia.ui.sidecar import relay
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     grants_supported,
 )
 from gaia.ui.sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -71,8 +71,8 @@ def test_only_a_flagship_at_2_26_lists_its_grants(version, expected):
     assert grants_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_offers_always():
-    assert grants_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_offers_always():
+    assert grants_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:

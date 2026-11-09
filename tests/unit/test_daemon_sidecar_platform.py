@@ -51,8 +51,8 @@ def test_load_and_resolve_entry(tmp_path):
         tmp_path,
         {
             "darwin-arm64": {
-                "filename": "email-agent-darwin-arm64",
-                "executable": "email-agent",
+                "filename": "gaia-agent-darwin-arm64",
+                "executable": "gaia-agent",
                 "sha256": "a" * 64,
                 "size": 10,
             }
@@ -61,8 +61,8 @@ def test_load_and_resolve_entry(tmp_path):
     lock = plat.load_lock(lock_path)
     assert lock.base_url == "https://example/r2"
     entry = plat.resolve_entry(lock, "darwin-arm64")
-    assert entry.filename == "email-agent-darwin-arm64"
-    assert entry.executable == "email-agent"
+    assert entry.filename == "gaia-agent-darwin-arm64"
+    assert entry.executable == "gaia-agent"
     assert entry.sha256 == "a" * 64
 
 
@@ -75,8 +75,8 @@ def test_resolve_entry_unknown_platform_raises(tmp_path):
     )
     with pytest.raises(PlatformError, match="no sidecar binary for platform") as exc:
         plat.resolve_entry(lock, "plan9-sparc")
-    # Shared code serves any sidecar agent — no email branding leaks (#2347).
-    assert "email-agent" not in str(exc.value)
+    # Shared code serves any sidecar agent — no agent branding leaks (#2347).
+    assert "gaia-agent" not in str(exc.value)
 
 
 def test_resolve_entry_incomplete_raises(tmp_path):
@@ -114,12 +114,11 @@ def test_load_lock_bad_json_raises(tmp_path):
 def test_default_lock_path_points_at_repo_lock():
     p = plat.default_lock_path()
     assert p.name == "binaries.lock.json"
-    assert p.parts[-3:] == ("email", "npm", "binaries.lock.json")
+    assert p.parts[-3:] == ("gaia", "npm", "binaries.lock.json")
 
 
 def test_flagship_lock_loads_its_sidecar_component():
-    """The flagship's schema-3.0 lock must yield its own sidecar pins, never the
-    email agent's."""
+    """The flagship's schema-3.0 lock must yield its sidecar component's pins."""
     path = plat.default_lock_path("gaia")
     raw = json.loads(path.read_text(encoding="utf-8"))
     sidecar = raw["components"]["sidecar"]
@@ -132,8 +131,6 @@ def test_flagship_lock_loads_its_sidecar_component():
     for key, entry in lock.binaries.items():
         assert entry.sha256 == sidecar["platforms"][key]["sha256"]
         assert entry.executable == sidecar["platforms"][key]["executable"]
-    email = plat.load_lock(agent_id="email")
-    assert lock.base_url != email.base_url
 
 
 def test_schema3_lock_without_sidecar_component_raises(tmp_path):

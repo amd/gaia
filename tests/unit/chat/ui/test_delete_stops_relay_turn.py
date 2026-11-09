@@ -1,8 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Deleting a chat mid-email-turn stops the turn and returns promptly (#4140).
+"""Deleting a chat mid-relay-turn stops the turn and returns promptly (#4140).
 
-An email-relay turn parks in a blocking socket read that the cancelled flag
+A relayed turn parks in a blocking socket read that the cancelled flag
 alone can't interrupt, and the delete waits on the session lock that turn
 holds. Every cancel route must also force the parked read closed.
 """
@@ -19,10 +19,10 @@ from fastapi.testclient import TestClient
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.ui._chat_helpers import _active_sse_handlers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.sidecar.proxy import EmailSidecarProxy
 from gaia.ui.routers import sessions as sessions_router
 from gaia.ui.run_manager import Run, run_manager
 from gaia.ui.server import create_app
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 PARK_SECONDS = 30.0
@@ -80,7 +80,7 @@ def silent_sidecar():
 
 def _park_relay_read(url, handler):
     """Open a relay stream on *handler* and drain it on a thread, like the producer."""
-    proxy = EmailSidecarProxy(url)
+    proxy = SidecarProxy(url, agent_id="gaia")
     gen = proxy.query_stream(
         {"query": "park"},
         read_timeout=PARK_SECONDS,

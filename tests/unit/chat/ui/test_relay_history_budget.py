@@ -21,9 +21,9 @@ from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClientError
 from gaia.llm.model_fit import ModelFitError
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.sidecar import daemon_client
-from gaia.ui.sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
 from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar import daemon_client
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 
 LOCAL_MODEL = "Qwen3.6-35B-A3B-GGUF"
@@ -210,26 +210,6 @@ def test_a_stable_cut_is_announced_once_per_chat(monkeypatch):
 
     assert len(first) == 1
     assert second == []
-
-
-def test_the_email_sidecar_gets_the_same_history(monkeypatch):
-    _window(monkeypatch, 65536)
-    mail = "Forwarded thread:\n" + "From: a@example.com\n" * 900
-
-    bodies, cuts, _ = _relay(
-        monkeypatch,
-        [(mail, "Two senders.")],
-        profile=EMAIL_PROFILE,
-        api_version="2.4",
-        message="who else wrote?",
-    )
-
-    assert bodies[0]["query"] == "who else wrote?"
-    assert bodies[0]["context"] == [
-        {"role": "user", "content": mail},
-        {"role": "assistant", "content": "Two senders."},
-    ]
-    assert cuts == []
 
 
 def test_a_window_that_cannot_be_read_stops_the_turn_loudly(monkeypatch):

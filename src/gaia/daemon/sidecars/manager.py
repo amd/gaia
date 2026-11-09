@@ -1,8 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """AgentSidecarManager — spawn / health / tree-kill a sidecar agent process,
-generalized from ``EmailSidecarManager`` (Node-free) to be spec-driven so the
-daemon can supervise more than one kind of sidecar (issue #2142, T1).
+spec-driven so the daemon can supervise more than one kind of sidecar.
 
 Modes (``spec.mode_env_var``):
   user (default) — spawn the verified frozen binary: a Hub-installed one when
@@ -10,8 +9,8 @@ Modes (``spec.mode_env_var``):
   dev            — spawn ``uvicorn <spec.dev_module> --app-dir
                    <spec.dev_src_dir>/<spec.dev_app_dir>`` from source. Loaded
                    as a TOP-LEVEL module (NOT ``packaging.server:app``, which
-                   would resolve to the PyPI ``packaging`` library — the
-                   email package's ``packaging/`` dir has no ``__init__.py``
+                   would resolve to the PyPI ``packaging`` library — an
+                   agent package's ``packaging/`` dir has no ``__init__.py``
                    by design).
 
 Both serve the identical sidecar contract; the mode only swaps which process
@@ -263,13 +262,12 @@ class AgentSidecarManager:
         self.resolved_mode: Optional[str] = None
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
         # Generated once per manager instance; the proxy replays it as a bearer
-        # token on every request. Delivered via a 0600 file (#2149) when the
-        # sidecar supports it, else the deprecated bare-env leg.
+        # token on every request. Delivered via a 0600 file (#2149).
         self.auth_token: str = secrets.token_urlsafe(32)
         # Installed binary version captured by build_spawn_command (user mode) —
         # the pre-spawn key for secret-delivery negotiation (#2149).
         self.installed_binary_version: Optional[str] = None
-        # The leg actually used at spawn time: "file" | "env".
+        # "file" once the secret has been delivered at spawn.
         self.secret_delivery: Optional[str] = None
         self._secret_path: Optional[Path] = None
         # Delegated-custody wiring (#2153), set by the registry at mint before
@@ -423,7 +421,7 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the {self.spec.agent_id} source at {app_dir} but "
                 "it is missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/email/python`."
+                f"`uv pip install -e hub/agents/{self.spec.agent_id}/python`."
             )
         # No ``--reload``: it makes uvicorn run its own multiprocessing-spawn
         # reload supervisor on top of a sidecar the daemon already supervises,
@@ -532,8 +530,8 @@ class AgentSidecarManager:
         group_kwargs = background_popen_kwargs()
         # Hand the sidecar its per-session caller-auth token (#1706). Merge over
         # the inherited env / any cwd already in popen_kwargs — never clobber
-        # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
-        # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
+        # them. The secret-file check runs pre-spawn (#2149), before the log
+        # opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
         from gaia.env import unfreeze_loader_paths
         from gaia.llm.lemonade_choice import child_lemonade_env
@@ -630,88 +628,71 @@ class AgentSidecarManager:
             minimum and version and _version_tuple(version) >= _version_tuple(minimum)
         )
 
-    def _resolve_secret_delivery(self) -> "tuple[str, str]":
-        """Pick the delivery leg ("file" | "env") BEFORE spawn, plus the reason.
+    def _resolve_secret_delivery(self) -> str:
+        """Check BEFORE spawn that the sidecar reads its secret from a file.
 
-        Keyed off what the parent already knows — the resolved mode and the
-        installed binary's version from the install manifest / lock. NOT the
-        runtime /version probe: that answers only after spawn, which is too late
-        to choose how the secret is delivered (#2149).
+        Returns why it does. Keyed off what the parent already knows — the
+        resolved mode and the installed binary's version from the install
+        manifest / lock. NOT the runtime /version probe: that answers only
+        after spawn, which is too late (#2149).
         """
         spec = self.spec
         if not spec.token_file_env_var or not spec.secret_file_min_version:
-            return "env", f"the {spec.agent_id} spec declares no file-delivery contract"
+            raise SidecarSpawnError(
+                f"the {spec.agent_id} sidecar spec declares no secret-file "
+                "contract (token_file_env_var / secret_file_min_version), so "
+                "its launch secret has no safe way in. Add both to its entry "
+                "in gaia.daemon.sidecars.spec.builtin_specs()."
+            )
         mode = self.resolved_mode or self.mode
         if mode == "dev":
-            return "file", "dev mode runs from source, which reads the secret file"
+            return "dev mode runs from source, which reads the secret file"
         version = self.installed_binary_version
         if not version:
             raise SidecarSpawnError(
                 f"cannot negotiate secret delivery for the {spec.agent_id} "
                 "sidecar: the installed binary's version is unknown (no version "
                 "in the hub install sentinel or binaries.lock.json). Refusing to "
-                "guess which leg the binary understands — reinstall the agent "
+                "guess whether the binary reads the secret file — reinstall the agent "
                 "so its install metadata records a version."
             )
-        if _version_tuple(version) >= _version_tuple(spec.secret_file_min_version):
-            return (
-                "file",
-                f"installed binary {version} >= {spec.secret_file_min_version}",
+        if _version_tuple(version) < _version_tuple(spec.secret_file_min_version):
+            raise SidecarSpawnError(
+                f"the installed {spec.agent_id} sidecar binary {version} predates "
+                f"secret-file delivery (needs {spec.secret_file_min_version} or "
+                "later). Update GAIA, or reinstall the agent, to get a current "
+                "binary."
             )
-        return (
-            "env",
-            f"installed binary {version} predates file delivery "
-            f"(< {spec.secret_file_min_version})",
-        )
+        return f"installed binary {version} >= {spec.secret_file_min_version}"
 
     def _apply_secret_delivery(self, spawn_env: dict) -> None:
-        """Inject the launch secret into *spawn_env* via the negotiated leg.
+        """Hand the launch secret to the child through an owner-only file.
 
         The same secret doubles as the sidecar's model-slot broker credential
         (#2151 / V2-11): the sidecar presents ``self.auth_token`` to the host
         broker, and the registry authenticates it against this manager's token.
-        It rides the SAME delivery leg as the launch secret so file delivery
-        (#2149) is never undermined by a bare-env copy — for the file leg the
-        broker credential reuses the very same 0600 file.
+        It reuses the very same 0600 file, so file delivery (#2149) is never
+        undermined by a bare-env copy.
         """
         from gaia.daemon.constants import (
             BROKER_TOKEN_ENV_VAR,
             BROKER_TOKEN_FILE_ENV_VAR,
         )
 
-        leg, reason = self._resolve_secret_delivery()
-        self.secret_delivery = leg
-        if leg == "file":
-            secret_path = self._write_secret_file()
-            spawn_env[self.spec.token_file_env_var] = str(secret_path)
-            # The broker credential is the same secret — point the broker client
-            # at the same 0600 file rather than leaking a bare-env copy (#2149).
-            spawn_env[BROKER_TOKEN_FILE_ENV_VAR] = str(secret_path)
-            # Never let a stale inherited token env var ride into the child.
-            spawn_env.pop(self.spec.token_env_var, None)
-            spawn_env.pop(BROKER_TOKEN_ENV_VAR, None)
-            logger.info(
-                "%s sidecar: delivering launch secret via 0600 file %s (%s)",
-                self.spec.agent_id,
-                secret_path,
-                reason,
-            )
-        else:
-            spawn_env[self.spec.token_env_var] = self.auth_token
-            # Bare-env broker credential only on the already-deprecated bare-env
-            # leg (older binaries). No new secret surface beyond the launch token.
-            spawn_env[BROKER_TOKEN_ENV_VAR] = self.auth_token
-            spawn_env.pop(BROKER_TOKEN_FILE_ENV_VAR, None)
-            logger.warning(
-                "%s sidecar: DEPRECATED bare-env secret delivery via %s (%s). "
-                "The secret is visible to local process inspection "
-                "(/proc/<pid>/environ, ps eww); upgrade the installed sidecar "
-                "binary to get 0600-file delivery. Removal of this leg is "
-                "tracked in #2149.",
-                self.spec.agent_id,
-                self.spec.token_env_var,
-                reason,
-            )
+        reason = self._resolve_secret_delivery()
+        self.secret_delivery = "file"
+        secret_path = self._write_secret_file()
+        spawn_env[self.spec.token_file_env_var] = str(secret_path)
+        spawn_env[BROKER_TOKEN_FILE_ENV_VAR] = str(secret_path)
+        # Never let a stale inherited token env var ride into the child.
+        spawn_env.pop(self.spec.token_env_var, None)
+        spawn_env.pop(BROKER_TOKEN_ENV_VAR, None)
+        logger.info(
+            "%s sidecar: delivering launch secret via 0600 file %s (%s)",
+            self.spec.agent_id,
+            secret_path,
+            reason,
+        )
 
     def _write_secret_file(self) -> Path:
         self._secret_path = self._create_secret_file(self.auth_token)

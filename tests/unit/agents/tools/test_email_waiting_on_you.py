@@ -564,29 +564,3 @@ def test_the_scan_never_writes(api):
     assert fake.requests
     assert {r.method for r in fake.requests} == {"GET"}
 
-
-# --------------------------------------------------------------------------
-# parity with the email agent, while it still ships
-# --------------------------------------------------------------------------
-
-
-def test_predicates_match_the_email_agent_row_for_row():
-    pytest.importorskip("gaia_agent_email")
-    from gaia_agent_email.tools.calendar_tools import detect_meeting_request_heuristic
-    from gaia_agent_email.tools.text_signals import (
-        has_direct_ask_signal,
-        has_meeting_time_signal,
-    )
-
-    for rec in _corpus():
-        s, b = (rec.get("subject") or ""), (rec.get("body") or "")
-        assert waiting.has_direct_ask_signal(
-            s.lower(), b.lower()
-        ) == has_direct_ask_signal(s.lower(), b.lower()), rec["id"]
-        assert waiting.has_meeting_time_signal(
-            s.lower(), b.lower()
-        ) == has_meeting_time_signal(s.lower(), b.lower()), rec["id"]
-        theirs = detect_meeting_request_heuristic(s, b)
-        assert waiting.is_meeting_request(s, b) == bool(
-            theirs.is_meeting_request and theirs.confidence == "high"
-        ), rec["id"]

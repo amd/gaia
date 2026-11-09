@@ -24,7 +24,7 @@ _FIXTURE = json.loads(
         Path(__file__).resolve().parents[2]
         / "fixtures"
         / "connectors"
-        / "email_scopes.json"
+        / "mail_scopes.json"
     ).read_text(encoding="utf-8")
 )
 _CONNECTORS = ("google", "microsoft", "microsoft_work")
@@ -55,22 +55,12 @@ def test_fixture_identity_scopes_are_a_single_list(connector_id):
     assert all(isinstance(s, str) for s in identity)
 
 
-@pytest.mark.parametrize("connector_id", _CONNECTORS)
-def test_connect_union_carries_the_identity_scopes_verbatim(connector_id):
-    entry = _FIXTURE[connector_id]
-    union = entry["connect_union"]
-    assert union[: len(entry["identity_scopes"])] == entry["identity_scopes"]
-    assert len(union) == len(set(union)), "the union must not repeat a scope"
-
-
 def test_google_requests_no_short_alias_for_a_url_it_already_asks_for():
     # "email" and userinfo.email are the same scope; requesting both spellings
     # is the drift this guards against.
     defaults = set(REGISTRY.get("google").default_scopes)
     assert "email" not in defaults and "profile" not in defaults
     assert "https://www.googleapis.com/auth/userinfo.email" in defaults
-    union = set(_FIXTURE["google"]["connect_union"])
-    assert not {"email", "profile"} & union
 
 
 def test_google_identity_scopes_match_what_the_token_response_echoes():

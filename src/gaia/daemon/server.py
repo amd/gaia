@@ -301,6 +301,7 @@ def run(host: str = HOST) -> None:
     )
     from gaia.daemon.migrate import run_migrations
     from gaia.daemon.paths import custody_db_path, scheduler_db_path
+    from gaia.daemon.sidecars.install import remove_retired_agents
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
@@ -312,6 +313,9 @@ def run(host: str = HOST) -> None:
     # propagates and the daemon exits) rather than serving over ambiguous state.
     result = run_migrations()
     logger.info("daemon: custody schema %s", result)
+    # An upgrade from a GAIA that shipped a since-retired agent leaves its
+    # binary behind with nothing to supervise it.
+    remove_retired_agents()
 
     port = _find_free_port(host)
     token = secrets.token_urlsafe(32)

@@ -73,19 +73,17 @@ def test_catalog_default_scopes_are_exactly_the_identity_set(spec_name):
 
 
 def test_openid_is_absent_from_every_microsoft_connect_scope_in_the_fixture():
-    """The shared fixture drives the TUI's reconnect scopes (Go) too, so a
-    stale ``openid`` there would resurrect the failing request in the TUI even
-    with the Python side fixed."""
+    """A stale ``openid`` in the shared fixture would let the identity-spelling
+    test pin the failing request back in."""
     fixture_path = (
         Path(__file__).resolve().parents[2]
         / "fixtures"
         / "connectors"
-        / "email_scopes.json"
+        / "mail_scopes.json"
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     for connector_id in ("microsoft", "microsoft_work"):
         entry = fixture[connector_id]
-        assert "openid" not in entry["connect_union"], connector_id
         assert "openid" not in entry["identity_scopes"], connector_id
 
 

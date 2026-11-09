@@ -73,7 +73,7 @@ def test_discovery_uses_list_agent_packages():
     """The pipeline's discovery is the real setup.py[agents] helper."""
     packages = pub.list_agent_packages()
     ids = {p.agent_id for p in packages}
-    assert {"email", "chat", "gaia"} <= ids
+    assert {"chat", "gaia"} <= ids
 
 
 def test_select_agents_default_is_all():

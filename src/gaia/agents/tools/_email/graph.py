@@ -7,11 +7,6 @@ conversation), and folder enumeration. There
 is no mutating verb here, so there is no action ledger to keep consistent and
 nothing to undo. Writes arrive in a later phase together with the ledger that
 makes them reversible.
-
-This is a lean reimplementation of the read half of
-``gaia_agent_email.outlook_backend``, not an import of it: the flagship must not
-depend on the standalone email package it is meant to replace. The wire
-contract (Graph ``message`` resource) is the shared truth, not the Python.
 """
 
 from __future__ import annotations

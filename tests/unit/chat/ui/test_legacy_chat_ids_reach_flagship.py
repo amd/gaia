@@ -16,7 +16,6 @@ import pytest
 from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
     GAIA_PROFILE,
     profile_for,
 )
@@ -53,7 +52,6 @@ def test_ids_that_only_look_legacy_get_no_profile(other):
 
 def test_real_profiles_are_unchanged():
     assert profile_for("gaia") is GAIA_PROFILE
-    assert profile_for("email") is EMAIL_PROFILE
 
 
 @pytest.mark.parametrize("legacy", LEGACY_IDS)

@@ -22,9 +22,6 @@ on:
     paths:
       - 'src/gaia/daemon/**'
       - 'src/gaia/eval/sidecar_harness.py'
-      - 'hub/agents/email/python/gaia_agent_email/sse_translation.py'
-      - 'hub/agents/email/python/gaia_agent_email/query_routes.py'
-      - 'hub/agents/email/python/eval_baselines/**'
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
@@ -33,8 +30,6 @@ on:
       - 'pyproject.toml'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'hub/agents/email/python/pyproject.toml'
-      - 'hub/agents/email/python/gaia_agent_email/__init__.py'
       - 'src/gaia/agents/base/memory_store.py'
       - 'src/gaia/ui/database.py'
       - 'tests/integration/conftest.py'
@@ -45,9 +40,6 @@ on:
     paths:
       - 'src/gaia/daemon/**'
       - 'src/gaia/eval/sidecar_harness.py'
-      - 'hub/agents/email/python/gaia_agent_email/sse_translation.py'
-      - 'hub/agents/email/python/gaia_agent_email/query_routes.py'
-      - 'hub/agents/email/python/eval_baselines/**'
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
@@ -56,8 +48,6 @@ on:
       - 'pyproject.toml'
       - 'setup.py'
       - 'pyproject.toml'
-      - 'hub/agents/email/python/pyproject.toml'
-      - 'hub/agents/email/python/gaia_agent_email/__init__.py'
       - 'src/gaia/agents/base/memory_store.py'
       - 'src/gaia/ui/database.py'
       - 'tests/integration/conftest.py'
@@ -91,12 +81,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Core [api] carries fastapi/httpx (relay + harness); the email hub
-          # package makes gaia_agent_email.sse_translation importable so the
-          # cross-seam VOCABULARY coherence assertions run for real (not skipped).
+          # Core [api] carries fastapi/httpx (relay + harness).
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx
-          uv pip install --system -e ".[api]" -e hub/agents/email/python
+          uv pip install --system -e ".[api]"
 
       - name: Run harness core unit tests
         env:

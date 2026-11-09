@@ -21,14 +21,14 @@ import gaia.ui._chat_helpers as chat_helpers
 from gaia.security import ALLOWED_PATHS_ENV, AllowedPathsEnvError, PathValidator
 from gaia.ui import session_environment
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client, relay
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     scope_supported,
     working_directory_supported,
 )
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -143,7 +143,7 @@ def test_only_a_flagship_at_2_18_takes_the_scope(version, expected):
 )
 def test_only_a_flagship_at_2_24_takes_the_working_directory(version, expected):
     assert working_directory_supported(GAIA_PROFILE, version) is expected
-    assert working_directory_supported(EMAIL_PROFILE, "9.9") is False
+    assert working_directory_supported(_NO_PROFILE, "9.9") is False
 
 
 def test_the_relay_sends_the_workspace_only_to_a_supporting_flagship(monkeypatch):
@@ -156,8 +156,8 @@ def test_the_relay_sends_the_workspace_only_to_a_supporting_flagship(monkeypatch
     assert "working_directory" not in old
 
 
-def test_email_never_takes_the_scope():
-    assert scope_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_the_scope():
+    assert scope_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:

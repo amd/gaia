@@ -67,7 +67,7 @@ class RelayProfile:
     """The agent-specific half of one ``/query`` relay."""
 
     agent_id: str
-    #: How the agent is named in user-facing copy, mid-sentence ("the email
+    #: How the agent is named in user-facing copy, mid-sentence ("the GAIA
     #: agent isn't ready yet"). Lower-case except for proper nouns.
     display_name: str
     #: Terminal error when the stream closes without a ``final``/``error``.
@@ -96,21 +96,7 @@ class RelayProfile:
     #: because the sidecar emits ``str(exc)`` verbatim and its commonest
     #: failure otherwise reaches the user as a raw urllib3 repr.
     lemonade_hint: str = ""
-    #: Whether this agent is ALWAYS served by its sidecar, even when an
-    #: importable in-process registration exists. True for email, whose
-    #: in-process tool-calling loop was retired in favour of the relay
-    #: (#2109). False for the flagship: a wheel/dev install registers a real
-    #: factory and runs in-process (that is what ``gaia eval agent`` drives),
-    #: while a Hub binary install registers only the raise-on-call stand-in
-    #: and must relay. Which one you have is an install-kind question, not an
-    #: agent-id question.
-    always_relay: bool = False
     #: Whether a not-ready ``/init`` (503) STOPS the turn.
-    #:
-    #: True for email: its ``/init`` is half of a provisioning handshake the
-    #: user completes from the agent card, and running a triage against an
-    #: unprovisioned mailbox wastes a long model call to reach the same
-    #: answer.
     #:
     #: False for the flagship, whose ``/init`` is only a read-only probe —
     #: and an imperfect one. Observed: against a Lemonade that requires
@@ -238,144 +224,6 @@ class RelayProfile:
         if not log_dir.is_dir():
             return message
         return f"{message} The details are in this log folder: {log_dir}"
-
-
-# --- email ------------------------------------------------------------------
-
-#: Mutating email tools that execute WITHOUT confirmation under ``/query``
-#: (``CONFIRMATION_REQUIRED_TOOLS`` gates only send/RSVP/forward/
-#: quarantine/calendar-create — see
-#: ``gaia_agent_email.agent.EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS``).
-_EMAIL_MUTATING_TOOLS = frozenset(
-    {
-        "archive_message",
-        "archive_message_batch",
-        "undo_archive_batch",
-        "mark_read",
-        "mark_unread",
-        "mark_read_batch",
-        "mark_unread_batch",
-        "add_star",
-        "remove_star",
-        "add_star_batch",
-        "remove_star_batch",
-        "label_message",
-        "label_message_batch",
-        "move_to_label",
-        "move_to_label_batch",
-        "trash_message",
-        "restore_message",
-        "restore_trashed_message",
-        "snooze_message",
-        "cancel_scheduled_job",
-        "unquarantine_message",
-        "set_priority_sender",
-        "set_low_priority_sender",
-        "set_category_default",
-        "clear_session_preferences",
-        "build_voice_profile",
-        "clear_voice_profile",
-    }
-)
-
-_EMAIL_TOOL_LABELS: Dict[str, str] = {
-    "pre_scan_inbox": "Scanning inbox",
-    "triage_inbox": "Triaging inbox",
-    "search_messages": "Searching mail",
-    "search_trash": "Searching Trash",
-    "list_inbox": "Listing inbox",
-    "get_message": "Reading message",
-    "get_thread": "Reading thread",
-    "summarize_thread": "Summarizing thread",
-    "summarize_message": "Summarizing message",
-    "list_labels": "Listing labels",
-    "check_followups": "Checking follow-ups",
-    "profile_inbox": "Profiling inbox",
-    "draft_reply": "Drafting reply",
-    "draft_forward": "Drafting forward",
-    "send_draft": "Sending draft",
-    "send_now": "Sending message",
-    "forward_message": "Forwarding message",
-    "schedule_send": "Scheduling send",
-    "archive_message": "Archiving message",
-    "archive_message_batch": "Archiving messages",
-    "undo_archive_batch": "Undoing archive",
-    "mark_read": "Marking read",
-    "mark_unread": "Marking unread",
-    "mark_read_batch": "Marking messages read",
-    "mark_unread_batch": "Marking messages unread",
-    "add_star": "Starring message",
-    "remove_star": "Unstarring message",
-    "add_star_batch": "Starring messages",
-    "remove_star_batch": "Unstarring messages",
-    "label_message": "Labeling message",
-    "label_message_batch": "Labeling messages",
-    "move_to_label": "Moving message",
-    "move_to_label_batch": "Moving messages",
-    "trash_message": "Trashing message",
-    "restore_message": "Restoring message",
-    "restore_trashed_message": "Restoring message from Trash",
-    "snooze_message": "Snoozing message",
-    "cancel_scheduled_job": "Cancelling scheduled job",
-    "list_scheduled_jobs": "Listing scheduled jobs",
-    "list_calendar_events": "Checking calendar",
-    "accept_invite": "Accepting invite",
-    "decline_invite": "Declining invite",
-    "create_event_from_email": "Creating calendar event",
-    "detect_meeting_request": "Detecting meeting request",
-    "detect_calendar_conflicts": "Checking calendar conflicts",
-    "quarantine_phishing_message": "Quarantining suspicious message",
-    "unquarantine_message": "Restoring quarantined message",
-    "set_priority_sender": "Updating priority sender",
-    "set_low_priority_sender": "Updating low-priority sender",
-    "set_category_default": "Updating category preference",
-    "clear_session_preferences": "Clearing session preferences",
-    "build_voice_profile": "Building voice profile",
-    "clear_voice_profile": "Clearing voice profile",
-}
-
-EMAIL_PROFILE = RelayProfile(
-    agent_id="email",
-    display_name="email",
-    # 2.4 is where /query itself landed; a pre-2.4 Hub binary passes the
-    # daemon's MAJOR-only handshake and then 404s every call.
-    min_api_version=(2, 4),
-    stream_ended_message=(
-        "The email agent stopped unexpectedly while working. Anything it had "
-        "already written is kept above. Send your message again."
-    ),
-    start_failed_message=(
-        "The email agent couldn't start. Send your message again. If this keeps "
-        "happening, restart GAIA. If it still fails, update GAIA to the latest "
-        "version or reinstall it."
-    ),
-    version_upgrade_message=(
-        "The email agent is out of date and can't answer chat messages. Update "
-        "GAIA and the email agent to the latest version, then try again."
-    ),
-    memory_upgrade_message=(
-        "The installed email agent does not support private chats or chats with "
-        "memory turned off. Your message was not sent to the email agent. Update "
-        "GAIA and the email agent, or use the GAIA agent for this chat instead."
-    ),
-    tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
-    mutating_tools=_EMAIL_MUTATING_TOOLS,
-    change_noun="mailbox change",
-    lemonade_hint=(
-        "\n\nThis usually means the local LLM backend (Lemonade Server) is "
-        "not running or unreachable from the email agent."
-    ),
-    always_relay=True,
-    # 2.12 added /query's session_id (#2829): a follow-up can then name a
-    # thread the previous turn showed (#2834).
-    min_session_id_api_version=(2, 12),
-    # 2.16 added /query's memory mode. Private and memory-off chats must never
-    # reach an older sidecar that would persist their email-derived memories.
-    min_memory_api_version=(2, 16),
-    tools_upgrade_message=(
-        "The email agent can't list its tools here. Its tools still work in chat."
-    ),
-)
 
 
 # --- gaia (the flagship) ----------------------------------------------------
@@ -630,7 +478,6 @@ GAIA_PROFILE = RelayProfile(
 
 
 _PROFILES: Dict[str, RelayProfile] = {
-    EMAIL_PROFILE.agent_id: EMAIL_PROFILE,
     GAIA_PROFILE.agent_id: GAIA_PROFILE,
 }
 
@@ -845,7 +692,6 @@ def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
 __all__ = [
     "RelayProfile",
     "_NO_PROFILE",
-    "EMAIL_PROFILE",
     "GAIA_PROFILE",
     "SIDECAR_AGENT_IDS",
     "profile_for",

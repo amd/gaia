@@ -93,7 +93,7 @@
 #                              gate and the release hangs). The publish job is
 #                              bound to it, so a release pauses for human
 #                              approval before any hub/npm publish. Shared with
-#                              release_agent_email.yml.
+#                              release_components.yml.
 #   Secrets:
 #     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an
 #                              entry in the Worker's PUBLISH_TOKENS secret,
@@ -127,10 +127,10 @@
 #   file name: release_agent_gaia.yml (repo amd/gaia). The OIDC subject is tied
 #   to the exact filename — RENAMING THIS FILE BREAKS THE npm PUBLISH.
 #
-# Not carried over from release_agent_email.yml (deliberate):
+# Not carried over from the retired email-agent release workflow (deliberate):
 #   * the `verify-darwin-x64-compat` leg. darwin-x64 is built on macos-26-intel,
 #     the newest Intel image, which can raise the frozen binary's minimum macOS.
-#     Email added a macos-15-intel smoke leg to catch that. Add the same here if
+#     The email agent had a macos-15-intel smoke leg to catch that. Add the same here if
 #     Intel-Mac backward-compat becomes a real support burden; today darwin-x64
 #     is best-effort and its absence/breakage fails loudly at install.
 #   * the whole-package zip (disabled upstream — exceeded the edge upload limit).

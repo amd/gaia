@@ -1,16 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The agent-type registry pre-check must not reject sidecar-backed agents.
+"""The agent-type registry pre-check decides which chats can be dispatched.
 
-The email agent ships as an out-of-process sidecar: a binary-only Hub install
-has no importable wheel, so ``registry.get("email")`` is ``None`` even when the
-agent is installed and healthy. The chat guard must exempt sidecar types or the
-email chat is unreachable on exactly the consumer machines the Hub install
-targets — dev boxes mask this because they pip-install the wheel.
-
-``chat`` is deliberately *not* exempt: it is created through the registry like
-every other in-process agent, so the registry is what decides whether it is
-reachable.
+Every agent, sidecar or in-process, must resolve in the registry; one installed
+after startup is found by a rescan instead of needing a server restart.
 """
 
 from gaia.ui._chat_helpers import _SIDECAR_AGENT_TYPES, _agent_type_unknown
@@ -46,11 +39,6 @@ def test_known_agent_does_not_rescan():
     assert registry.refreshes == 0
 
 
-def test_email_allowed_without_registry_entry():
-    # The consumer-machine state: binary hub install, no importable wheel.
-    assert _agent_type_unknown("email", _Registry(known=())) is False
-
-
 def test_chat_allowed_when_registered():
     assert _agent_type_unknown("chat", _Registry(known={"chat"})) is False
 
@@ -79,6 +67,6 @@ def test_no_registry_preserves_permissive_behavior():
     assert _agent_type_unknown("anything", None) is False
 
 
-def test_email_is_declared_sidecar_type():
-    # Pins the constant so a rename/refactor can't silently drop the exemption.
-    assert "email" in _SIDECAR_AGENT_TYPES
+def test_the_flagship_is_declared_sidecar_type():
+    # Pins the constant so a rename/refactor can't silently drop the relay.
+    assert "gaia" in _SIDECAR_AGENT_TYPES

@@ -1101,41 +1101,6 @@ def _launch_interactive_cli(log=None):
                 log.warning("Could not finish memory extraction before exit: %s", exc)
 
 
-def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
-    """Guard ``gaia eval benchmark --compare`` against cross-ctx comparisons (#1892).
-
-    A throughput/quality baseline measured at one context window is not
-    comparable to a run measured at another. Raises ``SystemExit`` when both
-    sides record a ``ctx_size`` and they differ; prints a single loud legacy
-    warning (and proceeds) when either side lacks the field.
-    """
-    baseline_ctx = baseline.get("ctx_size")
-    if baseline_ctx is None:
-        print(
-            f"[COMPARE] WARNING: baseline {baseline_path} records no ctx_size "
-            "(legacy pre-#1892 card, measured at an unpinned window — "
-            "implicitly the model's 64K registry floor). The comparison "
-            "proceeds but is NOT ctx-verified; re-record the baseline with "
-            "--ctx-size to make it comparable."
-        )
-        return
-    if current_ctx is None:
-        print(
-            f"[COMPARE] WARNING: this run records no ctx_size but baseline "
-            f"{baseline_path} was measured at ctx={baseline_ctx}; the "
-            "comparison proceeds but is NOT ctx-verified."
-        )
-        return
-    if int(baseline_ctx) != int(current_ctx):
-        raise SystemExit(
-            f"[ERROR] ctx mismatch: this run measured ctx_size={current_ctx} "
-            f"but the baseline at {baseline_path} records "
-            f"ctx_size={baseline_ctx}. Comparing runs across different "
-            f"context windows is invalid — rerun with --ctx-size "
-            f"{baseline_ctx}, or record a new baseline at {current_ctx}."
-        )
-
-
 def _hide_subcommands(subparsers, names) -> None:
     """Drop subcommands from ``-h`` while they keep parsing and dispatching.
 
@@ -1291,8 +1256,6 @@ def build_parser():
         "current folder without asking. Implies --dangerously-skip-permissions",
     )
 
-    # --stats is split out so a command whose handler never reads it (email)
-    # can take the rest without accepting a silent no-op.
     base_flags_parser = argparse.ArgumentParser(add_help=False)
     base_flags_parser.add_argument(
         "--logging-level",
@@ -1580,147 +1543,6 @@ def build_parser():
         "--index", "-i", type=str, help="Index a PDF document for voice Q&A"
     )
     talk_parser.set_defaults(action="talk")
-
-    # Add Email Triage Agent command (#962)
-    email_parser = subparsers.add_parser(
-        "email",
-        help=(
-            "Email Triage Agent — read, organize, and reply to Gmail or "
-            "Outlook with all body inference running locally on Lemonade. "
-            "Requires the Google or Microsoft connector to be configured "
-            "(Settings → Connectors)."
-        ),
-        parents=[
-            base_flags_parser,
-            model_parser,
-            base_url_parser,
-            trace_parser,
-            removed_provider_parser,
-        ],
-    )
-    email_parser.add_argument(
-        "-q",
-        "--query",
-        type=str,
-        default=None,
-        help="One-shot query to send to the agent (non-interactive).",
-    )
-    email_parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode (loop reading queries from stdin).",
-    )
-    email_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help=(
-            "Verbose mode — emit structured logs for every triage decision "
-            "and tool call (recommended when benchmarking against other "
-            "email agents)."
-        ),
-    )
-    email_parser.add_argument(
-        "--spec",
-        action="store_true",
-        help=(
-            "Generate the HTML endpoint spec page, write it to disk, and open "
-            "it in a browser. No LLM or Lemonade required."
-        ),
-    )
-    email_parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help=(
-            "Path to write the HTML spec (default: ~/.gaia/email/endpoint-spec.html). "
-            "Only used with --spec."
-        ),
-    )
-
-    # Autonomy control surface (#2516) — thin client over the sidecar's
-    # session-scoped /v1/email/agent/autonomy* REST routes, relayed through
-    # the daemon like every other `gaia email` command.
-    email_subparsers = email_parser.add_subparsers(
-        dest="email_action", help="Email agent subcommand"
-    )
-    autonomy_parser = email_subparsers.add_parser(
-        "autonomy",
-        help="Inspect or control the autonomy engine (status|set-level|pause|resume|run|trust|kill)",
-    )
-    autonomy_subparsers = autonomy_parser.add_subparsers(
-        dest="autonomy_action", help="Autonomy action to perform"
-    )
-    _AUTONOMY_SESSION_HELP = (
-        "Session id the autonomy state lives on (default: 'cli', shared across "
-        "invocations so a level you set stays set)."
-    )
-
-    autonomy_status_parser = autonomy_subparsers.add_parser(
-        "status", help="Show the current autonomy level and trust summary"
-    )
-    autonomy_status_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_trust_parser = autonomy_subparsers.add_parser(
-        "trust", help="Show the earned-trust ledger (per action/scope tally)"
-    )
-    autonomy_trust_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_set_level_parser = autonomy_subparsers.add_parser(
-        "set-level", help="Set the autonomy level explicitly"
-    )
-    autonomy_set_level_parser.add_argument(
-        "level", choices=["off", "suggest", "earn_trust", "full"]
-    )
-    autonomy_set_level_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_pause_parser = autonomy_subparsers.add_parser(
-        "pause", help="Stop autonomous activity (sets the level to 'off')"
-    )
-    autonomy_pause_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_resume_parser = autonomy_subparsers.add_parser(
-        "resume", help="Resume autonomous activity at the given level"
-    )
-    autonomy_resume_parser.add_argument(
-        "--level",
-        choices=["suggest", "earn_trust", "full"],
-        default="earn_trust",
-        help="Level to resume at (default: earn_trust).",
-    )
-    autonomy_resume_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_kill_parser = autonomy_subparsers.add_parser(
-        "kill", help="Kill switch — immediately sets the level to 'off'"
-    )
-    autonomy_kill_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
-
-    autonomy_run_parser = autonomy_subparsers.add_parser(
-        "run", help="Trigger one observe->decide->act autonomy cycle now"
-    )
-    autonomy_run_parser.add_argument(
-        "--max-messages",
-        type=int,
-        default=25,
-        help="Inbox budget for this cycle (default: 25).",
-    )
-    autonomy_run_parser.add_argument(
-        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
-    )
 
     # Add API server command
     api_parser = subparsers.add_parser(
@@ -2492,84 +2314,6 @@ Examples:
         help="Inference device for eval scenarios: cpu, gpu (default), or npu. "
         "Selects the model and backend from the agent's device_configs. "
         "Results are tagged with the device for cross-device comparison.",
-    )
-
-    # Email-triage throughput benchmark subcommand: gaia eval benchmark [OPTIONS] (#1233)
-    benchmark_eval_parser = eval_subparsers.add_parser(
-        "benchmark",
-        help="Email-triage throughput benchmark (TTFT / tok-per-sec / latency)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Benchmark the primary on-device model over the committed corpus
-  gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
-
-  # Repeat 3 times for variance + compare against a saved baseline
-  gaia eval benchmark --experiments 3 --compare eval/results/bench_baseline.json
-
-  # Save this run as the throughput baseline
-  gaia eval benchmark --save-baseline
-        """,
-    )
-    benchmark_eval_parser.add_argument(
-        "--model",
-        default="Gemma-4-E4B-it-GGUF",
-        help="Lemonade model id to benchmark (default: Gemma-4-E4B-it-GGUF).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--limit",
-        type=int,
-        default=50,
-        help="Target message count steered to the agent's triage call "
-        "(default: 50). The committed stub corpus is smaller, so the "
-        "effective count is min(limit, corpus size).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--experiments",
-        type=int,
-        default=1,
-        help="Repeat count per model for variance analysis (default: 1).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--mbox-path",
-        default=None,
-        help="MBOX corpus to triage (default: the committed stub fixture).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--ground-truth",
-        default=None,
-        help="Ground-truth JSON for quality scoring (default: the fixture's).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--backend",
-        default=None,
-        help="Lemonade base URL (default: the agent's configured base URL).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Directory to write scorecard.json / summary.md (optional).",
-    )
-    benchmark_eval_parser.add_argument(
-        "--compare",
-        metavar="PATH",
-        default=None,
-        help="Compare this run's throughput against a saved baseline scorecard.",
-    )
-    benchmark_eval_parser.add_argument(
-        "--save-baseline",
-        action="store_true",
-        help="Save this run's scorecard as the throughput baseline.",
-    )
-    benchmark_eval_parser.add_argument(
-        "--ctx-size",
-        type=int,
-        default=None,
-        help="Exact ctx window to pin the model load to (#1892 envelope: "
-        "16384 target / 32768 max; default: the target). The run verifies "
-        "the pin by readback and stamps it into scorecard.json/quality.json. "
-        "Values above the envelope max are allowed for deliberate sweeps "
-        "but warned loudly.",
     )
 
     # Replay real Claude Code sessions against the live agent: gaia eval sessions
@@ -3522,7 +3266,7 @@ Examples:
         help="Start (or attach to) one agent's sidecar under the daemon",
     )
     daemon_start_agent_parser.add_argument(
-        "agent_id", help="Agent to start (e.g. email)"
+        "agent_id", help="Agent to start (e.g. gaia)"
     )
     daemon_start_agent_parser.add_argument(
         "--mode",
@@ -3537,7 +3281,7 @@ Examples:
             "Explicit dev-mode source directory (escape hatch for --mode dev "
             "when this shell isn't inside a git work tree). Must be an "
             "absolute path ending in hub/agents/<agent_id>/python (e.g. "
-            "/path/to/gaia/hub/agents/email/python) — not the checkout root. "
+            "/path/to/gaia/hub/agents/gaia/python) — not the checkout root. "
             "Default: resolved from this checkout via "
             "`git rev-parse --show-toplevel`."
         ),
@@ -3569,7 +3313,7 @@ Examples:
         help=(
             "Show the named sidecar agent's log (the rich agent-loop activity — "
             "tool calls, triage decisions) instead of the host daemon log. "
-            "E.g. `gaia daemon logs --agent email -f`."
+            "E.g. `gaia daemon logs --agent gaia -f`."
         ),
     )
     daemon_parser.set_defaults(action="daemon")
@@ -3598,7 +3342,7 @@ Examples:
     hub_install_parser = hub_subparsers.add_parser(
         "install", help="Install an agent from the Agent Hub"
     )
-    hub_install_parser.add_argument("agent_id", help="Agent to install (e.g. email)")
+    hub_install_parser.add_argument("agent_id", help="Agent to install (e.g. gaia)")
     hub_install_parser.add_argument(
         "--version",
         default=None,
@@ -3759,7 +3503,7 @@ Examples:
     )
     agent_install_parser.add_argument(
         "agent_id",
-        help="Hub agent id to install (e.g. 'email').",
+        help="Hub agent id to install (e.g. 'gaia').",
     )
     agent_install_parser.add_argument(
         "--version",
@@ -3967,12 +3711,11 @@ Examples:
             "rag",
             "mcp",
             "vlm",
-            "email",
             "npu",
             "all",
         ],
         help="Profile to initialize: gaia (the flagship agent), minimal, sd (image gen), "
-        "chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), "
+        "chat, rag, mcp, vlm (vision), npu (Ryzen AI NPU), "
         "all (default: gaia)",
     )
     init_parser.add_argument(
@@ -5614,7 +5357,7 @@ Let me know your answer!
                     print("   To delete them, restart Lemonade Server and try again:")
                     print()
                     print(
-                        "   1. Close any running GAIA commands (gaia chat, gaia email, etc.)"
+                        "   1. Close any running GAIA commands (gaia chat, gaia talk, etc.)"
                     )
                     print(
                         f"   2. Restart Lemonade Server "
@@ -6159,175 +5902,6 @@ Let me know your answer!
             print(f"[OUTPUT] {report_path.resolve()}")
             return
 
-        # Email-triage throughput benchmark: gaia eval benchmark (#1233)
-        if getattr(args, "eval_command", None) == "benchmark":
-            import tempfile
-
-            from gaia.eval.benchmark import (
-                THROUGHPUT_BAR_TPS,
-                THROUGHPUT_STRETCH_TPS,
-                load_ground_truth,
-                run_benchmark,
-                summarize_benchmark,
-            )
-            from gaia.eval.runner import REPO_ROOT, RESULTS_DIR
-
-            fixtures = REPO_ROOT / "tests" / "fixtures" / "email"
-            mbox_path = args.mbox_path or str(fixtures / "_stub_inbox.mbox")
-            gt_path = args.ground_truth or str(fixtures / "ground_truth.json")
-            ground_truth = (
-                load_ground_truth(gt_path) if Path(gt_path).exists() else None
-            )
-            if ground_truth is None:
-                print(
-                    f"[WARN] ground truth not found at {gt_path}; "
-                    "quality scoring skipped"
-                )
-
-            if args.ctx_size is not None and args.ctx_size <= 0:
-                print(
-                    f"[ERROR] --ctx-size must be a positive token count, got "
-                    f"{args.ctx_size}. Use e.g. 16384 (the #1892 envelope "
-                    "target) or omit the flag for the default."
-                )
-                sys.exit(1)
-
-            # ignore_cleanup_errors: the benchmark's per-email SQLite state.db can
-            # still hold a Windows file lock when the block exits (WinError 32 on
-            # rmtree). `results` is already captured, and the temp dir is a
-            # throwaway in the OS temp space, so a failed cleanup must not fail an
-            # otherwise-successful eval.
-            with tempfile.TemporaryDirectory(
-                prefix="gaia-bench-", ignore_cleanup_errors=True
-            ) as tmp:
-                results = run_benchmark(
-                    args.model,
-                    mbox_path=mbox_path,
-                    limit=args.limit,
-                    experiments=args.experiments,
-                    base_url=args.backend,
-                    ground_truth=ground_truth,
-                    db_path=str(Path(tmp) / "state.db"),
-                    ctx_size=args.ctx_size,
-                )
-
-            # An overflowed run measured nothing; summarizing it would print a
-            # 0.0 accuracy that reads like a quality collapse.
-            overflowed = [
-                r for r in results if r.get("error_kind") == "context_overflow"
-            ]
-            if overflowed:
-                print(
-                    f"[ERROR] {len(overflowed)} of {len(results)} experiment(s) hit "
-                    "the context window, so no scorecard was written for any of "
-                    f"them. {overflowed[0]['remedy']}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-
-            run_id = f"bench-{args.model.replace('/', '-').lower()}"
-            summary = summarize_benchmark(results, run_id=run_id)
-            perf = summary["scorecard"]["performance"]
-            tps = perf.get("avg_tokens_per_second")
-            ttft = perf.get("avg_time_to_first_token")
-            bar_ok = isinstance(tps, (int, float)) and tps >= THROUGHPUT_BAR_TPS
-
-            print(f"\n{'=' * 60}")
-            print(f"  Email-Triage Throughput Benchmark — {args.model}")
-            print(f"{'=' * 60}")
-            print(
-                f"  Experiments:  {args.experiments}  " f"(limit {args.limit} emails)"
-            )
-            print(
-                f"  Throughput:   {tps} tok/s  "
-                f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
-            )
-            print(f"  TTFT:         {ttft} s")
-            print(
-                f"  Ctx window:   "
-                f"{summary['scorecard'].get('ctx_size', 'unpinned (legacy)')}"
-            )
-            if results and isinstance(results[0].get("quality"), dict):
-                print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
-            print(
-                f"  Committed bar (≥{THROUGHPUT_BAR_TPS} tok/s): "
-                f"{'PASS' if bar_ok else 'MISS'} (non-gating demo)"
-            )
-            print(f"{'=' * 60}\n")
-
-            # Variance report across repeated experiments.
-            if args.experiments > 1:
-                from gaia.eval.statistics import (
-                    compare_runs_by_model,
-                    print_comparison_report,
-                )
-
-                for report in compare_runs_by_model(results).values():
-                    print_comparison_report(report)
-
-            if args.output_dir:
-                from gaia.eval.scorecard import write_summary_md
-
-                outdir = Path(args.output_dir)
-                outdir.mkdir(parents=True, exist_ok=True)
-                (outdir / "scorecard.json").write_text(
-                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                (outdir / "summary.md").write_text(
-                    write_summary_md(summary["scorecard"]), encoding="utf-8"
-                )
-                (outdir / "variance.json").write_text(
-                    json.dumps(summary["variance"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                wrote_quality = ""
-                if isinstance(summary.get("quality"), dict):
-                    # Aggregate acceptance metrics + run-to-run variance/CI (#1437,
-                    # #1894). The scorecard adapter reads this (never the harness),
-                    # preserving the harness→file→adapter loose coupling.
-                    (outdir / "quality.json").write_text(
-                        json.dumps(summary["quality"], indent=2, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    wrote_quality = " / quality.json"
-                print(
-                    f"[OUT] wrote scorecard.json / summary.md / variance.json"
-                    f"{wrote_quality} → {outdir}"
-                )
-
-            if getattr(args, "save_baseline", False):
-                RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-                baseline_path = RESULTS_DIR / "bench_baseline.json"
-                baseline_path.write_text(
-                    json.dumps(summary["scorecard"], indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                print(f"[BASELINE] saved throughput baseline → {baseline_path}")
-
-            if args.compare:
-                cmp_path = Path(args.compare)
-                if not cmp_path.exists():
-                    print(f"[ERROR] baseline not found: {cmp_path}")
-                    sys.exit(1)
-                base = json.loads(cmp_path.read_text(encoding="utf-8"))
-                # Ctx envelope guard (#1892): a baseline measured at a
-                # different window is not comparable — hard error.
-                _compare_benchmark_ctx(
-                    current_ctx=summary["scorecard"].get("ctx_size"),
-                    baseline=base,
-                    baseline_path=str(cmp_path),
-                )
-                base_tps = base.get("performance", {}).get("avg_tokens_per_second")
-                if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
-                    print(
-                        f"[COMPARE] throughput {tps} vs baseline {base_tps} "
-                        f"tok/s (Δ{round(tps - base_tps, 1):+})  [non-gating]"
-                    )
-                else:
-                    print("[COMPARE] insufficient throughput data to compare")
-            return
-
         # Bare "gaia eval" without subcommand - show help
         print("Usage: gaia eval agent [OPTIONS]")
         print("")
@@ -6403,10 +5977,6 @@ Let me know your answer!
     # Handle Agent (export/import) command
     if args.action == "agent":
         handle_agent_command(args)
-        return
-
-    if args.action == "email":
-        handle_email_command(args)
         return
 
     # Handle API server command
@@ -6680,127 +6250,6 @@ def kill_process_by_port(port):
     }
 
 
-def handle_email_command(args):
-    """
-    Handle the ``gaia email`` command — a thin client over the GAIA daemon (V2-8).
-
-    The query path (``-q`` / ``-i``) no longer runs the email agent in-process:
-    it ensures/attaches to the always-on daemon, ensures the ``email`` sidecar,
-    and streams ``POST /v1/email/query`` through the daemon relay, presenting ONLY
-    the daemon client token — the CLI never learns the sidecar's port or bearer
-    (design §0.0 "one contract, many front-doors", #2152). Local-LLM only (AC3):
-    no ``--use-claude`` / ``--use-chatgpt`` — the sidecar rejects any non-local
-    provider.
-
-    ``--spec`` stays a fixed-function local operation (no daemon, no Lemonade).
-
-    Args:
-        args: Parsed command line arguments for the email command
-    """
-    log = get_logger(__name__)
-
-    # The query contract has no server field, so the sidecar would ignore it.
-    base_url = getattr(args, "base_url", None)
-    if base_url:
-        print(
-            "❌ gaia email does not accept --base-url: the email agent runs "
-            "inside the GAIA daemon and uses the daemon's LEMONADE_BASE_URL.\n"
-            "   To use another Lemonade server, run `gaia daemon stop`, set\n"
-            f"   LEMONADE_BASE_URL={base_url} in this shell, and re-run\n"
-            "   `gaia email` — the daemon restarts with that server.\n"
-            "   See https://amd-gaia.ai/docs/guides/email",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    # --spec: generate the HTML endpoint spec and open it in a browser.
-    # No LLM, no Lemonade, no daemon — short-circuit before any server check.
-    if getattr(args, "spec", False):
-        try:
-            from gaia_agent_email.spec_html import write_and_open_spec
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The email agent is not installed",
-                    "gaia-agent-email",
-                    next_step="Then re-run `gaia email --spec`.",
-                )
-            ) from e
-
-        dest = write_and_open_spec(getattr(args, "output", None))
-        print(dest)
-        sys.exit(0)
-
-    # Every email route relays through the daemon, including autonomy controls.
-    # Check its runtime dependencies before probing Lemonade or making a relay
-    # request, so a base install gets the actionable [api] remedy instead of
-    # "daemon exited early".
-    _check_daemon_deps()
-
-    # autonomy: a REST thin client over the daemon relay (#2516) — status/
-    # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
-    # own Lemonade check inside the sidecar call, so short-circuit here too.
-    if getattr(args, "email_action", None) == "autonomy":
-        handle_email_autonomy_command(args)
-        return
-
-    # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
-    # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
-    # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
-    # down → loud actionable error).
-    if not getattr(args, "no_lemonade_check", False):
-        success, _ = initialize_lemonade_for_agent(
-            agent="email",
-            skip_if_external=True,
-            # Deliberately omitted: use_claude / use_chatgpt — see AC3.
-        )
-        if not success:
-            sys.exit(1)
-
-    verbose = bool(getattr(args, "verbose", False))
-    query = getattr(args, "query", None)
-    interactive = getattr(args, "interactive", False)
-
-    if not query and not interactive:
-        # No query and not interactive — print a helpful usage hint (parity with
-        # the retired in-process CLI).
-        print(
-            "Usage: gaia email -q '<your question>' OR gaia email -i\n"
-            "Examples:\n"
-            "  gaia email -q 'Triage my inbox'\n"
-            "  gaia email -q 'Summarize my unread emails from this week'\n"
-            "  gaia email -i\n"
-        )
-        sys.exit(0)
-
-    from gaia.daemon.agent_query import ConsoleRenderer, run_query
-    from gaia.daemon.errors import DaemonError
-
-    model = getattr(args, "model", None)
-    trace = bool(getattr(args, "trace", False))
-
-    try:
-        if interactive:
-            sys.exit(_email_interactive(model=model, verbose=verbose, trace=trace))
-        renderer = ConsoleRenderer(verbose=verbose)
-        outcome = run_query(
-            "email",
-            query,
-            model=model,
-            renderer=renderer,
-            verbose=verbose,
-            trace=trace,
-        )
-        sys.exit(outcome.exit_code)
-    except DaemonError as e:
-        # Daemon unreachable / relay refusal / sidecar dead → loud, actionable,
-        # no silent in-process fallback (CLAUDE.md fail-loudly rule).
-        log.error("email thin client failed: %s", e)
-        print(f"❌ {e}", file=sys.stderr)
-        sys.exit(1)
-
-
 def _gaia_chat_relay(kwargs: dict) -> int:
     """`gaia chat` on the GAIA agent's own binary, through the daemon relay.
 
@@ -6864,235 +6313,6 @@ def _gaia_chat_relay(kwargs: dict) -> int:
         get_logger(__name__).error("gaia chat relay failed: %s", e)
         print(f"❌ {e}", file=sys.stderr)
         return 1
-
-
-def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
-    """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
-
-    Maintains the transcript locally and pushes it as ``context`` on each turn
-    (the host owns the transcript; the stateless sidecar is fed the relevant
-    slice per request, spec §2.4). ``trace`` writes one trace file per turn.
-    """
-    from gaia.daemon.agent_query import ConsoleRenderer, run_query
-
-    print("Email Triage Agent — interactive. Enter a query, or '/quit' to exit.\n")
-    transcript: list = []
-    while True:
-        try:
-            query = input("email> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return 0
-        if not query:
-            continue
-        if query in ("/quit", "/exit", "/q"):
-            return 0
-        renderer = ConsoleRenderer(verbose=verbose)
-        outcome = run_query(
-            "email",
-            query,
-            context=list(transcript),
-            model=model,
-            renderer=renderer,
-            verbose=verbose,
-            trace=trace,
-        )
-        # Only extend the transcript on a successful turn — a failed run must not
-        # poison the context of the next one.
-        if outcome.terminal_type == "final":
-            transcript.append({"role": "user", "content": query})
-            transcript.append(
-                {"role": "assistant", "content": outcome.final_answer or ""}
-            )
-
-
-def _print_autonomy_status(body: dict) -> None:
-    # Whitelisted fields only, coerced to known-safe scalars — never format a
-    # relay response verbatim, so it can't echo back anything unexpected.
-    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
-    # inline) so its name can't read as a credential-shaped literal.
-    scope_count_key = "trusted_scope_count"
-    level = str(body.get("level"))
-    enabled = bool(body.get("enabled"))
-    min_samples = int(body.get("trust_min_samples") or 0)
-    threshold = float(body.get("trust_threshold") or 0.0)
-    scope_count = int(body.get(scope_count_key) or 0)
-    print(f"level: {level}  enabled: {enabled}")
-    print(
-        f"trust: min_samples={min_samples} "
-        f"threshold={threshold} "
-        f"trusted_scopes={scope_count}"
-    )
-    _print_last_autonomy_cycle(body.get("last_cycle"))
-
-
-def _print_last_autonomy_cycle(last) -> None:
-    # Same whitelist contract as _print_autonomy_status.
-    if not isinstance(last, dict):
-        print("last cycle: none has run yet")
-        return
-    from datetime import datetime
-
-    finished = float(last.get("finished_at") or 0.0)
-    started = float(last.get("started_at") or finished)
-    when = datetime.fromtimestamp(finished).strftime("%Y-%m-%d %H:%M:%S")
-    took = max(0.0, finished - started)
-    level = str(last.get("level"))
-    if last.get("outcome") != "completed":
-        print(f"last cycle: FAILED at {when} after {took:.0f}s (level {level})")
-        print(f"  error: {str(last.get('error'))}")
-        return
-    print(f"last cycle: completed at {when} in {took:.0f}s (level {level})")
-    print(
-        f"  executed={int(last.get('executed') or 0)} "
-        f"proposals={int(last.get('proposals') or 0)} "
-        f"skipped={int(last.get('skipped') or 0)} "
-        f"already_proposed={int(last.get('already_proposed') or 0)} "
-        f"errors={int(last.get('errors') or 0)}"
-    )
-    stopped = last.get("stopped")
-    if stopped:
-        print(f"  stopped early: {str(stopped)}")
-
-
-def _print_autonomy_trust(body: dict) -> None:
-    scopes = body.get("scopes") or []
-    if not scopes:
-        print("No trust ledger entries yet.")
-        return
-    # Same whitelist contract as _print_autonomy_status.
-    for s in scopes:
-        action_type = str(s.get("action_type"))
-        scope = str(s.get("scope"))
-        positive = int(s.get("positive") or 0)
-        total = int(s.get("total") or 0)
-        mark = "trusted" if s.get("trusted") else "not trusted"
-        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
-
-
-def _print_autonomy_run(body: dict) -> None:
-    # Same whitelist contract as _print_autonomy_status.
-    executed = len(body.get("executed") or [])
-    proposals = len(body.get("proposals") or [])
-    skipped = int(body.get("skipped") or 0)
-    already_proposed = int(body.get("already_proposed") or 0)
-    errors = len(body.get("errors") or [])
-    stopped = body.get("stopped")
-    print(
-        f"executed={executed} proposals={proposals} "
-        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
-    )
-    if stopped:
-        print(f"stopped early: {stopped}")
-
-
-def handle_email_autonomy_command(args) -> None:
-    """``gaia email autonomy ...`` — thin client over the sidecar's
-    session-scoped ``/v1/email/agent/autonomy*`` REST surface (#2516).
-
-    Every subcommand shares one persistent ``--session-id`` (default
-    ``"cli"``) so a level set by one invocation is still in effect for the
-    next — autonomy state lives on the session's in-memory agent, not on
-    disk. A session is created (idempotently) before each call. Relays
-    through the daemon the same way every other ``gaia email`` command does
-    (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
-    """
-    from gaia.daemon.agent_control import may_still_be_running, relay_json
-    from gaia.daemon.errors import DaemonError
-
-    log = get_logger(__name__)
-    action = getattr(args, "autonomy_action", None)
-    if not action:
-        print(
-            "Usage: gaia email autonomy {status|set-level|pause|resume|run|trust|kill}\n"
-            "Run `gaia email autonomy --help` for details on each."
-        )
-        sys.exit(0)
-
-    session_id = getattr(args, "session_id", "cli")
-
-    try:
-        relay_json(
-            "email", "POST", "agent/session", json_body={"session_id": session_id}
-        )
-
-        if action == "status":
-            _print_autonomy_status(
-                relay_json("email", "GET", f"agent/autonomy/{session_id}")
-            )
-        elif action == "trust":
-            _print_autonomy_trust(
-                relay_json("email", "GET", f"agent/autonomy/{session_id}")
-            )
-        elif action == "set-level":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": args.level},
-            )
-            print(f"autonomy level -> {body['level']} (enabled={body['enabled']})")
-        elif action == "pause":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": "off"},
-            )
-            print(f"autonomy paused (level={body['level']})")
-        elif action == "kill":
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": "off"},
-            )
-            print(f"autonomy killed (level={body['level']})")
-        elif action == "resume":
-            level = getattr(args, "level", "earn_trust")
-            body = relay_json(
-                "email",
-                "POST",
-                "agent/autonomy",
-                json_body={"session_id": session_id, "level": level},
-            )
-            print(f"autonomy resumed -> {body['level']}")
-        elif action == "run":
-            _print_autonomy_run(
-                relay_json(
-                    "email",
-                    "POST",
-                    "agent/autonomy/run",
-                    json_body={
-                        "session_id": session_id,
-                        "max_messages": getattr(args, "max_messages", 25),
-                    },
-                )
-            )
-        else:  # pragma: no cover - argparse restricts choices upstream
-            raise AssertionError(f"unhandled autonomy action: {action!r}")
-    except DaemonError as e:
-        # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
-        # other relay failure — surfaced loudly, never a silent empty result.
-        # #2617: this does print the same text twice (log.error to stderr,
-        # then the stderr print below) -- kept deliberately. log.error is the
-        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
-        # dropping it would make a reported failure invisible to a bug
-        # report. The stderr print matches the ❌ convention every other
-        # `except DaemonError` handler in this file uses. The duplicate line
-        # is cosmetic; a missing log record is not.
-        log.error("email autonomy %s failed: %s", action, e)
-        print(f"❌ {e}", file=sys.stderr)
-        if action == "run" and may_still_be_running(e):
-            print(
-                "   If the cycle started, it keeps running on the agent. Run "
-                f"`gaia email autonomy status --session-id {session_id}` to "
-                "see its result once it finishes.",
-                file=sys.stderr,
-            )
-        sys.exit(1)
-
-    sys.exit(0)
 
 
 def handle_api_command(args):
@@ -9479,7 +8699,7 @@ def handle_agent_install(args):
 
     Thin CLI wrapper over :func:`gaia.hub.installer.install` — the headless
     equivalent of the Agent UI's Install button, so a machine with no UI can
-    provision a sidecar agent (e.g. ``email``) instead of resorting to a raw
+    provision a sidecar agent (e.g. ``gaia``) instead of resorting to a raw
     ``python -c`` one-liner.
     """
     from gaia.hub import installer

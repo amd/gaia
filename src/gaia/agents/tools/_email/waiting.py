@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Which inbox threads are waiting on the user's reply.
 
-A port of the standalone email agent's waiting-on-you detector
-(``gaia_agent_email.tools.waiting_on_you_tools``), rebuilt on the flagship's
-provider-neutral message shape so one detector serves Gmail and Outlook. It is
-a port, not an import: the flagship must not depend on the package it replaces.
+Built on the flagship's provider-neutral message shape, so one detector
+serves Gmail and Outlook.
 
 Precision is the whole difficulty. Marketing mail routinely carries a ``?``
 and a human-looking sender, so a thread qualifies only when ALL of these hold:
@@ -383,7 +381,7 @@ def is_automated_sender(sender: str) -> bool:
 def is_confidently_promotional(
     subject: str, body: str, label_ids: Sequence[str]
 ) -> bool:
-    """True only where the email agent's category heuristic was confident."""
+    """True only where the promotional-mail heuristic is confident."""
     labels = set(label_ids or ())
     subject_lower = (subject or "").lower()
     body_lower = (body or "").lower()

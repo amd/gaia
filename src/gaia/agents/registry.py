@@ -1245,7 +1245,7 @@ class AgentRegistry:
         icon: str = "",
         consumes_mcp_servers: bool = False,
     ) -> None:
-        """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
+        """Register a daemon-supervised sidecar agent (e.g. gaia) (#2408).
 
         A sidecar install (frozen binary + ``.installed`` sentinel under
         ``~/.gaia/agents/<id>/``) ships no ``agent.py``, so ``discover()``'s

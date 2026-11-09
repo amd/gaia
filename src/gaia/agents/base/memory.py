@@ -2767,8 +2767,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         memory lifted from it apart from one the user stated.
 
         Only reached when ``_execute_tool`` resolves to this mixin. An agent
-        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
-        and documents it on its ``process_query`` — shadows this override, so
+        listing ``Agent`` ahead of ``MemoryMixin`` shadows this override, so
         its source check sees only the answer.
         """
         cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS

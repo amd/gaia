@@ -26,8 +26,8 @@ def _lock(tmp_path: Path, sha: str, base="https://r2.example") -> Path:
                 "baseUrl": base,
                 "binaries": {
                     "darwin-arm64": {
-                        "filename": "email-agent-darwin-arm64",
-                        "executable": "email-agent",
+                        "filename": "gaia-agent-darwin-arm64",
+                        "executable": "gaia-agent",
                         "sha256": sha,
                         "size": len(REAL_BYTES),
                     }
@@ -81,13 +81,13 @@ def test_fetch_downloads_and_verifies(tmp_path):
     assert res.cached is False
     assert res.sha256 == REAL_SHA
     assert Path(res.binary_path).read_bytes() == REAL_BYTES
-    assert sess.calls == ["https://r2.example/email-agent-darwin-arm64"]
+    assert sess.calls == ["https://r2.example/gaia-agent-darwin-arm64"]
 
 
 def test_fetch_cache_hit_skips_download(tmp_path):
     out = tmp_path / "cache"
     out.mkdir()
-    (out / "email-agent").write_bytes(REAL_BYTES)
+    (out / "gaia-agent").write_bytes(REAL_BYTES)
     sess = _FakeSession(b"SHOULD-NOT-BE-USED")
     res = fetchmod.fetch_binary(
         out_dir=out,
@@ -110,7 +110,7 @@ def test_fetch_tampered_download_raises_and_leaves_no_file(tmp_path):
             session=sess,
         )
     # A failed verify must NOT leave a binary on disk.
-    assert not (out / "email-agent").exists()
+    assert not (out / "gaia-agent").exists()
 
 
 def test_fetch_placeholder_sha_refuses(tmp_path):
@@ -147,12 +147,12 @@ def test_fetch_base_url_override(tmp_path):
         lock_path=_lock(tmp_path, REAL_SHA),
         session=sess,
     )
-    assert sess.calls == ["https://mirror.example/dir/email-agent-darwin-arm64"]
+    assert sess.calls == ["https://mirror.example/dir/gaia-agent-darwin-arm64"]
 
 
 def test_default_cache_dir():
     p = fetchmod.default_cache_dir()
-    assert p.parts[-3:] == (".gaia", "agents", "email")
+    assert p.parts[-3:] == (".gaia", "agents", "gaia")
 
 
 # ---------------------------------------------------------------------------
@@ -164,23 +164,23 @@ def _hub_install(cache: Path, data: bytes = REAL_BYTES, **overrides) -> Path:
     """Simulate a Hub install (#2086): verified binary + .installed sentinel."""
     cache.mkdir(parents=True, exist_ok=True)
     sentinel = {
-        "id": "email",
+        "id": "gaia",
         "version": "0.5.0",
         "language": "python",
         "installed_at": "2026-07-15T00:00:00+00:00",
         "artifact_sha256": hashlib.sha256(data).hexdigest(),
         "artifact_kind": "binary",
-        "executable": "email-agent",
+        "executable": "gaia-agent",
         **overrides,
     }
-    binary = cache / (sentinel["executable"] or "email-agent")
+    binary = cache / (sentinel["executable"] or "gaia-agent")
     binary.write_bytes(data)
     (cache / ".installed").write_text(json.dumps(sentinel))
     return binary
 
 
 def test_hub_installed_binary_spawns_despite_placeholder_lock(tmp_path):
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     binary = _hub_install(out)
     sess = _FakeSession(b"SHOULD-NOT-BE-USED")
     res = fetchmod.fetch_binary(
@@ -198,7 +198,7 @@ def test_hub_installed_binary_spawns_despite_placeholder_lock(tmp_path):
 def test_hub_installed_short_circuit_precedes_lock(tmp_path):
     # Pin the ordering: a verified Hub install is returned BEFORE the lock is
     # consulted at all — an unreadable lock must not block the spawn.
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     binary = _hub_install(out)
     res = fetchmod.fetch_binary(
         out_dir=out,
@@ -210,7 +210,7 @@ def test_hub_installed_short_circuit_precedes_lock(tmp_path):
 
 
 def test_placeholder_still_refuses_without_hub_install(tmp_path):
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     out.mkdir()
     with pytest.raises(PlatformError, match="placeholder sha256"):
         fetchmod.fetch_binary(
@@ -221,11 +221,11 @@ def test_placeholder_still_refuses_without_hub_install(tmp_path):
         )
 
 
-def test_placeholder_message_points_at_hub_not_email_release(tmp_path):
+def test_placeholder_message_names_the_working_install_command(tmp_path):
     """The placeholder-refusal message must be generic (this code serves any
-    sidecar agent) and name the working install command, not the email-only
-    release workflow it used to hardcode (#2347)."""
-    out = tmp_path / "email"
+    sidecar agent) and name the working install command, not a per-agent
+    release workflow (#2347)."""
+    out = tmp_path / "gaia"
     out.mkdir()
     with pytest.raises(PlatformError) as exc_info:
         fetchmod.fetch_binary(
@@ -235,17 +235,17 @@ def test_placeholder_message_points_at_hub_not_email_release(tmp_path):
             session=_FakeSession(REAL_BYTES),
         )
     msg = str(exc_info.value)
-    assert "gaia hub install email" in msg
+    assert "`gaia init`" in msg  # the flagship installs through setup
     assert "Agent Hub" not in msg
     assert "independent of this lock" in msg
-    assert "release_agent_email" not in msg
-    assert "GAIA_EMAIL_AGENT_MODE" not in msg  # dev-mode remedy is the manager's job
+    assert "release_agent_" not in msg
+    assert "GAIA_GAIA_AGENT_MODE" not in msg  # dev-mode remedy is the manager's job
 
 
 def test_hub_installed_binary_tampered_raises(tmp_path):
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     _hub_install(out)
-    (out / "email-agent").write_bytes(b"tampered-after-install")
+    (out / "gaia-agent").write_bytes(b"tampered-after-install")
     with pytest.raises(IntegrityError, match="reinstall"):
         fetchmod.fetch_binary(
             out_dir=out,
@@ -256,8 +256,8 @@ def test_hub_installed_binary_tampered_raises(tmp_path):
 
 
 def test_hub_sentinel_without_binary_kind_is_ignored(tmp_path):
-    # A wheel-kind sentinel (pre-#2084 email install) vouches for no binary.
-    out = tmp_path / "email"
+    # A wheel-kind sentinel (pre-#2084 install) vouches for no binary.
+    out = tmp_path / "gaia"
     _hub_install(out, artifact_kind="wheel", executable="")
     with pytest.raises(PlatformError, match="placeholder"):
         fetchmod.fetch_binary(
@@ -269,9 +269,9 @@ def test_hub_sentinel_without_binary_kind_is_ignored(tmp_path):
 
 
 def test_hub_sentinel_missing_binary_file_falls_through(tmp_path):
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     _hub_install(out)
-    (out / "email-agent").unlink()
+    (out / "gaia-agent").unlink()
     with pytest.raises(PlatformError, match="placeholder"):
         fetchmod.fetch_binary(
             out_dir=out,
@@ -284,7 +284,7 @@ def test_hub_sentinel_missing_binary_file_falls_through(tmp_path):
 def test_force_refetches_past_hub_install(tmp_path):
     # force=True is an explicit "re-fetch from the lock" — the short-circuit
     # must not mask it. With real lock SHAs that means a fresh download.
-    out = tmp_path / "email"
+    out = tmp_path / "gaia"
     _hub_install(out, artifact_sha256="0" * 64)
     sess = _FakeSession(REAL_BYTES)
     res = fetchmod.fetch_binary(
@@ -295,12 +295,12 @@ def test_force_refetches_past_hub_install(tmp_path):
         force=True,
     )
     assert res.cached is False
-    assert sess.calls == ["https://r2.example/email-agent-darwin-arm64"]
+    assert sess.calls == ["https://r2.example/gaia-agent-darwin-arm64"]
 
 
-def test_flagship_default_lock_is_its_own_not_the_email_agents(tmp_path, monkeypatch):
+def test_flagship_default_lock_is_its_own(tmp_path, monkeypatch):
     """With no explicit lock, the flagship's cache check and download use the
-    flagship's own pins — a binary matching the email lock must not pass."""
+    flagship's own pins — a binary matching no flagship pin must not pass."""
     from gaia.daemon.sidecars import platform as plat
 
     monkeypatch.delenv("ASSETS_BASE_URL", raising=False)

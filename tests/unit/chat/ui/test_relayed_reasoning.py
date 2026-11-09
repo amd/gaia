@@ -11,13 +11,13 @@ from __future__ import annotations
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client, relay
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     reasoning_supported,
 )
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 
 
@@ -28,8 +28,8 @@ def test_only_a_flagship_at_2_22_takes_reasoning(version, expected):
     assert reasoning_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_is_never_asked_for_reasoning():
-    assert reasoning_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_is_never_asked_for_reasoning():
+    assert reasoning_supported(_NO_PROFILE, "9.9") is False
 
 
 class _Proxy:

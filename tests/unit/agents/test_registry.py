@@ -1066,7 +1066,7 @@ class TestRegisterSidecar:
 
 class TestRegisterInstalledSidecarsBridge:
     @staticmethod
-    def _fake_installed(agent_id: str = "email"):
+    def _fake_installed(agent_id: str = "gaia"):
         from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
 
         return {
@@ -1091,9 +1091,9 @@ class TestRegisterInstalledSidecarsBridge:
 
         installer_mod.register_installed_sidecars(registry)
 
-        reg = registry.get("email")
+        reg = registry.get("gaia")
         assert reg is not None
-        assert reg.namespaced_agent_id == "installed:email"
+        assert reg.namespaced_agent_id == "installed:gaia"
         assert reg.required_connections  # non-empty
 
     def test_not_installed_agent_is_not_phantom_registered(self, monkeypatch):
@@ -1104,7 +1104,7 @@ class TestRegisterInstalledSidecarsBridge:
 
         installer_mod.register_installed_sidecars(registry)
 
-        assert registry.get("email") is None
+        assert registry.get("gaia") is None
 
     def test_pre_existing_registration_field_survives_the_bridge(self, monkeypatch):
         """Cardinality alone is insufficient (dict-keyed → count stays 1
@@ -1118,26 +1118,26 @@ class TestRegisterInstalledSidecarsBridge:
         registry = AgentRegistry()
 
         def _real_factory(**_kwargs):
-            return "a real email agent instance"
+            return "a real gaia agent instance"
 
         registry._register(
             AgentRegistration(
-                id="email",
-                name="Custom Email",
-                description="a user's own custom agent claiming id 'email'",
+                id="gaia",
+                name="Custom GAIA",
+                description="a user's own custom agent claiming id 'gaia'",
                 source="custom_python",
                 conversation_starters=[],
                 factory=_real_factory,
                 agent_dir=None,
                 models=[],
-                namespaced_agent_id="custom:deadbeef:email",
+                namespaced_agent_id="custom:deadbeef:gaia",
             )
         )
 
         installer_mod.register_installed_sidecars(registry)
 
-        reg = registry.get("email")
-        assert reg.namespaced_agent_id == "custom:deadbeef:email"
+        reg = registry.get("gaia")
+        assert reg.namespaced_agent_id == "custom:deadbeef:gaia"
         assert reg.factory is _real_factory
 
     def test_registry_none_is_a_safe_no_op(self, monkeypatch):

@@ -22,7 +22,7 @@ from gaia.hub import installer
 class _InstallResult:
     """Stand-in for ``gaia.hub.installer.InstallResult``."""
 
-    def __init__(self, agent_id="email", version="0.5.0"):
+    def __init__(self, agent_id="gaia", version="0.5.0"):
         self.id = agent_id
         self.version = version
         self.path = Path.home() / ".gaia" / "agents" / agent_id
@@ -31,7 +31,7 @@ class _InstallResult:
         self.hot_registered = False
 
 
-def _args(agent_id="email", version=None, trusted=False):
+def _args(agent_id="gaia", version=None, trusted=False):
     return Namespace(
         agent_action="install",
         agent_id=agent_id,
@@ -50,13 +50,13 @@ def test_install_success_forwards_args_and_prints_next_step(monkeypatch, capsys)
         return _InstallResult(agent_id=agent_id, version=version or "0.5.0")
 
     monkeypatch.setattr(installer, "install", _fake_install)
-    cli.handle_agent_install(_args("email", version="0.5.0", trusted=True))
+    cli.handle_agent_install(_args("gaia", version="0.5.0", trusted=True))
 
-    assert captured == {"agent_id": "email", "version": "0.5.0", "trusted": True}
+    assert captured == {"agent_id": "gaia", "version": "0.5.0", "trusted": True}
     out = capsys.readouterr().out
-    assert "✅ Installed 'email' v0.5.0" in out
-    # email is a daemon sidecar spec, so the start hint must appear.
-    assert "gaia daemon start-agent email" in out
+    assert "✅ Installed 'gaia' v0.5.0" in out
+    # gaia is a daemon sidecar spec, so the start hint must appear.
+    assert "gaia daemon start-agent gaia" in out
 
 
 def test_install_non_sidecar_agent_omits_daemon_hint(monkeypatch, capsys):
@@ -79,10 +79,10 @@ def test_install_error_exits_nonzero_and_is_loud(monkeypatch, capsys):
 
     monkeypatch.setattr(installer, "install", _boom)
     with pytest.raises(SystemExit) as exc:
-        cli.handle_agent_install(_args("email"))
+        cli.handle_agent_install(_args("gaia"))
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "Could not install 'email'" in err
+    assert "Could not install 'gaia'" in err
     assert "checksum mismatch" in err
 
 
@@ -152,15 +152,15 @@ def test_list_shows_catalog_with_installed_marker(monkeypatch, capsys):
     _patch_list(
         monkeypatch,
         agents=[
-            {"id": "email", "latest_version": "0.5.0"},
+            {"id": "gaia", "latest_version": "0.5.0"},
             {"id": "summarize", "latest_version": "1.2.0"},
         ],
-        installed={"email": _Installed("0.5.0")},
+        installed={"gaia": _Installed("0.5.0")},
     )
     cli.handle_agent_list(Namespace(agent_action="list"))
     out = capsys.readouterr().out
-    assert "email" in out and "0.5.0" in out
-    assert "[installed]" in out  # email is marked installed
+    assert "gaia" in out and "0.5.0" in out
+    assert "[installed]" in out  # gaia is marked installed
     assert "summarize" in out
     assert "gaia agent install <id>" in out
 
@@ -207,7 +207,7 @@ def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     _patch_list(
         monkeypatch,
         agents=[],
-        installed={"email": _Installed("0.5.0")},
+        installed={"gaia": _Installed("0.5.0")},
         raise_exc=catalog.CatalogError("hub down"),
     )
     cli.handle_agent_list(Namespace(agent_action="list"))
@@ -215,7 +215,7 @@ def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
     # Loud note on stderr, not a silent empty result.
     assert "Could not reach the agent catalog" in captured.err
     # Still lists what IS installed.
-    assert "email" in captured.out
+    assert "gaia" in captured.out
     assert "Installed (not in the catalog)" in captured.out
 
 

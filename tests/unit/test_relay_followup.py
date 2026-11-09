@@ -29,16 +29,16 @@ from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers import chat as chat_router
 from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     followups_supported,
 )
 from gaia.ui.sidecar.proxy import SidecarProxy
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers import chat as chat_router
 
 pytestmark = pytest.mark.allow_network
 
@@ -51,8 +51,8 @@ def test_only_a_flagship_at_2_15_takes_followups(version, expected):
     assert followups_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_never_takes_followups():
-    assert followups_supported(EMAIL_PROFILE, "9.9") is False
+def test_a_profile_without_the_floor_never_takes_followups():
+    assert followups_supported(_NO_PROFILE, "9.9") is False
 
 
 # ── Proxy: the request the sidecar receives ────────────────────────────────

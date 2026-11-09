@@ -2,32 +2,14 @@
 # SPDX-License-Identifier: MIT
 """Contract tests for ``gaia.ui.sidecar.relay`` (#2109 query relay).
 
-``relay.py`` does not exist yet — this file pins its designed public surface
-(``relay.relay_query`` + the crash text from ``stream_ended_text()``) as a
-red-phase TDD contract. Every test in this file is expected to fail at
-collection with ``ModuleNotFoundError`` / ``ImportError`` until the module
-lands.
-
-Part 2 (unit): a hand-rolled fake proxy + fake handler drive ``relay_query``
-with no real HTTP, pinning the event-shape table and the crash/cancel/timeout
-control flow.
-
-Part 3 (integration): a REAL uvicorn server hosting the REAL
-``gaia_agent_email`` FastAPI app (via ``export_openapi.build_app()``) with the
-``query_routes.build_query_agent`` seam swapped for a scripted fake agent —
-the same pattern ``hub/agents/email/python/tests/test_query_route.py`` uses.
-This proves the render-map card payload (``pretty_print_json`` ->
-``SSEOutputHandler._render_card_payload`` -> the real
-``CanonicalTranslator`` -> real HTTP -> ``EmailSidecarProxy.query_stream``)
-survives end to end, with no test code hand-constructing a canonical event.
+A hand-rolled fake proxy + fake handler drive ``relay_query`` with no real
+HTTP, pinning the event-shape table and the crash/cancel/timeout control flow.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import threading
-import time
 import uuid
 
 import pytest
@@ -109,7 +91,7 @@ class _RaisingIterator:
 
 
 class _ScriptedProxy:
-    """Fake ``EmailSidecarProxy`` driving ``relay_query`` from a scripted
+    """Fake ``SidecarProxy`` driving ``relay_query`` from a scripted
     event source — no real HTTP.
 
     ``event_source`` is a zero-arg callable returning an iterable/iterator of
@@ -167,8 +149,8 @@ class TestRelayQueryRequestBody:
 
     def test_declares_can_answer_questions_true(self):
         # (#2595 review) the sidecar's own QueryRequest.can_answer_questions
-        # defaults to False -- omitting this field silently makes ask() (in
-        # gaia_agent_email/question.py) refuse every mid-run question, even
+        # defaults to False -- omitting this field silently makes ask()
+        # refuse every mid-run question, even
         # though this relay DOES render needs_input and answer it. A
         # response-mocking test can never catch a missing outgoing field
         # like this; assert the request body itself carries it.
@@ -351,8 +333,8 @@ class TestCanonicalEventShapes:
             _events(
                 {
                     "type": "tool_call",
-                    "tool": "archive_message",
-                    "args": {"message_id": "m1"},
+                    "tool": "write_file",
+                    "args": {"file_path": "notes.txt"},
                 },
                 {"type": "final", "answer": "done"},
             )
@@ -361,8 +343,8 @@ class TestCanonicalEventShapes:
         types = [e["type"] for e in handler.events]
         assert types == ["tool_start", "tool_args", "status", "answer"]
         status_event = handler.events[2]
-        assert "archive_message" in status_event["message"]
-        assert "mailbox" in status_event["message"]
+        assert "write_file" in status_event["message"]
+        assert "local change" in status_event["message"]
 
     def test_read_only_tool_call_does_not_emit_extra_status_line(self):
         handler = _FakeHandler()
@@ -545,7 +527,7 @@ class TestCanonicalEventShapes:
             raw_detail
         ), "the original error text must be preserved verbatim at the front"
         assert content != raw_detail, "no hint was appended"
-        assert relay.LEMONADE_CONNECTION_HINT in content
+        assert relay.GAIA_PROFILE.lemonade_hint in content
 
     def test_timeout_shaped_error_detail_gains_actionable_hint_appended(self):
         raw_detail = (
@@ -559,7 +541,7 @@ class TestCanonicalEventShapes:
         relay.relay_query(handler, proxy, query="q", context=[])
         content = handler.events[0]["content"]
         assert content.startswith(raw_detail)
-        assert relay.LEMONADE_CONNECTION_HINT in content
+        assert relay.GAIA_PROFILE.lemonade_hint in content
 
     def test_non_connection_error_detail_gets_no_hint(self):
         # A logic/validation error must pass through untouched — the hint is
@@ -623,12 +605,12 @@ class TestCanonicalEventShapes:
 class TestFinalAnswerEchoStrip:
     def test_embedded_render_card_json_is_stripped_from_final_answer(self):
         handler = _FakeHandler()
-        inner = {"kind": "email_pre_scan", "urgent": [], "actionable": []}
+        inner = {"kind": "table", "columns": [], "rows": []}
         answer = "Here you go.\n\n" + json.dumps(inner)
         proxy = _ScriptedProxy(_events({"type": "final", "answer": answer}))
         relay.relay_query(handler, proxy, query="q", context=[])
         content = handler.events[-1]["content"]
-        assert "email_pre_scan" not in content
+        assert "table" not in content
         assert '"kind"' not in content
         assert "Here you go." in content
 
@@ -657,7 +639,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.stream_ended_text()
         # Ends the turn: the chat is recorded failed, not done.
         assert agent_errors[0]["fatal"] is True
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
@@ -671,7 +653,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_generator_exhausted_without_terminal_event(self):
@@ -685,7 +667,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_crash_while_a_question_is_open_clears_it(self):
@@ -723,13 +705,13 @@ class TestSidecarHTTPErrorDetail:
     def test_non_404_http_error_with_detail_surfaces_detail(self):
         handler = _FakeHandler()
         detail = (
-            "Failed to start the email agent for this query: No mailbox "
-            "connected — connect Google or Microsoft in Settings → Connectors "
-            "before triaging."
+            "Failed to start the agent for this query: No model downloaded "
+            "— download one in Settings → Models "
+            "before chatting."
         )
         proxy = _ScriptedProxy(
             lambda: _RaisingIterator(
-                SidecarHTTPError(502, detail, path="/v1/email/query")
+                SidecarHTTPError(502, detail, path="/v1/gaia/query")
             )
         )
         relay.relay_query(handler, proxy, query="q", context=[])
@@ -745,14 +727,14 @@ class TestSidecarHTTPErrorDetail:
         detail = "502 local LLM triage failed: connection refused"
         proxy = _ScriptedProxy(
             lambda: _RaisingIterator(
-                SidecarHTTPError(502, detail, path="/v1/email/query")
+                SidecarHTTPError(502, detail, path="/v1/gaia/query")
             )
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == (
-            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_SERVER_DOWN_HINT}"
+            f"{detail}{relay.GAIA_PROFILE.lemonade_hint} {APP_SERVER_DOWN_HINT}"
         )
         assert "gaia " not in agent_errors[0]["content"]
 
@@ -784,7 +766,7 @@ class TestSidecarHTTPErrorDetail:
         )
         detail = "local LLM triage failed: connection refused"
         content = relay._augment_error_detail(detail)
-        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+        assert content == f"{detail}{relay.GAIA_PROFILE.lemonade_hint} {start}"
 
     def _assert_left_alone(self, detail):
         handler = _FakeHandler()
@@ -801,25 +783,23 @@ class TestSidecarHTTPErrorDetail:
         handler = _FakeHandler()
         proxy = _ScriptedProxy(
             lambda: _RaisingIterator(
-                SidecarHTTPError(404, "Not Found", path="/v1/email/query")
+                SidecarHTTPError(404, "Not Found", path="/v1/gaia/query")
             )
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.version_upgrade_message
 
     def test_detail_less_http_error_falls_back_to_stream_ended(self):
         handler = _FakeHandler()
         proxy = _ScriptedProxy(
-            lambda: _RaisingIterator(
-                SidecarHTTPError(503, "  ", path="/v1/email/query")
-            )
+            lambda: _RaisingIterator(SidecarHTTPError(503, "  ", path="/v1/gaia/query"))
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.stream_ended_text()
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------
@@ -827,7 +807,7 @@ class TestSidecarHTTPErrorDetail:
 
 class TestOrphanCancelOnCrash:
     """A run that ends without a terminal sidecar event (read-timeout, dropped
-    connection, exhausted stream) leaves the sidecar's ``/v1/email/query``
+    connection, exhausted stream) leaves the sidecar's ``/v1/gaia/query``
     generation decoding on the single GPU slot unless the relay cancels it —
     #2158's multi-query death-spiral."""
 
@@ -899,7 +879,7 @@ class TestOrphanCancelOnCrash:
         assert proxy.cancel_calls == ["rid-t7"]
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+        assert agent_errors[0]["content"] == relay.GAIA_PROFILE.stream_ended_text()
 
 
 # --- Cancellation mid-stream -------------------------------------------------
@@ -982,420 +962,3 @@ class TestEarlyCancelRace:
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         assert resp.closed is False
-
-
-# ---------------------------------------------------------------------------
-# Part 3 — integration: REAL uvicorn + REAL SSEOutputHandler + REAL
-# CanonicalTranslator, with a scripted fake agent injected via the
-# ``query_routes.build_query_agent`` seam.
-# ---------------------------------------------------------------------------
-
-_HAS_UVICORN = importlib.util.find_spec("uvicorn") is not None
-_HAS_EMAIL_AGENT = importlib.util.find_spec("gaia_agent_email") is not None
-_HAS_REQUESTS = importlib.util.find_spec("requests") is not None
-
-pytestmark_integration = pytest.mark.skipif(
-    not (_HAS_UVICORN and _HAS_EMAIL_AGENT and _HAS_REQUESTS),
-    reason=(
-        "uvicorn, requests, and gaia-agent-email must all be importable for "
-        "the real-server /query integration tests"
-    ),
-)
-
-
-def _free_port() -> int:
-    from gaia.daemon.sidecars.manager import find_free_port
-
-    return find_free_port()
-
-
-@pytest.fixture(scope="module")
-def live_email_app():
-    """Boot the REAL ``gaia_agent_email`` FastAPI app on a real TCP port.
-
-    Mirrors ``hub/agents/email/python/tests/test_query_route.py``'s
-    ``export_openapi.build_app()`` pattern, but run for real over HTTP via
-    uvicorn in a background thread rather than FastAPI's in-process
-    ``TestClient`` -- this is what proves the wire (SSE framing, socket
-    timing) rather than just the ASGI call path.
-    """
-    if not (_HAS_UVICORN and _HAS_EMAIL_AGENT and _HAS_REQUESTS):
-        pytest.skip("uvicorn / requests / gaia_agent_email not importable")
-
-    import requests
-    import uvicorn
-    from gaia_agent_email import export_openapi
-
-    app = export_openapi.build_app()
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-
-    base_url = f"http://127.0.0.1:{port}"
-    deadline = time.monotonic() + 10.0
-    reachable = False
-    while time.monotonic() < deadline:
-        try:
-            resp = requests.get(f"{base_url}/v1/email/health", timeout=0.5)
-            if resp.status_code == 200:
-                reachable = True
-                break
-        except requests.exceptions.RequestException:
-            pass
-        time.sleep(0.05)
-    if not reachable:
-        server.should_exit = True
-        thread.join(timeout=5)
-        raise RuntimeError("email sidecar test server never became reachable")
-
-    yield base_url
-
-    server.should_exit = True
-    thread.join(timeout=10)
-
-
-# --- Fake agent scripts (injected via query_routes.build_query_agent) ------
-
-
-class _PreScanFakeAgent:
-    """One tool call: ``pre_scan_inbox`` returning a well-formed card envelope."""
-
-    def __init__(self):
-        self.conversation_history = []
-        self.console = None
-        self._cancel_event = None
-
-    def process_query(self, query, max_steps=None):
-        self.console.print_processing_start(query, 20, "fake-model")
-        self.console.print_tool_usage("pre_scan_inbox")
-        self.console.pretty_print_json(
-            {
-                "ok": True,
-                "data": {
-                    "kind": "email_pre_scan",
-                    "urgent": [],
-                    "actionable": [{"message_id": "m1", "subject": "Q3 review"}],
-                    "informational_count": 0,
-                    "suggested_archives": [],
-                    "suggested_drafts": [],
-                    "preferences_applied": {},
-                    "totals": {},
-                },
-            }
-        )
-        self.console.print_final_answer("Here's your inbox pre-scan.", streaming=False)
-        return {"answer": "Here's your inbox pre-scan."}
-
-
-class _ConfirmFakeAgent:
-    """Attempts a destructive tool that requires confirmation."""
-
-    def __init__(self):
-        self.conversation_history = []
-        self.console = None
-        self._cancel_event = None
-
-    def process_query(self, query, max_steps=None):
-        self.console.print_processing_start(query, 20, "fake-model")
-        self.console.print_tool_usage("send_now")
-        approved = self.console.confirm_tool_execution(
-            "send_now", {"to": "a@b.com", "subject": "Hi", "body": "there"}
-        )
-        self.console.print_final_answer(
-            "Sent." if approved else "Not sent.", streaming=False
-        )
-        return {"answer": "Sent." if approved else "Not sent."}
-
-
-class _StallFakeAgent:
-    """Emits one status then stalls well past a short client read_timeout."""
-
-    def __init__(self, stall_seconds: float = 2.0):
-        self.conversation_history = []
-        self.console = None
-        self._cancel_event = None
-        self._stall_seconds = stall_seconds
-
-    def process_query(self, query, max_steps=None):
-        self.console.print_processing_start(query, 5, "fake-model")
-        time.sleep(self._stall_seconds)
-        self.console.print_final_answer("done eventually", streaming=False)
-        return {"answer": "done eventually"}
-
-
-class _TimingFakeAgent:
-    """Two status events with a real sleep between them, to prove the SSE
-    wire is not buffered/batched."""
-
-    def __init__(self, gap_seconds: float = 0.4):
-        self.conversation_history = []
-        self.console = None
-        self._cancel_event = None
-        self._gap_seconds = gap_seconds
-
-    def process_query(self, query, max_steps=None):
-        self.console.print_processing_start(query, 5, "fake-model")
-        self.console.print_info("first")
-        time.sleep(self._gap_seconds)
-        self.console.print_info("second")
-        self.console.print_final_answer("done", streaming=False)
-        return {"answer": "done"}
-
-
-class _CancelParkFakeAgent:
-    """One tool step, then parks with a periodic heartbeat so a client-side
-    cancellation (relayed to the server via a real ``POST .../cancel``) is
-    noticed promptly instead of waiting out one long silent block."""
-
-    def __init__(self, park_seconds: float = 8.0):
-        self.conversation_history = []
-        self.console = None
-        self._cancel_event = None
-        self._park_seconds = park_seconds
-
-    def process_query(self, query, max_steps=None):
-        self.console.print_processing_start(query, 5, "fake-model")
-        self.console.print_tool_usage("tool_1")
-        self.console.pretty_print_json({}, title="Arguments")
-        self.console.pretty_print_json({"ok": True})
-        self.console.print_tool_complete()
-
-        deadline = time.monotonic() + self._park_seconds
-        while time.monotonic() < deadline:
-            if self._cancel_event is not None and self._cancel_event.is_set():
-                break
-            self.console.print_info("still working...")
-            time.sleep(0.1)
-        self.console.print_final_answer("Completed.", streaming=False)
-        return {"answer": "Completed."}
-
-
-# --- (a) Pre-scan happy path -- no render card is the intended design ------
-
-
-class TestPreScanOmitsRenderCardByDesign:
-    # Why: sse_translation.py's ``_RENDER_TOOL_TO_LANG`` comment — pre_scan_inbox
-    # deliberately has no entry there.
-    pytestmark = pytestmark_integration
-
-    def test_raw_query_stream_omits_render_card_by_design(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _PreScanFakeAgent()
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-        events = list(
-            proxy.query_stream(
-                {"query": "prescan please", "run_id": str(uuid.uuid4()), "context": []}
-            )
-        )
-        tool_results = [e for e in events if e.get("type") == "tool_result"]
-        assert len(tool_results) == 1
-        tr = tool_results[0]
-        assert tr["tool"] == "pre_scan_inbox"
-        assert "render" not in tr
-        assert tr["data"]["kind"] == "email_pre_scan"
-        assert tr["data"]["actionable"][0]["message_id"] == "m1"
-
-        finals = [e for e in events if e.get("type") == "final"]
-        assert len(finals) == 1
-        assert finals[0]["answer"] == "Here's your inbox pre-scan."
-
-    def test_relay_query_omits_render_card_by_design(self, live_email_app, monkeypatch):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _PreScanFakeAgent()
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-        handler = _FakeHandler()
-        relay.relay_query(handler, proxy, query="prescan please", context=[])
-        tool_results = [e for e in handler.events if e.get("type") == "tool_result"]
-        assert len(tool_results) == 1
-        tr = tool_results[0]
-        assert "render" not in tr
-        assert tr["data"]["kind"] == "email_pre_scan"
-
-        answers = [e for e in handler.events if e.get("type") == "answer"]
-        assert len(answers) == 1
-        assert answers[0]["content"] == "Here's your inbox pre-scan."
-
-
-# --- (b) Send-class confirmation --------------------------------------------
-
-
-class TestConfirmationSequenceRealPipeline:
-    pytestmark = pytestmark_integration
-
-    def test_raw_query_stream_needs_confirmation_then_final(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _ConfirmFakeAgent()
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-        events = list(
-            proxy.query_stream(
-                {
-                    "query": "send a reply to bob",
-                    "run_id": str(uuid.uuid4()),
-                    "context": [],
-                }
-            )
-        )
-        types = [e["type"] for e in events]
-        assert "needs_confirmation" in types
-        idx = types.index("needs_confirmation")
-        assert types[idx + 1] == "final"
-        assert events[-1]["answer"]
-
-    def test_relay_query_needs_confirmation_then_answer_terminates_fast(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _ConfirmFakeAgent()
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-        handler = _FakeHandler()
-        start = time.monotonic()
-        relay.relay_query(handler, proxy, query="send a reply to bob", context=[])
-        elapsed = time.monotonic() - start
-        types = [e["type"] for e in handler.events]
-        assert "needs_confirmation" in types
-        idx = types.index("needs_confirmation")
-        assert types[idx + 1] == "answer"
-        assert elapsed < 5.0
-
-
-# --- (c) / (d) Read-timeout mid-stream (stall) -------------------------------
-
-
-class TestReadTimeoutMidStream:
-    pytestmark = pytestmark_integration
-
-    def test_relay_read_timeout_emits_stream_ended_unexpectedly(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _StallFakeAgent(stall_seconds=2.0)
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-        handler = _FakeHandler()
-        start = time.monotonic()
-        relay.relay_query(
-            handler, proxy, query="stall please", context=[], read_timeout=0.3
-        )
-        elapsed = time.monotonic() - start
-        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
-        assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
-        assert elapsed < 5.0
-
-
-# --- (e) Cancel park pattern -------------------------------------------------
-
-
-class TestCancelParkPattern:
-    pytestmark = pytestmark_integration
-
-    def test_relay_reacts_to_handler_cancelled_and_calls_cancel_query(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _CancelParkFakeAgent(park_seconds=8.0)
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-
-        class _SpyProxy(EmailSidecarProxy):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, **kw)
-                self.cancel_calls: list = []
-
-            def cancel_query(self, run_id):
-                self.cancel_calls.append(run_id)
-                return super().cancel_query(run_id)
-
-        proxy = _SpyProxy(live_email_app)
-        handler = _FakeHandler()
-        run_id = str(uuid.uuid4())
-        result: dict = {}
-
-        def _run():
-            start = time.monotonic()
-            relay.relay_query(
-                handler,
-                proxy,
-                query="park please",
-                context=[],
-                run_id=run_id,
-                read_timeout=15.0,
-            )
-            result["elapsed"] = time.monotonic() - start
-
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
-
-        # Wait until the relay has emitted something (proves step 1 ran)
-        # before triggering cancellation.
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and not handler.events:
-            time.sleep(0.02)
-        assert handler.events, "relay never emitted any event before timeout"
-
-        handler.cancelled.set()
-        thread.join(timeout=8.0)
-
-        assert not thread.is_alive(), "relay_query did not return after cancellation"
-        assert proxy.cancel_calls == [run_id]
-        assert result["elapsed"] < 5.0
-
-
-# --- Streaming-truth timing assertion (real socket, no hand-waving) --------
-
-
-class TestStreamingIsNotBuffered:
-    pytestmark = pytestmark_integration
-
-    def test_inter_arrival_gap_reflects_real_server_side_sleep(
-        self, live_email_app, monkeypatch
-    ):
-        from gaia_agent_email import query_routes
-
-        from gaia.ui.sidecar.proxy import EmailSidecarProxy
-
-        fake = _TimingFakeAgent(gap_seconds=0.4)
-        monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
-        proxy = EmailSidecarProxy(live_email_app)
-
-        timestamps = []
-        for event in proxy.query_stream(
-            {"query": "time me please", "run_id": str(uuid.uuid4()), "context": []},
-            read_timeout=10.0,
-        ):
-            if event.get("type") == "status" and event.get("message") in (
-                "first",
-                "second",
-            ):
-                timestamps.append(time.monotonic())
-
-        assert len(timestamps) == 2
-        gap = timestamps[1] - timestamps[0]
-        assert gap >= 0.8 * 0.4

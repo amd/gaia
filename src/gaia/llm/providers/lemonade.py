@@ -823,8 +823,7 @@ def _classify_lemonade_response(
         # profile's window, not a flat 64K: on NPU a correct load is 32K,
         # so a flat GPU threshold makes every real overflow look
         # retryable (#2884). NOTE (#1892): a client running under an
-        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
-        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # exact ctx pin (LemonadeClient.ctx_size_override)
         # legitimately sits below this threshold; the retryable hint is
         # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0

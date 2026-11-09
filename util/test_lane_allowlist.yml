@@ -21,7 +21,6 @@
 
 files:
   # A real model on a self-hosted Strix Halo runner (the real_model marker).
-  tests/integration/eval/test_sidecar_eval.py: Scores the email sidecar against a real model; real_model marker, self-hosted Strix Halo only.
   tests/integration/eval/test_sidecar_eval_gaia.py: Scores the flagship sidecar against a real model; real_model marker, self-hosted Strix Halo only.
 
   # A live Lemonade Server with models loaded.
@@ -29,9 +28,6 @@ files:
   tests/integration/test_chat_rag_pdf_e2e.py: Indexes and queries a PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_pptx_rag_e2e.py: Answers questions over an indexed PPTX; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_code_index_live.py: Embeds and searches real code; needs a live Lemonade Server serving the embedding model.
-  tests/integration/test_check_suspicious_mail_tool_selection_2900.py: Measures which tool a real model picks for mail phrasings; needs a live Lemonade Server with the email model.
-  tests/integration/test_email_agent_triage.py: Holds triage accuracy to a baseline; needs a live Lemonade Server with the email model.
-  tests/integration/test_email_bench_throughput.py: Benchmarks triage throughput; needs a live Lemonade Server with the email model.
   tests/integration/test_daemon_broker_lemonade.py: Drives concurrent real model loads through the broker; needs a live Lemonade Server with downloaded models.
   tests/integration/test_lemonade_model_residency.py: Checks an LLM and an embedder stay co-resident; needs a live Lemonade Server with both loaded.
   tests/integration/test_lemonade_tokenize.py: Proves the real /tokenize request shape the context panel sends and that it never loads a model; needs a live Lemonade Server with a chat model loaded.
@@ -40,11 +36,9 @@ files:
   tests/integration/test_gateway_lemonade.py: Proves Lemonade accepts the gateway's cloud-provider registration and discovery calls, not just that GAIA sent them; needs a live Lemonade Server 11.8.0+, skips otherwise.
   tests/test_lemonade_health.py: Reads context_size from the real health endpoint; needs a live Lemonade Server.
   tests/integration/test_lemonade_restart_live.py: Kills, hangs and idle-stops a real lemond on an isolated home for ~7 min, and its job-object case needs Windows, which the offline-integration lane is not; run it, or util/lemonade_restart_harness.py, by hand.
-  tests/mcp/test_email_mcp_stdio_parity.py: Both the REST and MCP-stdio surfaces triage with the local LLM; needs a live Lemonade Server with the email model.
   tests/integration/eval/test_bench_e2e.py: Runs one toybox task through a real harness and a real model; needs GAIA_BENCH_E2E=1, a live Lemonade Server, and the Claude CLI login for the Claude Code leg.
 
   # A live third-party account.
-  tests/integration/test_email_agent_live_gmail.py: Reads a real Gmail inbox; needs GAIA_GMAIL_LIVE_ACCOUNT credentials, never available in CI.
   tests/integration/test_claude_history_cache.py: Proves the live Anthropic API reads conversation history back from the prompt cache; needs a billed ANTHROPIC_API_KEY, which no test lane carries.
 
   # Manual runs against running services.
@@ -66,26 +60,6 @@ files:
 # A path may be a directory; the most specific entry wins.
 
 module_skips:
-  - reason: Needs the gaia-agent-email wheel, which only the email lanes install.
-    runs_in: test_email_agent_unit.yml
-    paths:
-      - tests/unit/agents/email
-      - tests/unit/email
-      - tests/unit/connectors/test_email_scope_drift.py
-      - tests/unit/connectors/test_summarize_error_envelope.py
-      - tests/unit/test_synthetic_mbox.py
-
-  - reason: Needs the gaia-agent-email wheel, which only the email lanes install.
-    runs_in: test_email_agent.yml
-    paths:
-      - tests/unit/agents/test_email_agent.py
-      - tests/unit/agents/test_email_agent_confirmation.py
-      - tests/unit/agents/test_email_agent_local_llm_enforcement.py
-      - tests/unit/agents/test_email_agent_prompt_injection.py
-      - tests/unit/agents/test_email_agent_soft_delete.py
-      - tests/unit/agents/test_email_agent_tools.py
-      - tests/unit/agents/test_email_llm_triage.py
-
   - reason: Needs the gaia-agent-gaia wheel (ChatAgent), which test_unit.yml does not install.
     runs_in: test_chat_agent.yml
     paths:
@@ -140,7 +114,7 @@ module_skips:
       - tests/unit/test_mcp2_server.py
       - tests/unit/test_mcp_bridge_protocol.py
 
-  - reason: Needs reportlab, which the email unit lane collects tests/unit/eval/ without.
+  - reason: Needs reportlab, which not every lane that collects tests/unit/eval/ installs.
     runs_in: test_unit.yml
     paths:
       - tests/unit/eval/test_pdf_document_generator.py

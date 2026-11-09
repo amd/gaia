@@ -23,17 +23,17 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
 from gaia.ui import _chat_helpers as helpers
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.sidecar import relay
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
+    _NO_PROFILE,
     GAIA_PROFILE,
     SIDECAR_AGENT_IDS,
     memory_supported,
     profile_for,
     surface_supported,
 )
-from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import (
     PROMPT_ARG_VALUE_CHARS,
@@ -356,14 +356,6 @@ def test_flagship_memory_floor_is_2_18(version, expected):
 
 
 @pytest.mark.parametrize(
-    "version, expected",
-    [("2.16", True), ("2.18", True), ("2.15", False), (None, False)],
-)
-def test_email_memory_floor_is_2_16(version, expected):
-    assert memory_supported(EMAIL_PROFILE, version) is expected
-
-
-@pytest.mark.parametrize(
     "private, enabled, mode",
     [(True, True, "private"), (True, False, "private"), (False, False, "off")],
 )
@@ -475,38 +467,6 @@ def test_every_profile_without_a_memory_floor_explains_the_refusal():
             assert profile.memory_upgrade_message.strip(), agent_id
 
 
-@pytest.mark.parametrize("version", ["2.4", "2.15"])
-@pytest.mark.parametrize("memory", ["private", "off"])
-def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
-    init_calls = []
-    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
-    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
-
-    assert init_calls == []
-    assert calls == []
-    assert len(events) == 1 and events[0]["type"] == "agent_error"
-    message = events[0]["content"]
-    assert "email agent" in message
-    assert "private" in message and "memory" in message
-    assert "not sent" in message
-
-
-@pytest.mark.parametrize(
-    "version, expected_memory",
-    [("2.4", None), ("2.15", None), ("2.16", "on"), ("2.18", "on"), ("9.9", "on")],
-)
-def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
-    monkeypatch, version, expected_memory
-):
-    init_calls = []
-    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
-    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
-
-    assert init_calls == [True]
-    assert len(calls) == 1 and calls[0]["memory"] == expected_memory
-    assert not [event for event in events if event["type"] == "agent_error"]
-
-
 # ── provider-error wording (#5295) ─────────────────────────────────────────
 
 
@@ -515,7 +475,7 @@ def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
 )
 def test_only_a_flagship_at_2_20_takes_the_surface(version, expected):
     assert surface_supported(GAIA_PROFILE, version) is expected
-    assert surface_supported(EMAIL_PROFILE, "9.9") is False
+    assert surface_supported(_NO_PROFILE, "9.9") is False
 
 
 @pytest.mark.parametrize("version, surface", [("2.20", "agent_ui"), ("2.19", None)])

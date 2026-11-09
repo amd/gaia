@@ -47,7 +47,7 @@ BUNDLED_MODULES = [
     "gaia.mcp.servers.agent_ui_mcp",
 ]
 #: The hub agents run as their own binaries; the core must not carry them.
-NOT_BUNDLED = ["gaia_agent", "gaia_agent_email", "torch", "PyInstaller"]
+NOT_BUNDLED = ["gaia_agent", "torch", "PyInstaller"]
 HEALTH_TIMEOUT_S = 90
 
 

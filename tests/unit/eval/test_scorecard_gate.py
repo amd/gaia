@@ -271,7 +271,7 @@ class TestWorkflowYaml:
             Path(__file__).parents[3]
             / ".github"
             / "workflows"
-            / "release_agent_email.yml"
+            / "release_agent_gaia.yml"
         )
         assert workflow_path.exists(), f"Workflow file not found: {workflow_path}"
         content = workflow_path.read_text(encoding="utf-8")
@@ -712,9 +712,9 @@ class TestCtxSizeMismatch:
 
 
 # ---------------------------------------------------------------------------
-# env_ctx_size — public helper (#2094): email_scorecard_refresh.yml's `pre`
-# step imports this directly to read the committed card's ctx stamp before
-# any eval spend, so it must be importable without the leading underscore.
+# env_ctx_size — public helper (#2094): a workflow reads the committed card's
+# ctx stamp before any eval spend, so it must be importable without the
+# leading underscore.
 # ---------------------------------------------------------------------------
 
 
@@ -730,9 +730,8 @@ class TestEnvCtxSizePublicHelper:
         assert env_ctx_size(parsed) == 16384
 
     def test_legacy_unstamped_card_returns_none(self, tmp_path):
-        # The current real state of hub/agents/email/npm/SCORECARD.md
-        # (#2094): committed before #1892's ctx envelope landed, so it carries
-        # no recipe.environment.ctx_size at all.
+        # A card committed before #1892's ctx envelope landed carries no
+        # recipe.environment.ctx_size at all (#2094).
         cand = _make_acceptance_card(
             tmp_path / "SCORECARD.md", version="0.3.0", within_one=0.834
         )
@@ -753,8 +752,8 @@ class TestEnvCtxSizePublicHelper:
 # ---------------------------------------------------------------------------
 # --expected-version (#2965) — release-time guard that fails when the
 # candidate SCORECARD.md's own front-matter version does not match the
-# package version being released, so a stale scorecard drift (e.g. the email
-# agent shipping 0.6.0 with a scorecard still stamped 0.5.0) is a loud release
+# package version being released, so a stale scorecard drift (e.g. an agent
+# shipping 0.6.0 with a scorecard still stamped 0.5.0) is a loud release
 # failure instead of a silently-published mismatch.
 # ---------------------------------------------------------------------------
 

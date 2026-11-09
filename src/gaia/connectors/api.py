@@ -77,10 +77,9 @@ logger = logging.getLogger(__name__)
 # explicit ``required_scopes``: at least ONE of these mail read scopes,
 # narrowest first. Authoritative validation is the caller's job (the UI router
 # resolves the union from the granted agents' ``REQUIRED_CONNECTORS``); this
-# is a defense-in-depth default. It is any-of, not all-of, because the
-# read-only flagship holds ``gmail.readonly`` while the email agent holds
-# ``gmail.modify`` — demanding modify + send rejected every forwarded flagship
-# connection. Unknown providers default to no requirement; the use-time gate
+# is a defense-in-depth default. It is any-of, not all-of, because a
+# connection may carry ``gmail.readonly`` or the wider ``gmail.modify`` —
+# demanding one of them rejects the other. Unknown providers default to no requirement; the use-time gate
 # in ``get_access_token`` still enforces per-agent coverage.
 #
 # Mirrors ``gaia.agents.tools._email.scopes.READ_CAPABLE_SCOPES`` — duplicated

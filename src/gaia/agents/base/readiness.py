@@ -5,7 +5,7 @@
 An agent states what it needs — a model id, a minimum backend version — and gets
 ``GET``/``POST /v1/<id>/init`` from :class:`~gaia.agents.base.server.AgentServer`
 for free. Before this module every agent that wanted a readiness contract had to
-hand-write both verbs; the email sidecar did, and was the only one that had them.
+hand-write both verbs.
 
 Two verbs, deliberately asymmetric:
 
@@ -196,8 +196,7 @@ class AgentRequirements:
 # Response models — the wire contract
 # ---------------------------------------------------------------------------
 #
-# Shape is byte-compatible with the email sidecar's existing /v1/email/init so
-# the TUI preflight gate parses both without a branch. The `lemonade` key is
+# The TUI preflight gate parses this shape for every agent without a branch. The `lemonade` key is
 # named for the backend rather than generically because that is what shipped and
 # what every consumer already reads; renaming it would break them for cosmetics.
 

@@ -3,20 +3,15 @@
 """
 In-memory ``GmailBackend`` fake for eval mode.
 
-Reads a local ``.mbox`` file, translates each message into the same
-Gmail API v1 JSON shape that ``LiveGmailBackend`` returns, and exposes
-the same Protocol surface — so the email agent's tools cannot tell
-whether they are talking to live Gmail or the synthetic dataset.
+Reads a local ``.mbox`` file and translates each message into the Gmail
+API v1 JSON shape live Gmail returns, so the flagship's mail tools (through
+``gaia.agents.tools._email.fixture``) cannot tell whether they are talking to
+live Gmail or the fixture mailbox.
 
 Critical contract (CA-5): every method must return data in Gmail API
 v1 shape — ``{"id": str, "threadId": str, "payload": {"headers":
 [{"name", "value"}], "parts": [...], "body": {"data": ...}},
-"labelIds": [...]}``. The shape parity is enforced by
-``tests/unit/email/test_fake_gmail_shape_contract.py``.
-
-The MIME body decoding uses the same module-level helpers from
-``gmail_backend.py`` so the production decoder is what's exercised in
-unit tests, NOT a parallel implementation.
+"labelIds": [...]}``.
 """
 
 from __future__ import annotations
@@ -34,14 +29,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 
-# Deliberately duplicated from gaia_agent_email.gmail_backend.METADATA_SCAN_HEADERS
-# rather than imported: this fixture lives in the GAIA-core repo tree and
-# several src/gaia/eval/*.py call sites import it before gaia_agent_email is
-# guaranteed to be installed (it's a soft, packaged-extra dependency) -- a
-# fresh top-level cross-package import here would turn "gaia_agent_email not
-# installed" into an import-time failure at a different, less obvious call
-# site instead of the actionable RuntimeError those call sites already raise.
-# Keep in sync with METADATA_SCAN_HEADERS if that set ever changes (#2643).
+# The headers a metadata-format read returns (#2643).
 _METADATA_SCAN_HEADERS = ("Subject", "From", "To", "Date", "List-Unsubscribe")
 _METADATA_HEADER_NAMES = {h.lower() for h in _METADATA_SCAN_HEADERS}
 
@@ -884,7 +872,7 @@ def _date_operator_matches(
 
     Returns True/False if ``token`` is a recognized date operator, else None so
     the caller falls through to its other token handling. Models the operators
-    the email agent emits — ``newer_than``/``older_than`` (relative windows) and
+    a mail search emits — ``newer_than``/``older_than`` (relative windows) and
     the absolute ``after``/``before``/``newer``/``older`` (``YYYY/MM/DD``, the
     form ``normalize_gmail_date_operators`` produces).
     """

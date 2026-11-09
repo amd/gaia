@@ -67,7 +67,6 @@ jobs:
           uv pip install --python .venv-licences \
             -e ".[api,ui,rag,diarize,browser,mcp,image,telegram,slack,talk,youtube]" \
             -e hub/agents/gaia/python \
-            -e hub/agents/email/python \
             anthropic pandas matplotlib tiktoken
       - name: Check licences
         shell: bash
@@ -94,7 +93,6 @@ jobs:
           python util/check_licenses.py npm \
             src/gaia/apps/webui/package-lock.json \
             hub/agents/gaia/npm/package-lock.json \
-            hub/agents/email/npm/package-lock.json \
             --production-only src/vscode/gaia/package-lock.json
 
   go:

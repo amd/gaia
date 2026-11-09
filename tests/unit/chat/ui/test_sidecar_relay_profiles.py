@@ -30,15 +30,14 @@ import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.sidecar.daemon_client as daemon_client_module
 import gaia.ui.sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
+from gaia.ui.models import ChatRequest
 from gaia.ui.sidecar.errors import SidecarError, SidecarSpawnError
 from gaia.ui.sidecar.profiles import (
-    EMAIL_PROFILE,
     GAIA_PROFILE,
     api_version_supported,
     profile_for,
 )
-from gaia.ui.sidecar.proxy import EmailSidecarProxy, SidecarProxy
-from gaia.ui.models import ChatRequest
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.turn_summary import TurnLedger
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -50,21 +49,6 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 class TestProxyPrefix:
     def test_gaia_proxy_targets_v1_gaia(self):
         assert SidecarProxy("http://x", agent_id="gaia").prefix == "/v1/gaia"
-
-    def test_email_subclass_is_pinned_to_email(self):
-        assert EmailSidecarProxy("http://x").prefix == "/v1/email"
-
-    def test_email_subclass_refuses_another_agent(self):
-        # Its mailbox routes are hardcoded /v1/email, so aiming it elsewhere
-        # could only 404. Refuse rather than silently ignore the argument.
-        with pytest.raises(TypeError, match="email-only"):
-            EmailSidecarProxy("http://x", agent_id="gaia")
-
-    def test_only_email_carries_mailbox_routes(self):
-        generic = SidecarProxy("http://x", agent_id="gaia")
-        assert not hasattr(generic, "triage")
-        assert not hasattr(generic, "provision")
-        assert hasattr(EmailSidecarProxy("http://x"), "triage")
 
     def test_query_and_cancel_paths_are_agent_scoped(self):
         p = SidecarProxy("http://x", agent_id="gaia")
@@ -81,12 +65,6 @@ class TestVersionFloors:
     )
     def test_gaia_floor_is_2_12(self, version, ok):
         assert api_version_supported(GAIA_PROFILE, version) is ok
-
-    @pytest.mark.parametrize(
-        "version,ok", [("2.4", True), ("2.3", False), ("1.9", False)]
-    )
-    def test_email_floor_is_unchanged(self, version, ok):
-        assert api_version_supported(EMAIL_PROFILE, version) is ok
 
     @pytest.mark.parametrize("version", [None, "", "not-a-version"])
     def test_absent_or_junk_version_is_refused(self, version):
@@ -258,7 +236,7 @@ class TestGaiaDispatch:
     def _patch(self, monkeypatch, handle):
         acquired = []
 
-        def _acquire(agent_id="email"):
+        def _acquire(agent_id):
             acquired.append(agent_id)
             return handle
 
@@ -393,22 +371,6 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
 
-    def test_email_missing_model_still_blocks_a_cloud_turn(self, monkeypatch):
-        """Email's readiness gate stays a gate whatever model the turn uses."""
-        body = self._init_body(reachable=True, present=False, hint="no inbox")
-        body["model"]["id"] = "Gemma-4-E4B-it-GGUF"
-        handle = _FakeHandle(api_version="2.4", init_result=(503, body))
-        _, calls = self._patch_cloud(monkeypatch, handle)
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="email")
-
-        _dispatch_sidecar_query(
-            handler, request, [], "amd.DeepSeek-V4.1-Flash", "email"
-        )
-
-        assert calls == []
-        assert handler.events[0]["type"] == "agent_error"
-
     def test_an_incompatible_lemonade_still_blocks(self, monkeypatch):
         body = self._init_body(
             reachable=True, compatible=False, hint="Lemonade 10.1 is too old"
@@ -421,21 +383,6 @@ class TestGaiaDispatch:
 
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
-
-    def test_email_not_ready_still_blocks(self, monkeypatch):
-        """Email's /init IS a gate — provisioning is a step the user finishes
-        on the agent card, and a triage against an unprovisioned mailbox
-        burns a long model call to reach the same answer."""
-        handle = _FakeHandle(api_version="2.4", init_result=(503, {"hint": "no inbox"}))
-        _, calls = self._patch(monkeypatch, handle)
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="email")
-
-        _dispatch_sidecar_query(handler, request, [], "m", "email")
-
-        assert calls == []
-        assert handler.events[0]["type"] == "agent_error"
-        assert "email agent isn't ready" in handler.events[0]["content"]
 
     def test_unknown_agent_fails_loudly(self, monkeypatch):
         self._patch(monkeypatch, _FakeHandle())
@@ -613,7 +560,7 @@ class TestRelayedToolResult:
                 "tool": "list_messages",
                 "data": {"status": "error", "error": "mailbox offline"},
             },
-            EMAIL_PROFILE,
+            GAIA_PROFILE,
         )
         [step] = ui.events
         assert step["success"] is False
@@ -647,38 +594,16 @@ class TestSessionIdGating:
     def test_gaia_sends_session_id(self):
         assert self._body_for(GAIA_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_email_sends_it_too(self):
-        # #2834: without it a follow-up can't name the thread the last turn
-        # showed — the sidecar builds a fresh agent per turn.
-        assert self._body_for(EMAIL_PROFILE, "sess-9")["session_id"] == "sess-9"
-
     @pytest.mark.parametrize("empty", [None, ""])
     def test_omitted_when_absent(self, empty):
-        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+        for profile in (GAIA_PROFILE,):
             assert "session_id" not in self._body_for(profile, empty)
 
     def test_a_profile_without_the_field_never_sends_it(self):
         from dataclasses import replace
 
-        bare = replace(EMAIL_PROFILE, min_session_id_api_version=None)
+        bare = replace(GAIA_PROFILE, min_session_id_api_version=None)
         assert "session_id" not in self._body_for(bare, "sess-9")
-
-    @pytest.mark.parametrize(
-        "version,expected",
-        [
-            ("2.11", False),
-            ("2.12", True),
-            ("2.14", True),
-            ("3.0", True),
-            (None, False),
-            ("", False),
-            ("garbage", False),
-        ],
-    )
-    def test_email_takes_it_only_from_contract_2_12(self, version, expected):
-        from gaia.ui.sidecar.profiles import session_id_supported
-
-        assert session_id_supported(EMAIL_PROFILE, version) is expected
 
     def test_gaia_takes_it_at_its_own_floor(self):
         from gaia.ui.sidecar.profiles import session_id_supported
@@ -696,20 +621,14 @@ class TestCopyIsAgentSpecific:
             "GAIA stopped unexpectedly while answering."
         )
 
-    def test_email_crash_copy_names_the_email_agent(self):
-        assert EMAIL_PROFILE.stream_ended_message.startswith(
-            "The email agent stopped unexpectedly while working."
-        )
-
     def test_the_lemonade_hint_names_the_right_agent(self):
         """It is appended to terminal errors; the flagship's must not send the
         reader to the email agent."""
         assert "GAIA agent" in GAIA_PROFILE.lemonade_hint
-        assert "email agent" in EMAIL_PROFILE.lemonade_hint
         assert "email" not in GAIA_PROFILE.lemonade_hint
 
     def test_the_lemonade_hint_leaves_the_remedy_to_the_start_hint(self):
-        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+        for profile in (GAIA_PROFILE,):
             assert "Start Lemonade" not in profile.lemonade_hint
 
     def test_mutating_status_line_names_the_right_kind_of_change(self):
@@ -748,21 +667,21 @@ _USER_COPY_FIELDS = (
 
 
 class TestPlainUserCopy:
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     @pytest.mark.parametrize("field_name", _USER_COPY_FIELDS)
     def test_no_internal_jargon_or_hub(self, profile, field_name):
         text = getattr(profile, field_name).lower()
         for word in ("sidecar", "stream", "hub", "contract", "~/"):
             assert word not in text, f"{profile.agent_id}.{field_name}: {text!r}"
 
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     def test_crash_copy_keeps_the_partial_answer_and_asks_to_resend(self, profile):
         text = profile.stream_ended_message
         assert "stopped unexpectedly" in text
         assert "kept above" in text
         assert "Send your message again." in text
 
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     def test_start_failure_copy_says_what_to_try(self, profile):
         text = profile.start_failed_message
         assert "couldn't start" in text
@@ -770,11 +689,11 @@ class TestPlainUserCopy:
         assert "restart GAIA" in text
         assert "update GAIA to the latest version or reinstall it" in text
 
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     def test_upgrade_copy_says_update_gaia(self, profile):
         assert "Update GAIA" in profile.version_upgrade_message
 
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     def test_crash_text_names_the_real_log_folder(self, profile, tmp_path, monkeypatch):
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         log_dir = tmp_path / "agents" / profile.agent_id / "logs"
@@ -922,7 +841,7 @@ class TestPlainUserCopy:
         for word in ("sidecar", "daemon", "ensure"):
             assert word not in message, word
 
-    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE])
     def test_an_out_of_date_agent_says_update_gaia(self, profile):
         assert profile.start_failed_text("out_of_date") == (
             profile.version_upgrade_message

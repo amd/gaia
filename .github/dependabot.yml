@@ -73,13 +73,12 @@ updates:
   # root-npm-dependencies owns that lockfile. A nested npm entry split upgrades
   # across two red PRs (amd/gaia#3261).
 
-  # JavaScript - standalone npm packages outside the root workspace: the two
-  # published hub sidecars, the website, the docs proxy, the Cloudflare workers
+  # JavaScript - standalone npm packages outside the root workspace: the
+  # published flagship hub sidecar, the website, the docs proxy, the Cloudflare workers
   # and the VS Code extension. util/check_dependabot.py fails lint if a tracked
   # lockfile is missing here (#3525). One grouped PR per directory.
   - package-ecosystem: "npm"
     directories:
-      - "/hub/agents/email/npm"
       - "/hub/agents/gaia/npm"
       - "/website"
       - "/docs"

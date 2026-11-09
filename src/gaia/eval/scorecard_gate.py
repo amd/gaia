@@ -16,17 +16,17 @@ Usage::
 
     # Presence-only (first adoption):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md
+        --scorecard hub/agents/gaia/npm/SCORECARD.md
 
     # With a baseline from a file (unit tests):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md \\
+        --scorecard hub/agents/gaia/npm/SCORECARD.md \\
         --baseline-file /tmp/prev-SCORECARD.md
 
     # With a baseline resolved from a git ref (CI):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/email/npm/SCORECARD.md \\
-        --baseline-ref agent-pkg-email-v0.2.3
+        --scorecard hub/agents/gaia/npm/SCORECARD.md \\
+        --baseline-ref agent-pkg-gaia-v0.1.0
 
 Exit codes:
     0 — Passed (presence-only first adoption, equal score, or score improved).
@@ -95,10 +95,8 @@ def env_ctx_size(parsed: dict) -> int | None:
     Lives in ``recipe.environment.ctx_size`` — absent on cards produced
     before the envelope landed (implicitly the model's 64K registry floor).
 
-    Public (#2094): the ``email_scorecard_refresh.yml`` ``pre`` step imports
-    this directly to read the committed card's ctx stamp before spending any
-    eval budget, rather than re-deriving the ``recipe.environment.ctx_size``
-    path in ad-hoc PowerShell/Python.
+    Public (#2094) so a workflow can read a committed card's ctx stamp before
+    spending any eval budget.
     """
     env = parsed.get("recipe", {}).get("environment")
     if not isinstance(env, dict):
@@ -223,7 +221,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--scorecard",
         required=True,
-        help="Path to the candidate SCORECARD.md (e.g. hub/agents/email/npm/SCORECARD.md).",
+        help="Path to the candidate SCORECARD.md (e.g. hub/agents/gaia/npm/SCORECARD.md).",
     )
     baseline_group = parser.add_mutually_exclusive_group()
     baseline_group.add_argument(

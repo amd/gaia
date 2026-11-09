@@ -70,7 +70,7 @@ PACKAGE_DATA = [
 
 #: Never in the frozen core: the hub agents, which run as their own binaries
 #: through the daemon. The chat paths relay to them when they can't be imported.
-NOT_SHIPPED = ["gaia_agent", "gaia_agent_email"]
+NOT_SHIPPED = ["gaia_agent"]
 
 COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic"]
 COLLECT_ALL = ["faiss"]

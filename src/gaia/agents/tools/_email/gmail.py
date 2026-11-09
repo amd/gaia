@@ -6,12 +6,8 @@ Same reads as the Graph backend next door, emitting the same
 provider-neutral summary shape, so neither the skill nor the model learns
 which mailbox is connected.
 
-This is a reimplementation of the read half of
-``gaia_agent_email.gmail_backend``, not a relocation of it: the flagship must
-not depend on the standalone email package it is meant to replace, and that
-backend returns raw Gmail resources — its flattening lives in the sidecar's
-tool layer, which does not come along. The wire contract (Gmail API v1) is the
-shared truth, not the Python.
+It flattens Gmail API v1 resources into that shape here, so the tools never
+handle raw Gmail payloads.
 """
 
 from __future__ import annotations

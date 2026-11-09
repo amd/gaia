@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Untrusted-content handling for mail the flagship agent reads (#4150).
 
-Two safeguards, both deterministic and LLM-free, carried over from the retired
-hub email agent's triage card so the flagship's own path does not have to
-rediscover them:
+Two safeguards, both deterministic and LLM-free:
 
 - **Fencing.** A message body is wrapped in ``<<<UNTRUSTED_EMAIL_BODY_*>>>``
   before it reaches the model. Anything between the markers is data about an

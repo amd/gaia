@@ -39,7 +39,7 @@ def _publish_step(name: str) -> dict:
 
 
 def test_glob_finds_every_known_agent_workflow():
-    assert {"release_agent_gaia.yml", "release_agent_email.yml"} <= set(AGENT_WORKFLOWS)
+    assert "release_agent_gaia.yml" in AGENT_WORKFLOWS
 
 
 @pytest.mark.parametrize("name", AGENT_WORKFLOWS)

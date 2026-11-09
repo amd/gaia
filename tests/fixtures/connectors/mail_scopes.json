@@ -1,59 +1,15 @@
 {
-  "_source": "hub/agents/email/python/gaia_agent_email/scopes.py and outlook_scopes.py — hand-maintained, guarded by tests/unit/connectors/test_email_scope_drift.py (Python) and tui/internal/ui/preflight/check_test.go (Go). Edit the source constants first, then this fixture, then let the guards confirm agreement. identity_scopes is the one spelling both the catalog spec's default_scopes and the OAuthProvider's default_scopes must equal (#2738).",
+  "_source": "src/gaia/agents/tools/_email/scopes.py (DECLARED_SCOPES) — hand-maintained, guarded by tests/unit/connectors/test_mail_scope_drift.py. agent_scopes is what the flagship's mail tools ask for at consent; identity_scopes is the one spelling both the catalog spec's default_scopes and the OAuthProvider's default_scopes must equal (#2738). Edit the source constants first, then this fixture.",
   "google": {
-    "agent_scopes": {
-      "required": [
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send"
-      ],
-      "optional": [
-        "https://www.googleapis.com/auth/calendar.events",
-        "https://www.googleapis.com/auth/calendar.readonly"
-      ]
-    },
-    "identity_scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"],
-    "connect_union": [
-      "openid",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/gmail.modify",
-      "https://www.googleapis.com/auth/gmail.send",
-      "https://www.googleapis.com/auth/calendar.events",
-      "https://www.googleapis.com/auth/calendar.readonly"
-    ]
+    "agent_scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "identity_scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"]
   },
   "microsoft": {
-    "agent_scopes": {
-      "required": [
-        "https://graph.microsoft.com/Mail.ReadWrite",
-        "https://graph.microsoft.com/Mail.Send"
-      ],
-      "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
-    },
-    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"],
-    "connect_union": [
-      "offline_access",
-      "https://graph.microsoft.com/User.Read",
-      "https://graph.microsoft.com/Mail.ReadWrite",
-      "https://graph.microsoft.com/Mail.Send",
-      "https://graph.microsoft.com/Calendars.ReadWrite"
-    ]
+    "agent_scopes": ["https://graph.microsoft.com/Mail.ReadWrite"],
+    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"]
   },
   "microsoft_work": {
-    "_note": "Work Microsoft 365 / Entra (#2628) — identical Graph scopes to personal Outlook; only the connector id (token/grant/keyring slot) differs.",
-    "agent_scopes": {
-      "required": [
-        "https://graph.microsoft.com/Mail.ReadWrite",
-        "https://graph.microsoft.com/Mail.Send"
-      ],
-      "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
-    },
-    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"],
-    "connect_union": [
-      "offline_access",
-      "https://graph.microsoft.com/User.Read",
-      "https://graph.microsoft.com/Mail.ReadWrite",
-      "https://graph.microsoft.com/Mail.Send",
-      "https://graph.microsoft.com/Calendars.ReadWrite"
-    ]
+    "_note": "Work Microsoft 365 / Entra (#2628): the flagship declares no mailbox scope for it; only the identity spelling is pinned.",
+    "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"]
   }
 }

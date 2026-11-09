@@ -30,7 +30,7 @@ class _FakeProxy:
 
 
 class _FakeHandle:
-    api_version = "2.4"
+    api_version = "2.12"
 
     def proxy(self):
         return _FakeProxy()
@@ -60,17 +60,21 @@ def test_a_relayed_turn_saves_its_streamed_text(monkeypatch, stopped):
         handler._emit({"type": "answer", "content": "Once upon a time, a fox."})
 
     monkeypatch.setattr(
-        daemon_client_module, "acquire_handle", lambda agent_id="email": _FakeHandle()
+        daemon_client_module, "acquire_handle", lambda agent_id: _FakeHandle()
     )
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
+    monkeypatch.setattr(
+        chat_helpers_module, "_should_relay_to_sidecar", lambda *_a: True
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_type_unknown", lambda *_a: False)
     monkeypatch.setattr(
         chat_helpers_module, "_maybe_update_session_title", _noop_retitle
     )
 
     db = ChatDatabase(":memory:")
-    session = db.create_session(agent_type="email")
+    session = db.create_session(agent_type="gaia")
     request = ChatRequest(
-        session_id=session["id"], message="a story", stream=True, agent_type="email"
+        session_id=session["id"], message="a story", stream=True, agent_type="gaia"
     )
     sent = []
 

@@ -99,8 +99,6 @@ def test_the_unknown_agent_message_does_not_contradict_itself():
     assert "Unknown agent_type 'gaia'" in detail
     listed = detail.split("Registered agent ids: ")[1].split(".")[0]
     assert "gaia" not in listed, f"named as unknown and registered at once: {listed}"
-    # Email still belongs there — its relay needs no registration.
-    assert "email" in listed
     # The flagship installs by re-running setup in the app, never a command.
     assert "Settings > Setup" in detail
     assert "gaia init" not in detail and "gaia hub" not in detail
@@ -126,11 +124,6 @@ def test_uninstalled_flagship_says_so_rather_than_failing_at_the_daemon():
     """ "Install it from the Hub" beats whatever the daemon says about being
     asked to start a sidecar that was never installed."""
     assert _agent_type_unknown("gaia", _Registry(None)) is True
-
-
-def test_email_stays_dispatchable_without_a_registration():
-    """Its relay never needed one, and #2109 left it that way."""
-    assert _agent_type_unknown("email", _Registry(None)) is False
 
 
 def test_dispatch_set_is_the_profile_registry():
@@ -175,12 +168,6 @@ class TestRelayDecision:
         registry = _Registry(None)
         registry.load_error = "ImportError: No module named 'faiss'"
         assert _should_relay_to_sidecar("gaia", registry) is False
-
-    def test_email_always_relays_even_with_a_real_registration(self):
-        """#2109 retired email's in-process loop; the wheel being importable
-        must not resurrect it."""
-        registry = _Registry(_registration("email", is_sidecar=False))
-        assert _should_relay_to_sidecar("email", registry) is True
 
     def test_non_sidecar_agent_never_relays(self):
         assert _should_relay_to_sidecar("my-custom-agent", _Registry(None)) is False

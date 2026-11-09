@@ -32,10 +32,10 @@ from gaia.daemon.sidecars.errors import (
     SidecarError,
 )
 from gaia.llm.surface_hints import APP_RESTART_HINT
-from gaia.ui.sidecar.proxy import EmailSidecarProxy  # noqa: E402
+from gaia.ui.sidecar.proxy import SidecarProxy  # noqa: E402
 
 ENSURE_PAYLOAD = {
-    "agent_id": "email",
+    "agent_id": "gaia",
     "state": "running",
     "mode": "user",
     "pid": 111,
@@ -105,9 +105,10 @@ def test_handle_proxy_returns_bound_proxy_instance():
         agent_version="0.3.0",
         mode="user",
         pid=111,
+        agent_id="gaia",
     )
     proxy = handle.proxy()
-    assert isinstance(proxy, EmailSidecarProxy)
+    assert isinstance(proxy, SidecarProxy)
     assert proxy.base_url == "http://127.0.0.1:55001"
     assert proxy._auth_token == "sidecar-tok"
     assert proxy._session.headers["Authorization"] == "Bearer sidecar-tok"
@@ -123,7 +124,7 @@ def test_acquire_daemon_start_error_wraps_as_sidecar_error(monkeypatch):
     monkeypatch.setattr(daemon_client_module, "start_or_attach", _raise)
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
 
     message = str(excinfo.value)
     assert APP_RESTART_HINT in message
@@ -138,7 +139,7 @@ def test_acquire_generic_daemon_error_wraps_as_sidecar_error(monkeypatch):
     monkeypatch.setattr(daemon_client_module, "start_or_attach", _raise)
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
 
     message = str(excinfo.value)
     assert APP_RESTART_HINT in message
@@ -155,7 +156,7 @@ def test_acquire_stale_daemon_minor_zero_raises_restart_hint(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
     with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
@@ -165,7 +166,7 @@ def test_acquire_stale_daemon_major_only_raises_restart_hint(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
     with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
@@ -177,7 +178,7 @@ def test_acquire_stale_daemon_floor_check_precedes_http_call(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
     with pytest.raises(SidecarError):
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
 
 
 # ── acquire_handle: the ensure POST + success path ──────────────────────────
@@ -189,7 +190,7 @@ def test_acquire_success_returns_handle_from_ensure_payload(monkeypatch):
     recorder = _RecordingPost(_FakeResponse(200, ENSURE_PAYLOAD))
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
-    handle = daemon_client_module.acquire_handle()
+    handle = daemon_client_module.acquire_handle("gaia")
 
     assert isinstance(handle, daemon_client_module.SidecarHandle)
     assert handle.base_url == ENSURE_PAYLOAD["base_url"]
@@ -207,10 +208,10 @@ def test_acquire_posts_bearer_token_and_ensure_url(monkeypatch):
     recorder = _RecordingPost(_FakeResponse(200, ENSURE_PAYLOAD))
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
-    daemon_client_module.acquire_handle(agent_id="email")
+    daemon_client_module.acquire_handle(agent_id="gaia")
 
     call = recorder.calls[0]
-    assert call["url"] == f"{inst.base_url}/daemon/v1/agents/email/ensure"
+    assert call["url"] == f"{inst.base_url}/daemon/v1/agents/gaia/ensure"
     assert call["headers"]["Authorization"] == "Bearer daemon-tok-xyz"
 
 
@@ -226,13 +227,13 @@ def test_acquire_uses_agent_id_in_url(monkeypatch):
 
 
 def test_acquire_default_mode_is_user(monkeypatch):
-    monkeypatch.delenv("GAIA_EMAIL_AGENT_MODE", raising=False)
+    monkeypatch.delenv("GAIA_GAIA_AGENT_MODE", raising=False)
     inst = _daemon_instance()
     monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
     recorder = _RecordingPost(_FakeResponse(200, ENSURE_PAYLOAD))
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
-    daemon_client_module.acquire_handle()
+    daemon_client_module.acquire_handle("gaia")
 
     assert recorder.calls[0]["json"] == {"mode": "user"}
 
@@ -251,7 +252,7 @@ def _patch_dev_src_dir_resolution(monkeypatch) -> Path:
     by that name into this module.
     """
     fake_repo_root = Path("/fake/checkout-b")
-    fake_dev_src_dir = fake_repo_root / "hub" / "agents" / "email" / "python"
+    fake_dev_src_dir = fake_repo_root / "hub" / "agents" / "gaia" / "python"
     if hasattr(daemon_client_module, "resolve_caller_dev_src_dir"):
         monkeypatch.setattr(
             daemon_client_module,
@@ -275,14 +276,14 @@ def _patch_dev_src_dir_resolution(monkeypatch) -> Path:
 
 
 def test_acquire_mode_from_env_override(monkeypatch):
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    monkeypatch.setenv("GAIA_GAIA_AGENT_MODE", "dev")
     inst = _daemon_instance()
     monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
     recorder = _RecordingPost(_FakeResponse(200, {**ENSURE_PAYLOAD, "mode": "dev"}))
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
     fake_dev_src_dir = _patch_dev_src_dir_resolution(monkeypatch)
 
-    handle = daemon_client_module.acquire_handle()
+    handle = daemon_client_module.acquire_handle("gaia")
 
     assert recorder.calls[0]["json"] == {
         "mode": "dev",
@@ -298,7 +299,7 @@ def test_acquire_non_200_response_raises_sidecar_error_with_detail(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
     with pytest.raises(SidecarError, match="DISTINCTIVE-502"):
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
 
 
 def test_acquire_non_200_response_carries_the_daemons_error_kind(monkeypatch):
@@ -310,7 +311,7 @@ def test_acquire_non_200_response_carries_the_daemons_error_kind(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _RecordingPost(response))
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert excinfo.value.kind == KIND_CAPACITY
 
 
@@ -321,7 +322,7 @@ def test_acquire_non_200_from_a_daemon_without_kinds_has_no_kind(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _RecordingPost(response))
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert excinfo.value.kind == ""
 
 
@@ -338,7 +339,7 @@ def test_acquire_daemon_errors_carry_a_kind(monkeypatch, error, kind):
 
     monkeypatch.setattr(daemon_client_module, "start_or_attach", _raise)
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert excinfo.value.kind == kind
 
 
@@ -348,7 +349,7 @@ def test_acquire_stale_daemon_floor_is_a_service_outdated_kind(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert excinfo.value.kind == KIND_SERVICE_OUTDATED
 
 
@@ -361,7 +362,7 @@ def test_acquire_unreachable_daemon_is_a_service_unreachable_kind(monkeypatch):
 
     monkeypatch.setattr(daemon_client_module.requests, "post", _refuse)
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.acquire_handle()
+        daemon_client_module.acquire_handle("gaia")
     assert excinfo.value.kind == KIND_SERVICE_UNREACHABLE
 
 
@@ -372,7 +373,7 @@ def test_stop_sidecar_noop_when_daemon_absent_no_http_call(monkeypatch):
     monkeypatch.setattr(daemon_client_module, "attach", lambda **k: None)
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
-    daemon_client_module.stop_sidecar()  # must not raise
+    daemon_client_module.stop_sidecar("gaia")  # must not raise
 
 
 def test_stop_sidecar_stale_daemon_below_minor_floor_raises_restart_hint(
@@ -383,7 +384,7 @@ def test_stop_sidecar_stale_daemon_below_minor_floor_raises_restart_hint(
     monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
 
     with pytest.raises(SidecarError, match="gaia daemon restart") as excinfo:
-        daemon_client_module.stop_sidecar()
+        daemon_client_module.stop_sidecar("gaia")
     assert "pip install --upgrade amd-gaia" in str(excinfo.value)
 
 
@@ -391,15 +392,15 @@ def test_stop_sidecar_success_posts_bearer_and_returns_none(monkeypatch):
     inst = _daemon_instance(token="daemon-tok-abc")
     monkeypatch.setattr(daemon_client_module, "attach", lambda **k: inst)
     recorder = _RecordingPost(
-        _FakeResponse(200, {"agent_id": "email", "state": "stopped"})
+        _FakeResponse(200, {"agent_id": "gaia", "state": "stopped"})
     )
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
-    result = daemon_client_module.stop_sidecar("email")
+    result = daemon_client_module.stop_sidecar("gaia")
 
     assert result is None
     call = recorder.calls[0]
-    assert call["url"] == f"{inst.base_url}/daemon/v1/agents/email/stop"
+    assert call["url"] == f"{inst.base_url}/daemon/v1/agents/gaia/stop"
     assert call["headers"]["Authorization"] == "Bearer daemon-tok-abc"
 
 
@@ -412,7 +413,7 @@ def test_stop_sidecar_failure_raises_sidecar_error_with_detail(monkeypatch):
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
 
     with pytest.raises(SidecarError, match="4242"):
-        daemon_client_module.stop_sidecar("email")
+        daemon_client_module.stop_sidecar("gaia")
 
 
 def test_stop_sidecar_daemon_error_from_attach_wraps_as_sidecar_error(monkeypatch):
@@ -422,7 +423,7 @@ def test_stop_sidecar_daemon_error_from_attach_wraps_as_sidecar_error(monkeypatc
     monkeypatch.setattr(daemon_client_module, "attach", _raise)
 
     with pytest.raises(SidecarError) as excinfo:
-        daemon_client_module.stop_sidecar()
+        daemon_client_module.stop_sidecar("gaia")
 
     message = str(excinfo.value)
     assert APP_RESTART_HINT in message

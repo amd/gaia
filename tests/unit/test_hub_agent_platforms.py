@@ -40,7 +40,7 @@ def _to_lock_key(triple: str) -> str:
 
 
 def test_binary_agents_are_discovered():
-    assert {"gaia", "email"} <= set(_binary_agents())
+    assert {"gaia"} <= set(_binary_agents())
 
 
 @pytest.mark.parametrize("agent_id", _binary_agents())
