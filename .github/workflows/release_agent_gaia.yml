@@ -177,7 +177,6 @@ env:
   CHANGELOG: hub/agents/gaia/npm/CHANGELOG.md
   SPEC: hub/agents/gaia/npm/SPEC.md
   SKILL: hub/agents/gaia/npm/SKILL.md
-  FREEZE_DIST: hub/agents/gaia/python/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns
   # the bucket binding; CI never talks to R2 directly — it POSTs to /publish.
   HUB_PREFIX: agents/gaia

@@ -50,21 +50,13 @@ jobs:
 
   retrieval:
     name: Code retrieval (${{ github.event_name == 'push' && 'nightly' || (github.event.inputs.suite || 'pr') }})
-    # Fork PRs never reach the self-hosted pool; drafts wait for ready_for_ci.
-    # Of all labels, only ready_for_ci starts a run.
     needs: eval-gate
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
-      needs.eval-gate.outputs.run == 'true' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.action != 'labeled' || github.event.label.name == 'ready_for_ci') &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
-    # Job-level, so a skipped run (a label other than ready_for_ci) cancels nothing.
+      needs.eval-gate.outputs.run == 'true'
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.suite || 'pr' }}
-      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+      cancel-in-progress: false
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:

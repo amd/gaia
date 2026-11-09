@@ -168,11 +168,10 @@
 # here, which compares against the Gemma-on-Halo baseline in gaia-flagship/ -
 # the way a targeted re-run joins an earlier Gemma tag run.
 #
-# FORKS AND DRAFTS. The job-level `if` guards below still skip fork and draft
-# PRs, in case a `pull_request` trigger is ever added back: a fork PR could not
-# pass (ANTHROPIC_API_KEY is not exposed to it) and must not put unreviewed code
-# on the lab pool. If the key is ever missing, the preflight fails with
-# instructions instead of running a judge-less eval.
+# No `pull_request` trigger, so no fork or draft code reaches the lab pool. Do
+# not add one without a fork/draft guard: a fork PR would put unreviewed code on
+# a self-hosted runner. If ANTHROPIC_API_KEY is ever missing, the preflight
+# fails with instructions instead of running a judge-less eval.
 
 name: Agent Eval — flagship
 
@@ -488,11 +487,7 @@ jobs:
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
-      needs.lanes.outputs.outcomes == 'true' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+      needs.lanes.outputs.outcomes == 'true'
     concurrency:
       group: ${{ github.workflow }}-outcomes-${{ github.ref }}
       cancel-in-progress: false
@@ -504,7 +499,7 @@ jobs:
         shell: powershell
     # At least the sum of the step limits below plus setup, or a job-level
     # timeout cancels and skips the judge, gate and upload steps.
-    timeout-minutes: ${{ github.event_name != 'pull_request' && 420 || 200 }}
+    timeout-minutes: 420
     env:
       # The venv's interpreter and CLI by full path. A bare `python` resolves
       # through PATH, which a runner's own setup can put ahead of the venv.
@@ -587,7 +582,7 @@ jobs:
 
       # No credentials in this step's environment: the agent runs shell commands.
       - name: Run the flagship on the task suites
-        timeout-minutes: ${{ github.event_name != 'pull_request' && 240 || 60 }}
+        timeout-minutes: 240
         run: |
           $ErrorActionPreference = "Continue"
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -616,7 +611,7 @@ jobs:
       # Not after a failed pick: it would judge on an account that cannot answer.
       - name: Judge quality
         if: ${{ !cancelled() && steps.claude_account.outcome == 'success' }}
-        timeout-minutes: ${{ github.event_name != 'pull_request' && 60 || 30 }}
+        timeout-minutes: 60
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Only without a subscription token. The token would win anyway, and the
@@ -747,25 +742,12 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.lane }}-${{ github.ref }}
       cancel-in-progress: false
-    # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
-    # untrusted code onto a self-hosted runner and could not pass anyway
-    # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
-    # fails); a draft would spend a multi-hour single-slot run on work still in
-    # progress. A job-level `if` resolves before a runner is assigned, so a
-    # skipped job never reaches the pool at all. `ready_for_ci` is the repo-wide
-    # escape hatch for a draft that does want CI. Mirrors the guard in
-    # test_email_agent_eval.yml.
-    #
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
-      needs.lanes.outputs.has_lanes == 'true' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+      needs.lanes.outputs.has_lanes == 'true'
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
