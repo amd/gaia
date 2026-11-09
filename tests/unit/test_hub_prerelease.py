@@ -42,6 +42,11 @@ def _load_packager():
 packager = _load_packager()
 
 
+@pytest.fixture(autouse=True)
+def _no_assets_override(monkeypatch):
+    monkeypatch.delenv(prerelease.ASSETS_URL_ENV, raising=False)
+
+
 def _freeze_artifacts(root: Path, platforms=("win32-x64", "darwin-arm64", PLATFORM)):
     """The layout download-artifact gives publish.yml: one dir per freeze leg."""
     for platform in platforms:
@@ -154,6 +159,47 @@ def test_an_explicit_version_is_still_the_hubs(tmp_path):
         pytest.raises(RuntimeError, match="hub"),
     ):
         installer.install("gaia", version="0.2.0", install_root=tmp_path)
+
+
+def test_the_run_can_install_its_own_flagship_before_the_release_exists(
+    release_assets, tmp_path, monkeypatch
+):
+    # build_core.yml's real-engine check on a tag build: the pre-release is
+    # published by the run under test, so the core reads the packed assets.
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, release_assets.as_uri() + "/")
+    with patch.object(prerelease, "CORE_VERSION", RC_CORE):
+        result = installer.install(
+            "gaia",
+            install_root=tmp_path / "agents",
+            skip_compatibility_check=True,
+            platform_key=PLATFORM,
+        )
+
+    assert result.version == f"0.3.0+{TAG}"
+    assert (tmp_path / "agents" / "gaia" / "gaia-agent").read_bytes() == BINARY
+    assert (tmp_path / "agents" / "gaia" / "gaia-agent.yaml").is_file()
+
+
+def test_the_override_still_needs_this_cores_release(tmp_path, monkeypatch):
+    other = tmp_path / "rc2-assets"
+    packager.build_release(
+        _freeze_artifacts(tmp_path / "artifacts"), "v0.25.0-rc2", "abc", other, "0.3.0"
+    )
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, other.as_uri())
+    with pytest.raises(prerelease.PrereleaseFlagshipError, match="belongs to"):
+        prerelease.flagship_source(
+            "gaia", fetcher=installer.catalog_mod.fetch_bytes, core_version=RC_CORE
+        )
+
+
+def test_a_missing_override_directory_names_the_override(tmp_path, monkeypatch):
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, (tmp_path / "none").as_uri())
+    with pytest.raises(
+        prerelease.PrereleaseFlagshipError, match=prerelease.ASSETS_URL_ENV
+    ):
+        prerelease.flagship_source(
+            "gaia", fetcher=installer.catalog_mod.fetch_bytes, core_version=RC_CORE
+        )
 
 
 @pytest.mark.parametrize(

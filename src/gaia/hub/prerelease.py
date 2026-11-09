@@ -11,11 +11,17 @@ packaged by ``util/flagship_rc_assets.py``), and an RC core installs that one.
 There is no fallback to the hub: if the pre-release has no flagship, the
 install fails and says where it looked. A tester silently running a stale
 agent is the failure this module exists to prevent.
+
+``GAIA_RC_FLAGSHIP_URL`` replaces the pre-release's download directory (a
+``file://`` directory works), so the release pipeline can install the flagship
+it just froze before the pre-release exists. The release file must still name
+this core's tag.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -31,6 +37,8 @@ RELEASES_DOWNLOAD_URL = "https://github.com/amd/gaia/releases/download"
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"
 AGENT_YAML_ASSET_NAME = "gaia-agent.yaml"
 SCHEMA_VERSION = 1
+#: Overrides ``RELEASES_DOWNLOAD_URL/<tag>``: the directory holding the assets.
+ASSETS_URL_ENV = "GAIA_RC_FLAGSHIP_URL"
 
 #: GitHub's release CDN sometimes stalls one request; the next one answers.
 MANIFEST_READ_ATTEMPTS = 3
@@ -104,9 +112,14 @@ def flagship_source(
     if tag is None:
         return None
 
-    base_url = f"{RELEASES_DOWNLOAD_URL}/{tag}"
+    override = os.environ.get(ASSETS_URL_ENV, "").strip().rstrip("/")
+    base_url = override or f"{RELEASES_DOWNLOAD_URL}/{tag}"
     url = f"{base_url}/{RELEASE_MANIFEST_NAME}"
-    page = f"https://github.com/amd/gaia/releases/tag/{tag}"
+    page = (
+        f"{base_url} (from {ASSETS_URL_ENV})"
+        if override
+        else f"https://github.com/amd/gaia/releases/tag/{tag}"
+    )
     if attempts < 1:
         raise ValueError(f"attempts must be at least 1, got {attempts}")
     try:
