@@ -14,7 +14,8 @@ turns the cloud choices off.
 
 1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
-   opens once Lemonade is installed. Otherwise press **p** during setup, or enter
+   opens once Lemonade is installed. Otherwise, with the flagship GAIA agent,
+   press **p** during setup (other agents' setup screens don't offer it), or enter
    **`/provider`** from the command palette in chat.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
@@ -99,7 +100,7 @@ with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
 `gaia init` to download it. On a PC that cannot hold it, `gaia init` refuses and
 says how much memory it needs. Like Qwen3.6 it runs with thinking on. To stay on Gemma on a
 large machine and skip the download, run `gaia config set default_model
-Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the setup screen and
+Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the flagship's setup screen and
 picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
