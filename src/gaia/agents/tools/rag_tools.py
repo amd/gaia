@@ -1771,10 +1771,22 @@ class RAGToolsMixin:
                 left_out = _bring_current(self, self.rag, indexed)
                 if left_out and len(left_out) == len(indexed):
                     return _left_out_result(left_out)
-                searched = list(_served_chunks(self.rag, left_out))
+                with self.rag._state_lock:  # pylint: disable=protected-access
+                    # Keep one coherent snapshot for matching and provenance. A
+                    # re-index can replace both arrays while this tool is
+                    # formatting its answer.
+                    chunks_snapshot = list(self.rag.chunks)
+                    chunk_to_file_snapshot = dict(self.rag.chunk_to_file)
+                    searched = [
+                        (index, chunk, chunk_to_file_snapshot.get(index))
+                        for index, chunk in enumerate(chunks_snapshot)
+                        if chunk_to_file_snapshot.get(index) not in left_out
+                    ]
 
-                # Search through chunks for pattern
+                # Search through chunks for pattern. Keep the global chunk index
+                # so exact matches retain their source file and PDF page.
                 matching_chunks = []
+                matching_details = []
                 pattern_lower = pattern.lower()
 
                 if debug_info:
@@ -1783,9 +1795,10 @@ class RAGToolsMixin:
                         f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(searched)} chunks"
                     )
 
-                for i, chunk in enumerate(searched):
+                for index, chunk, source_file in searched:
                     if pattern_lower in chunk.lower():
                         matching_chunks.append(chunk)
+                        matching_details.append((index, chunk, source_file))
 
                         # Capture debug info for first few matches
                         if debug_info and len(debug_info["chunks_with_matches"]) < 5:
@@ -1796,7 +1809,7 @@ class RAGToolsMixin:
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
-                                    "chunk_index": i,
+                                    "chunk_index": index,
                                     "chunk_preview": (
                                         chunk[:100] + "..."
                                         if len(chunk) > 100
@@ -1829,15 +1842,54 @@ class RAGToolsMixin:
                     return result
 
                 # Limit results
-                limited_matches = matching_chunks[:10]
+                limited_details = matching_details[:10]
+                limited_matches = [chunk for _, chunk, _ in limited_details]
+                formatted_matches = []
+                for index, chunk, source_file in limited_details:
+                    matched_content = chunk
+                    page = None
+                    initial_page = extract_page_from_chunk(
+                        chunk, index, chunks_snapshot, chunk_to_file_snapshot
+                    )
+                    if initial_page is not None:
+                        page_entries = split_entries_at_pages(
+                            [
+                                {
+                                    "chunk_id": index,
+                                    "content": chunk,
+                                    "page": initial_page,
+                                }
+                            ]
+                        )
+                        matching_entries = [
+                            entry
+                            for entry in page_entries
+                            if pattern_lower in entry["content"].lower()
+                        ]
+                        if matching_entries:
+                            matched_content = matching_entries[0]["content"]
+                            page = matching_entries[0].get("page")
+                    entry = {"content": matched_content}
+                    if source_file:
+                        entry["source_file"] = str(Path(source_file).resolve())
+                        if page is None and initial_page is not None:
+                            page = initial_page
+                        if page is not None:
+                            entry["page"] = page
+                    formatted_matches.append(entry)
 
                 result = {
                     "status": "success",
                     "message": f"Found {len(matching_chunks)} matches for '{pattern}'",
                     "matches": limited_matches,
+                    "match_details": formatted_matches,
                     "count": len(matching_chunks),
                     "showing": len(limited_matches),
-                    "instruction": "Use these exact matches to answer the user's question.",
+                    "instruction": (
+                        "Use these exact matches to answer the user's question. "
+                        "Cite each match using its source_file and page when present; "
+                        "do not invent a page number when the field is absent."
+                    ),
                 }
                 if left_out:
                     result["files_left_out"] = _public(list(left_out.values()))
