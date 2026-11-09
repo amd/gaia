@@ -453,6 +453,40 @@ HttpResponse HttpClient::post(const std::string& path, const std::string& body,
     return impl_->finish("POST", t, result, connectSec, readSec);
 }
 
+HttpResponse HttpClient::postMultipart(const std::string& path,
+                                       const std::vector<HttpMultipartPart>& parts,
+                                       const HttpHeaders& headers, int timeoutSec,
+                                       int connectTimeoutSec) {
+    const Impl::Target t = impl_->resolve(path);
+    const int readSec    = impl_->readTimeout(timeoutSec);
+    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
+    std::string ignoredType;
+    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &ignoredType);
+    impl_->logRequest("POST", t);
+    httplib::MultipartFormDataItems items;
+    for (const auto& p : parts) items.push_back({p.name, p.content, p.filename, p.contentType});
+
+    httplib::Result result;
+    if (t.useSSL) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        httplib::SSLClient cli(t.host, t.port);
+        cli.enable_server_certificate_verification(impl_->config.verifyTls);
+        if (!impl_->config.caCertPath.empty()) {
+            cli.set_ca_cert_path(impl_->config.caCertPath);
+        }
+        applyTimeouts(cli, connectSec, readSec);
+        result = cli.Post(t.path, hdrs, items);
+#else
+        impl_->throwTlsUnavailable(t);
+#endif
+    } else {
+        httplib::Client cli(t.host, t.port);
+        applyTimeouts(cli, connectSec, readSec);
+        result = cli.Post(t.path, hdrs, items);
+    }
+    return impl_->finish("POST", t, result, connectSec, readSec);
+}
+
 HttpResponse HttpClient::postStreaming(const std::string& path, const std::string& body,
                                        HttpChunkCallback onChunk,
                                        const HttpHeaders& headers, int timeoutSec,

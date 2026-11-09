@@ -36,6 +36,9 @@ public:
         std::string memoryPath;      // empty = MemoryStore::defaultPath()
         bool vision = true;          // analyze_image
         std::string visionModel;     // empty = the agent's own model
+        std::string transcribeModel; // empty = no transcribe_audio
+        std::string audioBaseUrl;    // empty = the agent's endpoint
+        std::string imageModel;      // empty = no generate_image
     };
 
     DocumentIndex* documents() { return docs_.get(); }

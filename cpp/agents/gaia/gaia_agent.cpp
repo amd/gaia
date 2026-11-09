@@ -13,6 +13,7 @@
 
 #include <gaia/file_tools.h>
 #include <gaia/git_tools.h>
+#include <gaia/media_tools.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
@@ -85,6 +86,22 @@ void GaiaAgent::registerTools() {
     if (memory_) memory_->registerTools(toolRegistry());
     if (code_) registerCodeTools(ws);
     if (options_.vision) registerVisionTool(ws);
+    {
+        MediaToolsOptions m;
+        m.transcribeModel = options_.transcribeModel;
+        m.imageModel = options_.imageModel;
+        m.chatEndpoint = [this] {
+            const AgentConfig c = this->config();
+            LemonadeClient normalize(LemonadeClientConfig{c.baseUrl});
+            return MediaEndpoint{normalize.baseUrl(), c.apiKey};
+        };
+        if (!options_.audioBaseUrl.empty()) {
+            const std::string url = options_.audioBaseUrl;
+            m.audioEndpoint = [this, url] { return MediaEndpoint{url, this->config().apiKey}; };
+        }
+        if (ws) m.checkPath = [ws](const std::string& p) { return ws->checkPath(p); };
+        MediaTools::registerAll(toolRegistry(), std::move(m));
+    }
 }
 
 std::string GaiaAgent::getSystemPrompt() const {
