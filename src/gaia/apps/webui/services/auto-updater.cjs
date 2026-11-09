@@ -39,6 +39,8 @@
  *   - installVersion(tag)     → downgrade/install a specific tagged release
  *   - clearPin()              → resume auto-updates (clear the version pin)
  *   - revertUpdate()          → go back to the version before the last update
+ *   - markSetupWorked()       → note that setup finished on the running version
+ *   - revertToLastWorking()   → go back to the last version setup finished on
  *   - setAutoUpdate(enabled)  → persist the auto-update preference
  *   - downloadUpdate()        → download the offered update ("Update now")
  *   - restartToInstall()      → restart into a downloaded update
@@ -90,6 +92,8 @@ const PICKER_FEED_PAGES = 3;
 // Where a restart notes the update it started: a silent install that fails
 // shows nothing, so the next launch is what finds out.
 const INSTALL_ATTEMPT_PATH = path.join(os.homedir(), ".gaia", "update-attempt.json");
+// The last app version first-run setup finished on, and when: {version, at}.
+const LAST_WORKING_PATH = path.join(os.homedir(), ".gaia", "last-working-version.json");
 const PREVIOUS_VERSION_KEY = "previousAppVersion";
 const LAUNCHES_SINCE_UPDATE_KEY = "launchesSinceUpdate";
 // Same cap as the TUI's sumsAtOnce, to go easy on proxies.
@@ -317,6 +321,8 @@ const state = {
   pinnedVersion: null,
   previousVersion: null,
   startFailed: false,
+  // An older version setup last finished on, {version, at}, or null.
+  lastWorking: null,
   autoUpdate: false,
   // Offer release candidates too; off by default. A release-candidate build
   // is offered newer candidates without it.
@@ -1185,6 +1191,77 @@ async function revertUpdate() {
   }
 }
 
+/** Installing an older release in-app is proven only for the Windows setup and the AppImage. */
+function _canInstallOlder() {
+  return process.platform === "win32" || (process.platform === "linux" && Boolean(process.env.APPIMAGE));
+}
+
+/**
+ * The older version setup last finished on, as {version, at}, or null. Only a
+ * version that really finished setup on this PC counts. Works before init().
+ */
+function lastWorkingVersion() {
+  if (isDisabled() || !_canInstallOlder()) return null;
+  const { version, at } = _readJsonFile(LAST_WORKING_PATH);
+  if (typeof version !== "string" || typeof at !== "string" || Number.isNaN(Date.parse(at))) return null;
+  return _compareVersions(version, _runningVersion()) < 0 ? { version, at } : null;
+}
+
+/** Setup finished on the running version: it is the one to come back to. Throws when it can't be saved. */
+function markSetupWorked() {
+  const record = { version: _runningVersion(), at: new Date().toISOString() };
+  fs.mkdirSync(path.dirname(LAST_WORKING_PATH), { recursive: true });
+  const tmp = `${LAST_WORKING_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(record));
+  fs.renameSync(tmp, LAST_WORKING_PATH);
+  setState({ lastWorking: lastWorkingVersion() });
+}
+
+/**
+ * Go back to the version setup last finished on, pinned so the broken one
+ * isn't reinstalled. A failed setup is the user's call to make, so a pin they
+ * set doesn't stop it; a failed install puts that pin back.
+ */
+async function revertToLastWorking() {
+  const last = lastWorkingVersion();
+  if (!last) {
+    throw _userError(
+      "noEarlier",
+      { url: RELEASES_PAGE },
+      `There is no earlier GAIA version to go back to on this PC. Pick one in Settings → General → Updates, or download it from ${RELEASES_PAGE}.`
+    );
+  }
+  if (state.status === STATES.DOWNLOADING) {
+    throw _userError("checkBusy", {}, "An update is already downloading — try again in a moment.");
+  }
+  log("info", `Setup failed on GAIA ${_runningVersion()}: going back to ${last.version}, where it last finished`);
+  const tag = _tagForVersion(last.version);
+  const userPin = state.pinnedVersion;
+  try {
+    await installVersion(tag);
+  } catch (err) {
+    // A refused restart leaves the pin and the download: neither may outlive it.
+    if (state.pinnedVersion === tag) {
+      clearPin();
+      if (userPin) {
+        try {
+          _savePin(userPin);
+          setState({ pinnedVersion: userPin });
+        } catch (pinErr) {
+          const reason = (pinErr && pinErr.message) || String(pinErr);
+          log("error", `Couldn't put back the pin to ${userPin}:`, reason);
+          throw _userError(
+            "failedWith",
+            { reason: `${err.message} The pin to ${userPin} could not be put back in ${UPDATE_CONFIG_PATH} (${reason}).` },
+            `${err.message} The pin to ${userPin} could not be put back: ${reason}`
+          );
+        }
+      }
+    }
+    throw err;
+  }
+}
+
 /** True for the first few launches after an update landed, the only time a failed start blames it. */
 function _updateIsRecent() {
   // An attempt from the running version is a failed install, not an update.
@@ -1625,6 +1702,14 @@ function registerIpcHandlers() {
     await revertUpdate();
     return getState();
   });
+  ipcMain.handle("gaia:update:setup-worked", () => {
+    markSetupWorked();
+    return getState();
+  });
+  ipcMain.handle("gaia:update:revert-to-working", async () => {
+    await revertToLastWorking();
+    return getState();
+  });
   ipcMain.handle("gaia:update:resume", async () => {
     clearPin();
     return getState();
@@ -1660,6 +1745,8 @@ function unregisterIpcHandlers() {
     "gaia:update:list-releases",
     "gaia:update:install-version",
     "gaia:update:revert",
+    "gaia:update:setup-worked",
+    "gaia:update:revert-to-working",
     "gaia:update:resume",
     "gaia:update:set-auto-update",
     "gaia:update:set-include-prereleases",
@@ -1770,6 +1857,7 @@ function init(mainWindow, options = {}) {
     }
     _readInstallOutcome();
     state.previousVersion = previousVersion();
+    state.lastWorking = lastWorkingVersion();
   } catch (err) {
     log("error", "Failed to load electron-updater:", err && err.message);
     setState({
@@ -1866,6 +1954,11 @@ function _initDisabled() {
   state.currentVersion = electron.app.getVersion() || null;
   if (!ipcHandlersRegistered) {
     electron.ipcMain.handle("gaia:update:get-status", () => getState());
+    // Still recorded, so turning updates back on knows where setup worked.
+    electron.ipcMain.handle("gaia:update:setup-worked", () => {
+      markSetupWorked();
+      return getState();
+    });
     ipcHandlersRegistered = true;
   }
 }
@@ -1919,6 +2012,9 @@ module.exports = {
   installVersion,
   previousVersion,
   revertUpdate,
+  lastWorkingVersion,
+  markSetupWorked,
+  revertToLastWorking,
   reportStartFailure,
   clearStartFailure,
   clearPin,

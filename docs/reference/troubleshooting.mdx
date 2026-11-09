@@ -748,6 +748,29 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="Setup fails the same way every time I try again" icon="clock-rotate-left">
+    A broken GAIA build can stop setup, for example at "GAIA couldn't download or
+    start its AI engine", in a way **Try again** can't fix. When an older version
+    finished setup on this PC, the setup screen also offers **Go back to GAIA
+    vX**, with the date it last worked. The same offer appears under the notice
+    when an update to GAIA's own model server fails.
+
+    Going back is your choice; GAIA never does it on its own. It downloads that
+    version, so it needs an internet connection, then restarts into it. Your
+    chats, memory and settings stay as they are. Updates pause so the broken
+    version isn't reinstalled; the newer version stays available, and **Unpin**
+    in **Settings → General → Updates** offers it again once a fix ships.
+
+    The offer appears on the Windows desktop app and the Linux AppImage. A
+    `.deb`, whose files the package manager owns, and a Mac, whose releases
+    don't publish an in-app update yet, don't get it: install the older version
+    from the [releases page](https://github.com/amd/gaia/releases) instead. GAIA
+    records the version local setup finished on in `~/.gaia/last-working-version.json`;
+    a launch on a cloud model doesn't count.
+    Earlier versions didn't keep that record, so a version can be offered only
+    once setup has finished on it.
+  </Accordion>
+
   <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
     The desktop app restarts its assistant when it stops on its own. The banner
     shows how long it has been restarting, and your chats are saved. GAIA tries

@@ -24,6 +24,7 @@ import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
 import { LanguagePicker } from './setup/LanguagePicker';
 import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
+import { GoBackOffer } from './setup/GoBackOffer';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
@@ -1385,6 +1386,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         </>
                     )}
 
+                    {/* A failed run can go back to the version setup last finished on. */}
+                    {run?.state === 'failed' && <GoBackOffer />}
                 </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">

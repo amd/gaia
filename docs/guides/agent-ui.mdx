@@ -983,6 +983,14 @@ in the first three launches after it, GAIA offers the same button in that error 
 or on the corner chip. It downloads the older version, so it needs an internet
 connection, and keeps your chats, memory and goals.
 
+When first-run setup fails, or an update to GAIA's own model server does, the screen
+also offers **Go back to GAIA vX** for the last version local setup finished on this PC,
+with the date it last worked. GAIA records that version each time local setup is ready
+(a cloud model doesn't count), in `~/.gaia/last-working-version.json`, and offers it only
+when it is older than the one running, on Windows and the Linux AppImage. Going back pins
+it like any other go-back; the newer version stays one **Unpin** away. If you keep GAIA
+running when it asks to restart, the older version installs when GAIA restarts or quits.
+
 Checks read the [GitHub releases](https://github.com/amd/gaia/releases) and take the
 newest one on your channel that publishes this platform's update. When none does,
 the Updates section says so rather than "up to date", and you install from the
