@@ -162,7 +162,7 @@ sdk = CodeIndexSDK(CodeIndexConfig(repo_path=".", embedding_model="user.embeddin
 sdk.index_repository()
 ```
 
-The 51-minute figure predates the repo's growth and is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
+The 51-minute figure predates the repo's growth and is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local setup the embedding model (a GGUF model run through llama.cpp) runs on the GPU, with a CPU fallback, so there is no network hop and it is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
 
 ## Roadmap
 
