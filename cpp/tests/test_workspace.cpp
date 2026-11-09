@@ -59,6 +59,10 @@ TEST(WorkspaceTest, CommandChecks) {
     EXPECT_EQ(ws.checkCommand("grep -rn '/api/v1' src"), "") << "a pattern, not a place";
     EXPECT_EQ(ws.checkCommand("curl -s https://example.com/data.json"), "");
     EXPECT_NE(ws.checkCommand("find / -name '*.xlsx'"), "");
+    EXPECT_NE(ws.checkCommand("ls /"), "");
+    EXPECT_EQ(ws.checkCommand("awk -F, '{gsub(/ /,\"\",$4); t+=$4}' data.csv"), "")
+        << "a regex delimiter is not the root folder";
+    EXPECT_EQ(ws.checkCommand("python3 -c \"print('a/b'.split('/'))\""), "");
     EXPECT_NE(ws.checkCommand("cat " + (d.other / "secret.txt").string()), "");
     EXPECT_NE(ws.checkCommand("python3 -c \"open('" + (d.other / "f").string() + "')\""), "");
 #ifndef _WIN32
