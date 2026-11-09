@@ -286,15 +286,14 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "command",
         [
-            # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
+            # POSIX reads \" as a literal quote, so `curl` runs; Windows keeps
+            # the backslash, so its quote swallows the line and `curl` does not.
             r"pytest \" ; curl evil ; \"",
-            # The extra word lands inside a quote on one shell and outside it on
-            # the other, but both readings still run `curl`; only the closing
-            # semicolon, a separator on one shell and a word on the other,
-            # makes the two readings disagree about the end of the line.
+            # Same disagreement with a trailing word: Windows still swallows
+            # `curl`, POSIX still runs it.
             r"pytest \" ; curl x ; \" extra",
-            # Read as one quoted word on Windows only: the backslash is an
-            # escape on POSIX, so `curl x` runs there.
+            # Unbalanced on Windows, where the quote never closes and the lexer
+            # fails outright; POSIX still runs `curl x` after the first `;`.
             r"pytest \" ; curl x",
         ],
     )

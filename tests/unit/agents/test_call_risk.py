@@ -10,6 +10,7 @@ is wrong on the safe calls is the one people learn to ignore on the real ones.
 import pytest
 
 from gaia.agents.base.call_risk import call_risk, shell_command_risk
+from gaia.agents.base.command_facts import read_command
 
 
 @pytest.mark.parametrize(
@@ -68,32 +69,21 @@ DISAGREEING_LINE = r"pytest \" ; curl x ; \""
 
 
 @pytest.mark.parametrize(
-    "command",
-    [
-        # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
-        DISAGREEING_LINE,
-        # The extra word lands inside a quote on one shell and outside it on
-        # the other, but both readings still run `curl`; only the closing
-        # semicolon, a separator on one shell and a word on the other, makes
-        # the two readings disagree about the end of the line.
-        r"pytest \" ; curl x ; \" extra",
-    ],
-)
-def test_a_line_the_two_shells_split_differently_is_not_a_read(command):
-    assert shell_command_risk(command) == "execute"
-
-
-@pytest.mark.parametrize(
     "tool",
     ["run_shell_command", "run_cli_command", "wait_for_condition"],
 )
 def test_no_shell_tool_labels_an_unreadable_line_by_one_reading(tool):
-    assert call_risk(tool, {"command": DISAGREEING_LINE}) == "execute"
+    # The risk label alone cannot show this: `shell_command_risk` returns
+    # `execute` both for a command it read and for one it could not, so the
+    # assertion below would pass even with the guard removed. What distinguishes
+    # the safe outcome is that the line stays opaque rather than being split
+    # into segments by whichever shell read it as a single command.
+    args = {"command": DISAGREEING_LINE}
+    assert read_command(DISAGREEING_LINE).opaque is True
+    assert call_risk(tool, args) == "execute"
     # Even once the call is flagged as one GAIA's checks would refuse, the line
     # stays unreadable rather than picking up a label from one shell's reading.
-    assert (
-        call_risk(tool, {"command": DISAGREEING_LINE, "_risk_note": "x"}) == "execute"
-    )
+    assert call_risk(tool, {**args, "_risk_note": "x"}) == "execute"
 
 
 def test_tools_without_a_command_are_labelled_by_kind():
