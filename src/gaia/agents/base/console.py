@@ -1756,7 +1756,10 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                             subprocess.run(["open", str(path)], check=False)
                         else:
                             subprocess.run(
-                                ["xdg-open", str(path)], env=child_env(), check=False
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
                             )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
@@ -1777,7 +1780,10 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                             subprocess.run(["open", str(path)], check=False)
                         else:
                             subprocess.run(
-                                ["xdg-open", str(path)], env=child_env(), check=False
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
                             )
                 except (KeyboardInterrupt, EOFError):
                     pass
