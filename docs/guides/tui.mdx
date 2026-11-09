@@ -34,7 +34,7 @@ gaia-tui
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -953,24 +953,18 @@ shell for the session.
 persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
 
-## Running another agent
+## Running an agent by id
 
-The flagship is the default, but `gaia-tui` can also drive `email` by id — it keeps
-its own five-row readiness gate:
-
-```bash
-gaia-tui run email
-gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-tui chat --agent email                    # same thing, via `chat`
-```
-
-Installing or removing it is the Python CLI's job:
+The flagship is the default, and `gaia-tui` can also drive an agent by its id:
 
 ```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
+gaia-tui run gaia
+gaia-tui run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-tui chat --agent gaia                     # same thing, via `chat`
 ```
+
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 

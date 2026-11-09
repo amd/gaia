@@ -35,7 +35,7 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 
 One download for users: on Windows, one installer offers the desktop app, the terminal, or both. See [Install GAIA](https://amd-gaia.ai/docs/guides/install) for every platform, and its [For developers](https://amd-gaia.ai/docs/guides/install#for-developers) section for script, `pip`/`uv` and source installs.
 
-> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
+> **Email:** the GAIA agent reads and searches your Gmail or Outlook inbox once you connect the Google or Microsoft connector — see [Email](https://amd-gaia.ai/docs/guides/email). There is no separate email agent to install.
 
 ---
 

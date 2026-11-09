@@ -566,6 +566,18 @@
   },
   "redirects": [
     {
+      "source": "/plans/email-triage-agent",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-agent-packaging",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-calendar-integration",
+      "destination": "/guides/email"
+    },
+    {
       "source": "/guides/hub-publishing",
       "destination": "/guides/custom-agent"
     },

@@ -70,6 +70,20 @@ agent behind it.
 `npx @amd-gaia/gaia version` prints this matrix, plus the version and source URL of
 each binary, for the release you have installed.
 
+## Email
+
+The agent reads Gmail or Outlook once you connect the Google or Microsoft
+connector and grant it to the agent. Eight **read-only** tools list, search and
+open mail, follow a thread, list folders and find the threads waiting on your
+reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
+It never archives, labels, drafts or sends, and every email body is read by the
+local model. Gemma 4 E4B (GPU or NPU) is not offered the mail tools; a larger
+model is. Setup and the full tool list:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
+
+There is no separate email agent: the standalone `@amd-gaia/agent-email` package
+was removed, and mail is this agent's job.
+
 ## Commands
 
 ```

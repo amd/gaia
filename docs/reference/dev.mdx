@@ -351,22 +351,6 @@ python -m pytest tests/ -xvs        # All tests, verbose
 python -m pytest tests/ --hybrid    # Cloud + local testing
 ```
 
-The packaged email-agent tests are hermetic and must not invoke an interactive
-OS keychain. Run them with the null keyring backend (the email test package's
-`conftest.py` and CI workflow apply this setting automatically):
-
-```bash
-PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
-  python -m pytest hub/agents/email/python/tests/
-```
-
-On PowerShell, set the equivalent environment variable first:
-
-```powershell
-$env:PYTHON_KEYRING_BACKEND = "keyring.backends.null.Keyring"
-python -m pytest hub/agents/email/python/tests/
-```
-
 Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
@@ -388,13 +372,13 @@ pre-flight checks that must refuse to publish anything at all. It refuses to run
 against any non-loopback URL, needs no credentials, and cleans up after itself.
 It skips with a message (not a failure) when Node.js is unavailable.
 
-**There are two publisher scripts and they are different programs.**
-`hub/agents/email/python/packaging/publish_to_r2.py` backs the email, chat, and
-components releases; `hub/agents/gaia/python/packaging/publish_to_r2.py` backs
-`release_agent_gaia.yml`. Proving one says nothing about the other, so the
-harness runs both by default and labels every row with the publisher it came
-from. Use `--publisher email` or `--publisher gaia` to narrow it. A case that
-needs a capability a publisher does not have is reported **N/A**, never passed.
+***There are two publisher scripts and they are different programs.**
+`hub/agents/gaia/python/packaging/publish_to_r2.py` backs `release_agent_gaia.yml`;
+`hub/components/terminal-hub/publish_to_r2.py` backs the components release (the
+TUI). Proving one says nothing about the other, so the harness runs both by default
+and labels every row with the publisher it came from. Use `--publisher gaia` or
+`--publisher terminal-hub` to narrow it. A case that needs a capability a
+publisher does not have is reported **N/A**, never passed.
 
 Read the module docstring for what it deliberately **cannot** prove — real R2
 credentials from GitHub's IP space, real installer sizes, and the macOS freeze

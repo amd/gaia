@@ -97,7 +97,7 @@ describe("GET routes", () => {
   });
 });
 
-// Minimal YAML front matter matching the email agent's scorecard shape.
+// Minimal YAML front matter matching a hub agent's scorecard shape.
 const SAMPLE_SCORECARD = [
   "---",
   "schema_version: 1",
@@ -229,7 +229,7 @@ describe("eval scorecard in catalog", () => {
   });
 
   it("surfaces the scorecard's own version even when it lags the published package version (#2965)", async () => {
-    // Mirrors the email agent's real drift: package.json/pyproject at 0.2.0,
+    // Mirrors a real drift: package.json/pyproject at 0.2.0,
     // SCORECARD.md still front-matter-stamped 0.1.0 because no fresh eval ran
     // for the new release. eval_score_version must report the MEASURED
     // version, not the package's latest_version, so a UI caption can't imply

@@ -23,28 +23,6 @@ Each published hub agent ships a **release scorecard** — a single `SCORECARD.m
 
 Scorecards are committed alongside the agent's README and linked from it. A standalone **release gate** (`scorecard_gate.py`) blocks packaging when the scorecard is missing, when its aggregate score regresses below the prior version's, or — when enforcement is on — when it is below an absolute bar or an anti-gaming floor.
 
-## Acceptance metric — email triage (#1437)
-
-The email-triage scorecard's aggregate is **within-one-bucket acceptance accuracy**, not exact 4-way match. Triage priority is an *ordinal* scale, so the user-facing question is "how far off", not "exact match":
-
-```
-URGENT (3) > NEEDS_RESPONSE (2) > FYI (1) > PROMOTIONAL (0)
-```
-
-A prediction is credited when it is exact **or an adjacent bucket** (`|rank(pred) − rank(expected)| ≤ 1`) — what a user feels (nothing urgent buried in low-priority). `PERSONAL` is not a priority *level* and is absent from the corpus, so it is scored exact-only; re-place it on the scale if the corpus gains `PERSONAL` examples. Exact 4-way agreement (~40% on a 4B on-device model) is below the realistic ceiling — single-rater human agreement on subjective priority is only ~60–75% — so the **80% bar (#1437) is on this acceptance metric**, with these **reported (non-gating) secondaries**:
-
-- `urgent_vs_not_accuracy` — binary accuracy on the needs-attention axis (`{URGENT, NEEDS_RESPONSE}` vs rest).
-- `urgent_recall` — recall on that axis; the input to the gate's anti-gaming URGENT floor.
-- `category_accuracy` — exact 4-way match, kept as a reference.
-
-The secondaries are recorded with **weight 0**, so they are displayed but excluded from `aggregate.value` (which stays `round(100 × within_one_bucket_accuracy, 2)`, recomputable from the displayed components per the formula below).
-
-### Trustworthy numbers — variance & CI (#1894)
-
-The corpus + greedy decoding (`temperature=0.0`) are fixed, and the `needs_llm` routing is a deterministic heuristic, so the only run-to-run noise is GPU floating-point non-determinism (not seedable — measured, not removed). `gaia eval benchmark --experiments N` runs N times over the same corpus and the adapter records an additive `acceptance_variance` block (mean / stdev / CV% / 95% CI / `n_runs`) in `recipe.config`. It never affects `aggregate.value` (the mean); it lets the gate tell a real regression from noise.
-
-**`--experiments` defaults to 1.** Measured run-to-run stdev on the email corpus is 0.0023 (CV 0.27%), so repeats cost hours of serial-slot time to tighten the CI by ~0.26pp. A single run records `stdev: 0.0`, and the gate's `--regression-floor-pp` supplies the noise tolerance instead. Raise `--experiments` only when you are specifically characterising variance.
-
 ## Aggregate metric — GAIA flagship
 
 The flagship's scorecard is built from **`gaia eval agent --agent-type gaia`** runs over the committed 13-category scenario corpus (`eval/scenarios/gaia_*`, ~99 judged multi-turn scenarios: conversation/memory tiers through adversarial, RAG, files, data, web, the shell permission gate, skill lifecycle + all 12 skills, the honesty floor, tool selection, code index). The adapter is `hub/agents/gaia/python/packaging/gen_scorecard.py`; it reads the run's `scorecard.json` (or merges the CI `eval-out/<category>/scorecard.json` collection from serial per-category runs) and never imports the eval runner.
@@ -53,7 +31,7 @@ The flagship's scorecard is built from **`gaia eval agent --agent-type gaia`** r
 - **Reported secondaries (weight 0):** `avg_score_normalized` (the judge's 0–10 rubric mean ÷ 10) and one `<category>_pass_rate` per category. `aggregate.value` stays `round(100 × judged_pass_rate, 2)`, recomputable from the displayed components.
 - **Environment stamps:** `gaia_commit`, the agent `model`, `ctx_size` (#1892), the hardware class, and `eval_model` (the Claude driver/judge — recorded because it drives the scenarios, not just scores them).
 
-Bars + the enforce switch live in `tests/fixtures/gaia/quality_gate_thresholds.json` (with a perf sibling). The quality manifest ships **`enforce: true`** with deliberately loose absolute floors (judged pass rate ≥ 0.60, avg score ≥ 5.0), so a breach fails the build; the perf sibling ships `enforce: false` until the first self-hosted-runner baseline calibrates it. Expect the quality bars to be retuned after that first Gemma run rather than assumed correct. CI: `test_gaia_agent_eval.yml` (dispatch only; the gaia_* categories run on release and RC tags in `eval_flagship.yml`), `gaia_scorecard_refresh.yml` (dispatch-only card refresh with the same basis guards as email's), and, in `release_agent_gaia.yml`, the `scorecard-gate` release gate plus the `gaia-eval` subset, which reports only: publishing never waits on it. It compares against the flagship baseline (`tests/fixtures/eval_baselines/gaia-flagship/`) and files the agent's one `eval-failure` issue only on a breached quality bar or a stable smoke-set scenario gone PASS→FAIL. A run that measured nothing files nothing and says why in its summary, and a later clean, complete run closes the issue.
+Bars + the enforce switch live in `tests/fixtures/gaia/quality_gate_thresholds.json` (with a perf sibling). The quality manifest ships **`enforce: true`** with deliberately loose absolute floors (judged pass rate ≥ 0.60, avg score ≥ 5.0), so a breach fails the build; the perf sibling ships `enforce: false` until the first self-hosted-runner baseline calibrates it. Expect the quality bars to be retuned after that first Gemma run rather than assumed correct. CI: `test_gaia_agent_eval.yml` (dispatch only; the gaia_* categories run on release and RC tags in `eval_flagship.yml`), `gaia_scorecard_refresh.yml` (dispatch-only card refresh, described below), and, in `release_agent_gaia.yml`, the `scorecard-gate` release gate plus the `gaia-eval` subset, which reports only: publishing never waits on it. It compares against the flagship baseline (`tests/fixtures/eval_baselines/gaia-flagship/`) and files the agent's one `eval-failure` issue only on a breached quality bar or a stable smoke-set scenario gone PASS→FAIL. A run that measured nothing files nothing and says why in its summary, and a later clean, complete run closes the issue.
 
 ## File format
 
@@ -63,51 +41,46 @@ Scorecard files are **Markdown with YAML front matter** (`.md`). The front matte
 ---
 schema_version: 1
 agent:
-  name: Email Triage
-  version: 0.3.0
+  name: GAIA (flagship agent)
+  version: 0.1.1
 recipe:
   dataset:
-    reference: tests/fixtures/email/ground_truth.json
-    description: Synthetic email corpus (FakeGmailBackend, schema-2.0 triage taxonomy)
-    size: 220
-  methodology: gaia eval benchmark — within-one-bucket acceptance (exact-or-adjacent, #1437)
+    reference: eval/scenarios/
+    description: Judged multi-turn scenario corpus for the flagship gaia agent
+    size: 103
+  methodology: gaia eval agent --agent-type gaia — judged_pass_rate over judged scenarios
   config:
-    harness: gaia eval benchmark
-    model: Gemma-4-E4B-it-GGUF
-    limit: 220
-    n_runs: 1
-    # acceptance_variance: { ... } — additive mean/stdev/CI per metric (omitted here)
+    harness: gaia eval agent
+    agent_type: gaia
+    categories: [gaia_core]
 results:
-  test_cases_run: 100
+  test_cases_run: 11
   metrics:
-    - name: within_one_bucket_accuracy   # gated aggregate
-      value: 0.8467
+    - name: judged_pass_rate          # gated aggregate
+      value: 0.7273
       weight: 1.0
-    - name: urgent_vs_not_accuracy       # reported secondaries (weight 0)
-      value: 0.58
+    - name: avg_score_normalized      # reported secondaries (weight 0)
+      value: 0.885
       weight: 0.0
-    - name: urgent_recall
-      value: 0.6571
-      weight: 0.0
-    - name: category_accuracy
-      value: 0.4567
+    - name: gaia_core_pass_rate
+      value: 0.7273
       weight: 0.0
 aggregate:
-  name: weighted_accuracy
+  name: judged_pass_rate
   formula: "round(100 * sum(weight_i * value_i) / sum(weight_i), 2)"
   components:
-    - metric: within_one_bucket_accuracy
-      value: 0.8467
+    - metric: judged_pass_rate
+      value: 0.7273
       weight: 1.0
     # ... weight-0 secondaries omitted for brevity
-  value: 84.67
-generated_at: "2026-06-29T21:45:03+00:00"
+  value: 72.73
+generated_at: "2026-08-24T11:25:31+00:00"
 inherited_from: null
 ---
 
-# Email Triage — Eval Scorecard v0.3.0
+# GAIA (flagship agent) — Eval Scorecard v0.1.1
 
-**Aggregate score: 84.67** (out of 100)
+**Aggregate score: 72.73** (out of 100)
 ...
 
 ## Reproduction
@@ -145,19 +118,7 @@ These blocks are **optional and additive** — a scorecard is valid with or with
 |-------|-------------|
 | `recipe.environment` | What produced the numbers: `gaia_commit`, `lemonade_version`, `model`, `hardware` (a class descriptor — never a hostname), and an optional `temperature`. |
 | `results.breakdown` | Where the score comes from: `per_category` (per-label `total` / `correct` / `accuracy`) and `top_confusions` (the most frequent `expected → predicted` mistakes). |
-| `results.performance` | Observed perf figures, mean across the run's scenarios: `ttft_s`, `throughput_tps`, `pipeline_s`, `peak_memory_gb`, `emails_per_run`, and the token-accounting rows below. Rendered as the `## Performance` table. Every row here is **reported, never gated**. |
-
-**Token accounting rows** (`results.performance`, issue #1891) — real LLM token counts including the nested per-email classify calls the outer-turn stats used to miss:
-
-| Row | Definition |
-|-----|------------|
-| `total_input_tokens` / `total_output_tokens` | Run totals: outer agent-loop turns **plus** the triage tool's per-email classify calls. |
-| `llm_classified_count` | Classify calls whose usage was measurable — on the shipped Lemonade path this equals the number of emails classified by the LLM (the rest took the heuristic fast path). |
-| `tokens_per_triage` | **Pinned definition:** triage classify-call tokens ÷ `llm_classified_count` — classify tokens over *LLM-classified emails only*, so the figure is invariant to the heuristic/LLM mix and to outer-turn measurement races. Comparisons across releases are only meaningful with the corpus held fixed. |
-
-<Note>
-  `tokens_per_triage` is **reported, not gated**: do not add a release-gate bar for it without a committed, ctx-stamped baseline scorecard to compare against (see `_tokens_per_triage_comment` in `tests/fixtures/email/quality_gate_thresholds.json`).
-</Note>
+| `results.performance` | Observed perf figures, mean across the run's scenarios: `ttft_s`, `throughput_tps`, `total_input_tokens`, `total_output_tokens`, and `scenarios_with_data`. Rendered as the `## Performance` table. Every row here is **reported, never gated**. |
 
 ```yaml
 recipe:
@@ -169,13 +130,10 @@ recipe:
 results:
   breakdown:
     per_category:
-      - {category: fyi, total: 88, correct: 54, accuracy: 0.6136}
-      - {category: needs_response, total: 44, correct: 17, accuracy: 0.3864}
-    top_confusions:
-      - {expected: fyi, predicted: needs_response, count: 28}
+      - {category: gaia_core, total: 11, correct: 8, accuracy: 0.7273}
 ```
 
-The email-triage adapter fills both in automatically. For a new agent, set `ResultPayload.environment` / `ResultPayload.breakdown` when your harness exposes the data, and omit them otherwise.
+The flagship adapter fills `environment` and `per_category` in automatically. For a new agent, set `ResultPayload.environment` / `ResultPayload.breakdown` when your harness exposes the data, and omit them otherwise.
 
 ### Two counts — defined distinctly
 
@@ -224,7 +182,6 @@ The `doc-root` is the location of the agent's canonical README:
 
 | Agent | doc-root |
 |-------|----------|
-| Email Triage (`@amd-gaia/agent-email`) | `hub/agents/email/npm/` |
 | GAIA flagship (`@amd-gaia/gaia`) | `hub/agents/gaia/npm/` |
 
 The relative link `./SCORECARD.md` resolves both in-repo and when the directory is published as an npm package. The npm `files` array includes `SCORECARD.md` (not a `scorecards/` directory).
@@ -240,14 +197,14 @@ from gaia.eval.release_scorecard import carry_forward, write_scorecard
 from pathlib import Path
 
 new_payload = carry_forward(
-    prev_scorecard_path=Path("hub/agents/email/npm/SCORECARD.md"),
-    new_version="0.2.5",
+    prev_scorecard_path=Path("hub/agents/gaia/npm/SCORECARD.md"),
+    new_version="0.1.2",
 )
-# new_payload.inherited_from == "0.2.4"  (read from front matter, not filename)
-write_scorecard(new_payload, Path("hub/agents/email/npm/SCORECARD.md"))
+# new_payload.inherited_from == "0.1.1"  (read from front matter, not filename)
+write_scorecard(new_payload, Path("hub/agents/gaia/npm/SCORECARD.md"))
 ```
 
-The resulting scorecard has `inherited_from: "0.2.4"` and identical `results` and `aggregate` fields. The aggregate score is unchanged, so the release gate's equal-score case passes.
+The resulting scorecard has `inherited_from: "0.1.1"` and identical `results` and `aggregate` fields. The aggregate score is unchanged, so the release gate's equal-score case passes.
 
 `carry_forward()` reads the prior version from the `agent.version` field in the front matter — **not** from the filename.
 
@@ -256,29 +213,24 @@ The resulting scorecard has `inherited_from: "0.2.4"` and identical `results` an
 For a **minor or major bump**, `carry_forward()` raises `ValueError` with a "re-run" message. Run the eval fresh and generate a new scorecard:
 
 ```bash
-PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
-GAIA_AGENT_TOOL_TIMEOUT=1800 \
-PYTHONPATH="$(pwd)" \
-gaia eval benchmark \
-  --model Gemma-4-E4B-it-GGUF \
-  --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
-  --ground-truth tests/fixtures/email/ground_truth.json \
-  --limit 220 \
-  --ctx-size 16384 \
-  --output-dir /tmp/email-eval
+# Terminal 1 — the Agent UI backend the eval drives
+python -m gaia.ui.server --port 4200 --host 127.0.0.1
 
-PYTHONPATH="$(pwd)" \
-python hub/agents/email/python/packaging/gen_scorecard.py \
-  --benchmark-dir /tmp/email-eval \
-  --limit 220
+# Terminal 2 — run the gaia_* categories serially, then build the card
+gaia eval agent --agent-type gaia --category gaia_core \
+  --backend http://127.0.0.1:4200
+# ...repeat per category, never in parallel against one Lemonade
+
+python hub/agents/gaia/python/packaging/gen_scorecard.py \
+  --run-dir <run-dir-printed-by-the-eval> \
+  --model Gemma-4-E4B-it-GGUF \
+  --ctx-size 65536 \
+  --hardware "AMD Ryzen AI MAX+ (Strix Halo)"
 ```
 
-This writes `hub/agents/email/npm/SCORECARD.md` in place.
-
-Pass the same `--ctx-size` as the committed card's `ctx_size`, or the new card is not
-comparable to it. If the triage prompt outgrows that window, the benchmark exits 1 with
-`Context overflow, not a quality result` and the token counts. It does not write a
-scorecard with 0% accuracy.
+This writes `hub/agents/gaia/npm/SCORECARD.md` in place. Pass the same
+`--ctx-size` and `--model` as the committed card, or the new card is not
+comparable to it.
 
 ## Release gate
 
@@ -287,17 +239,17 @@ scorecard with 0% accuracy.
 ```bash
 # Presence-only check (first adoption or no baseline specified):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/email/npm/SCORECARD.md
+  --scorecard hub/agents/gaia/npm/SCORECARD.md
 
 # Regression check against a specific prior scorecard file (unit tests / local):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/email/npm/SCORECARD.md \
+  --scorecard hub/agents/gaia/npm/SCORECARD.md \
   --baseline-file /tmp/prev-SCORECARD.md
 
 # Regression check against a prior release tag (CI):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/email/npm/SCORECARD.md \
-  --baseline-ref agent-pkg-email-v0.2.3
+  --scorecard hub/agents/gaia/npm/SCORECARD.md \
+  --baseline-ref agent-pkg-gaia-v0.1.1
 ```
 
 `--baseline-file` and `--baseline-ref` are mutually exclusive. If the file doesn't exist at the given ref, the gate treats it as first adoption (presence-only pass).
@@ -306,9 +258,9 @@ python -m gaia.eval.scorecard_gate \
 
 1. **Presence check**: `--scorecard` path must exist and be a valid scorecard. → exit 1 if not.
 2. **Absolute bar + anti-gaming floor** (opt-in, applies to *every* path including first adoption):
-   - `--min-aggregate <N>`: exit 1 if `aggregate.value < N` (the #1437 80% bar is `--min-aggregate 80`).
-   - `--min-urgent-recall <r>`: exit 1 if the card's `urgent_recall` secondary is below `r` (a high aggregate must not come with buried urgent mail). Fails loud if the metric is absent.
-   - Omit both for report mode (presence + regression only). The email release workflow reads these from the thresholds manifest (`acceptance_target`, `urgent_recall_floor`, `acceptance_enforce`) — data, not code.
+   - `--min-aggregate <N>`: exit 1 if `aggregate.value < N`.
+   - `--min-urgent-recall <r>`: exit 1 if the card's `urgent_recall` secondary is below `r`. Fails loud if the metric is absent, so pass it only for a card that records one.
+   - Omit both for report mode (presence + regression only). `release_agent_gaia.yml` reads the bar from `tests/fixtures/gaia/quality_gate_thresholds.json` (`min_judged_pass_rate`, `enforce`) — data, not code.
 3. **Baseline resolution**:
    - `--baseline-file`: read the given file directly (no git access; suitable for unit tests).
    - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the ref does not resolve to a commit → exit 1 (an actionable error, not first adoption). If the file does not exist at that ref → **first adoption**, exit 0.
@@ -346,11 +298,11 @@ The scorecard must move with the agent: when LLM-affecting code changes, the eva
 Two enforcement points work together:
 
 1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
-2. **Run-and-refresh (self-hosted AMD, manual dispatch).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, Windows, stx]` pool, serialized against the other evals by the shared `lemonade-eval` concurrency group. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) is **`workflow_dispatch`-only** (#2094 — it previously also ran on pushes touching the email agent, but a full eval costs hours and that trigger never once completed a run), and takes two profiles:
-   - **full** (`limit ≥ 249` **and** `experiments ≥` the committed card's `n_runs`) — reproduces the committed card's methodology and is the **only** profile allowed to commit a refreshed card;
-   - **subset** (`limit < 249`) — an end-to-end smoke run that exercises every step and then **never commits** (a small-sample number is not a valid stand-in for the published figure).
+2. **Run-and-refresh (self-hosted AMD, manual dispatch).** The judged eval needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners. `gaia_scorecard_refresh.yml` is **`workflow_dispatch`-only** and runs on the self-hosted pool:
+   - **all 13 `gaia_*` categories** (the default) is the **only** run allowed to commit a refreshed card;
+   - **a subset** of categories is an end-to-end smoke run that exercises every step and then **never commits** (a partial number is not a valid stand-in for the published figure).
 
-   A full run then either **commits** the refreshed card (score clears the absolute bar and shows no regression beyond the recorded noise band) or **fails loudly** (regression, or a card below the acceptance bar / urgent-recall floor from `tests/fixtures/email/quality_gate_thresholds.json`). Before any eval spend, the run also fails fast if its basis (`ctx_size`, `experiments`) differs from the committed card's — unless `rebaseline=true` (with a required `rebaseline_reason`) marks the basis change deliberate.
+   A full run then either **commits** the refreshed card (bar met and no regression beyond the noise band) or **fails loudly**. Before any eval spend, the run also fails fast if its basis (`ctx_size`, `model`) differs from the committed card's — unless `rebaseline=true` (with a required `rebaseline_reason`) marks the basis change deliberate.
 
 So the published number always traces to a full-corpus run, and the release gate is the backstop on hosted CI. Locally, `gen_scorecard.py` + `scorecard_gate.py` reproduce both steps (see the **`adding-eval-scorecard` skill**).
 
@@ -364,8 +316,8 @@ So the published number always traces to a full-corpus run, and the release gate
   **Use the [`adding-eval-scorecard` skill](https://github.com/amd/gaia/tree/main/.claude/skills/adding-eval-scorecard/SKILL.md).** In Claude Code, invoke it instead of following these steps by hand — it carries the exact commands, the harness→payload→generator flow, the headless-eval gotchas (keyring/PYTHONPATH/tool-timeout), and the verification evidence to capture. The steps below are the reference the skill automates.
 </Tip>
 
-1. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/email/python/packaging/gen_scorecard.py` for a reference). The adapter should populate `reproduction_command` with the exact commands needed to reproduce the scorecard.
+1. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/gaia/python/packaging/gen_scorecard.py` for a reference). The adapter should populate `reproduction_command` with the exact commands needed to reproduce the scorecard.
 2. Run the eval and call the adapter → commit the resulting `SCORECARD.md` to `<doc-root>/SCORECARD.md`.
 3. Link the scorecard from the README: `./SCORECARD.md`.
 4. Add `SCORECARD.md` to the npm `package.json` `files` array (if published on npm); do **not** add a `scorecards/` directory.
-5. Wire `scorecard_gate` into the release workflow (see `release_agent_email.yml` for the job topology). Use `--scorecard <path>/SCORECARD.md` and `--baseline-ref <prev-tag>` (best-effort).
+5. Wire `scorecard_gate` into the release workflow (see `release_agent_gaia.yml` for the job topology). Use `--scorecard <path>/SCORECARD.md` and `--baseline-ref <prev-tag>` (best-effort).

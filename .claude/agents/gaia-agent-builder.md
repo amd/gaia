@@ -74,7 +74,7 @@ Fastest path to a package: `gaia agent init <id> -o hub/agents/ --layout hub` sc
 
 **Optional:**
 - `_create_console(self) -> AgentConsole` — only override if you need a custom console; the base class provides a default
-- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for display metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `tests/fixtures/agents/hello-world` and `hub/agents/email` do declare them.
+- `AGENT_ID` / `AGENT_NAME` / `AGENT_DESCRIPTION` / `CONVERSATION_STARTERS` — read by the registry for display metadata (see `_registration_from_class` in `src/gaia/agents/registry.py`). `ChatAgent` and `GaiaAgent` don't declare them — the registry falls back to the entry-point name when `AGENT_ID` is absent. `tests/fixtures/agents/hello-world` does declare them.
 
 ### 2. Tools
 - [ ] Every tool decorated with `@tool` inside `_register_tools` so `self` is in closure scope

@@ -1,16 +1,16 @@
 ---
 name: "adding-eval-scorecard"
-description: "Adopt the per-agent eval scorecard for a GAIA hub agent: write the harness→payload adapter, run the eval to produce a REAL scorecard, link + surface it from the agent's README, wire the release gate, and (for a new agent) generalize the format. Use when asked to 'add a scorecard', 'adopt the eval scorecard', 'generate the scorecard for <agent>', or wire scorecard CI for an agent. Builds on docs/reference/eval-scorecard.mdx and the email agent reference adapter."
+description: "Adopt the per-agent eval scorecard for a GAIA hub agent: write the harness→payload adapter, run the eval to produce a REAL scorecard, link + surface it from the agent's README, wire the release gate, and (for a new agent) generalize the format. Use when asked to 'add a scorecard', 'adopt the eval scorecard', 'generate the scorecard for <agent>', or wire scorecard CI for an agent. Builds on docs/reference/eval-scorecard.mdx and the flagship reference adapter."
 ---
 
 # Adding an Eval Scorecard to a GAIA Agent
 
-Adopt the release **eval scorecard** ([`docs/reference/eval-scorecard.mdx`](../../../docs/reference/eval-scorecard.mdx)) for one hub agent. The system is `harness → result payload → generator → scorecard`, with a standalone presence+regression release gate. The **email agent is the reference implementation** — mirror it.
+Adopt the release **eval scorecard** ([`docs/reference/eval-scorecard.mdx`](../../../docs/reference/eval-scorecard.mdx)) for one hub agent. The system is `harness → result payload → generator → scorecard`, with a standalone presence+regression release gate. The **flagship `gaia` agent is the reference implementation** — mirror it.
 
 **Core modules (do not modify; reuse):**
 - `src/gaia/eval/release_scorecard.py` — `ResultPayload`, `compute_aggregate`, `render_scorecard`, `write_scorecard`, `validate_scorecard`, `carry_forward`. Harness-agnostic (stdlib + PyYAML only).
 - `src/gaia/eval/scorecard_gate.py` — the standalone gate (`python -m gaia.eval.scorecard_gate`).
-- Reference adapter: `hub/agents/email/python/packaging/gen_scorecard.py`.
+- Reference adapter: `hub/agents/gaia/python/packaging/gen_scorecard.py`.
 
 This is a **phased checklist with a hard gate at the real-eval step** — the scorecard MUST come from an actual eval run, never hand-authored numbers.
 
@@ -19,16 +19,16 @@ This is a **phased checklist with a hard gate at the real-eval step** — the sc
 1. **Version source of truth** = the `version:` field in `<agent>/gaia-agent.yaml`. Never invent a parallel scheme.
 2. **Canonical README** (where the scorecard is linked + surfaced): for an npm-published agent it is the npm client README (e.g. `hub/agents/<id>/npm/README.md`), NOT a `packaging/README.md`. For a Python-only agent it is `hub/agents/<id>/python/README.md`. Confirm which by checking what `release_agent_<id>.yml` publishes (`README:` env) — the published README is the one to link.
 3. **doc-root** = the directory holding that canonical README. The scorecard lives at `<doc-root>/SCORECARD.md` — a **single file updated in place**, versioned via the publish snapshot (same as README.md). **There is no `scorecards/` directory.**
-4. **Eval vehicle**: what existing harness produces this agent's accuracy metric? (email → `gaia eval benchmark` over `tests/fixtures/email/`.) If none exists, STOP and surface that — propose the minimal harness before building; do not invent numbers.
+4. **Eval vehicle**: what existing harness produces this agent's accuracy metric? (flagship → `gaia eval agent --agent-type gaia` over `eval/scenarios/gaia_*`.) If none exists, STOP and surface that — propose the minimal harness before building; do not invent numbers.
 
-   **Expect none.** Email is the only agent with a corpus + harness; for every other agent this step is the long pole, not a lookup. Two traps: an `agent_type` in the scenario corpus may name a **ChatAgent prompt profile** rather than your package (so a green scenario is measuring something else), and the ground truth itself is human judgment the factory does not automate. Build the corpus + deterministic fixture harness first, then return here for the adapter and gate.
+   **Expect none.** The flagship is the only agent with a corpus + harness; for any other agent this step is the long pole, not a lookup. Two traps: an `agent_type` in the scenario corpus may name a **ChatAgent prompt profile** rather than your package (so a green scenario is measuring something else), and the ground truth itself is human judgment the factory does not automate. Build the corpus + deterministic fixture harness first, then return here for the adapter and gate.
 
 ## Phase 2 — Write the adapter (harness → payload)
 
-Copy `hub/agents/email/python/packaging/gen_scorecard.py` as the template. The adapter:
+Copy `hub/agents/gaia/python/packaging/gen_scorecard.py` as the template. The adapter:
 - imports ONLY `gaia.eval.release_scorecard` (never the harness or agent package — preserve loose coupling);
 - reads the harness output, builds a `ResultPayload`;
-- populates `reproduction_command` with the **exact shell commands** to reproduce this scorecard, including all required env vars (`PYTHON_KEYRING_BACKEND`, `GAIA_AGENT_TOOL_TIMEOUT`, `PYTHONPATH`);
+- populates `reproduction_command` with the **exact shell commands** to reproduce this scorecard, including every required flag and env var;
 - defines **"judged"** explicitly and **raises loudly** if zero results are judged (no silent 0.0);
 - records **dataset size** (total labeled examples) and **test_cases_run** (subset executed) as DISTINCT fields;
 - stores **repo-relative** paths only (never a local absolute path — it ships in a published artifact);
@@ -36,29 +36,29 @@ Copy `hub/agents/email/python/packaging/gen_scorecard.py` as the template. The a
 - optionally populates `environment` (`gaia_commit`, `lemonade_version`, `model`, `hardware` — a class descriptor, never a hostname) and `breakdown` (`per_category` accuracy + `top_confusions`) — additive blocks that pin the run and explain the misses without ever affecting `aggregate.value`. Capture live environment (git SHA, server health version) in `main()`, not `build_payload`, so the payload builder stays pure and unit-testable;
 - writes to `<doc-root>/SCORECARD.md` (the single file; `--output-dir` overrides to a directory, but the filename is always `SCORECARD.md`).
 
-Add an offline unit test against a committed sample harness-output fixture (see `tests/fixtures/eval/email_benchmark_scorecard.json` + `tests/unit/eval/test_release_scorecard.py::TestEmailAdapter`) so the adapter is testable without a live model.
+Add an offline unit test against a committed sample harness-output fixture (see `tests/unit/eval/test_gaia_scorecard_adapter.py`) so the adapter is testable without a live model.
 
 ## Phase 3 — Run the REAL eval (hard gate — no hand-authored numbers)
 
-The accuracy number must come from an actual run. For the email agent:
+The accuracy number must come from an actual run. For the flagship:
 
 ```bash
 # Real eval needs Lemonade + the model. Prefer AMD hardware (Strix Halo / Ryzen AI);
-# the [self-hosted, lemonade-eval] runner is the canonical environment.
-GAIA_AGENT_TOOL_TIMEOUT=1800 \
-PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
-PYTHONPATH="$(pwd)" \
-  <venv>/bin/gaia eval benchmark \
-    --model Gemma-4-E4B-it-GGUF \
-    --mbox-path tests/fixtures/email/_stub_inbox.mbox \
-    --ground-truth tests/fixtures/email/<task>_ground_truth.json \
-    --limit 220 --output-dir <persistent-dir>
+# the self-hosted pool is the canonical environment.
+python -m gaia.ui.server --port 4200 --host 127.0.0.1      # terminal 1
 
-PYTHONPATH="$(pwd)" \
-<venv>/bin/python hub/agents/email/python/packaging/gen_scorecard.py \
-    --benchmark-dir <persistent-dir> --limit 220
-# → writes hub/agents/email/npm/SCORECARD.md in place
+for c in gaia_core gaia_memory gaia_rag; do                 # terminal 2, serially
+  gaia eval agent --agent-type gaia --category $c --backend http://127.0.0.1:4200
+done
+
+python hub/agents/gaia/python/packaging/gen_scorecard.py \
+    --run-dir <dir-holding-the-run-scorecards> \
+    --model Gemma-4-E4B-it-GGUF --ctx-size 65536 \
+    --hardware "AMD Ryzen AI MAX+ (Strix Halo)"
+# → writes hub/agents/gaia/npm/SCORECARD.md in place
 ```
+
+The committed card's reproduction section lists the full category loop; match it.
 
 ⚠️ **Run evals SERIALLY — never two at once** (CLAUDE.md). A scorecard refresh loop is the
 most likely thing to violate this: chain runs with `&&`, never background them with `&`.
@@ -66,18 +66,15 @@ Concurrent runs race-evict each other's models on the single-tenant Lemonade bac
 produce garbage (`ctx_size` errors, spurious `INFRA_ERROR`) that looks like a real
 regression. Before each run: `ps aux | grep "gaia eval" | grep -v grep | wc -l` must be 0.
 
-**Pass both fixture flags explicitly.** `ls tests/fixtures/email/` and pick the real files
-— ground truth is **task-specific** (`action_items_`, `briefing_`, `drafting_`,
-`followups_`, `longthread_`), and the CLI's `--ground-truth` default points at a
-`ground_truth.json` that does not exist. Omit the flag and the run prints one `[WARN]` and
-scores nothing, which reads as a successful eval right up until the scorecard is empty.
-
-**Headless gotchas (see memory `project-email-benchmark-headless-gotchas`):**
-- `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` — the email agent's calendar-connector resolution blocks forever on the macOS Keychain (and can stall on Linux SecretService) in non-interactive contexts. Without this it hangs at 0% CPU during agent construction.
-- `PYTHONPATH="$(pwd)"` — the benchmark imports `tests.fixtures.email.*`; the console script doesn't add the repo root.
-- `GAIA_AGENT_TOOL_TIMEOUT=1800` — triage of the full corpus is one tool call (~17 min for ~100 emails on a 4B model); a lower timeout (the 180s default, or even 900s) abandons it mid-run, yielding a degenerate 0-email FAIL run.
-- Write `--output-dir` to a **persistent** dir, not `/tmp` (cleared on session resume).
-- Record honestly: if the metric is low for a known reason (e.g. a taxonomy/label mismatch), put the explanation in the adapter's `methodology` string and link the tracking issue — never inflate the number.
+**Headless gotchas:**
+- `gaia_*` categories read staged fixtures, a fixture web server and hub, and a fake `gh`;
+  `python util/run_eval_lane.py --category <name>` reproduces CI's setup. A plain run
+  is not comparable to CI.
+- `--model`, `--ctx-size` and `--hardware` are required by the adapter and must match the
+  committed card, or the regression check compares two different things.
+- Record honestly: if the metric is low for a known reason, put the explanation in the
+  adapter's `methodology` string or `--note` and link the tracking issue — never inflate
+  the number.
 
 ## Phase 4 — Surface, link, and gate
 

@@ -602,8 +602,7 @@ is enforced only when the request itself names a source document or asks for
 every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
-`default_skill_set:` blocks **commented out** — following the email agent's
-precedent, because loading several skill bodies into every prompt costs tokens
+`default_skill_set:` blocks **commented out**, because loading several skill bodies into every prompt costs tokens
 and no eval has measured that trade for this agent yet. Re-enabling is
 uncommenting two blocks; no code change.
 
@@ -685,6 +684,11 @@ There is no silent null.
 
 ## Gotchas — read before debugging
 
+- **Mail is read-only, and only with a connector.** The agent reads Gmail or
+  Outlook through eight read-only tools plus the `inbox-triage` skill once the
+  Google or Microsoft connector is connected and granted to it. It never
+  archives, drafts or sends, Gemma 4 E4B is not offered the mail tools, and
+  there is no separate email agent to call. See the README's Email section.
 - **`/health` green ≠ ready.** It never touches the model server. Use
   `GET /v1/gaia/init` and branch on `.ready`; it returns 503 with a full body and
   a `hint`, not an empty error.

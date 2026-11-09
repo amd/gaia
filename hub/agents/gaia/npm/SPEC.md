@@ -71,8 +71,8 @@ both components. That stopped being true once the TUI became the published
 versions. A shared base URL cannot express that, so `2.x` is rejected at load with
 an error naming the schema — never read as `3.x` with a missing field.
 
-The email agent's lock is `schemaVersion` `1.0`, a flat `binaries` map, because it
-delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
+A `1.x`-shaped lock (a flat `binaries` map, one binary from one lane) is likewise
+rejected.
 
 ### 2.2 Where each component comes from
 
@@ -291,8 +291,7 @@ The full, machine-readable contract — every field, type, and which are
 required — is the committed
 [`openapi.gaia.json`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/openapi.gaia.json),
 regenerated from the live routes by `python -m gaia_agent.export_openapi` and
-checked for drift in CI — the same pattern as the email agent's own
-`openapi.email.json`. Required: **`query`**, **`run_id`**,
+checked for drift in CI. Required: **`query`**, **`run_id`**,
 **`context`** — `additionalProperties: false`, so an unrecognized field or a
 missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
@@ -803,6 +802,15 @@ demonstrably saw.
 
 Clients that predate 2.15 get a `404` on the path itself. Probe `/version`
 before sending rather than reading a 404 as "the run ended".
+
+### 5.7 Mail
+
+Mail goes through the same `/query` route; there is no mail-specific endpoint
+and no separate email sidecar. The agent's eight mail tools are read-only
+(list, search, read, thread, folders, waiting-on-you, mailbox state) and need
+the Google or Microsoft connector connected and granted to the agent. A model
+on the `compact` feature tier (Gemma 4 E4B) is not offered them. Setup:
+[Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership
 

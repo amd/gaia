@@ -25,7 +25,7 @@ Chain sequentially (`run-1 && run-2`), never with background `&`. The judge LLM 
 
 - Adding a new eval task or dataset under `src/gaia/eval/`
 - Running the agent eval harness with `gaia eval agent`
-- Running benchmarks with `gaia eval benchmark`
+- Running benchmarks with `gaia eval tasks`, `gaia eval retrieval` and `gaia eval memory`
 - Writing transcript analysis or summarization metrics
 - Building performance visualizations (`gaia perf-vis`) and reports (`gaia report`)
 - Writing eval workflow CI (`test_eval.yml`)
@@ -44,7 +44,7 @@ Chain sequentially (`run-1 && run-2`), never with background `&`. The judge LLM 
 | `tests/test_eval.py` | Eval framework tests |
 | `.github/workflows/test_eval.yml` | Eval CI |
 | `gaia eval agent` | Run the agent eval harness (`--fix` auto-fixes failures) |
-| `gaia eval benchmark` | Run the model benchmark |
+| `gaia eval tasks` / `retrieval` / `memory` | Flagship task gate, RAG retrieval and memory benchmarks |
 | `gaia report` | Render eval reports |
 | `gaia perf-vis` | Visualize performance results |
 

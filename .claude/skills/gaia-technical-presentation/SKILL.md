@@ -86,11 +86,11 @@ prose.
 
 ## Worked example
 
-`reference/example-technical.html` — generated from the GAIA email agent hub package
-(`hub/agents/email/python/`): 12 slides covering architecture, the request/response contract,
-the packaging table, the token-usage schema, and code blocks. Its benchmark slide
-intentionally shows labeled `⚠ PLACEHOLDER` values because no eval results existed in the
-source at generation time — a demonstration of the credibility contract.
+`reference/example-technical.html` — generated from the flagship GAIA agent package
+(`hub/agents/gaia/python/` + `hub/agents/gaia/npm/`): 12 slides covering architecture, the
+`/v1/gaia/query` request/response contract and SSE events, the packaging table, and code
+blocks. Its scorecard slide labels the committed card as a harness-validation run and shows
+the product baseline as a labeled `⚠ PLACEHOLDER` — a demonstration of the credibility contract.
 
 ## Checklist before reporting done
 

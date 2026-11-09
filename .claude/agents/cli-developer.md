@@ -92,7 +92,7 @@ parent_parser.add_argument("--stats", "--show-stats", dest="show_stats", action=
 
 ## Nested subcommand pattern
 
-`gaia mcp start`, `gaia eval agent`, `gaia eval benchmark`:
+`gaia mcp start`, `gaia eval agent`, `gaia eval tasks`:
 
 ```python
 mcp_parser = subparsers.add_parser("mcp", parents=[parent_parser])

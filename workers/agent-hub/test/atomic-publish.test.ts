@@ -132,20 +132,20 @@ describe("catalog writes — concurrent writers don't drop each other", () => {
     env.bucket.beforePut = async (key) => {
       if (key !== "index.json" || raced) return;
       raced = true;
-      // Another release job publishes `email` start to finish between this
+      // Another release job publishes `sample` start to finish between this
       // publish deriving the index and writing it.
       expect(
         (
           await publish(env, {
             ...CHAT,
-            manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-            filename: "gaia_agent_email-0.1.0-py3-none-any.whl",
+            manifestYaml: sampleManifest({ id: "sample", name: "Sample" }),
+            filename: "gaia_agent_sample-0.1.0-py3-none-any.whl",
           })
         ).status
       ).toBe(201);
     };
     expect((await publish(env, CHAT)).status).toBe(201);
-    expect(await indexIds(env)).toEqual(["chat", "email"]);
+    expect(await indexIds(env)).toEqual(["chat", "sample"]);
   });
 
   it("a manifest write racing another version of the same agent keeps both versions", async () => {
@@ -242,15 +242,15 @@ describe("catalog writes — concurrent writers don't drop each other", () => {
         (
           await publish(env, {
             ...CHAT,
-            manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-            filename: "gaia_agent_email-0.1.0-py3-none-any.whl",
+            manifestYaml: sampleManifest({ id: "sample", name: "Sample" }),
+            filename: "gaia_agent_sample-0.1.0-py3-none-any.whl",
           })
         ).status
       ).toBe(201);
     };
     const index = await rebuildIndex(env.bucket as never);
-    expect(index.agents.map((a) => a.id).sort()).toEqual(["chat", "email"]);
-    expect(await indexIds(env)).toEqual(["chat", "email"]);
+    expect(index.agents.map((a) => a.id).sort()).toEqual(["chat", "sample"]);
+    expect(await indexIds(env)).toEqual(["chat", "sample"]);
   });
 
   it("gives up with an actionable 503 when the catalog never settles", async () => {

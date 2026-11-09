@@ -41,7 +41,7 @@ user-observable impact first, never a raw commit dump. No Claude attribution any
 
 Verify current workflow names with `ls .github/workflows/` — CI scaffolding changes.
 
-**Agent packages release separately:** GAIA agent sidecars (e.g. the email agent) publish on their own `agent-pkg-*` tag namespace via `release_agent_email.yml` / `build_agent_package.yml` — distinct from the core `v*` release tag.
+**Agent packages release separately:** The flagship agent sidecar publishes on its own `agent-pkg-gaia-*` tag namespace via `release_agent_gaia.yml` (see the `agent-hub-release` skill) — distinct from the core `v*` release tag.
 
 ## Standard release checklist
 

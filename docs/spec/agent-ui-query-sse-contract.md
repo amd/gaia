@@ -14,9 +14,9 @@
 > **Tracks:** [#2015](https://github.com/amd/gaia/issues/2015) (this spec),
 > epic [#2014](https://github.com/amd/gaia/issues/2014) (Agent UI v2, Phase 0).
 > **Design source:** the Agent UI v2 design (removed from the tree; this document is now the source of truth).
-> **First consumer:** [#2016](https://github.com/amd/gaia/issues/2016) implements
-> this contract as `POST /v1/email/query` on the email sidecar (contract bump
-> 2.3 → 2.4).
+> **Consumer:** the flagship `gaia` sidecar serves this contract as
+> `POST /v1/gaia/query`. The standalone email agent that first implemented it
+> ([#2016](https://github.com/amd/gaia/issues/2016)) has been removed.
 
 ---
 
@@ -76,16 +76,16 @@ net-new agent instrumentation.
 | `query` | string | **yes** | The natural-language request driving the agent loop. Non-empty. |
 | `run_id` | string (UUIDv4) | **yes** | **Host-minted** streaming-run handle. See §2.3. |
 | `context` | array of `{role, content}` objects | **yes** | The relevant transcript slice, **pushed in the body**. May be an empty array `[]` for a fresh conversation, but the field must be present. See §2.4. |
-| `model` | string | no | Model id override. Omitted ⇒ the sidecar's default (e.g. `Gemma-4-E4B-it-GGUF` for the email agent). |
-| `provider` | string | no | LLM provider override. The flagship (`gaia`) accepts `lemonade` / `claude`; the email agent is local-only and accepts only `lemonade`. Omitted ⇒ sidecar default. `openai` is rejected by both — #3899 retired the generic `openai`/`litellm` backends repo-wide. |
+| `model` | string | no | Model id override. Omitted ⇒ the sidecar's default model. |
+| `provider` | string | no | LLM provider override. The flagship (`gaia`) accepts `lemonade` / `claude`. Omitted ⇒ sidecar default. `openai` is rejected — #3899 retired the generic `openai`/`litellm` backends repo-wide. |
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
-| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). **The two shipped sidecars default this differently when it's omitted.** The email agent's field is a plain `bool` defaulting to `False` — the safe answer, since a caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A client driving both sidecars with the same "omit when unsure" logic gets opposite behavior; send the field explicitly rather than relying on either default. |
+| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). *The flagship (`gaia`) agent's field is `Optional[bool]` defaulting to `None`, and only an *explicit* `false` turns answering off — an omitted field behaves as answerable. A caller that cannot answer must send `false`, or the run parks until the question times out, which is indistinguishable from a hang. |
 | `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
-| `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
-| `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
-| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Email agent, contract ≥ 2.16; flagship (`gaia`), contract ≥ 2.18** — an older peer 422s the unknown field (see §7). Controls whether this turn may read or write memory. `private` and `off` suppress all reads and writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
-| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
+| `documents` | array of strings (absolute file paths) | no | ***Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — an older flagship 422s the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
+| `allowed_paths` | array of absolute path strings | no | ***Flagship (`gaia`) only, contract ≥ 2.18** — an older flagship 422s the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | ***Flagship (`gaia`), contract ≥ 2.18** — an older peer 422s the unknown field (see §7). Controls whether this turn may read or write memory. `private` and `off` suppress all reads and writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | ***Flagship (`gaia`) only, contract ≥ 2.19** — an older flagship 422s the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
 | `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
 | `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
@@ -468,7 +468,7 @@ either:
 
 - **Stateless stop-and-hand-off (recommended v1):** the event *ends the stream*;
   `confirm_url` is **omitted**. The host performs the deterministic call itself
-  (e.g. `POST /v1/email/send` with the single-use token) and issues a fresh
+  (e.g. the agent's own write route with the single-use token) and issues a fresh
   `/query` carrying the approved-step state to continue.
 - **Resume model:** the event includes `confirm_url =
   /v1/<agent>/query/{run_id}/confirm`; the run stays paused server-side and
@@ -702,31 +702,21 @@ The seven types are the frozen v1 vocabulary. Evolution rules:
 
 ---
 
-## 8. Email agent regeneration plan (implemented by #2016)
+## 8. Docs that move with a contract change
 
-Freezing this contract is the dependency for [#2016](https://github.com/amd/gaia/issues/2016),
-which adds `POST /v1/email/query` (the SSE agent loop) to the email sidecar and
-bumps the contract **2.3 → 2.4** (additive MINOR — 2.2 was consumed by
-attachments #1542, 2.3 by the triage scaffold #1984). Per the #1841 "update every
-doc that describes it" rule, #2016 must regenerate/update **together**:
+The first implementation of this contract was the standalone email agent's
+`/query` route ([#2016](https://github.com/amd/gaia/issues/2016)); that agent
+has since been removed, and the flagship `gaia` sidecar is the one that serves
+it. Per the #1841 "update every doc that describes it" rule, a contract MINOR
+moves these **together**: this spec, the flagship's OpenAPI document
+(`hub/agents/gaia/python/openapi.gaia.json`, regenerated by
+`gaia_agent/export_openapi.py`), its contract version, and the npm
+`SPEC.md` / `README.md` / `SKILL.md` / `CHANGELOG.md` under
+`hub/agents/gaia/npm/`.
 
-| Surface | File | Change |
-|---|---|---|
-| OpenAPI | [`hub/agents/email/python/openapi.email.json`](../../hub/agents/email/python/openapi.email.json) | Regenerate via `export_openapi.py` with the new `/query` route + this SSE contract referenced as the streaming response. |
-| OpenAPI generator | `hub/agents/email/python/gaia_agent_email/export_openapi.py` | Emit the `/query` path + `/query/{run_id}/cancel`. |
-| Human spec (HTML) | [`hub/agents/email/python/specification.html`](../../hub/agents/email/python/specification.html) via `gaia_agent_email/spec_html.py` | Document `/query`, the seven event types, and the request body. |
-| Contract version | `gaia_agent_email/contract.py` (`SCHEMA_VERSION`) + `gaia_agent_email/version.py` (`API_VERSION`) | `2.3` → `2.4`. |
-| Route | `gaia_agent_email/api_routes.py` | New `/query` route wiring the agent loop through the translation layer (§6). |
-| Integrator docs | `hub/agents/email/npm/{SPEC.md, SKILL.md, README.md, CHANGELOG.md}` | Describe `/query`, the event vocabulary, and the 2.4 CHANGELOG entry. |
-
-The same rule applied again for the #2469 `needs_input` MINOR (contract 2.5 →
-2.6): this spec, `openapi.email.json`, `specification.html` / `spec_html.py`,
-`contract.py`, `CONTRACT.md`, `CAPABILITY_MATRIX.md`, and the npm
-`SPEC.md` / `README.md` / `SKILL.md` / `CHANGELOG.md` all moved together.
-
-The translation layer (§6) is the reusable piece: #2016 builds it once against
-this contract; later surfaces (#2014 relay, CLI, `gaia api`) consume the same
-canonical stream and never re-derive the mapping.
+The translation layer (§6) is the reusable piece: it is built once against
+this contract, and every surface (#2014 relay, CLI, `gaia api`) consumes the
+same canonical stream and never re-derives the mapping.
 
 ---
 

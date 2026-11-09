@@ -13,8 +13,8 @@ discovery roots with auditable precedence, progressive disclosure,
 the 16 `gaia skill` verbs (`list|info|create|import|export|migrate|audit|search|install|remove|lock|promote|publish|keygen|trust|deltas`). Plus the declarative
 `skills:` / `skill_sets:` manifest blocks and per-launch
 [skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
-whose reference implementation is the email agent (which currently ships with its
-sets commented out — see [below](#reference-implementation-the-email-agent)); and
+whose reference implementation is the flagship's manifest (which currently ships
+with its sets commented out — see [below](#reference-implementation-the-flagship)); and
 `gaia skill migrate --from openclaw|hermes|auto`
 ([#692](https://github.com/amd/gaia/issues/692)), which converts a third-party
 skill to GAIA format at the `experimental` tier.
@@ -757,36 +757,22 @@ adopted the blocks, whose behaviour is unchanged.
 **A skill body costs context.** Loading a set injects each skill's Markdown body
 into the system prompt, which is prompt budget the agent's own tool results no
 longer have. An agent with a tight context envelope must account for the loaded
-set's cost, not assume it is free — the email agent's bulk-triage path subtracts
-it from its result-envelope budget for exactly this reason — and its three-skill
-`personal` set still cut that envelope from 6,144 tokens to 4,810 (the four-skill
-`work` set, to 4,070). Budget the set, and keep bodies short.
+set's cost, not assume it is free. Budget the set, and keep bodies short.
 </Note>
 
-### Reference implementation: the email agent
+### Reference implementation: the flagship
 
-The email agent ([`hub/agents/email/`](https://github.com/amd/gaia/tree/main/hub/agents/email))
-is the worked example in the tree. It bundles six instruction-only skills and its
-manifest carries two sets — `personal` (triage, newsletter digests, travel
-itineraries) and `work` (triage, meeting scheduling, action-item extraction,
-escalation routing) — with `inbox-triage` deliberately in both.
+The flagship's manifest ([`hub/agents/gaia/python/gaia-agent.yaml`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia-agent.yaml))
+is the worked example in the tree. It keeps `gaia-voice` always on under
+`skills:` and sketches three sets — `research`, `documents` and `personal` —
+with a `documents` default.
 
 <Warning>
-**It ships with those blocks commented out**, pending an eval that shows the
-skills improve triage, so the released agent resolves no set and loads no skills
-— `active_skill_set is None`, `loaded_skills == {}`, and a `--skill-set` request
-is a startup error. Treat it as a wiring reference, not as evidence that a
-shipped agent has a set active.
+**It ships with the set blocks commented out**, pending an eval that shows the
+skills help, so the released agent resolves no set and loads only its always-on
+skill — a `GAIA_SKILL_SET` request is a startup error. Treat it as a wiring
+reference, not as evidence that a shipped agent has a set active.
 </Warning>
-
-Its selector maps the connected mailbox's account type onto a set: a personal
-Microsoft account gets `personal`, a work/school account gets `work`. The kind is
-derived at connect time from the id_token `tid` claim (personal accounts always
-carry the well-known consumers tenant; work/school accounts carry the
-organization's Entra tenant id) and recorded on the connection, so no agent
-re-derives it. A Gmail mailbox has no equivalent claim, so its kind is genuinely
-unknown and the selector returns `None` — the manifest's `default_skill_set`
-applies, explicitly.
 
 For a step-by-step author walkthrough see
 [Composing skills and skill sets](/guides/composing-skills).

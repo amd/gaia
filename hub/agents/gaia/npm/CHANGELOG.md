@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Mail is this agent's job now; the standalone email agent is gone.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, with the Google or Microsoft
+  connector. Organizing, drafting, sending, undo, briefings and autonomous
+  runs went with the old agent. See the new Email section in the README.
 - **The first reply reads far less, and the prompt cache stays warm.**
   A session now starts on the 26 most-used tools in short form and moves to every
   tool at most once, with the full list kept ready so a first task starts as fast

@@ -115,12 +115,12 @@ describe("POST /publish — version immutability", () => {
 
   it("appends a second platform binary to an existing version (multi-platform release)", async () => {
     const env = makeEnv();
-    // First platform binary for email@0.1.0.
+    // First platform binary for sample@0.1.0.
     const first = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      manifestYaml: sampleManifest({ id: "sample", name: "Sample", version: "0.1.0" }),
       artifact: "win32-binary",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     expect(first.status).toBe(201);
     expect(((await first.json()) as any).published.version_artifacts).toBe(1);
@@ -128,26 +128,26 @@ describe("POST /publish — version immutability", () => {
     // Second platform binary under the SAME version — must be accepted, not 409.
     const second = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email", version: "0.1.0" }),
+      manifestYaml: sampleManifest({ id: "sample", name: "Sample", version: "0.1.0" }),
       artifact: "darwin-arm64-binary",
-      filename: "email-agent-darwin-arm64",
+      filename: "sample-agent-darwin-arm64",
     });
     expect(second.status).toBe(201);
     expect(((await second.json()) as any).published.version_artifacts).toBe(2);
 
     // Both artifacts exist in R2 and in the per-agent manifest.
     const keys = env.bucket.keys();
-    expect(keys).toContain("agents/email/0.1.0/email-agent-win32-x64.exe");
-    expect(keys).toContain("agents/email/0.1.0/email-agent-darwin-arm64");
+    expect(keys).toContain("agents/sample/0.1.0/sample-agent-win32-x64.exe");
+    expect(keys).toContain("agents/sample/0.1.0/sample-agent-darwin-arm64");
 
-    const manifest = (await (await env.bucket.get("agents/email/manifest.json"))!.json()) as AgentManifest;
+    const manifest = (await (await env.bucket.get("agents/sample/manifest.json"))!.json()) as AgentManifest;
     const v = manifest.versions["0.1.0"];
     expect(v.artifacts.map((a) => a.filename).sort()).toEqual([
-      "email-agent-darwin-arm64",
-      "email-agent-win32-x64.exe",
+      "sample-agent-darwin-arm64",
+      "sample-agent-win32-x64.exe",
     ]);
     // Primary artifact stays the first-published one.
-    expect(v.artifact.filename).toBe("email-agent-win32-x64.exe");
+    expect(v.artifact.filename).toBe("sample-agent-win32-x64.exe");
     expect(Object.keys(manifest.versions)).toEqual(["0.1.0"]);
   });
 
@@ -155,20 +155,20 @@ describe("POST /publish — version immutability", () => {
     const env = makeEnv();
     await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0" }),
       artifact: "original",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     const dup = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0" }),
       artifact: "tampered",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     expect(dup.status).toBe(409);
     expect(((await dup.json()) as any).error.code).toBe("version_exists");
     // Original bytes untouched.
-    const obj = await env.bucket.get("agents/email/0.1.0/email-agent-win32-x64.exe");
+    const obj = await env.bucket.get("agents/sample/0.1.0/sample-agent-win32-x64.exe");
     expect(await obj!.text()).toBe("original");
   });
 
@@ -176,29 +176,29 @@ describe("POST /publish — version immutability", () => {
     const env = makeEnv();
     const first = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", security_tier: "experimental" }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0", security_tier: "experimental" }),
       artifact: "win32-binary",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     expect(first.status).toBe(201);
-    const manifestBefore = await (await env.bucket.get("agents/email/manifest.json"))!.text();
+    const manifestBefore = await (await env.bucket.get("agents/sample/manifest.json"))!.text();
     const indexBefore = await (await env.bucket.get("index.json"))!.text();
 
     const second = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", security_tier: "verified" }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0", security_tier: "verified" }),
       artifact: "darwin-arm64-binary",
-      filename: "email-agent-darwin-arm64",
+      filename: "sample-agent-darwin-arm64",
     });
     expect(second.status).toBe(409);
     expect(((await second.json()) as any).error.code).toBe("manifest_mismatch");
 
     // Nothing about the published version moved: no new artifact, same catalog.
-    expect(env.bucket.keys()).not.toContain("agents/email/0.1.0/email-agent-darwin-arm64");
-    expect(await (await env.bucket.get("agents/email/manifest.json"))!.text()).toBe(manifestBefore);
+    expect(env.bucket.keys()).not.toContain("agents/sample/0.1.0/sample-agent-darwin-arm64");
+    expect(await (await env.bucket.get("agents/sample/manifest.json"))!.text()).toBe(manifestBefore);
     expect(await (await env.bucket.get("index.json"))!.text()).toBe(indexBefore);
     const index = JSON.parse(indexBefore) as CatalogIndex;
-    expect(index.agents.find((a) => a.id === "email")!.security_tier).toBe("experimental");
+    expect(index.agents.find((a) => a.id === "sample")!.security_tier).toBe("experimental");
   });
 
   it("reports manifest_mismatch, not version_exists, for a same-filename re-post with a changed manifest", async () => {
@@ -207,15 +207,15 @@ describe("POST /publish — version immutability", () => {
     const env = makeEnv();
     await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0" }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0" }),
       artifact: "original",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     const again = await publish(env, {
       token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", version: "0.1.0", description: '"changed"' }),
+      manifestYaml: sampleManifest({ id: "sample", version: "0.1.0", description: '"changed"' }),
       artifact: "original",
-      filename: "email-agent-win32-x64.exe",
+      filename: "sample-agent-win32-x64.exe",
     });
     expect(again.status).toBe(409);
     expect(((await again.json()) as any).error.code).toBe("manifest_mismatch");
@@ -225,28 +225,28 @@ describe("POST /publish — version immutability", () => {
     // Release legs can check the same gaia-agent.yaml out with different line
     // endings; equal content must still join the version.
     const env = makeEnv();
-    const yaml = sampleManifest({ id: "email", version: "0.1.0" });
+    const yaml = sampleManifest({ id: "sample", version: "0.1.0" });
     expect(
       (
         await publish(env, {
           token: "tok_amd",
           manifestYaml: yaml,
           artifact: "win32-binary",
-          filename: "email-agent-win32-x64.exe",
+          filename: "sample-agent-win32-x64.exe",
         })
       ).status
     ).toBe(201);
-    const rawBefore = await (await env.bucket.get("agents/email/0.1.0/gaia-agent.yaml"))!.text();
+    const rawBefore = await (await env.bucket.get("agents/sample/0.1.0/gaia-agent.yaml"))!.text();
     const second = await publish(env, {
       token: "tok_amd",
       manifestYaml: "# same manifest, Windows checkout\r\n" + yaml.replace(/\n/g, "\r\n"),
       artifact: "darwin-arm64-binary",
-      filename: "email-agent-darwin-arm64",
+      filename: "sample-agent-darwin-arm64",
     });
     expect(second.status).toBe(201);
     expect(((await second.json()) as any).published.version_artifacts).toBe(2);
     // The first post's bytes stay the version's record.
-    const raw = await (await env.bucket.get("agents/email/0.1.0/gaia-agent.yaml"))!.text();
+    const raw = await (await env.bucket.get("agents/sample/0.1.0/gaia-agent.yaml"))!.text();
     expect(raw).toBe(rawBefore);
   });
 
@@ -970,7 +970,7 @@ describe("POST /publish — npm_package & playground_url", () => {
 describe("POST /publish — whole-package zip + file list", () => {
   const filesJson = JSON.stringify({
     files: [
-      { name: "binaries/email-agent-linux-x64", size_bytes: 35000000 },
+      { name: "binaries/sample-agent-linux-x64", size_bytes: 35000000 },
       { name: "dist/index.js", size_bytes: 4096 },
       { name: "README.md", size_bytes: 13000 },
     ],
@@ -992,7 +992,7 @@ describe("POST /publish — whole-package zip + file list", () => {
     expect(entry.package!.filename).toBe("agent-sidecar-0.1.0.zip");
     expect(entry.package!.size_bytes).toBe("ZIPBYTES".length);
     expect(entry.package!.files).toHaveLength(3);
-    expect(entry.package!.files[0].name).toBe("binaries/email-agent-linux-x64");
+    expect(entry.package!.files[0].name).toBe("binaries/sample-agent-linux-x64");
   });
 
   it("stores package_files on a LATER POST after the version already exists (real release order)", async () => {
@@ -1001,13 +1001,13 @@ describe("POST /publish — whole-package zip + file list", () => {
     // the listing arrives when versionExists is already true — it must still be
     // stored, or the catalog never gets `package` and the file list never renders.
     const env = makeEnv();
-    const yaml = sampleManifest({ id: "email", name: "Email", version: "0.1.0" });
+    const yaml = sampleManifest({ id: "sample", name: "Sample", version: "0.1.0" });
 
     const first = await publish(env, {
       token: "tok_amd",
       manifestYaml: yaml,
       artifact: "linux-binary",
-      filename: "email-agent-linux-x64",
+      filename: "sample-agent-linux-x64",
     });
     expect(first.status).toBe(201);
 
@@ -1016,16 +1016,16 @@ describe("POST /publish — whole-package zip + file list", () => {
       token: "tok_amd",
       manifestYaml: yaml,
       artifact: "ZIPBYTES",
-      filename: "agent-email-0.1.0.zip",
+      filename: "agent-sample-0.1.0.zip",
       packageFiles: filesJson,
     });
     expect(second.status).toBe(201);
 
     const entry = (
       (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
-    ).agents.find((a) => a.id === "email")!;
+    ).agents.find((a) => a.id === "sample")!;
     expect(entry.package).toBeDefined();
-    expect(entry.package!.filename).toBe("agent-email-0.1.0.zip");
+    expect(entry.package!.filename).toBe("agent-sample-0.1.0.zip");
     expect(entry.package!.files).toHaveLength(3);
   });
 

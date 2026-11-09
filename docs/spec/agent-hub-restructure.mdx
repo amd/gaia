@@ -19,13 +19,13 @@ surface, driven by a `SKILL.md` under `hub/skills/`.
 
 | Agent(s) | Status |
 |----------|--------|
-| `chat`, `email` | Migrated to `hub/agents/<id>/python/` — the pattern below still describes them |
-| `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, composing `chat` as its base class |
+| `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, with `ChatAgent` as its base class in the same package (`hub/agents/chat/` is a deprecated re-export shim) |
+| `email` | **Deleted.** Mail is the flagship's read-only mail tools plus the `inbox-triage` skill — see [Email](/guides/email) |
 | `code`, `analyst`, `browser`, `fileio`, `docqa`, `doc-search`, `summarize`, `jira`, `docker`, `blender`, `sd`, `emr`, `routing` | **Deleted.** Capability moved to flagship skills in `hub/skills/` — see [Skill Format](/plans/skill-format) |
 | `hello-world`, `word-count`, `connectors-demo` | **Deleted.** `hello-world` survives as the one reference package `gaia agent init` mirrors, at `tests/fixtures/agents/hello-world/` |
 
 The package format below (`gaia-agent.yaml`, `pyproject.toml`, entry-point
-discovery) is still how `chat`, `email`, and `gaia` ship, and still the
+discovery) is still how `gaia` ships, and still the
 pattern a third-party contributor follows to add a **new** agent. It is no
 longer the destination for GAIA's own per-task capabilities — those are
 skills now, not agents.
@@ -301,8 +301,8 @@ This section originally tracked bringing `jira`, `docker`, `blender`, `sd`,
 Agent Hub package standard (registry entry, `gaia-agent.yaml`, conversational
 response mode). That work is moot: every one of those agents was **deleted**
 rather than modernized, and their capability now lives in flagship skills
-(`hub/skills/`) instead. `chat`, `email`, and `builder` were already modern
-and are unaffected. `jira` and `docker` specifically are planned to come back
+(`hub/skills/`) instead. `chat` and `builder` were already modern
+and were unaffected (`email` was later deleted as well). `jira` and `docker` specifically are planned to come back
 as **connectors**, not agents — tracked separately, not as a modernization of
 the deleted agent code.
 
@@ -332,9 +332,9 @@ above.
 python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
-pip install -e hub/agents/email/python/
-gaia-tui chat --agent email --query "Triage my inbox"
-python -m pytest hub/agents/email/python/tests/ -xvs
+pip install -e hub/agents/gaia/python/
+gaia-tui chat --agent gaia --query "Summarize my inbox"
+python -m pytest hub/agents/gaia/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
 pip install -e ".[dev]"        # framework
