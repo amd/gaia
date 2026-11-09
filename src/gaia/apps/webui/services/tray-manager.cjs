@@ -25,6 +25,7 @@ const os = require("os");
 const { drawStateIcon, drawOverlayIcon, STATES } = require("./tray-icons.cjs");
 const { validateActivity, deriveTrayView, buildMenuTemplate } = require("./tray-state.cjs");
 const { backendJson, fetchWorkInProgress } = require("./quit-guard.cjs");
+const { desktopExecArg } = require("./appimage-launcher.cjs");
 
 /** Why the model can't be freed right now, from the backend's work list; null when it can. */
 function describeBusy(work) {
@@ -138,16 +139,6 @@ function validateAgents(agents, where) {
     };
   }
   return out;
-}
-
-/**
- * A path as one quoted Exec= argument: the Desktop Entry spec escapes " ` $ \
- * inside the quotes, then escapes every backslash again as a string value.
- */
-function desktopExecArg(file) {
-  // "%" starts a field code (%f, %u…) anywhere in Exec=, so it is doubled.
-  const quoted = `"${file.replace(/%/g, "%%").replace(/["`$\\]/g, (c) => `\\${c}`)}"`;
-  return quoted.replace(/\\/g, "\\\\");
 }
 
 // ── TrayManager ──────────────────────────────────────────────────────────
@@ -340,7 +331,7 @@ class TrayManager {
 
   /**
    * What closing the window does. With no tray to find a hidden window in,
-   * GAIA minimizes instead, so the dock still shows it and offers Quit.
+   * GAIA minimizes instead, so the dock or overview still shows it and offers Quit.
    * @returns {"hide" | "minimize" | "quit"}
    */
   get closeAction() {
@@ -416,8 +407,8 @@ class TrayManager {
     const loaded = "Closing the window keeps your model loaded, so the next chat starts quickly.";
     if (this.closeAction === "minimize") {
       return {
-        message: "GAIA is still running in the dock.",
-        detail: `${loaded} Click GAIA in the dock to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+        message: "GAIA is still running, minimized.",
+        detail: `${loaded} Click GAIA in your dock or the Activities overview to bring it back. To stop it, right-click GAIA there and choose Quit.`,
       };
     }
     const where = process.platform === "darwin" ? "menu bar" : "tray";
