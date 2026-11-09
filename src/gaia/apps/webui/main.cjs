@@ -995,6 +995,12 @@ if (process.platform === "win32") {
   app.setAppUserModelId(appUserModelId(app.isPackaged));
 }
 
+// Older builds registered gaia:// at runtime; nothing handles it any more.
+if (app.isPackaged && app.isDefaultProtocolClient("gaia")) {
+  const removed = app.removeAsDefaultProtocolClient("gaia");
+  console.log(`[main] Removed stale gaia:// registration: ${removed}`);
+}
+
 app.on("second-instance", () => {
   // A second launch happened while we were running. Surface our window
   // (the user almost certainly wanted to see it).
