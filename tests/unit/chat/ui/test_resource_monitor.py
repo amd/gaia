@@ -486,38 +486,78 @@ def test_an_idle_npu_is_left_to_fall_asleep(tmp_path):
     assert npu.queried == [100.0]  # only the first look
 
 
+def test_an_idle_npu_is_not_asked_before_its_timer_has_surely_fired(tmp_path):
+    # The kernel may fire a 5 s timer up to 1.25 s late; asking at 6 s could
+    # catch it still awake and restart the timer every time.
+    npu = FakeNpu(tmp_path, [0.0])
+    reader = npu.reader()
+    for _ in range(8):
+        npu.now += 1
+        assert percents(reader) == [0.0]
+    assert npu.queried == [100.0]
+
+
 def test_an_idle_npu_something_else_keeps_awake_is_still_checked(tmp_path):
-    # Still awake after its timer: FastFlowLM holds it, so asking costs nothing.
+    # Still awake well after its timer: FastFlowLM holds it, so asking is free.
     npu = FakeNpu(tmp_path, [0.0, 0.0, 70.0, 80.0])
     reader = npu.reader()
-    npu.now += 6.0  # 5 s autosuspend plus a second
+    npu.now += 9.0  # 5 s x 1.5 + 1 s
     assert percents(reader) == [0.0]
-    npu.now += 6.0
+    npu.now += 9.0
     assert percents(reader) == [70.0]
     npu.now += 1.0
     assert percents(reader) == [80.0]  # busy again: every sample
-    assert npu.queried == [100.0, 106.0, 112.0, 113.0]
+    assert npu.queried == [100.0, 109.0, 118.0, 119.0]
 
 
-def test_a_sleeping_npu_is_never_woken(tmp_path):
-    npu = FakeNpu(tmp_path, [], status="suspended")
-    reader = npu.reader()  # no look at start either
+def test_a_suspending_npu_counts_as_asleep(tmp_path):
+    npu = FakeNpu(tmp_path, [0.0])
+    reader = npu.reader()
+    npu.status("suspending")
+    npu.now += 20
+    assert percents(reader) == [0.0]
+    assert npu.queried == [100.0]
+
+
+def test_a_sleeping_npu_is_asked_once_then_left_asleep(tmp_path):
+    # One look at start, so an unsupported driver says so rather than show 0%.
+    npu = FakeNpu(tmp_path, [0.0], status="suspended")
+    reader = npu.reader()
     for _ in range(3):
         npu.now += 10
         assert percents(reader) == [0.0]
-    assert npu.queried == []
+    assert npu.queried == [100.0]
 
 
-def test_an_npu_woken_by_something_else_is_read_at_once(tmp_path):
-    npu = FakeNpu(tmp_path, [90.0], status="suspended")
+def test_a_sleeping_npu_on_a_driver_without_usage_says_so_at_once(tmp_path):
+    npu = FakeNpu(tmp_path, [rm.ResourceProbeError(rm._NO_USAGE)], status="suspended")
+    with pytest.raises(rm.ResourceProbeError, match="Linux 7.1"):
+        npu.reader()
+
+
+def test_an_npu_woken_by_something_else_is_read_once_the_wait_is_over(tmp_path):
+    npu = FakeNpu(tmp_path, [0.0, 90.0], status="suspended")
     reader = npu.reader()
     npu.status("active")
     npu.now += 1
+    assert percents(reader) == [0.0]  # maybe our own look keeping it up
+    npu.now += 8
     assert percents(reader) == [90.0]
 
 
-def test_an_npu_without_autosuspend_is_settled_a_second_after_a_query(tmp_path):
+def test_a_missing_autosuspend_delay_uses_the_drivers_own(tmp_path):
     npu = FakeNpu(tmp_path, [0.0, 0.0], autosuspend_ms=None)
+    reader = npu.reader()
+    npu.now += 8
+    reader.sample()
+    assert len(npu.queried) == 1
+    npu.now += 1
+    reader.sample()
+    assert len(npu.queried) == 2
+
+
+def test_an_npu_that_never_autosuspends_is_asked_a_second_after_a_query(tmp_path):
+    npu = FakeNpu(tmp_path, [0.0, 0.0], autosuspend_ms="-1")
     reader = npu.reader()
     npu.now += 0.5
     assert percents(reader) == [0.0] and len(npu.queried) == 1

@@ -678,6 +678,7 @@ _GET_INFO = struct.Struct("<IIQ")  # param, buffer_size, buffer
 # label, input, max, average, highest, status, units, unitm, type, pad
 _SENSOR = struct.Struct("<64s4I64s16sbB6x")
 _MAX_SENSORS = 9  # total power, then at most 8 columns
+_AMDXDNA_AUTOSUSPEND_MS = 5000  # AMDXDNA_AUTOSUSPEND_DELAY in amdxdna_pm.c
 _IOCTL_GET_INFO = (
     (3 << 30)  # read and write
     | (_GET_INFO.size << 16)
@@ -741,8 +742,22 @@ def amdxdna_busy_percent(fd: int) -> float:
 
 
 def _autosuspend_s(dev: Path) -> float:
+    # amdxdna's own default when sysfs doesn't say; negative means it never autosuspends.
     ms = _read_int(dev / "power" / "autosuspend_delay_ms")
-    return max(0, ms) / 1000 if ms is not None else 0.0
+    return max(0, _AMDXDNA_AUTOSUSPEND_MS if ms is None else ms) / 1000
+
+
+def _settle_s(dev: Path) -> float:
+    # The kernel may fire the timer up to a quarter late, and suspending takes a moment.
+    return _autosuspend_s(dev) * 1.5 + 1.0
+
+
+def _npu_asleep(dev: Path) -> bool:
+    try:
+        status = (dev / "power" / "runtime_status").read_text().strip()
+    except OSError:
+        return False
+    return status in ("suspended", "suspending")
 
 
 @dataclass
@@ -761,8 +776,9 @@ class AmdxdnaNpus:
 
     Every query wakes the NPU and restarts its autosuspend timer, so a query
     each second would keep an idle NPU awake. An idle one is asked again only
-    once that timer has run out: asleep by then, it reads 0 and stays asleep;
-    still awake, something else holds it and it is safe to ask.
+    once that timer has surely run out: asleep by then, it reads 0 and stays
+    asleep; still awake, something else holds it and it is safe to ask. Work
+    that starts during that wait shows up to the wait late.
     """
 
     def __init__(
@@ -779,11 +795,11 @@ class AmdxdnaNpus:
         self._npus: List[_Npu] = []
         try:
             for name, dev, node in found:
-                npu = _Npu(name, dev, open_node(node), _autosuspend_s(dev) + 1.0)
+                npu = _Npu(name, dev, open_node(node), _settle_s(dev))
                 self._npus.append(npu)
-                # An awake NPU is asked now, so an unsupported driver says so at once.
-                if not _runtime_suspended(dev):
-                    self._query(npu)
+                # Asked once even if asleep: one wake per strip opening, so the
+                # tile never shows a reading this driver can't give.
+                self._query(npu)
         except BaseException:
             self.close()
             raise
@@ -794,7 +810,7 @@ class AmdxdnaNpus:
         return npu.last_percent
 
     def _read(self, npu: _Npu) -> float:
-        if _runtime_suspended(npu.dev):
+        if _npu_asleep(npu.dev):
             return 0.0
         idle = npu.last_query is not None and npu.last_percent == 0.0
         if idle and self._clock() - npu.last_query < npu.settle_s:
