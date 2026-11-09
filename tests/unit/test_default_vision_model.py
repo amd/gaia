@@ -67,15 +67,6 @@ def test_discovered_cloud_chat_does_not_turn_off_npu_vision(
         return catalog
 
     monkeypatch.setattr(lc.LemonadeClient, "list_models", list_models)
-    monkeypatch.setattr(
-        lc,
-        "find_model_requirement",
-        lambda model: (
-            SimpleNamespace(feature_tier="full")
-            if model == "user.Llama-3.2-3B-GGUF"
-            else lc.MODELS.get(model)
-        ),
-    )
     record_cloud_models(catalog if warm_cache else {"data": []})
     try:
         config(lc.DEFAULT_MODEL_NAME, last_model="opencode.big-model")
@@ -87,6 +78,29 @@ def test_discovered_cloud_chat_does_not_turn_off_npu_vision(
         assert len(reads) == (0 if warm_cache else 1)
     finally:
         record_cloud_models({"data": []})
+
+
+def test_registered_dotted_local_chat_does_not_probe_catalog_for_vision(
+    config, monkeypatch
+):
+    config(lc.LARGE_DEFAULT_MODEL_NAME, last_model="user.Llama-3.2-3B-GGUF")
+    original_requirement = lc.find_model_requirement
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda model: (
+            SimpleNamespace(feature_tier="full")
+            if model == "user.Llama-3.2-3B-GGUF"
+            else original_requirement(model)
+        ),
+    )
+    monkeypatch.setattr(
+        lc.LemonadeClient,
+        "list_models",
+        lambda self, **kwargs: pytest.fail("catalog should not be queried"),
+    )
+
+    assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
 
 
 def test_a_resident_tested_vision_model_is_used(monkeypatch):
