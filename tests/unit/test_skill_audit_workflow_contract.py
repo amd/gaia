@@ -350,12 +350,28 @@ def test_a_malformed_count_is_infrastructure_not_zero(runnable_enforce, bad):
     assert "Skill audit passed." not in result.stdout
 
 
-def test_the_gate_does_not_read_the_downstream_skills_output(enforce_step):
-    """Emptying `skills` for downstream consumers must not decide this check.
+def test_the_verdict_runs_after_an_upstream_failure(enforce_step):
+    """A status function is required, or the infrastructure verdict never fires.
 
-    `skills='[]'` is how the SARIF and Claude jobs are told to skip an
-    incomplete run (#4107). If the verdict also consulted it, that fix would
-    make the required gate green in exactly the case it must stay red.
+    Actions wraps a step `if:` that names no status function in an implicit
+    `success()`. A failed install or audit would then skip this step entirely,
+    which is the #4107 hole: the gate disappears instead of reporting that it
+    never ran. This asserts the condition, not just the shell body, because the
+    runner decides whether that body runs at all.
+    """
+    assert "always()" in str(enforce_step.get("if", "")), (
+        "Enforce verdict must run after an upstream failure to report it; "
+        "drop always() and the infrastructure branch becomes unreachable"
+    )
+
+
+def test_the_gate_does_not_read_the_downstream_skills_output(enforce_step):
+    """Keeping the downstream `skills` signal out of the verdict.
+
+    A future change may empty `skills` so the SARIF and Claude jobs skip an
+    incomplete run. If the verdict also consulted it, one place would decide
+    both, and a downstream skip could turn the required gate green. The verdict
+    keys on `AUDIT_OUTCOME` instead, so the two cannot be conflated.
     """
     assert "SKILLS" not in enforce_step.get("env", {})
     assert "steps.detect" not in enforce_step["run"]

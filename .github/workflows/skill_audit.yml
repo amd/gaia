@@ -385,8 +385,14 @@ jobs:
       # so a reviewer can tell "the gate never got to run" apart from "the gate
       # ran and said no" without opening the log. It stays a failure either way:
       # the check is required, and an unrun gate must not look green.
+      # `always()` is load-bearing, not defensive: without a status function
+      # Actions wraps the condition in an implicit `success()`, so a failed
+      # install or audit skips this step and the infrastructure verdict below
+      # never runs. That was the original #4107 hole. A failed `detect` leaves
+      # `skills` empty, `'' != '[]'` is true, so the step still runs and reports
+      # the missing outcome instead of vanishing.
       - name: Enforce verdict
-        if: steps.detect.outputs.skills != '[]'
+        if: always() && steps.detect.outputs.skills != '[]'
         env:
           AUDIT_OUTCOME: ${{ steps.audit.outcome }}
           BLOCK_COUNT: ${{ steps.audit.outputs.block_count }}
