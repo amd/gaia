@@ -1277,3 +1277,32 @@ TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
     EXPECT_EQ(result["result"], "All done.");
     EXPECT_EQ(agent.executed.size(), 5u);
 }
+
+// ---------------------------------------------------------------------------
+// The model is checked before every request, and a failed load ends the turn
+// ---------------------------------------------------------------------------
+
+TEST(ModelLoadTest, LoadIsRecheckedBeforeEveryRequest) {
+    // A server that keeps reporting the model unloaded gets a load before each request.
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 2);
+}
+
+TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.setLoadStatus(500);
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.llmRetries = 0;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    const json r = agent.processQuery("hello");
+    EXPECT_EQ(r.value("status", ""), "error") << r.dump();
+    EXPECT_NE(r.value("result", "").find(kToolCallingModel), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 0);  // no chat request against a model that isn't loaded
+}

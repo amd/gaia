@@ -10,13 +10,14 @@ icon: "sparkles"
 
 `gaiacpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands, edits code and fetches web pages. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
 
-It runs three ways:
+It runs four ways:
 
 | Mode | Command | For |
 |---|---|---|
 | Interactive | `gaiacpp` | A person at a terminal |
 | Headless | `gaiacpp -p "prompt"` | Scripts, CI, eval harnesses: answer on stdout, exit code 0 or 1 |
 | Server | `gaiacpp serve` | Apps and [Lemonade](#lemonade-integration): OpenAI-compatible `/v1/chat/completions` |
+| MCP server | `gaiacpp --mcp` | Another program's agent: the tools over MCP, with no model of its own |
 
 ## Quick start
 
@@ -38,16 +39,16 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 
 `gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
 
-1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, and `Gemma-4-E4B-it-GGUF`
+1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 8192 output tokens and temperature 0.2
 2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
 3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`
-4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--native-tools`
+4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`
 
 The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
 
 `gaiacpp` loads the model at `contextSize` only through Lemonade's `/api/v1` endpoints. Through `/v1`, or any other server, the model runs at whatever window the server gives it.
 
-`--provider fireworks` is shorthand for Fireworks' endpoint with `FIREWORKS_API_KEY` and native tool calls:
+`--provider fireworks` is shorthand for Fireworks' endpoint with `FIREWORKS_API_KEY`, native tool calls and a 131072-token context window. It replaces a `contextSize` from the settings file or `GAIA_CONTEXT_SIZE`; `--ctx-size` still overrides it:
 
 ```bash
 gaiacpp -p "…" --provider fireworks -m accounts/fireworks/models/deepseek-v4p1-flash
@@ -86,7 +87,7 @@ The file, git and shell tools are confined to the working directory (`--cwd`) an
 
 ### Models
 
-With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp models pull <name>` downloads one. A built-in model is pulled by name alone; `--checkpoint` and `--recipe` register a new model and need a name starting with `user.`.
+With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp models pull <name>` downloads one. A built-in model is pulled by name alone; `--checkpoint` and `--recipe` register a new model and need a name starting with `user.`. Both commands use the same settings as a run and take `--base-url`, `--provider`, `--api-key-env` and `--config`.
 
 ### Images
 
@@ -100,7 +101,7 @@ With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp mode
 
 ### Memory
 
-`remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
+`remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused: API keys and tokens, a password or PIN stated outright, card numbers and security codes, and US social security numbers. The check is a backstop, not a guarantee. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
 
 ### Skills
 
@@ -114,6 +115,8 @@ A skill that ships Python tools (`tools.py`) loads as instructions only, and `lo
 
 `gaiacpp skills install <name>[@version]` downloads a skill from the hub (`GAIA_HUB_URL`, default `https://hub.amd-gaia.ai`), checks the bundle against the SHA-256 the hub lists, and verifies its `SIGNATURE.json` the same way the Python runtime does: Ed25519 over every file's digest, checked against the built-in AMD key and `~/.gaia/skills/trusted-keys.json`. A signature that doesn't verify, or files that changed after signing, stop the install. The signature sets the skill's tier: AMD-signed skills are `verified`, ones signed by a key you trust are `community`, and unsigned ones or ones signed by an unknown key are `experimental`, which install only with `--allow-experimental`. `gaiacpp skills install <folder>` applies the same checks to a local folder. `gaiacpp skills list` and `gaiacpp skills remove <name>` do the rest. Installing is the user's command, not a tool the agent can call.
 
+Installing from the hub, or from a folder that has a `SIGNATURE.json`, needs a build with OpenSSL: it does the HTTPS download, the SHA-256 check and the signature check. A build without it stops the install and says so. The release binaries include it.
+
 ## Headless runs
 
 ```bash
@@ -126,11 +129,21 @@ gaiacpp --prompt-file prompt.txt
 
 ```json
 {"result": "…", "status": "success", "steps": 5, "tool_errors": 0,
- "model": "…", "duration_s": 6.0, "peak_rss_mb": 14.9,
+ "model": "…", "duration_s": 6.0, "peak_rss_mb": 14.9, "cpu_s": 0.08,
  "usage": {"prompt_tokens": 17831, "completion_tokens": 735, "total_tokens": 18566}}
 ```
 
-`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. Progress goes to stderr, so stdout carries only the answer.
+`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer.
+
+## MCP server mode
+
+`gaiacpp --mcp` serves the agent's tools over the Model Context Protocol on stdin and stdout, so a program that already has its own agent and model can call them. No model is contacted. It answers `initialize`, `ping`, `tools/list` and `tools/call`; logs go to stderr.
+
+```json
+{"mcpServers": {"gaiacpp": {"command": "gaiacpp", "args": ["--mcp", "--cwd", "/path/to/project"]}}}
+```
+
+The folder scope and the other options apply as in a headless run. Nobody can answer an approval card over MCP, so a tool that needs approval (a shell command that changes something, a file write) is refused unless the server was started with `--dangerously-skip-permissions`.
 
 ## Server mode
 
@@ -172,7 +185,7 @@ A few things answer the way an older flagship would, and the UI copes with each:
 
 "Always allow" answers are kept per chat in memory. A shell command that only reads runs without asking: `ls`, `cat`, `grep`, or `find` without `-exec` or `-delete`, chained or piped, with output thrown away by `2>/dev/null`. Under cmd.exe only the built-ins `dir`, `type`, `cd` and `echo` qualify, because cmd runs a `find.bat` in the current folder before the real `find`. `git` always asks, because a repository's own config can make `git status` run a program. With the internet off, the chat refuses `web_fetch` to other hosts, every MCP tool, and shell commands that go online, before any approval card. On Windows the shell is Git Bash when Git for Windows is installed, found next to `git.exe` if it isn't on `PATH`, and `cmd.exe` otherwise; the WSL launcher (`System32\bash.exe`) is never used, because it can't see `C:\` paths. The system prompt names the shell in use.
 
-To try it, put `gaiacpp.exe` in `~/.gaia/agents/gaia/` with an `.installed` file naming it (`"artifact_kind": "binary"`, `"executable": "gaiacpp.exe"`, and its SHA-256). The Agent UI then relays to it whenever the Python `gaia_agent` package isn't importable in its environment.
+To try it, put the binary in `~/.gaia/agents/gaia/` with an `.installed` file naming it (`"artifact_kind": "binary"`, `"executable"` set to the file's name, and its SHA-256). A local build names the file `gaiacpp.exe` (`gaiacpp` on Linux and macOS); the hub package from `cpp/packaging/package_agents.py` names it `gaia-win-x64.exe`, `gaia-linux-x64` or `gaia-darwin-arm64`. The Agent UI then relays to it whenever the Python `gaia_agent` package isn't importable in its environment.
 
 ## Lemonade integration
 
@@ -180,14 +193,14 @@ Lemonade's agent host installs agents from a pinned GitHub release asset, config
 
 | Lemonade needs | gaiacpp provides |
 |---|---|
-| A release asset per platform, binary at the archive root, pinned by SHA-256 | `cpp/packaging/package_lemonade.py` builds `gaiacpp-<os>-<arch>.tar.gz` (`.zip` on Windows) and the `agent_versions.json` checksum entry; `build_agents.yml` runs it for each platform |
+| A release asset per platform, binary at the archive root, pinned by SHA-256 | `cpp/packaging/package_lemonade.py` builds `gaiacpp-<os>-<arch>.tar.gz` (`.zip` on Windows) and writes its checksum entry to `agent_versions.gaia.json`, to copy into Lemonade's `agent_versions.json`. `build_agents.yml` runs it for each platform, and on a release tag joins the three files into one with `--merge` |
 | Point the agent at this server, without writing the key to disk | The settings file (`baseUrl`, `modelId`, `contextSize`). When lemond has a key, the host adds `apiKeyEnv: "LEMONADE_API_KEY"` and passes the key in the environment; without one it leaves `apiKeyEnv` out |
 | Lemonade's tools in the agent | `mcpConfig` naming Lemonade's MCP server by URL |
 | A launch command for a terminal | `gaiacpp -m <model>` (interactive) |
 | A served agent | `gaiacpp serve --port 0 --server-key-env <VAR>`, ready line on stdout, `GET /health` for readiness |
 | No surprise upgrades | `--version`; the binary has no self-update |
 
-Release archives link the C++ runtime statically (`GAIA_STATIC_CXX_RUNTIME=ON`) and need only OpenSSL 3, zlib and zstd from the system on Linux. glibc is the floor of the build host, so build Linux releases on the oldest distribution you support (CI uses `ubuntu-latest`).
+The release build links OpenSSL statically on every platform and, on Linux, the C++ runtime too (`GAIA_STATIC_CXX_RUNTIME=ON`), so the Linux binary needs only glibc from the system. A build made without OpenSSL has no HTTPS: it can't reach an `https://` endpoint or install skills from the hub. glibc is the floor of the build host, so build Linux releases on the oldest distribution you support (CI uses `ubuntu-latest`).
 
 ## What the agent loop handles
 

@@ -46,6 +46,9 @@ constexpr const char* kService = "gaia-agent-gaia";
 constexpr const char* kApiVersion = "2.27";
 constexpr auto kKeepalive = std::chrono::seconds(10);
 constexpr auto kConfirmTimeout = std::chrono::minutes(10);
+constexpr size_t kMaxSessions = 256;      // idle chats beyond this are forgotten, oldest first
+constexpr size_t kMaxEarlyCancels = 256;
+constexpr size_t kMaxBodyBytes = 64u * 1024 * 1024;
 
 std::string randomHex(size_t n) {
     static thread_local std::mt19937_64 rng(std::random_device{}());
@@ -201,6 +204,9 @@ struct Session {
     std::set<std::string> builtWith;  // roots the agent was built with
     std::set<std::string> indexed;    // attached documents already indexed
     std::string workingDirectory;
+    std::shared_ptr<ShellSession> shell;  // this chat's folder and exported variables
+    std::string shellDir;                 // the working folder the shell was last put in
+    std::chrono::steady_clock::time_point lastUsed = std::chrono::steady_clock::now();
 };
 
 std::string grantLabel(const std::string& key) {
@@ -260,11 +266,16 @@ public:
     explicit Sidecar(SidecarOptions opts) : opts_(std::move(opts)) {}
 
     int run() {
+        if (!loopbackName(opts_.host)) {
+            throw std::runtime_error("gaiacpp sidecar only listens on this PC: --host must be 127.0.0.1, localhost "
+                                     "or ::1, not " + opts_.host + ".");
+        }
         token_ = loadToken();
         dropKeychainSecret();
         lemonadeKey_ = getEnvVar("LEMONADE_API_KEY");
         // Shells the agent starts inherit this environment; keep the secrets out of it.
-        for (const char* secret : {"GAIA_GAIA_SIDECAR_TOKEN", "LEMONADE_API_KEY", "GAIA_HOST_CUSTODY_SECRET"}) {
+        for (const char* secret : {"GAIA_GAIA_SIDECAR_TOKEN", "GAIA_GAIA_SIDECAR_TOKEN_FILE", "LEMONADE_API_KEY",
+                                   "GAIA_HOST_CUSTODY_SECRET", "GAIA_HOST_KEYCHAIN_SECRET_FILE"}) {
 #ifdef _WIN32
             _putenv_s(secret, "");
 #else
@@ -272,6 +283,21 @@ public:
 #endif
         }
         routes();
+        // Each open answer stream holds a worker for the whole turn.
+        server_.new_task_queue = [] { return new httplib::ThreadPool(64); };
+        server_.set_payload_max_length(kMaxBodyBytes);
+        // A field of the wrong type in a request body is the caller's mistake, not a crash.
+        server_.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
+            try {
+                std::rethrow_exception(ep);
+            } catch (const json::exception& e) {
+                sendDetail(res, 422, std::string("Malformed request body: ") + e.what());
+            } catch (const std::exception& e) {
+                sendDetail(res, 500, e.what());
+            } catch (...) {
+                sendDetail(res, 500, "Unknown error");
+            }
+        });
         int port = opts_.port;
         if (port > 0) {
             if (!server_.bind_to_port(opts_.host, port)) {
@@ -316,6 +342,7 @@ private:
         if (!f.empty()) {
             std::error_code ec;
             fs::remove(f, ec);
+            if (ec) std::cerr << "gaiacpp: could not remove the keychain secret file " << f << ": " << ec.message() << std::endl;
         }
     }
 
@@ -370,7 +397,19 @@ private:
     std::shared_ptr<Session> session(const std::string& id) {
         std::lock_guard<std::mutex> lock(sessionsMu_);
         auto it = sessions_.find(id);
-        if (it != sessions_.end()) return it->second;
+        if (it != sessions_.end()) {
+            it->second->lastUsed = std::chrono::steady_clock::now();
+            return it->second;
+        }
+        while (sessions_.size() >= kMaxSessions) {
+            auto oldest = sessions_.end();
+            for (auto c = sessions_.begin(); c != sessions_.end(); ++c) {
+                if (c->second->busy.load()) continue;
+                if (oldest == sessions_.end() || c->second->lastUsed < oldest->second->lastUsed) oldest = c;
+            }
+            if (oldest == sessions_.end()) break;  // every chat is mid-turn
+            sessions_.erase(oldest);
+        }
         auto s = std::make_shared<Session>();
         s->id = id;
         sessions_[id] = s;
@@ -407,6 +446,8 @@ private:
         o.internetOff = s.internetOff;
         o.memoryOff = s.memoryOff;
         o.memoryPrivate = s.memoryPrivate;
+        if (!s.shell) s.shell = BashTools::newSession();
+        o.shell = s.shell;
         auto agent = std::make_unique<GaiaAgent>(cfg, o);
         auto console = std::make_unique<SidecarConsole>();
         SidecarConsole* consolePtr = console.get();
@@ -459,16 +500,23 @@ private:
         // Other chats may run while this one waits for its user.
         if (s.turnLock) s.turnLock->unlock();
         std::string d;
+        bool answered = false;
         {
             std::unique_lock<std::mutex> lock(run->mu);
-            run->cv.wait_for(lock, kConfirmTimeout,
-                             [&] { return run->cancelled.load() || !run->decisions[confirmId].empty(); });
+            answered = run->cv.wait_for(lock, kConfirmTimeout,
+                                        [&] { return run->cancelled.load() || !run->decisions[confirmId].empty(); });
             d = run->decisions[confirmId];
             run->decisions.erase(confirmId);
         }
+        if (!answered) {
+            run->push({{"type", "status"},
+                       {"message", "No answer to the approval request in 10 minutes, so " + tool + " was not run."}});
+        }
         if (s.turnLock) {
             s.turnLock->lock();
-            enterWorkingDirectory(s);
+            // Another chat may have moved the process; the shell keeps its own folder.
+            std::error_code ec;
+            if (!s.shellDir.empty()) fs::current_path(s.shellDir, ec);
         }
         if (d == "allow") return ToolConfirmResult::ALLOW_ONCE;
         if (d == "always") return ToolConfirmResult::ALWAYS_ALLOW;
@@ -517,7 +565,7 @@ private:
             if (!admit(req, res, true)) return;
             const std::string base = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
             LemonadeClient lc(base);
-            lc.setApiKey(getEnvVar("LEMONADE_API_KEY"));
+            lc.setApiKey(lemonadeKey_);
             const bool up = lc.isServerRunning();
             json body = {{"ready", up},
                          {"lemonade", {{"reachable", up}, {"base_url", lc.baseUrl()}, {"version", nullptr},
@@ -547,12 +595,14 @@ private:
         server_.Post(R"(/v1/gaia/query/([^/]+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
             const std::string id = req.matches[1];
+            if (!validSessionId(id)) return sendDetail(res, 400, "Invalid run id");
             auto run = findRun(id);
             if (run) {
                 // The agent's cancel check reads this flag, so this alone stops the run.
                 run->cancel();
             } else {
                 std::lock_guard<std::mutex> lock(runsMu_);
+                if (earlyCancels_.size() >= kMaxEarlyCancels) earlyCancels_.erase(earlyCancels_.begin());
                 earlyCancels_.insert(id);
             }
             sendJson(res, 200, {{"run_id", id}, {"cancelled", run != nullptr}});
@@ -737,6 +787,7 @@ private:
         const std::string runId = body.value("run_id", "");
         if (text.empty()) throw BadRequest(422, "query must be a non-empty string");
         if (runId.empty()) throw BadRequest(422, "run_id is required");
+        if (!validSessionId(runId)) throw BadRequest(422, "run_id may hold letters, digits and _ . : - only");
         if (!body.contains("context") || !body["context"].is_array()) throw BadRequest(422, "context must be a list");
         const bool hasTurns = body.contains("turns") && !body["turns"].is_null();
         if (hasTurns && !body["turns"].is_array()) throw BadRequest(422, "turns must be a list of turns");
@@ -821,6 +872,7 @@ private:
                       << " internet_off=" << s->internetOff->load() << std::endl;
         }
 
+        try {
         std::thread([this, s, run, history = std::move(history), text, model, maxSteps, documents, reasoning,
                      undoRequested, hasTurns]() mutable {
             // One chat works at a time: the working folder is process-wide. A
@@ -838,7 +890,7 @@ private:
                 s->console->attach(run, reasoning);
                 if (run->cancelled) throw std::runtime_error("cancelled");
                 const std::string folderProblem = enterWorkingDirectory(*s);
-                if (!folderProblem.empty()) s->console->emit({{"type", "status"}, {"message", folderProblem}});
+                if (!folderProblem.empty()) throw std::runtime_error(folderProblem);
                 if (undoRequested) {
                     s->console->emit({{"type", "status"},
                                       {"message", "Undo may not work for this turn: gaiacpp doesn't record file changes yet."}});
@@ -881,6 +933,9 @@ private:
             } catch (const std::exception& e) {
                 terminal = run->cancelled ? json{{"type", "final"}, {"answer", ""}}
                                           : json{{"type", "error"}, {"detail", e.what()}, {"status", 500}};
+            } catch (...) {
+                // Anything else would end the process and every other chat with it.
+                terminal = {{"type", "error"}, {"detail", "The turn failed with an unknown error"}, {"status", 500}};
             }
             if (s->console) s->console->detach();
             {
@@ -897,6 +952,15 @@ private:
             s->busy = false;
             run->finish(terminal);
         }).detach();
+        } catch (const std::system_error& e) {
+            {
+                std::lock_guard<std::mutex> lock(runsMu_);
+                runs_.erase(runId);
+            }
+            if (s->temporary) dropSession(s->id);
+            s->busy = false;
+            throw BadRequest(503, std::string("Can't start a thread for this turn: ") + e.what());
+        }
 
         res.set_header("Cache-Control", "no-cache");
         res.set_chunked_content_provider(
@@ -954,8 +1018,11 @@ private:
         if (dir.empty()) return "";
         std::error_code ec;
         fs::current_path(dir, ec);
-        if (ec || !BashTools::setWorkingDirectory(dir)) {
-            return "Can't use " + dir + " as the working folder: " + (ec ? ec.message() : "not a folder");
+        if (ec) return "Can't use " + dir + " as the working folder: " + ec.message();
+        // The shell moves only when the chat's folder changes, so a `cd` lasts between turns.
+        if (dir != s.shellDir) {
+            if (!s.shell->setCwd(dir)) return "Can't use " + dir + " as the working folder: not a folder";
+            s.shellDir = dir;
         }
         return "";
     }

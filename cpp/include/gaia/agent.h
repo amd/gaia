@@ -256,7 +256,7 @@ public:
     /// would dangle.
     std::vector<std::string> skillSetLoaded() const;
 
-    /// Install the loader that actually registers skills (P3.3 / #2800).
+    /// Install the loader that actually registers skills.
     /// Not owned; must outlive the agent. Passing nullptr detaches it.
     ///
     /// **Not thread-safe** — setup-time call, serialized with loadSkillSet()
@@ -273,7 +273,7 @@ public:
     /// Changes take effect on the next processQuery() call.
     void setConfig(const AgentConfig& newConfig);
 
-    /// Change the active model. Resets modelEnsured_ so the next processQuery() reloads it.
+    /// Change the active model. The next request loads it.
     void setModel(const std::string& modelId);
 
     /// Convenience setters — take effect on the next processQuery() call.
@@ -411,7 +411,6 @@ private:
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
     LemonadeClient lemonade_;
-    std::atomic<bool> modelEnsured_{false};
 
     // Concurrency guard — Agent is NOT re-entrant. A second processQuery
     // call on the same Agent (from any thread) throws std::runtime_error.

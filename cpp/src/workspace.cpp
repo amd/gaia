@@ -43,7 +43,9 @@ const std::vector<std::string>& systemDirs() {
 #else
     static const std::vector<std::string> dirs = {
         "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/etc",
-        "/proc", "/sys", "/dev", "/tmp", "/var/tmp", "/run", "/snap", "/nix"};
+        "/sys", "/dev", "/tmp", "/var/tmp", "/snap", "/nix",
+        // Machine facts only: /proc/<pid> holds other programs' environments.
+        "/proc/cpuinfo", "/proc/meminfo", "/proc/version", "/proc/uptime", "/proc/loadavg"};
 #endif
     return dirs;
 }
@@ -58,6 +60,32 @@ std::string expandHome(const std::string& p) {
         if (!home.empty()) return home + p.substr(1);
     }
     return p;
+}
+
+// Git Bash spells C:\Users as /c/Users or /cygdrive/c/Users.
+std::string fromShellPath(std::string p) {
+#ifdef _WIN32
+    if (p.rfind("/cygdrive/", 0) == 0) p.erase(0, 9);
+    if (p.size() >= 2 && p[0] == '/' && std::isalpha(static_cast<unsigned char>(p[1])) &&
+        (p.size() == 2 || p[2] == '/')) {
+        p = std::string(1, p[1]) + ":" + (p.size() == 2 ? "/" : p.substr(2));
+    }
+#endif
+    return p;
+}
+
+bool inSystemDir(const std::string& abs) {
+    return std::any_of(systemDirs().begin(), systemDirs().end(),
+                       [&](const std::string& d) { return under(abs, d); });
+}
+
+// An absolute path whose top-level folder doesn't exist is a pattern, not a place (grep '/api/v1').
+bool looksLikePattern(const std::string& abs) {
+    const fs::path ap(abs);
+    const fs::path rel = ap.relative_path();
+    if (rel.empty()) return false;
+    std::error_code ec;
+    return !fs::exists(ap.root_path() / *rel.begin(), ec);
 }
 
 }  // namespace
@@ -98,7 +126,12 @@ std::string Workspace::checkCommand(const std::string& command) const {
     for (auto it = std::sregex_iterator(command.begin(), command.end(), pathRe);
          it != std::sregex_iterator(); ++it) {
         std::string token = (*it)[1].str();
-        if (token.rfind("//", 0) == 0) continue;  // the tail of a URL (https://…)
+        if (token.rfind("//", 0) == 0) {
+            // After a colon it is the tail of a URL (https://…); otherwise a network share.
+            const size_t at = static_cast<size_t>((*it).position(1));
+            if (at > 0 && command[at - 1] == ':') continue;
+            return refusal(token);
+        }
         if (token == "/") {
             // The root only as a standalone word (find / …), not a regex
             // delimiter such as awk's gsub(/ /, …).
@@ -123,22 +156,64 @@ std::string Workspace::checkCommand(const std::string& command) const {
             }
             if (!fsCommands.count(fs::path(program).filename().string())) continue;
         }
-        const std::string expanded = expandHome(token);
+        const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
         const std::string abs = normalized(expanded);
-        const bool system = std::any_of(systemDirs().begin(), systemDirs().end(),
-                                        [&](const std::string& d) { return under(abs, d); });
-        if (system) continue;
-        // A path whose top-level folder doesn't exist is a pattern, not a place (grep '/api/v1').
-        const fs::path ap(abs);
-        const fs::path rel = ap.relative_path();
-        if (!rel.empty()) {
-            std::error_code ec;
-            if (!fs::exists(ap.root_path() / *rel.begin(), ec)) continue;
-        }
+        if (inSystemDir(abs) || looksLikePattern(abs)) continue;
         return refusal(token);
     }
+    // \\host\share, which the path pattern above does not see.
+    static const std::regex uncRe(R"((?:^|[\s'"=(,`])(\\\\[^\s\\'"]+))");
+    std::smatch unc;
+    if (std::regex_search(command, unc, uncRe)) return refusal(unc[1].str());
     return "";
+}
+
+bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& segments,
+                                const std::string& cwd) const {
+    auto inside = [this](const std::string& abs) {
+        return std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(abs, r); });
+    };
+    // `cd` in a pipeline changes nothing and `cd` after ; or && does, so a
+    // later word is checked against every folder the command could be in.
+    std::vector<std::string> folders = {normalized(cwd.empty() ? roots_.front() : fromShellPath(cwd))};
+    if (!inside(folders.front())) return false;
+    for (const auto& words : segments) {
+        if (words.empty()) return false;
+        const bool cd = words[0] == "cd";
+        if (cd && (words.size() != 2 || words[1] == "-")) return false;  // home, or the previous folder
+        for (size_t i = 1; i < words.size(); ++i) {
+            std::string w = words[i];
+            if (w.empty()) continue;
+            if (w[0] == '-') {
+                const size_t eq = w.find('=');
+                if (eq != std::string::npos) w = w.substr(eq + 1);
+                else if (w.find_first_of("/\\") != std::string::npos) return false;  // -f/etc/x
+                else continue;
+                if (w.empty()) continue;
+            }
+            if (w[0] == '~' && w != "~" && w.rfind("~/", 0) != 0) return false;  // ~other-user
+            // A component such as .* can match the parent folder.
+            for (size_t at = 0; at < w.size(); ++at) {
+                if (w[at] != '.' || (at > 0 && w[at - 1] != '/' && w[at - 1] != '\\')) continue;
+                const size_t end = w.find_first_of("/\\", at);
+                if (w.substr(at, end - at).find_first_of("*?[") != std::string::npos) return false;
+            }
+            const fs::path p = expandHome(fromShellPath(w));
+            const size_t known = folders.size();
+            for (size_t f = 0; f < known; ++f) {
+                const std::string abs = normalized(p.is_absolute() ? p : fs::path(folders[f]) / p);
+                if (inside(abs)) {
+                    if (cd) folders.push_back(abs);
+                    continue;
+                }
+                if (cd) return false;
+                if (p.has_root_directory() && (inSystemDir(abs) || looksLikePattern(abs))) continue;
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,

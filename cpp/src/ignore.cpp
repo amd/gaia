@@ -271,6 +271,12 @@ GitignoreMatcher GitignoreMatcher::forDirectory(const std::string& directory) {
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
         matcher.addFile((*it / ".gitignore").string());
     }
+    // A folder the caller named is searched even when the repository around it ignores it.
+    if (matcher.isIgnored(start.string(), /*isDirectory=*/true)) {
+        GitignoreMatcher own;
+        own.addFile((start / ".gitignore").string());
+        return own;
+    }
     return matcher;
 }
 

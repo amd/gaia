@@ -380,9 +380,12 @@ TEST_F(MCPRegistryTest, NonBooleanDisabledRaisesInsteadOfThrowingAJsonTypeError)
 }
 
 TEST_F(MCPRegistryTest, KeyringEnvReferenceRaisesActionableError) {
-    // What `gaia connectors` writes for a secret env value — the C++ runtime
-    // has no keychain support, so passing the reference string through as the
-    // token would hand the server a bogus credential.
+    // A reference with no keyring entry must be refused: passing the reference
+    // through as the token would hand the server a bogus credential.
+    setKeyringBackendForTesting(
+        [](const std::string&, const std::string&) -> std::optional<std::string> {
+            return std::nullopt;
+        });
     MCPRegistry registry = over(writeFile("mcp_servers.json", R"({
       "mcpServers": {
         "github": {
@@ -394,11 +397,12 @@ TEST_F(MCPRegistryTest, KeyringEnvReferenceRaisesActionableError) {
 
     try {
         registry.require("github");
-        FAIL() << "expected MCPRegistryError";
+        ADD_FAILURE() << "expected MCPRegistryError";
     } catch (const MCPRegistryError& e) {
         EXPECT_TRUE(contains(e.what(), "GITHUB_TOKEN"));
         EXPECT_TRUE(contains(e.what(), "keyring"));
     }
+    setKeyringBackendForTesting({});
 }
 
 TEST_F(MCPRegistryTest, NonStringArgRaisesNamingTheIndex) {
@@ -554,21 +558,24 @@ TEST_F(MCPRegistryTest, ResolvesEntryInTheShapePythonWrites) {
 }
 
 TEST_F(MCPRegistryTest, ConnectorsSecretBackedServerIsRefusedNotSilentlyMisconfigured) {
-    // `gaia connectors configure mcp-github` stores GITHUB_TOKEN in the OS
-    // keyring. The C++ runtime has no keychain, so this server is Python-only —
-    // and says so, instead of launching npx with a literal "$keyring" string
-    // as the token and failing somewhere inside GitHub's API.
+    // The fixture keeps GITHUB_TOKEN in the OS keyring. With no entry there the
+    // server is refused, not launched with a literal "$keyring" string as its token.
+    setKeyringBackendForTesting(
+        [](const std::string&, const std::string&) -> std::optional<std::string> {
+            return std::nullopt;
+        });
     fs::path fixture = fs::path(GAIA_TEST_FIXTURES_DIR) / "mcp_servers_python.json";
     MCPRegistry registry = over(fixture.string());
 
     try {
         registry.require("mcp-github");
-        FAIL() << "expected MCPRegistryError";
+        ADD_FAILURE() << "expected MCPRegistryError";
     } catch (const MCPRegistryError& e) {
         EXPECT_TRUE(contains(e.what(), "mcp-github"));
         EXPECT_TRUE(contains(e.what(), "GITHUB_TOKEN"));
         EXPECT_TRUE(contains(e.what(), "keyring"));
     }
+    setKeyringBackendForTesting({});
 }
 
 TEST_F(MCPRegistryTest, ResolvesThePackagedPythonMcpJson) {

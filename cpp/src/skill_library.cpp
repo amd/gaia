@@ -315,9 +315,13 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
     }
     const std::string filename = artifact.is_object() ? artifact.value("filename", "") : "";
     const std::string expected = artifact.is_object() ? artifact.value("sha256", "") : "";
-    if (filename.empty() || expected.empty() || filename.find_first_of("/\\") != std::string::npos) {
+    // The name goes into an unpack command line, so only plain file-name characters.
+    const bool plainName = filename.find_first_not_of(
+                               "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") == std::string::npos &&
+                           filename.rfind('-', 0) != 0 && filename.rfind('.', 0) != 0;
+    if (filename.empty() || expected.empty() || !plainName) {
         throw SkillError("The hub manifest for '" + name + "' " + ver +
-                         " has no artifact with a filename and sha256, so it can't be verified. "
+                         " has no artifact with a plain filename and a sha256, so it can't be verified. "
                          "This is a hub-side problem; report it.");
     }
     const std::string bytes = http.get("/skills/" + name + "/" + ver + "/" + filename).body;

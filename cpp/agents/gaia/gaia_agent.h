@@ -16,6 +16,7 @@
 #include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
 #include <gaia/memory_store.h>
+#include <gaia/process.h>
 #include <gaia/skill_library.h>
 #include <gaia/workspace.h>
 
@@ -42,6 +43,8 @@ public:
         std::string audioBaseUrl;    // empty = the agent's endpoint
         std::string imageModel;      // empty = no generate_image
         bool screenshots = false;    // take_screenshot (off unless asked: privacy)
+        // The shell this agent's commands run in; unset = one per process.
+        std::shared_ptr<ShellSession> shell;
         // Read on every call, so a chat can flip them mid-turn. Unset = on.
         std::shared_ptr<std::atomic<bool>> internetOff;    // nothing that goes online runs
         std::shared_ptr<std::atomic<bool>> memoryOff;      // memory neither read nor written

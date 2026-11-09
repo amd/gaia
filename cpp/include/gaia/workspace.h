@@ -36,6 +36,13 @@ public:
     /// "" when the command names no outside location, else the refusal.
     std::string checkCommand(const std::string& command) const;
 
+    /// True when a read-only command, split by splitShellCommand(), reads
+    /// nothing outside the roots and the system folders: every argument is
+    /// resolved against `cwd` (the shell's folder; "" = the primary root),
+    /// following `..`, `~` and links. False when `cwd` itself is outside.
+    bool readsStayInside(const std::vector<std::vector<std::string>>& segments,
+                         const std::string& cwd) const;
+
     /// Wrap a tool so each named string argument must pass checkPath().
     static ToolInfo confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
                             std::vector<std::string> pathArgs);

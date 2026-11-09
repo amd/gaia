@@ -30,7 +30,19 @@ void BashTools::registerAll(ToolRegistry& registry) {
 // bash_execute
 // ---------------------------------------------------------------------------
 
-ToolInfo BashTools::bashExecute() {
+ShellSession& BashTools::defaultSession() {
+    // One session per process, so cwd and exported variables survive between calls.
+    static ShellSession session("", detectShell());
+    return session;
+}
+
+ToolInfo BashTools::bashExecute() { return bashExecute(nullptr); }
+
+std::shared_ptr<ShellSession> BashTools::newSession(const std::string& dir) {
+    return std::make_shared<ShellSession>(dir, detectShell());
+}
+
+ToolInfo BashTools::bashExecute(std::shared_ptr<ShellSession> session) {
     ToolInfo info;
     info.name = "bash_execute";
     info.description =
@@ -47,7 +59,9 @@ ToolInfo BashTools::bashExecute() {
         {"timeout_ms", ToolParamType::INTEGER, /*required=*/false,
          "Timeout in milliseconds (default: 30000)"},
     };
-    info.callback = doBashExecute;
+    info.callback = [session](const json& args) {
+        return doBashExecute(session ? *session : defaultSession(), args);
+    };
     info.policy = ToolPolicy::CONFIRM;
     info.grantScope = [](const json& args) { return shellCommandScope(args.value("command", "")); };
     info.needsConfirm = [](const json& args) {
@@ -56,18 +70,9 @@ ToolInfo BashTools::bashExecute() {
     return info;
 }
 
-namespace {
-ShellSession& sharedSession() {
-    // One session per process, so cwd and exported variables survive between calls.
-    static ShellSession session("", BashTools::detectShell());
-    return session;
-}
-}  // namespace
+bool BashTools::setWorkingDirectory(const std::string& dir) { return defaultSession().setCwd(dir); }
 
-bool BashTools::setWorkingDirectory(const std::string& dir) { return sharedSession().setCwd(dir); }
-
-json BashTools::doBashExecute(const json& args) {
-    // Extract arguments
+json BashTools::doBashExecute(ShellSession& session, const json& args) {
     std::string command = args.value("command", "");
     if (command.empty()) {
         return {{"error", "command parameter is required"}};
@@ -77,10 +82,6 @@ json BashTools::doBashExecute(const json& args) {
     if (timeoutMs <= 0) {
         timeoutMs = DEFAULT_TIMEOUT_MS;
     }
-
-    // One session per process, so cwd and exported variables survive between
-    // calls. The CONFIRM policy and the output cap below are unchanged.
-    ShellSession& session = sharedSession();
 
     ProcessResult result = session.run(command, timeoutMs, MAX_OUTPUT_BYTES);
 

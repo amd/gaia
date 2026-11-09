@@ -299,36 +299,35 @@ curl http://localhost:8200/v1/chat/completions \
   }'
 ```
 
+The stream is OpenAI `chat.completion.chunk` events ending in `data: [DONE]`.
+While the agent works, extra chunks with an empty delta carry a `gaia` field
+(`tool_start`, `tool_end`, `thought`, `plan` and so on) so a client can show
+tool activity. Clients that only read `delta.content` ignore them.
+
 <Note>
-Streaming is **simulated**: the response is delivered as a single SSE
-`data:` chunk followed by `data: [DONE]`, not token-by-token. The
-agent runs its full tool loop before emitting the final answer, so
-real incremental token streaming isn't available through this endpoint
-yet. The SSE envelope is OpenAI-compatible, so streaming clients work
-unchanged.
+The answer arrives as one chunk after the tool events unless the server is
+started with `GAIA_STREAMING=1`, which streams it token by token.
 </Note>
+
+Each request stands alone: the conversation is whatever `messages` holds, and
+`system` messages are dropped. The agent runs one completion at a time; a
+request that arrives while another is running gets `409` with code `agent_busy`.
+
+#### `GET /v1/models`
+
+Lists the one model the agent runs on, in OpenAI's format.
 
 #### `GET /v1/tools`
 
-List all registered tools with their parameter schemas:
+List all registered tools with their parameters:
 
 ```bash
 curl http://localhost:8200/v1/tools | jq '.tools[].name'
 ```
 
-#### `POST /v1/tools/{name}`
-
-Execute a specific tool directly (bypass the LLM):
-
-```bash
-curl http://localhost:8200/v1/tools/bash_execute \
-  -H "Content-Type: application/json" \
-  -d '{"command": "df -h", "timeoutMs": 5000}'
-
-curl http://localhost:8200/v1/tools/file_read \
-  -H "Content-Type: application/json" \
-  -d '{"path": "/etc/hostname"}'
-```
+This route only lists tools. Running one directly (`POST /v1/tools/{name}`) is a
+core `ApiServer` option, `ServerOptions::exposeToolRoutes`, and `gaia-bash --serve`
+leaves it off, so tools run only when the model calls them.
 
 #### `GET /health`
 
@@ -336,8 +335,17 @@ Health check:
 
 ```bash
 curl http://localhost:8200/health
-# {"status":"ok","model":"Gemma-4-E4B-it-GGUF","tools":10,"port":8200}
+# {"status":"ok","version":"0.1.0","model":"Gemma-4-E4B-it-GGUF","tools":10,"busy":false}
 ```
+
+`version` is the GAIA C++ core version and `busy` is true while a completion is
+running.
+
+<Note>
+`gaia-bash --serve` binds to `127.0.0.1` with no API key and approves every tool
+call, so any program on this machine can run shell commands as you through it.
+It answers only requests addressed to a loopback host name.
+</Note>
 
 #### `GET /sessions`, `DELETE /sessions/{id}`
 
@@ -472,8 +480,10 @@ A quick demo showing the key features of `gaia-bash`:
 
 ```bash
 # From another terminal
-curl -s http://localhost:8200/v1/tools/script_lint \
-  -d '{"path":"compress_old_logs.sh"}' | jq .
+curl -s http://localhost:8200/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"lint compress_old_logs.sh"}]}' \
+  | jq -r '.choices[0].message.content'
 ```
 
 ### 5. Use via MCP from Claude Code

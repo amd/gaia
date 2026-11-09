@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <gaia/security.h>
 #include <gaia/tool_registry.h>
 #include <gaia/workspace.h>
 
@@ -71,6 +72,53 @@ TEST(WorkspaceTest, CommandChecks) {
     EXPECT_NE(ws.checkCommand("python3 -c \"open('" + (d.other / "f").string() + "')\""), "");
 #ifndef _WIN32
     EXPECT_EQ(ws.checkCommand("cat /etc/hosts 2>/dev/null; ls /tmp"), "") << "system dirs pass";
+#endif
+}
+
+TEST(WorkspaceTest, NetworkSharesAreOutside) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    EXPECT_NE(ws.checkCommand("cat //server/share/x"), "");
+    EXPECT_NE(ws.checkCommand("type \\\\server\\share\\x"), "");
+    EXPECT_NE(ws.checkCommand("cp notes.txt \"\\\\server\\share\""), "");
+    EXPECT_EQ(ws.checkCommand("curl -s http://localhost:8000//double"), "") << "a URL path, not a share";
+#ifdef _WIN32
+    // Git Bash spells a drive as /c/.
+    EXPECT_NE(ws.checkCommand("cat /c/Users/Public/x.txt"), "");
+    EXPECT_NE(ws.checkCommand("cat /cygdrive/c/Users/Public/x.txt"), "");
+#else
+    EXPECT_NE(ws.checkCommand("cat /proc/1/environ"), "") << "another program's environment";
+    EXPECT_EQ(ws.checkCommand("cat /proc/cpuinfo"), "");
+#endif
+}
+
+namespace {
+bool staysInside(const Workspace& ws, const std::string& command, const std::string& cwd) {
+    std::vector<std::vector<std::string>> segments;
+    if (!splitShellCommand(command, true, segments)) return false;
+    return ws.readsStayInside(segments, cwd);
+}
+}  // namespace
+
+TEST(WorkspaceTest, ReadsStayInside) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string cwd = d.work.string();
+    for (const char* ok : {"ls", "ls -la sub", "cat sub/../notes.txt", "find . -name '*.md'", "cd sub && ls",
+                           "grep -rn /api/v1 sub", "grep --include=*.py -rn x .", "cat notes.txt | wc -l"}) {
+        EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok;
+    }
+    for (const char* no : {"cat ../other/secret.txt", "cat sub/../../other/x", "ls ..", "cd .. && ls",
+                           "cd", "cd -", "cd sub && cat ../../other/x", "ls ~root", "ls ~", "ls .*",
+                           "cat sub/.?/other/x", "grep -f/etc/passwd x", "grep --file=../other/x y", "ls /"}) {
+        EXPECT_FALSE(staysInside(ws, no, cwd)) << no;
+    }
+    EXPECT_FALSE(staysInside(ws, "cat " + (d.other / "secret.txt").generic_string(), cwd));
+    EXPECT_FALSE(staysInside(ws, "ls", d.other.string())) << "the shell has left the chat's folders";
+    EXPECT_TRUE(staysInside(ws, "ls", "")) << "no folder yet means the first root";
+#ifndef _WIN32
+    EXPECT_TRUE(staysInside(ws, "cat /etc/hosts", cwd)) << "system folders are readable";
+    EXPECT_FALSE(staysInside(ws, "cat /proc/1/environ", cwd));
 #endif
 }
 

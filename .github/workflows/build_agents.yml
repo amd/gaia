@@ -177,6 +177,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: cpp/packaging
+
       - name: Download all platform artifacts
         uses: actions/download-artifact@v8
         with:
@@ -199,9 +203,18 @@ jobs:
           done
           find bundle -name checksums.sha256 -delete
 
+          # Every leg wrote its own Lemonade pin file at the same path, so the
+          # copy above kept one platform's. Rebuild it from all of them.
+          rm -f bundle/lemonade/agent_versions.gaia.json
+          python3 cpp/packaging/package_lemonade.py --out bundle/lemonade \
+            --merge artifacts/cpp-agents-*/lemonade/agent_versions.gaia.json
+
           : > bundle/CHECKSUMS.sha256
           for agent_dir in bundle/*/; do
             [ -d "$agent_dir" ] || continue
+            agent_id="$(basename "$agent_dir")"
+            # lemonade/ holds release archives, not a hub agent; hashed below.
+            [ "$agent_id" = "lemonade" ] && continue
             ( cd "$agent_dir"
               # Hash every shipped binary (everything except yaml/checksum files).
               : > checksums.sha256
@@ -213,14 +226,26 @@ jobs:
                 sha256sum "$f" >> checksums.sha256
               done
             )
-            agent_id="$(basename "$agent_dir")"
             sed "s|\$| (${agent_id})|" "${agent_dir}checksums.sha256" >> bundle/CHECKSUMS.sha256
           done
+
+          # The pin file is what Lemonade verifies against; this lists the same
+          # archives in sha256sum form so the bundle can be checked by hand.
+          ( cd bundle/lemonade
+            archives=(gaiacpp-*.tar.gz gaiacpp-*.zip)
+            for archive in "${archives[@]}"; do
+              [ -f "$archive" ] || { echo "::error::no Lemonade archive matches $archive"; exit 1; }
+            done
+            sha256sum "${archives[@]}" > checksums.sha256
+          )
+          sed "s|\$| (lemonade)|" bundle/lemonade/checksums.sha256 >> bundle/CHECKSUMS.sha256
 
           echo "=== release bundle ==="
           find bundle -type f | sort
           echo "=== aggregated checksums ==="
           cat bundle/CHECKSUMS.sha256
+          echo "=== Lemonade pins ==="
+          cat bundle/lemonade/agent_versions.gaia.json
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v7

@@ -234,7 +234,7 @@ GAIA_API std::string findAgentManifestNearExecutable();
 /// How Agent::loadSkillSet() actually brings a skill in and takes it out.
 ///
 /// SkillLibrary (gaia/skill_library.h) implements it: discovery across the
-/// skill roots and prompt injection of loaded bodies. Permission gating (#2800)
+/// skill roots and prompt injection of loaded bodies. Permission gating
 /// is still to come. An Agent without a loader still resolves a set —
 /// including throwing on an undeclared name — but registers nothing.
 class GAIA_API SkillLoader {
