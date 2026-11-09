@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"net/http"
 	"strings"
 
@@ -397,5 +398,5 @@ func detailSuffix(body string) string {
 	}
 	// Rune-wise: these bodies carry `Settings → Connections` and em dashes, and a
 	// byte cut through one of those renders as mojibake.
-	return "It said: " + clip(body, 240)
+	return "It said: " + textutil.Clip(body, 240)
 }

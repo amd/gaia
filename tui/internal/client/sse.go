@@ -247,7 +247,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
-		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
+		return nil, fmt.Errorf("the connection to the %s agent has closed; send your message again, and restart GAIA if it still fails", s.agentID)
 	}
 	runID, err := newRunID()
 	if err != nil {
@@ -563,7 +563,7 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case ctx.Err() != nil || !delivered:
-		// The user cancelled the turn (Esc / hub exit) — the UI already says so.
+		// The user cancelled the turn (Esc / quit) — the UI already says so.
 		s.opts.Logf("sse: '%s' run %s cancelled by the caller", s.agentID, handle.runID)
 	case runCtx.Err() != nil:
 		// Close() cancelled the run without the caller's context ending.
@@ -1070,8 +1070,8 @@ func displayedCard(tr event.CanonicalToolResultEvent) string {
 	return strings.Join(rows, "\n")
 }
 
-// Transcript returns a copy of the host-owned transcript pushed as `context`.
-func (s *SSEClient) Transcript() []Turn {
+// transcriptSnapshot returns a copy of the transcript pushed as `context`.
+func (s *SSEClient) transcriptSnapshot() []Turn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Turn(nil), s.transcript...)

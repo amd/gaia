@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // llamacppBackends are the backends Lemonade's /load accepts, the same list as
@@ -189,15 +191,6 @@ func BackendLabel(b string) string {
 	return b
 }
 
-// clip shortens s to at most n runes, ending in "…".
-func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n-1]) + "…"
-}
-
 // StatusLine is one line for a status bar or `gaia-tui status`:
 // "Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan, 64K ctx".
 func (s ServerInfo) StatusLine() string {
@@ -215,9 +208,9 @@ func (s ServerInfo) StatusLine() string {
 		return line + " · no chat model loaded"
 	}
 	if s.Chat.Backend == "remote" {
-		return line + " · " + clip(s.Chat.Name, 48) + " (cloud, runs remotely)"
+		return line + " · " + textutil.Clip(s.Chat.Name, 48) + " (cloud, runs remotely)"
 	}
-	line += " · " + clip(s.Chat.Name, 48) + " on " + BackendLabel(s.Chat.Backend)
+	line += " · " + textutil.Clip(s.Chat.Name, 48) + " on " + BackendLabel(s.Chat.Backend)
 	if s.Chat.FromDefault {
 		line += " (default)"
 	}

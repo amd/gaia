@@ -434,7 +434,6 @@ func (m ConfirmationModel) RunID() string       { return m.runID }
 func (m ConfirmationModel) Seq() uint64         { return m.seq }
 func (m ConfirmationModel) Action() string      { return m.action }
 func (m ConfirmationModel) State() ConfirmState { return m.state }
-func (m ConfirmationModel) Tier() RiskTier      { return m.tier }
 func (m ConfirmationModel) Pending() bool       { return m.state == ConfirmationPending }
 
 // Deliverable reports whether answering this prompt actually reaches the agent.
