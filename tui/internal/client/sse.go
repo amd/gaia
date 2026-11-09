@@ -249,7 +249,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
-		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
+		return nil, fmt.Errorf("the %s agent connection is closed; restart GAIA to reconnect", s.agentID)
 	}
 	runID, err := newRunID()
 	if err != nil {

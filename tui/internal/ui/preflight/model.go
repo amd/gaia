@@ -750,7 +750,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
+		// Matches chat: ctrl+c leaves the app, not just the screen.
 		m.Abandon()
 		m.Cancel()
 		m.provisionCh, m.phase = nil, phaseIdle

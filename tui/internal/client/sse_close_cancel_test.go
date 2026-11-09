@@ -111,6 +111,23 @@ func TestSSEClientCloseAfterACompletedRunDoesNotWait(t *testing.T) {
 	}
 }
 
+// A send after Close names a step the user can take; the hub screen it once
+// pointed at no longer exists.
+func TestSSEClientSendAfterCloseSaysToRestart(t *testing.T) {
+	f := newFakeRelay(t)
+	c := f.client(t)
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_, err := c.Send(context.Background(), "triage")
+	if err == nil {
+		t.Fatal("Send after Close returned nil error")
+	}
+	if !strings.Contains(err.Error(), "restart GAIA") || strings.Contains(err.Error(), "hub") {
+		t.Fatalf("Send after Close error = %q, want a restart hint and no hub reference", err)
+	}
+}
+
 // abandonOneRun starts a run that never ends and closes the client mid-run.
 func abandonOneRun(t *testing.T, f *fakeRelay) error {
 	t.Helper()
