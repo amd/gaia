@@ -29,6 +29,7 @@ class FakeTransport:
         self.pin_list = []
         self.deleted = []
         self.unpinned = []
+        self.reactions = []
         self.missed = 0
         self._next = 1000
 
@@ -69,6 +70,9 @@ class FakeTransport:
     def unpin(self, channel_id, message_id):
         self.unpinned.append(message_id)
         self.pin_list = [p for p in self.pin_list if p.id != message_id]
+
+    def react(self, channel_id, message_id, emoji):
+        self.reactions.append((message_id, emoji))
 
     def pin(self, channel_id, message_id):
         self.pinned.append(message_id)
@@ -1282,3 +1286,81 @@ def test_an_old_or_foreign_edit_gets_no_notice(late, author):
     clock.now += late
     ad.handle_edit(_edit(clock, first, "b", author=author))
     assert not [m for m in ad.transport.sent if m["text"] == da.EDIT_NOTICE]
+
+
+# ----------------------------------------------------------------------
+# Emoji reactions
+# ----------------------------------------------------------------------
+
+
+def test_the_question_tells_the_agent_emoji_and_reactions_work_here():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    assert "[react:" in ad._agent().turns[-1].text
+
+
+def test_a_reaction_lands_on_the_users_message_and_the_rest_is_the_reply():
+    ad, clock = make()
+    ad.on_ready()
+    msg = message(clock, "the build passed")
+    ad.handle_message(msg)
+    ad._on_agent_event(
+        {"type": "final", "answer": "Nice, that's the last blocker.\n[react: 🎉]"},
+        ad._agent().turns[-1],
+    )
+    assert ad.transport.reactions == [(msg.id, "🎉")]
+    assert ad.transport.sent[-1]["text"] == "Nice, that's the last blocker."
+
+
+def test_a_reaction_alone_posts_no_reply():
+    ad, clock = make()
+    ad.on_ready()
+    msg = message(clock, "thanks!")
+    ad.handle_message(msg)
+    sent_before = len(ad.transport.sent)
+    ad._on_agent_event(
+        {"type": "final", "answer": "[react: ❤️]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.reactions == [(msg.id, "❤️")]
+    assert len(ad.transport.sent) == sent_before
+    assert state.read_status().open_messages == []
+
+
+def test_a_bad_reaction_marker_is_dropped_not_shown():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+    ad._on_agent_event(
+        {"type": "final", "answer": "Hey!\n[react: thumbsup]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.reactions == []
+    assert ad.transport.sent[-1]["text"] == "Hey!"
+
+
+def test_a_failed_reaction_still_posts_the_reply():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "hi"))
+
+    def boom(*_args):
+        raise RuntimeError("Unknown Emoji")
+
+    ad.transport.react = boom
+    ad._on_agent_event(
+        {"type": "final", "answer": "Hey!\n[react: 👋]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.sent[-1]["text"] == "Hey!"
+
+
+def test_an_emoji_in_the_reply_text_lands_on_the_users_message_instead():
+    ad, clock = make()
+    ad.on_ready()
+    msg = message(clock, "my tests came back clean!")
+    ad.handle_message(msg)
+    ad._on_agent_event(
+        {"type": "final", "answer": "That's fantastic news 🎉 Enjoy it."},
+        ad._agent().turns[-1],
+    )
+    assert ad.transport.reactions == [(msg.id, "🎉")]
+    assert ad.transport.sent[-1]["text"] == "That's fantastic news. Enjoy it."

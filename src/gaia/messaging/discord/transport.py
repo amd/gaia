@@ -206,6 +206,14 @@ class GatewayTransport:
 
         self._call(go)
 
+    def react(self, channel_id: str, message_id: str, emoji: str) -> None:
+        async def go() -> None:
+            await self._channel(channel_id).get_partial_message(
+                int(message_id)
+            ).add_reaction(emoji)
+
+        self._call(go)
+
     def count_from_after(
         self, channel_id: str, author_id: str, after_id: str, bot_id: str = ""
     ) -> int:

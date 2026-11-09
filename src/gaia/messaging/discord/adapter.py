@@ -52,6 +52,7 @@ from gaia.messaging.bridge import (
     resolve_agent_argv,
 )
 from gaia.messaging.discord import github_watch, state
+from gaia.messaging.expression import CHAT_STYLE_NOTE, take_reaction
 from gaia.security import is_scratch_path
 
 log = get_logger(__name__)
@@ -288,6 +289,8 @@ class Transport(Protocol):
     def pin(self, channel_id: str, message_id: str) -> None: ...
 
     def unpin(self, channel_id: str, message_id: str) -> None: ...
+
+    def react(self, channel_id: str, message_id: str, emoji: str) -> None: ...
 
 
 # ----------------------------------------------------------------------
@@ -1567,6 +1570,15 @@ class DiscordAdapter:
                     target.reply_id = ""
                 return
             answer = kept
+        if not failed:
+            emoji, answer = take_reaction(answer)
+            if emoji and target.message_id:
+                self._react(target.channel_id, target.message_id, emoji)
+                if not answer.strip():
+                    if target.reply_id:
+                        self._delete(target.channel_id, target.reply_id)
+                        target.reply_id = ""
+                    return
         if target.heading:
             answer = f"{target.heading}\n{answer}"
         for chunk in split_message(untable(answer) or "-# (no answer)"):
@@ -1591,6 +1603,14 @@ class DiscordAdapter:
             self.transport.edit(channel_id, message_id, text, **kwargs)
         except Exception as e:  # noqa: BLE001 - an edit failure must not kill the turn
             log.warning("Could not edit Discord message %s: %s", message_id, e)
+
+    def _react(self, channel_id: str, message_id: str, emoji: str) -> None:
+        try:
+            self.transport.react(channel_id, message_id, emoji)
+        except Exception as e:  # noqa: BLE001 - a lost reaction must not kill the turn
+            log.warning(
+                "Could not react %s to Discord message %s: %s", emoji, message_id, e
+            )
 
     def _delete(self, channel_id: str, message_id: str) -> None:
         self._untrack(message_id)
@@ -1665,12 +1685,12 @@ class _DiscordSink:
 
 def _turn_text(questions: List[str]) -> str:
     if len(questions) == 1:
-        return f"{questions[0]}\n\n{DISCORD_REPLY_NOTE}"
+        return f"{questions[0]}\n\n{DISCORD_REPLY_NOTE}\n\n({CHAT_STYLE_NOTE})"
     joined = "\n\n".join(questions)
     return (
         f"{joined}\n\n(The user sent these {len(questions)} messages in a row; "
         "answer them together in one reply. A later one can change or cancel an "
-        f"earlier one.)\n\n{DISCORD_REPLY_NOTE}"
+        f"earlier one.)\n\n{DISCORD_REPLY_NOTE}\n\n({CHAT_STYLE_NOTE})"
     )
 
 
