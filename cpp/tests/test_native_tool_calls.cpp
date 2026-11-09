@@ -226,7 +226,7 @@ TEST(NativeToolCallsTest, ToolCallingModelSendsToolsAndToolChoice) {
 
     ASSERT_TRUE(body.contains("tools"));
     ASSERT_TRUE(body["tools"].is_array());
-    EXPECT_EQ(body["tools"].size(), 3u);  // add, echo, ping
+    EXPECT_EQ(body["tools"].size(), 4u);  // add, echo, ping, read_tool_output
     EXPECT_EQ(body["tool_choice"], "auto");
 
     // Registry order is alphabetical (std::map): add, echo.
@@ -315,9 +315,10 @@ TEST(NativeToolCallsTest, DisabledToolsAreExcludedFromTheSchemas) {
 
     json body = json::parse(mock.receivedBodies().back());
     ASSERT_TRUE(body.contains("tools"));
-    ASSERT_EQ(body["tools"].size(), 2u);
+    ASSERT_EQ(body["tools"].size(), 3u);
     EXPECT_EQ(body["tools"][0]["function"]["name"], "add");
     EXPECT_EQ(body["tools"][1]["function"]["name"], "ping");
+    EXPECT_EQ(body["tools"][2]["function"]["name"], "read_tool_output");
 }
 
 // ---------------------------------------------------------------------------
@@ -948,25 +949,48 @@ TEST(NativeToolCallsTest, CancelBetweenParallelCallsLeavesNoUnansweredToolCall) 
 
 TEST(NativeToolCallsTest, MalformedArgsInABatchRunNothingAndDoNotThrow) {
     // Call A is well-formed, call B is truncated. Decoding happens up front, so
-    // A's side effects never happen — and processQuery reports via "result"
-    // rather than throwing out of the public API.
+    // A's side effects never happen; both calls are answered with the problem
+    // and the model gets to resend.
     bench::MockLlmServer mock;
     const std::string body = toolCallsResponse(
         R"([{"id":"call_a","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}},)"
         R"({"id":"call_b","type":"function","function":{"name":"add","arguments":"{\"a\":"}}])");
     mock.pushResponse(body);
-    mock.pushResponse(body);
+    mock.pushResponse(kPlainAnswer);
 
     ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
     agent.initForTest();
 
     json result;
-    ASSERT_NO_THROW(result = agent.processQuery("go", 2));
+    ASSERT_NO_THROW(result = agent.processQuery("go", 5));
     EXPECT_TRUE(agent.executed.empty())
         << "no tool may run when a sibling call in the batch is malformed";
-    EXPECT_NE(result["result"].get<std::string>().find("LLM error"), std::string::npos);
-    // The turn was still recorded — the history write must not be skipped.
+    EXPECT_EQ(result["result"], "All done.");
+    const json second = json::parse(mock.receivedBodies()[1]);
+    int toolReplies = 0;
+    for (const auto& m : second["messages"]) {
+        if (m["role"] == "tool") {
+            ++toolReplies;
+            EXPECT_NE(m["content"].get<std::string>().find("not valid JSON"), std::string::npos);
+        }
+    }
+    EXPECT_EQ(toolReplies, 2) << "every advertised call needs a reply";
     EXPECT_FALSE(agent.history().empty());
+}
+
+TEST(NativeToolCallsTest, RepeatedMalformedArgsEndTheTurn) {
+    bench::MockLlmServer mock;
+    const std::string body = toolCallsResponse(
+        R"([{"id":"call_b","type":"function","function":{"name":"add","arguments":"{\"a\":"}}])");
+    mock.pushResponses(body, 3);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    json result = agent.processQuery("go", 10);
+
+    EXPECT_EQ(result["status"], "error");
+    EXPECT_NE(result["result"].get<std::string>().find("malformed tool arguments"),
+              std::string::npos);
 }
 
 TEST(NativeToolCallsTest, NeverPolicyIgnoresVolunteeredToolCalls) {
@@ -1171,10 +1195,10 @@ std::string promptJsonEcho(const std::string& msg) {
            msg + R"(\"}}"}}]})";
 }
 
-const char* kLoopStopped = "Task stopped due to repeated tool call loop.";
-
 } // namespace
 
+// The Nth identical call is refused with a nudge instead of run; a model that
+// takes the hint carries on to its answer.
 TEST(LoopDetectionTest, NativeLoopStillCaughtAfterLongDistinctHistory) {
     bench::MockLlmServer mock;
     int id = 0;
@@ -1188,15 +1212,22 @@ TEST(LoopDetectionTest, NativeLoopStillCaughtAfterLongDistinctHistory) {
     agent.initForTest();
     json result = agent.processQuery("go", 50);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "All done.");
     // 30 distinct + 3 identical run; the 4th identical one is refused.
     EXPECT_EQ(agent.executed.size(), 33u);
+    const auto bodies = mock.receivedBodies();
+    const json last = json::parse(bodies.back());
+    const auto& msgs = last["messages"];
+    EXPECT_NE(msgs[msgs.size() - 1]["content"].get<std::string>().find("identical call"),
+              std::string::npos)
+        << "the refused call must be answered with the nudge";
 }
 
 TEST(LoopDetectionTest, PromptJsonLoopStillCaughtAfterLongDistinctHistory) {
     bench::MockLlmServer mock;
     for (int i = 0; i < 30; ++i) mock.pushResponse(promptJsonEcho("m" + std::to_string(i)));
     for (int i = 0; i < 4; ++i) mock.pushResponse(promptJsonEcho("same"));
+    mock.pushResponse(R"({"choices":[{"message":{"content":"{\"answer\":\"done differently\"}"}}]})");
 
     AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
     cfg.maxSteps = 50;
@@ -1204,16 +1235,16 @@ TEST(LoopDetectionTest, PromptJsonLoopStillCaughtAfterLongDistinctHistory) {
     agent.initForTest();
     json result = agent.processQuery("go", 50);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "done differently");
     EXPECT_EQ(agent.executed.size(), 33u);
 }
 
-TEST(LoopDetectionTest, InterruptedRunIsNotALoop) {
-    // A A A B A A A: never four identical in a row, so every call runs.
+// A model that ignores the nudge is stopped, and one tool-free call asks it to wrap up.
+TEST(LoopDetectionTest, LoopAfterNudgeStopsWithClosingAnswer) {
     bench::MockLlmServer mock;
     int id = 0;
-    for (const char* m : {"a", "a", "a", "b", "a", "a", "a"}) mock.pushResponse(nativeEcho(m, ++id));
-    mock.pushResponse(kPlainAnswer);
+    for (int i = 0; i < 8; ++i) mock.pushResponse(nativeEcho("same", ++id));
+    mock.pushResponse(R"({"choices":[{"message":{"role":"assistant","content":"Partial: echoed same."}}]})");
 
     AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
     cfg.maxSteps = 20;
@@ -1221,43 +1252,11 @@ TEST(LoopDetectionTest, InterruptedRunIsNotALoop) {
     agent.initForTest();
     json result = agent.processQuery("go", 20);
 
-    EXPECT_EQ(result["result"], "All done.");
-    EXPECT_EQ(agent.executed.size(), 7u);
-}
-
-TEST(LoopDetectionTest, SameToolDifferentArgsIsNotALoop) {
-    bench::MockLlmServer mock;
-    int id = 0;
-    for (int i = 0; i < 8; ++i) mock.pushResponse(nativeEcho("v" + std::to_string(i % 2), ++id));
-    mock.pushResponse(kPlainAnswer);
-
-    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
-    cfg.maxSteps = 20;
-    ToolAgent agent(cfg);
-    agent.initForTest();
-    json result = agent.processQuery("go", 20);
-
-    EXPECT_EQ(result["result"], "All done.");
-    EXPECT_EQ(agent.executed.size(), 8u);
-}
-
-TEST(LoopDetectionTest, SmallestThresholdStopsOnSecondIdenticalCall) {
-    bench::MockLlmServer mock;
-    int id = 0;
-    mock.pushResponse(nativeEcho("x", ++id));
-    mock.pushResponse(nativeEcho("y", ++id));
-    mock.pushResponse(nativeEcho("y", ++id));
-    mock.pushResponse(kPlainAnswer);
-
-    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
-    cfg.maxSteps = 10;
-    cfg.maxConsecutiveRepeats = 2;
-    ToolAgent agent(cfg);
-    agent.initForTest();
-    json result = agent.processQuery("go", 10);
-
-    EXPECT_EQ(result["result"], kLoopStopped);
-    EXPECT_EQ(agent.executed.size(), 2u);
+    EXPECT_EQ(result["result"], "Partial: echoed same.");
+    // 3 run, 4th nudged, window cleared: 3 more run, the next is the second loop.
+    EXPECT_EQ(agent.executed.size(), 6u);
+    const json closing = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(closing["tool_choice"], "none") << "the closing call must not let the model call tools";
 }
 
 TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
@@ -1275,6 +1274,6 @@ TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
     agent.initForTest();
     json result = agent.processQuery("go", 10);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "All done.");
     EXPECT_EQ(agent.executed.size(), 5u);
 }

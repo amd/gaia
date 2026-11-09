@@ -43,6 +43,50 @@ std::string pythonStr(const json& value) {
     return value.dump();
 }
 
+/// Validate a Streamable HTTP entry. `${VAR}` in header values is left as-is:
+/// MCPClient::fromConfig() expands it at connect time, so a reconnect re-reads it.
+json normalizeHttpEntry(const std::string& id, const json& entry, const std::string& where) {
+    const bool urlOk = entry.contains("url") && entry["url"].is_string() &&
+                       (entry["url"].get<std::string>().rfind("http://", 0) == 0 ||
+                        entry["url"].get<std::string>().rfind("https://", 0) == 0);
+    if (!urlOk) {
+        throw MCPRegistryError(
+            "MCP server '" + id + "' is an HTTP server but has no usable \"url\"" + where +
+            ". Set it to the server's MCP endpoint, e.g. "
+            "{\"type\": \"http\", \"url\": \"http://localhost:8000/mcp\"}.");
+    }
+
+    json out = entry;
+    json headers = json::object();
+    if (entry.contains("headers")) {
+        if (!entry["headers"].is_object()) {
+            throw MCPRegistryError(
+                "MCP server '" + id + "': \"headers\" must be an object of string values, got " +
+                typeName(entry["headers"]) + where + ".");
+        }
+        for (const auto& kv : entry["headers"].items()) {
+            const json& value = kv.value();
+            if (value.is_string()) {
+                headers[kv.key()] = value;
+            } else if (value.is_object() && value.contains("$keyring")) {
+                throw MCPRegistryError(
+                    "MCP server '" + id + "' keeps its \"" + kv.key() +
+                    "\" header in the OS keyring (reference " + value["$keyring"].dump() +
+                    ")" + where + ", and this runtime has no keychain support — passing the "
+                    "reference through would hand the server a bogus credential. Use "
+                    "\"${ENV_VAR}\" in the header value instead, or launch this server from "
+                    "the Python runtime, which resolves keyring references.");
+            } else {
+                throw MCPRegistryError(
+                    "MCP server '" + id + "': headers[\"" + kv.key() +
+                    "\"] must be a string, got " + typeName(value) + where + ".");
+            }
+        }
+    }
+    out["headers"] = std::move(headers);
+    return out;
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -228,22 +272,34 @@ json MCPRegistry::normalizeEntry(const std::string& id, const json& entry) const
         }
     }
 
-    // Same gate as Python's MCPClientManager: stdio is the only transport
-    // either runtime speaks. Saying so beats "has no usable command", which
+    // Naming an unsupported transport beats "has no usable command", which
     // sends the reader off fixing the wrong line.
+    std::string transport = "stdio";
     if (entry.contains("type")) {
         if (!entry["type"].is_string()) {
             throw MCPRegistryError(
                 "MCP server '" + id + "': \"type\" must be a string, got " +
                 typeName(entry["type"]) + where + ".");
         }
-        const std::string transport = entry["type"].get<std::string>();
-        if (transport != "stdio") {
+        transport = entry["type"].get<std::string>();
+        if (transport != "stdio" && transport != "http" && transport != "streamable-http") {
             throw MCPRegistryError(
                 "MCP server '" + id + "' uses the '" + transport + "' transport" + where +
-                ", and GAIA's MCP client only speaks stdio. Configure a stdio command for "
-                "this server, or drop it from the config.");
+                ", and GAIA's C++ MCP client only speaks stdio and http (Streamable HTTP). "
+                "Configure a stdio command or a Streamable HTTP url for this server, or drop "
+                "it from the config.");
         }
+    } else if (entry.contains("url")) {
+        if (entry.contains("command")) {
+            throw MCPRegistryError(
+                "MCP server '" + id + "' has both \"command\" and \"url\"" + where +
+                ". Set \"type\" to \"stdio\" or \"http\" to say which transport to use.");
+        }
+        transport = "http";
+    }
+
+    if (transport != "stdio") {
+        return normalizeHttpEntry(id, entry, where);
     }
 
     if (!entry.contains("command") || !entry["command"].is_string() ||

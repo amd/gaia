@@ -231,7 +231,8 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
             return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
         }
     } else if (!tool->parameters.empty()) {
-        // Auto-validate against declared parameter schema
+        // Small models send "5" for 5 and "true" for true; accept the obvious ones.
+        effectiveArgs = coerceArgsToSchema(tool->parameters, effectiveArgs);
         std::string validationError = validateArgsAgainstSchema(tool->parameters, effectiveArgs);
         if (!validationError.empty()) {
             return json{{"status", "error"}, {"error", "Invalid arguments for '" + resolvedName + "': " + validationError}};
@@ -290,6 +291,35 @@ std::string ToolRegistry::toLower(const std::string& s) {
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
+}
+
+json ToolRegistry::coerceArgsToSchema(const std::vector<ToolParameter>& params,
+                                      const json& args) {
+    if (!args.is_object()) return args;
+    json out = args;
+    for (const auto& param : params) {
+        auto it = out.find(param.name);
+        if (it == out.end() || !it->is_string()) continue;
+        const std::string s = it->get<std::string>();
+        if (s.empty()) continue;
+        try {
+            size_t used = 0;
+            if (param.type == ToolParamType::INTEGER) {
+                long long v = std::stoll(s, &used);
+                if (used == s.size()) *it = v;
+            } else if (param.type == ToolParamType::NUMBER) {
+                double v = std::stod(s, &used);
+                if (used == s.size()) *it = v;
+            } else if (param.type == ToolParamType::BOOLEAN) {
+                const std::string l = toLower(s);
+                if (l == "true") *it = true;
+                else if (l == "false") *it = false;
+            }
+        } catch (const std::exception&) {
+            // Not a number: leave it for the type check to reject with its own message.
+        }
+    }
+    return out;
 }
 
 std::string ToolRegistry::validateArgsAgainstSchema(

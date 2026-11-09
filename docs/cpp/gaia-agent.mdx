@@ -1,0 +1,152 @@
+---
+title: "GAIA Agent (native)"
+description: "gaia-cpp: the general-purpose GAIA agent as one small native binary, for headless runs, an OpenAI-compatible server, and Lemonade's agent host"
+icon: "sparkles"
+---
+
+<Info>
+  **First time here?** Complete the [C++ Framework Setup](/cpp/setup) guide first.
+</Info>
+
+`gaia-cpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands, edits code and fetches web pages. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
+
+It runs three ways:
+
+| Mode | Command | For |
+|---|---|---|
+| Interactive | `gaia-cpp` | A person at a terminal |
+| Headless | `gaia-cpp -p "prompt"` | Scripts, CI, eval harnesses: answer on stdout, exit code 0 or 1 |
+| Server | `gaia-cpp serve` | Apps and [Lemonade](#lemonade-integration): OpenAI-compatible `/v1/chat/completions` |
+
+## Quick start
+
+```bash
+cd cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target gaia-cpp
+```
+
+With Lemonade running and a model downloaded:
+
+```bash
+./build/gaia-cpp -p "Summarize the CSV files in this folder" -m Qwen3.6-35B-A3B-GGUF
+```
+
+Headless runs deny tools that change things (shell, writes, web) unless you pass `--dangerously-skip-permissions`; each denial is reported on stderr.
+
+## Choosing the model endpoint
+
+`gaia-cpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
+
+1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, and `Gemma-4-E4B-it-GGUF`
+2. The settings file: `--config FILE`, else `$GAIA_CPP_CONFIG`, else `~/.config/gaia-cpp/config.json` (`%APPDATA%\gaia-cpp\config.json` on Windows) when it exists
+3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`
+4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--native-tools`
+
+The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
+
+`gaia-cpp` loads the model at `contextSize` only through Lemonade's `/api/v1` endpoints. Through `/v1`, or any other server, the model runs at whatever window the server gives it.
+
+`--provider fireworks` is shorthand for Fireworks' endpoint with `FIREWORKS_API_KEY` and native tool calls:
+
+```bash
+gaia-cpp -p "…" --provider fireworks -m accounts/fireworks/models/deepseek-v4p1-flash
+```
+
+### Settings file
+
+```json
+{
+  "baseUrl": "http://localhost:13305/api/v1",
+  "modelId": "Qwen3.6-35B-A3B-GGUF",
+  "contextSize": 65536,
+  "apiKeyEnv": "LEMONADE_API_KEY",
+  "nativeToolCalls": "always",
+  "mcpConfig": "mcp.json"
+}
+```
+
+Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade` or `fireworks`) and `mcpConfig` (relative to the settings file) are the two extras.
+
+### MCP servers
+
+`--mcp-config FILE` connects every server in an `mcp.json` (`mcpServers` object). Both transports work: `command`/`args` for stdio, and `url` (or `"type": "http"`) for Streamable HTTP, such as Lemonade's own MCP server. Header values may reference variables, for example `"Authorization": "Bearer ${LEMONADE_API_KEY}"`; an unset variable is an error. A server that fails to connect stops the agent.
+
+### Skills
+
+`gaia-cpp` reads the same `SKILL.md` skills as the Python agent. It lists installed skills in its prompt by name and description, and loads a skill's instructions with `load_skill` when the request calls for it. It looks in these folders, and an earlier folder's skill wins over a same-named one later (`list_skills` reports the shadowed copy):
+
+1. `skills/` beside the `gaia-cpp` binary
+2. `~/.gaia/skills/` (`$GAIA_HOME/skills` when `GAIA_HOME` is set)
+3. `./.claude/skills/` and `~/.claude/skills/`: loadable by name, not listed
+
+A skill that ships Python tools (`tools.py`) loads as instructions only, and `load_skill` says so. `--no-skills` leaves skills out.
+
+## Headless runs
+
+```bash
+gaia-cpp -p "prompt" --output-format json --cwd ./task
+echo "prompt" | gaia-cpp -p
+gaia-cpp --prompt-file prompt.txt
+```
+
+`--output-format json` prints one line:
+
+```json
+{"result": "…", "status": "success", "steps": 5, "tool_errors": 0,
+ "model": "…", "duration_s": 6.0, "peak_rss_mb": 14.9,
+ "usage": {"prompt_tokens": 17831, "completion_tokens": 735, "total_tokens": 18566}}
+```
+
+`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. Progress goes to stderr, so stdout carries only the answer.
+
+## Server mode
+
+```bash
+SERVE_KEY=$(openssl rand -hex 32) gaia-cpp serve --port 0 --server-key-env SERVE_KEY
+```
+
+Once bound, the server prints one JSON line on stdout, so a supervisor learns the port:
+
+```json
+{"event": "ready", "url": "http://127.0.0.1:41733", "model": "…", "version": "0.1.0"}
+```
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | Run the agent on the conversation. With `stream: true`, steps and tool activity arrive live as empty-delta `chat.completion.chunk`s carrying a `gaia` field, and the answer follows when the run ends |
+| `GET /v1/models` | The agent's model |
+| `GET /v1/tools` | The agent's tools and their parameters |
+| `GET /health` | Status, version, `busy`. Open without a key, for readiness probes |
+| `POST /v1/tools/:name` | Run a tool directly. Off unless `--expose-tool-routes` |
+
+Each request carries its whole conversation, so the server keeps no state between requests. It runs one completion at a time and answers a second with 409. A client that disconnects from a stream cancels the run. A run that fails, runs out of steps or is cancelled comes back as an error (HTTP 500, or an error event on a stream) whose `code` is the run's status, with the agent's own summary as the message; it never ends with `finish_reason: "stop"`.
+
+The server binds `127.0.0.1` and refuses to bind any other address without a key. It sends no CORS headers and rejects requests that carry an `Origin` header unless you allow that origin with `--allow-origin`, and it rejects a `Host` header that isn't `localhost` or a loopback address. A web page in the user's browser therefore can't drive the agent. Tools run without confirmation in this mode: whoever starts the server and holds its key owns that decision.
+
+## Lemonade integration
+
+Lemonade's agent host installs agents from a pinned GitHub release asset, configures them for the local server, and launches them (see Lemonade's `docs/guide/agents.md`). `gaia-cpp` provides what that contract needs:
+
+| Lemonade needs | gaia-cpp provides |
+|---|---|
+| A release asset per platform, binary at the archive root, pinned by SHA-256 | `cpp/packaging/package_lemonade.py` builds `gaia-cpp-<os>-<arch>.tar.gz` (`.zip` on Windows) and the `agent_versions.json` checksum entry; `build_agents.yml` runs it for each platform |
+| Point the agent at this server, without writing the key to disk | The settings file (`baseUrl`, `modelId`, `contextSize`). When lemond has a key, the host adds `apiKeyEnv: "LEMONADE_API_KEY"` and passes the key in the environment; without one it leaves `apiKeyEnv` out |
+| Lemonade's tools in the agent | `mcpConfig` naming Lemonade's MCP server by URL |
+| A launch command for a terminal | `gaia-cpp -m <model>` (interactive) |
+| A served agent | `gaia-cpp serve --port 0 --server-key-env <VAR>`, ready line on stdout, `GET /health` for readiness |
+| No surprise upgrades | `--version`; the binary has no self-update |
+
+Release archives link the C++ runtime statically (`GAIA_STATIC_CXX_RUNTIME=ON`) and need only OpenSSL 3, zlib and zstd from the system on Linux. glibc is the floor of the build host, so build Linux releases on the oldest distribution you support (CI uses `ubuntu-latest`).
+
+## What the agent loop handles
+
+- **Transient failures:** connection errors and HTTP 408, 409, 425, 429 and 5xx are retried with exponential backoff (`llmRetries`, default 3). Other errors fail the turn with the server's message.
+- **Full context window:** on an overflow error, older tool outputs are replaced with references and the request is sent once more.
+- **Large tool output:** output beyond `maxToolResultChars` (default 16000) keeps its head and tail in the conversation; the model reads the rest with `read_tool_output`.
+- **Malformed tool calls:** invalid arguments are returned to the model to resend, up to three times in a row. Whole-string numbers and `"true"`/`"false"` are converted to the declared parameter type.
+- **Loops:** the fourth identical call in a row is refused with a note asking the model to change course; a second loop ends the turn.
+- **Step budget:** the model is told when few steps remain (default budget 50). At the limit, one call without tools asks for an honest summary of what was done and what wasn't.
+- **Reasoning text:** `<think>…</think>` blocks never reach the answer. A reply that is empty, for example reasoning cut off by `maxTokens`, is asked for once more.
+- **Cancel:** `requestCancel()` (Ctrl+C, or a server client disconnecting) stops the run at the next step, and mid-stream when the agent streams (`GAIA_STREAMING=1`). A second Ctrl+C exits at once, for a model call or tool that won't return.
+- **Web access:** `web_fetch` follows redirects itself and refuses any hop that resolves to a loopback, private, link-local or metadata address, so a page can't steer the agent at Lemonade or other local services. `GAIA_WEB_FETCH_ALLOW_PRIVATE=1` allows the local network.

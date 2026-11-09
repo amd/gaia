@@ -235,6 +235,13 @@ public:
     bool debug() const { return debug_; }
     void setDebug(bool d) { debug_ = d; http_.setDebug(d); }
 
+    /// Sends `Authorization: Bearer <key>` on every request; empty removes it.
+    void setApiKey(const std::string& key);
+    bool hasApiKey() const { return hasApiKey_; }
+
+    /// Polled on every streamed chunk; returning true ends the stream early.
+    void setAbortCheck(std::function<bool()> check) { abortCheck_ = std::move(check); }
+
 private:
     /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.
     static std::string normalizeUrl(const std::string& url);
@@ -258,6 +265,8 @@ private:
     std::string model_;
     int contextSize_ = 0;
     bool debug_ = false;
+    bool hasApiKey_ = false;
+    std::function<bool()> abortCheck_;
     HttpClient http_;
 };
 

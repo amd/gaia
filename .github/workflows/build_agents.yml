@@ -54,12 +54,18 @@ jobs:
           - os: windows-latest
             platform: win-x64
             triplet: x64-windows-static
+            lemonade_os: windows
+            lemonade_arch: x64
           - os: ubuntu-latest
             platform: linux-x64
             triplet: x64-linux-static
+            lemonade_os: linux
+            lemonade_arch: x64
           - os: macos-latest
             platform: darwin-arm64
             triplet: arm64-osx-static
+            lemonade_os: darwin
+            lemonade_arch: arm64
 
     env:
       # vcpkg binary cache so static OpenSSL is built once and reused across runs.
@@ -119,6 +125,7 @@ jobs:
             -DGAIA_BUILD_EXAMPLES=ON \
             -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
             -DGAIA_BUILD_BENCHMARKS=OFF \
+            -DGAIA_STATIC_CXX_RUNTIME=ON \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/cpp/triplets" \
@@ -134,6 +141,15 @@ jobs:
           --build-dir cpp/build
           --agents-dir cpp/agents
           --out dist
+
+      - name: Package gaia-cpp for Lemonade (${{ matrix.lemonade_os }}-${{ matrix.lemonade_arch }})
+        run: >-
+          python cpp/packaging/package_lemonade.py
+          --build-dir cpp/build
+          --os ${{ matrix.lemonade_os }}
+          --arch ${{ matrix.lemonade_arch }}
+          --version ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.0.0-dev' }}
+          --out dist/lemonade
 
       - name: Show packaged artifacts
         shell: bash

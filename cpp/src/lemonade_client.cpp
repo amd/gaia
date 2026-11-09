@@ -160,6 +160,16 @@ void LemonadeClient::setBaseUrl(const std::string& url) {
     http_.setBaseUrl(baseUrl_);
 }
 
+void LemonadeClient::setApiKey(const std::string& key) {
+    if (key.empty()) {
+        http_.removeDefaultHeader("Authorization");
+        hasApiKey_ = false;
+        return;
+    }
+    http_.setDefaultHeader("Authorization", "Bearer " + key);
+    hasApiKey_ = true;
+}
+
 // ---------------------------------------------------------------------------
 // Low-level HTTP helpers — thin forwards to gaia::HttpClient
 // ---------------------------------------------------------------------------
@@ -427,13 +437,17 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
     httpPostStreaming(
         "/chat/completions",
         body.dump(),
-        [&parser, &rawBytes](const char* data, size_t len) -> bool {
+        [this, &parser, &rawBytes](const char* data, size_t len) -> bool {
+            if (abortCheck_ && abortCheck_()) return false;
             rawBytes.append(data, len);
             return parser.feed(data, len);
         },
         timeoutSec
     );
 
+    if (abortCheck_ && abortCheck_() && !parser.done()) {
+        throw std::runtime_error("Stream stopped: the request was cancelled.");
+    }
     parser.finish();
 
     if (parser.hasError()) {

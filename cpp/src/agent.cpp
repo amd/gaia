@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/agent.h"
+#include "gaia/http_client.h"
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <deque>
 #include <iostream>
 #include <set>
@@ -120,6 +123,10 @@ Agent::Agent(const AgentConfig& config)
         }
     }
 
+    config_.apiKey = resolveApiKey(config_);
+    lemonade_.setApiKey(config_.apiKey);
+    lemonade_.setAbortCheck([this] { return cancelled_.load(); });
+
     // Create console based on config
     if (config_.silentMode) {
         console_ = std::make_unique<SilentConsole>();
@@ -152,14 +159,17 @@ AgentConfig Agent::config() const {
 
 void Agent::setConfig(const AgentConfig& newConfig) {
     newConfig.validate();
+    const std::string key = resolveApiKey(newConfig);
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_ = newConfig;
+        config_.apiKey = key;
         modelEnsured_ = false;
         systemPromptDirty_ = true;
     }
     // Update LemonadeClient outside configMutex_ to avoid holding the lock
     // across external calls (guards against future LemonadeClient → Agent callbacks).
+    lemonade_.setApiKey(key);
     lemonade_.setBaseUrl(newConfig.baseUrl);
     lemonade_.setModel(newConfig.modelId);
     lemonade_.setContextSize(newConfig.contextSize);
@@ -541,7 +551,7 @@ UsageStats extractUsage(const json& responseJson) {
 } // namespace
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
-                                const AgentConfig& cfg) {
+                                const AgentConfig& cfg, bool allowTools) {
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
@@ -566,12 +576,14 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
     // Native OpenAI tool calling — the request keeps exactly its legacy shape
     // when this is off, so non-tool-calling models see a byte-identical body.
-    const bool nativeTools = cfg.useNativeToolCalls();
-    if (nativeTools) {
+    const bool nativeTools = allowTools && cfg.useNativeToolCalls();
+    if (cfg.useNativeToolCalls()) {
         json toolSchemas = tools_.buildOpenAiToolSchemas();
         if (!toolSchemas.empty()) {
             requestBody["tools"] = std::move(toolSchemas);
-            requestBody["tool_choice"] = cfg.toolChoice;
+            // A tool-free call still declares the tools: strict servers reject a
+            // history holding tool_calls when the request has no `tools` field.
+            requestBody["tool_choice"] = nativeTools ? cfg.toolChoice : "none";
         }
     }
 
@@ -582,7 +594,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     }
 
     // ---- Streaming path ----
-    if (config_.streaming) {
+    if (cfg.streaming) {
         std::string accumulated;
         std::vector<ToolCall> streamedToolCalls;
         std::string rawResponse = lemonade_.chatCompletionsStreaming(
@@ -700,6 +712,207 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     }
     // Include truncated response body in error for debugging
     throw std::runtime_error("Unexpected LLM response format: " + responseBody.substr(0, 200));
+}
+
+// ---- Resilient model calls ----
+
+namespace {
+
+// Transient: the request may succeed unchanged if sent again.
+bool isTransientLlmFailure(const std::exception& e) {
+    if (const auto* he = dynamic_cast<const HttpError*>(&e)) {
+        const int s = he->status();
+        if (s == 0) {
+            const std::string what = he->what();
+            return what.find(" failed: ") != std::string::npos ||
+                   what.find("streaming failed") != std::string::npos;
+        }
+        return s == 408 || s == 409 || s == 425 || s == 429 || s >= 500;
+    }
+    return false;
+}
+
+bool isContextOverflow(const std::exception& e) {
+    std::string what = e.what();
+    if (const auto* he = dynamic_cast<const HttpError*>(&e)) what += he->body();
+    for (const char* marker : {"exceeds the available context size", "context window too small",
+                               "maximum context length", "context_length_exceeded",
+                               "context length", "too many tokens"}) {
+        if (what.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+std::string stripReasoning(const std::string& text) {
+    std::string out = text;
+    // A reasoning model may emit <think>…</think> inline; it is never the answer.
+    for (;;) {
+        const size_t open = out.find("<think>");
+        if (open == std::string::npos) break;
+        const size_t close = out.find("</think>", open);
+        if (close == std::string::npos) {
+            out.erase(open);
+            break;
+        }
+        out.erase(open, close + 8 - open);
+    }
+    // Some templates open the block in the prompt, so the reply starts inside it
+    // and only the close appears; text that merely mentions the tag is kept.
+    const size_t strayClose = out.find("</think>");
+    if (strayClose != std::string::npos && text.find("<think>") == std::string::npos &&
+        out.find("</think>", strayClose + 8) == std::string::npos) {
+        out.erase(0, strayClose + 8);
+    }
+    const size_t first = out.find_first_not_of(" \t\r\n");
+    return first == std::string::npos ? std::string() : out.substr(first);
+}
+
+Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
+                                         const std::string& sysPrompt, const AgentConfig& cfg,
+                                         bool allowTools) {
+    bool shrunk = false;
+    int attempt = 0;
+    for (;;) {
+        try {
+            LlmResult r = callLlm(messages, sysPrompt, cfg, allowTools);
+            r.content = stripReasoning(r.content);
+            return r;
+        } catch (const std::exception& e) {
+            if (cancelled_.load()) throw;
+            if (!shrunk && isContextOverflow(e)) {
+                shrunk = true;
+                if (elideOldToolOutputs(messages, 2) > 0) {
+                    console_->printWarning(
+                        "Context window full; replaced older tool output with "
+                        "read_tool_output references and retrying.");
+                    continue;
+                }
+                throw;
+            }
+            if (attempt >= cfg.llmRetries || !isTransientLlmFailure(e)) throw;
+            ++attempt;
+            const int waitSec = std::min(30, 2 << (attempt - 1));
+            console_->printWarning(std::string("Model call failed (") + e.what() +
+                                   "); retry " + std::to_string(attempt) + "/" +
+                                   std::to_string(cfg.llmRetries) + " in " +
+                                   std::to_string(waitSec) + "s");
+            for (int i = 0; i < waitSec * 10 && !cancelled_.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (cancelled_.load()) throw;
+        }
+    }
+}
+
+// ---- Tool output store ----
+
+namespace {
+constexpr size_t kMaxStoredToolOutputs = 64;
+constexpr int kReadToolOutputDefaultChars = 12000;
+
+// Move pos back to the start of the UTF-8 character it falls in.
+size_t utf8Boundary(const std::string& s, size_t pos) {
+    if (pos >= s.size()) return s.size();
+    while (pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) --pos;
+    return pos;
+}
+} // namespace
+
+std::string Agent::recordToolOutput(const json& toolResult, int maxChars) {
+    // Plain strings are re-encoded too, so invalid UTF-8 never reaches a request.
+    std::string full = toolResult.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (toolResult.is_string()) full = json::parse(full).get<std::string>();
+    if (static_cast<int>(full.size()) <= maxChars) return full;
+
+    int id;
+    {
+        std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+        id = nextToolOutputId_++;
+        toolOutputs_[id] = full;
+        while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+    }
+    const size_t headEnd = utf8Boundary(full, static_cast<size_t>(maxChars) * 6 / 10);
+    const size_t tailStart =
+        utf8Boundary(full, full.size() - (static_cast<size_t>(maxChars) - headEnd));
+    return full.substr(0, headEnd) + "\n...[output " + std::to_string(id) +
+           " clipped: chars " + std::to_string(headEnd) + "-" + std::to_string(tailStart) +
+           " of " + std::to_string(full.size()) +
+           " omitted. Call read_tool_output with output_id=" + std::to_string(id) +
+           " and offset=" + std::to_string(headEnd) + " to read them]...\n" +
+           full.substr(tailStart);
+}
+
+size_t Agent::elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent) {
+    std::vector<size_t> toolIdx;
+    for (size_t i = 0; i < messages.size(); ++i) {
+        if (messages[i].role == MessageRole::TOOL && messages[i].content.size() > 400) {
+            toolIdx.push_back(i);
+        }
+    }
+    if (toolIdx.size() <= keepRecent) return 0;
+    size_t freed = 0;
+    for (size_t k = 0; k + keepRecent < toolIdx.size(); ++k) {
+        Message& m = messages[toolIdx[k]];
+        int id;
+        {
+            std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+            id = nextToolOutputId_++;
+            toolOutputs_[id] = m.content;
+            while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+        }
+        const std::string stub = "[earlier output of " + m.name.value_or("tool") + " (" +
+                                 std::to_string(m.content.size()) +
+                                 " chars) removed to fit the context window; read_tool_output "
+                                 "output_id=" + std::to_string(id) + " returns it]";
+        freed += m.content.size() - std::min(m.content.size(), stub.size());
+        m.content = stub;
+    }
+    return freed;
+}
+
+void Agent::registerBuiltinTools() {
+    if (tools_.hasTool("read_tool_output")) return;
+    ToolInfo info;
+    info.name = "read_tool_output";
+    info.description =
+        "Read part of an earlier tool output that was clipped or removed from the "
+        "conversation. Use the output_id named in the clipped output.";
+    info.policy = ToolPolicy::ALLOW;
+    info.parameters = {
+        {"output_id", ToolParamType::INTEGER, true, "The id named in the clipped output."},
+        {"offset", ToolParamType::INTEGER, false, "Character offset to start at (default 0)."},
+        {"length", ToolParamType::INTEGER, false,
+         "Characters to return (default 12000, max 50000)."},
+    };
+    info.callback = [this](const json& args) -> json {
+        const int id = args.at("output_id").get<int>();
+        const long long offset = std::max<long long>(0, args.value("offset", 0LL));
+        const long long length =
+            std::clamp<long long>(args.value("length", kReadToolOutputDefaultChars), 1, 50000);
+        std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+        auto it = toolOutputs_.find(id);
+        if (it == toolOutputs_.end()) {
+            return json{{"status", "error"},
+                        {"error", "No stored output with id " + std::to_string(id) +
+                                      "; only the last " +
+                                      std::to_string(kMaxStoredToolOutputs) +
+                                      " clipped outputs are kept. Re-run the tool instead."}};
+        }
+        const std::string& full = it->second;
+        const size_t start = utf8Boundary(full, static_cast<size_t>(offset));
+        const size_t end = utf8Boundary(full, start + static_cast<size_t>(length));
+        const size_t n = end - start;
+        return json{{"status", "success"},
+                    {"output_id", id},
+                    {"offset", start},
+                    {"returned", n},
+                    {"total", full.size()},
+                    {"remaining", full.size() - start - n},
+                    {"text", full.substr(start, n)}};
+    };
+    tools_.registerTool(std::move(info));
 }
 
 // ---- Tool Execution ----
@@ -976,15 +1189,41 @@ void recordToolCall(ToolCallWindow& history, const std::string& toolName,
     while (history.size() > keep) history.pop_front();
 }
 
-// Serialize a tool result for the model, clipping the middle of oversized
-// payloads so both the head and the tail survive.
-std::string truncateToolResult(const json& toolResult) {
-    std::string resultStr = toolResult.dump();
-    if (resultStr.size() > 4000) {
-        resultStr = resultStr.substr(0, 2000) + "\n...[truncated]...\n" +
-                    resultStr.substr(resultStr.size() - 1500);
+// The error a tool result reports, whatever shape it uses ({"status":"error"},
+// {"ok":false}, {"error":...}, MCP {"isError":true}); nullopt for success.
+std::optional<std::string> toolFailure(const json& r) {
+    if (!r.is_object()) return std::nullopt;
+    auto message = [&r]() -> std::string {
+        if (r.contains("error")) {
+            const auto& e = r["error"];
+            if (e.is_string()) return e.get<std::string>();
+            if (e.is_object() && e.contains("message") && e["message"].is_string()) {
+                return e["message"].get<std::string>();
+            }
+            if (!e.is_null()) return e.dump();
+        }
+        return "the tool reported a failure without a message";
+    };
+    if (r.value("status", "") == "error") return message();
+    if (r.contains("ok") && r["ok"].is_boolean() && !r["ok"].get<bool>()) return message();
+    if (r.contains("isError") && r["isError"].is_boolean() && r["isError"].get<bool>()) {
+        return message();
     }
-    return resultStr;
+    if (r.contains("error") && !r["error"].is_null() && !r["error"].is_boolean() &&
+        r.value("status", "") != "success") {
+        return message();
+    }
+    return std::nullopt;
+}
+
+std::string loopNudge(const std::string& toolName, int repeats) {
+    return json{{"status", "error"},
+                {"error", "Not run: this is the " + std::to_string(repeats) +
+                              "th identical call to " + toolName +
+                              " in a row, and it returned the same result each time. "
+                              "Use what it already returned, try a different approach, or "
+                              "give your final answer."}}
+        .dump();
 }
 
 // Make native tool_calls and their role=tool replies consistent before the
@@ -1123,6 +1362,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string lastError;
     ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
     UsageStats totalUsage;
+    bool budgetNoticeSent = false;
+    bool failed = false;
+    bool loopWarned = false;
+    bool emptyNudged = false;
+    int malformedStreak = 0;
+    std::string stopReason;  // why the loop ended without an answer: loop | empty
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
         // ---- Cancel check ----
@@ -1162,28 +1407,38 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // decide whether to send `tools`.
         const std::string turnSystemPrompt = composeSystemPromptFor(cfg);
 
-        // Call LLM (retry once on failure).
+        const int stepsLeft = stepsLimit - stepsTaken + 1;
+        if (cfg.stepBudgetNotices && !budgetNoticeSent && stepsLimit >= 6 &&
+            stepsLeft == std::max(3, stepsLimit / 10)) {
+            budgetNoticeSent = true;
+            Message notice;
+            notice.role = MessageRole::USER;
+            notice.content =
+                "[Step budget] " + std::to_string(stepsLeft) +
+                " steps remain for this request, including your answer. Finish only the "
+                "essential work, save anything you were asked to produce, then give your "
+                "final answer.";
+            messages.push_back(notice);
+        }
+
         // Skip progress spinner when streaming — tokens serve as live progress.
-        if (!config_.streaming) console_->startProgress("Thinking");
+        if (!cfg.streaming) console_->startProgress("Thinking");
         LlmResult llmResult;
         try {
-            llmResult = callLlm(messages, turnSystemPrompt, cfg);
+            llmResult = callLlmResilient(messages, turnSystemPrompt, cfg);
         } catch (const std::exception& e) {
-            if (!config_.streaming) console_->stopProgress();
-            console_->printWarning(std::string("LLM call failed, retrying: ") + e.what());
-
-            // Retry once
-            if (!config_.streaming) console_->startProgress("Retrying");
-            try {
-                llmResult = callLlm(messages, turnSystemPrompt, cfg);
-            } catch (const std::exception& e2) {
-                if (!config_.streaming) console_->stopProgress();
-                console_->printError(std::string("LLM error: ") + e2.what());
-                finalAnswer = std::string("Unable to complete task due to LLM error: ") + e2.what();
+            if (!cfg.streaming) console_->stopProgress();
+            if (cancelled_.load()) {
+                console_->printWarning("Cancelled by user");
+                finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
                 break;
             }
+            console_->printError(std::string("LLM error: ") + e.what());
+            finalAnswer = std::string("Unable to complete task due to LLM error: ") + e.what();
+            failed = true;
+            break;
         }
-        if (!config_.streaming) console_->stopProgress();
+        if (!cfg.streaming) console_->stopProgress();
 
         const std::string& response = llmResult.content;
         totalUsage += llmResult.usage;
@@ -1210,21 +1465,46 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 try {
                     decodedArgs.push_back(tc.parsedArgs());
                 } catch (const std::exception& e) {
-                    decodeError = e.what();
+                    decodeError = tc.name + ": " + e.what();
                     break;
                 }
-            }
-            if (!decodeError.empty()) {
-                console_->printError("Malformed tool call: " + decodeError);
-                finalAnswer = "Unable to complete task due to LLM error: " + decodeError;
-                break;
             }
 
             Message nativeAssistantMsg;
             nativeAssistantMsg.role = MessageRole::ASSISTANT;
             nativeAssistantMsg.content = response;
             nativeAssistantMsg.toolCalls = llmResult.toolCalls;
+            // Never replay arguments the server's chat template may fail to parse.
+            if (!decodeError.empty()) {
+                for (auto& tc : nativeAssistantMsg.toolCalls) tc.arguments = "{}";
+            }
             messages.push_back(nativeAssistantMsg);
+
+            // Nothing ran: answer every call with the problem so the model can resend.
+            if (!decodeError.empty()) {
+                console_->printWarning("Malformed tool call: " + decodeError);
+                if (++malformedStreak > 2) {
+                    finalAnswer = "Unable to complete task: the model sent malformed tool "
+                                  "arguments three times in a row (" + decodeError + ").";
+                    failed = true;
+                    break;
+                }
+                for (const auto& tc : llmResult.toolCalls) {
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    reply.content =
+                        json{{"status", "error"},
+                             {"error", "Not run: the arguments in this batch were not valid "
+                                       "JSON (" + decodeError +
+                                       "). Resend the call with a valid JSON object."}}
+                            .dump(-1, ' ', false, json::error_handler_t::replace);
+                    messages.push_back(reply);
+                }
+                continue;
+            }
+            malformedStreak = 0;
 
             // structuredEvents consumers (TUI/WebUI) expect a thought per step;
             // a native turn's reasoning is whatever prose came with the calls.
@@ -1241,10 +1521,22 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
                 if (isRepeatedToolCall(toolCallHistory, tc.name, toolArgs,
                                        cfg.maxConsecutiveRepeats)) {
-                    console_->printWarning("Detected repeated tool call loop. Breaking out.");
-                    finalAnswer = "Task stopped due to repeated tool call loop.";
-                    loopDetected = true;
-                    break;
+                    if (loopWarned) {
+                        console_->printWarning("Detected repeated tool call loop. Breaking out.");
+                        loopDetected = true;
+                        stopReason = "loop";
+                        break;
+                    }
+                    loopWarned = true;
+                    console_->printWarning("Repeated tool call; asking the model to change course.");
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    reply.content = loopNudge(tc.name, cfg.maxConsecutiveRepeats);
+                    messages.push_back(reply);
+                    toolCallHistory.clear();
+                    continue;
                 }
 
                 console_->printToolUsage(tc.name);
@@ -1263,17 +1555,51 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = truncateToolResult(toolResult);
+                toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
                 messages.push_back(toolMsg);
 
-                if (toolResult.is_object() && toolResult.value("status", "") == "error") {
+                if (auto err = toolFailure(toolResult)) {
                     ++errorCount;
-                    lastError = toolResult.value("error", "Unknown error");
+                    lastError = *err;
                     executionState_ = AgentState::ERROR_RECOVERY;
                 }
             }
 
+            // A loop stop is followed by a closing call, so every advertised call needs a reply.
+            for (size_t j = 0; loopDetected && j < llmResult.toolCalls.size(); ++j) {
+                const auto& tc = llmResult.toolCalls[j];
+                const bool answered = std::any_of(
+                    messages.begin(), messages.end(), [&tc](const Message& m) {
+                        return m.role == MessageRole::TOOL && m.toolCallId == tc.id;
+                    });
+                if (!answered) {
+                    Message reply;
+                    reply.role = MessageRole::TOOL;
+                    reply.name = tc.name;
+                    reply.toolCallId = tc.id;
+                    reply.content = R"({"status":"error","error":"Not run."})";
+                    messages.push_back(reply);
+                }
+            }
+
             if (loopDetected) break;
+            continue;
+        }
+
+        // An empty reply is usually a cut-off reasoning block; ask once more.
+        if (response.find_first_not_of(" \t\r\n") == std::string::npos) {
+            if (emptyNudged) {
+                stopReason = "empty";
+                break;
+            }
+            emptyNudged = true;
+            console_->printWarning("The model's reply was empty; asking again.");
+            Message retry;
+            retry.role = MessageRole::USER;
+            retry.content = "[Your last reply was empty, possibly cut off while reasoning.] "
+                            "Continue: call a tool or give your final answer, keeping any "
+                            "reasoning short.";
+            messages.push_back(retry);
             continue;
         }
 
@@ -1325,9 +1651,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             // Loop detection — same tool+args repeated maxConsecutiveRepeats times
             if (isRepeatedToolCall(toolCallHistory, toolName, toolArgs,
                                    cfg.maxConsecutiveRepeats)) {
-                console_->printWarning("Detected repeated tool call loop. Breaking out.");
-                finalAnswer = "Task stopped due to repeated tool call loop.";
-                break;
+                if (loopWarned) {
+                    console_->printWarning("Detected repeated tool call loop. Breaking out.");
+                    stopReason = "loop";
+                    break;
+                }
+                loopWarned = true;
+                console_->printWarning("Repeated tool call; asking the model to change course.");
+                Message nudge;
+                nudge.role = MessageRole::TOOL;
+                nudge.name = toolName;
+                nudge.content = loopNudge(toolName, cfg.maxConsecutiveRepeats);
+                messages.push_back(nudge);
+                toolCallHistory.clear();
+                continue;
             }
 
             console_->printToolUsage(toolName);
@@ -1346,15 +1683,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = truncateToolResult(toolResult);
+            toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
             messages.push_back(toolMsg);
 
-            // Check for error
-            bool isError = toolResult.is_object() &&
-                           toolResult.value("status", "") == "error";
-            if (isError) {
+            if (auto err = toolFailure(toolResult)) {
                 ++errorCount;
-                lastError = toolResult.value("error", "Unknown error");
+                lastError = *err;
                 executionState_ = AgentState::ERROR_RECOVERY;
             }
 
@@ -1369,10 +1703,58 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         }
     }
 
-    // Max steps reached without answer
-    if (finalAnswer.empty()) {
-        finalAnswer = "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
-        console_->printWarning(finalAnswer);
+    // Out of steps, stopped in a loop, or no reply: one tool-free call for an honest wrap-up.
+    if (finalAnswer.empty() && !cancelled_.load()) {
+        if (stopReason.empty()) stopReason = "cap";
+        const char* why = stopReason == "loop"  ? "[Stopped: repeated tool calls]"
+                          : stopReason == "empty" ? "[Stopped: empty replies]"
+                                                  : "[Step limit reached]";
+        console_->printWarning(std::string(why) + " Asking for a closing answer.");
+        if (cfg.stepBudgetNotices) {
+            Message closing;
+            closing.role = MessageRole::USER;
+            closing.content =
+                std::string(why) +
+                " You cannot call any more tools for this request. In plain text, give your "
+                "final answer: what you completed, the results so far, and what is still "
+                "unfinished. Do not claim work you did not do.";
+            messages.push_back(closing);
+            try {
+                LlmResult closingResult =
+                    callLlmResilient(messages, composeSystemPromptFor(cfg), cfg, false);
+                totalUsage += closingResult.usage;
+                std::string text = closingResult.content;
+                if (!cfg.useNativeToolCalls()) {
+                    ParsedResponse p = parseLlmResponse(text);
+                    if (p.answer.has_value()) text = *p.answer;
+                    else if (p.toolName.has_value()) text.clear();
+                }
+                if (!text.empty()) {
+                    Message reply;
+                    reply.role = MessageRole::ASSISTANT;
+                    reply.content = text;
+                    messages.push_back(reply);
+                    finalAnswer = text;
+                    if (!cfg.streaming || cfg.structuredEvents) {
+                        console_->printFinalAnswer(finalAnswer, totalUsage);
+                    }
+                }
+            } catch (const std::exception& e) {
+                console_->printError(std::string("Closing answer failed: ") + e.what());
+            }
+        }
+        if (finalAnswer.empty()) {
+            finalAnswer = stopReason == "loop"
+                              ? "Task stopped due to repeated tool call loop."
+                          : stopReason == "empty"
+                              ? "Task stopped: the model returned empty replies."
+                              : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
+            console_->printWarning(finalAnswer);
+        }
+        failed = true;  // the task is unfinished
+    }
+    if (finalAnswer.empty() && cancelled_.load()) {
+        finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
@@ -1408,7 +1790,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     json result = {
         {"result", finalAnswer},
         {"steps_taken", stepsTaken},
-        {"steps_limit", stepsLimit}
+        {"steps_limit", stepsLimit},
+        {"status", cancelled_.load() ? "cancelled" : (failed ? "error" : "success")},
+        {"tool_errors", errorCount}
     };
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();

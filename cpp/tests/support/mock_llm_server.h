@@ -133,6 +133,12 @@ public:
         return receivedBodies_;
     }
 
+    /// Authorization header of each /chat/completions request ("" when absent).
+    std::vector<std::string> receivedAuthorization() const {
+        std::lock_guard<std::mutex> lk(mu_);
+        return receivedAuth_;
+    }
+
 private:
     struct QueuedResponse {
         std::string body;
@@ -163,6 +169,7 @@ private:
                           {
                               std::lock_guard<std::mutex> lk(mu_);
                               receivedBodies_.push_back(req.body);
+                              receivedAuth_.push_back(req.get_header_value("Authorization"));
                           }
                           ++requestCount_;
 
@@ -304,6 +311,7 @@ private:
     std::deque<QueuedResponse> responseQueue_;
     std::deque<std::string> sseQueue_;
     std::vector<std::string> receivedBodies_;
+    std::vector<std::string> receivedAuth_;
     std::atomic<int> requestCount_{0};
     std::atomic<int> loadCount_{0};
     std::atomic<bool> sseStreaming_{false};

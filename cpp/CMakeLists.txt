@@ -273,7 +273,10 @@ add_library(gaia_core
     src/skill.cpp
     src/skill_yaml.cpp
     src/skill_sets.cpp
+    src/skill_library.cpp
     src/database.cpp
+    src/api_server.cpp
+    src/web_tools.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -295,6 +298,7 @@ if(GAIA_BUILD_TUI)
 endif()
 
 add_library(gaia::gaia_core ALIAS gaia_core)
+target_compile_definitions(gaia_core PRIVATE GAIA_CORE_VERSION="${PROJECT_VERSION}")
 
 include(GenerateExportHeader)
 generate_export_header(gaia_core
@@ -393,7 +397,6 @@ if(GAIA_BUILD_BASH_AGENT)
         agents/bash/main.cpp
         agents/bash/bash_agent.cpp
         agents/bash/bash_tools.cpp
-        agents/bash/api_server.cpp
         agents/bash/mcp_server.cpp
     )
     target_include_directories(gaia-bash PRIVATE
@@ -401,16 +404,28 @@ if(GAIA_BUILD_BASH_AGENT)
     )
     target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
 
-    # API server needs httplib (already a dependency of gaia_core but PRIVATE)
-    if(httplib_FOUND)
-        target_link_libraries(gaia-bash PRIVATE httplib::httplib)
-    else()
-        target_include_directories(gaia-bash SYSTEM PRIVATE
-            $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+
+# ---------------------------------------------------------------------------
+# gaia-cpp: the general-purpose GAIA agent (headless, serve, interactive)
+# ---------------------------------------------------------------------------
+option(GAIA_BUILD_GAIA_AGENT "Build the gaia-cpp agent" ON)
+if(GAIA_BUILD_GAIA_AGENT)
+    add_executable(gaia-cpp
+        agents/gaia/main.cpp
+        agents/gaia/gaia_agent.cpp
+        agents/bash/bash_tools.cpp
+    )
+    target_compile_definitions(gaia-cpp PRIVATE GAIA_CPP_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(gaia-cpp PRIVATE gaia::gaia_core)
+    if(WIN32)
+        target_link_libraries(gaia-cpp PRIVATE psapi)
     endif()
-    if(OpenSSL_FOUND)
-        target_compile_definitions(gaia-bash PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-        target_link_libraries(gaia-bash PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    # Release archives must run on older distros than the build host (Lemonade
+    # ships to Ubuntu 24.04, Debian 13, Fedora): carry the C++ runtime inside.
+    option(GAIA_STATIC_CXX_RUNTIME "Link libstdc++/libgcc statically into gaia-cpp" OFF)
+    if(GAIA_STATIC_CXX_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_options(gaia-cpp PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()
 
@@ -451,6 +466,9 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
         tests/test_mcp_registry.cpp
+        tests/test_mcp_http.cpp
+        tests/test_agent_resilience.cpp
+        tests/test_skill_library.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -472,6 +490,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_skill.cpp
         tests/test_skill_sets.cpp
         tests/test_database.cpp
+        tests/test_api_server.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
