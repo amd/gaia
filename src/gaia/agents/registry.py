@@ -813,6 +813,19 @@ class AgentRegistry:
                 )
                 continue
 
+            # A leftover gaia-agent-chat install must not take over a retired id.
+            if registration.id in self._LEGACY_ID_ALIASES:
+                dist = getattr(entry_point, "dist", None)
+                logger.warning(
+                    "registry: ignoring installed agent %r from %s — that id is "
+                    "retired and now opens %r; uninstall the package to clear "
+                    "this warning",
+                    registration.id,
+                    getattr(dist, "name", None) or entry_point.value,
+                    self._LEGACY_ID_ALIASES[registration.id],
+                )
+                continue
+
             if registration.id in self._agents:
                 logger.warning(
                     "registry: entry point agent %s skipped — ID already registered",

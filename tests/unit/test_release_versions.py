@@ -9,6 +9,7 @@ release.
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import re
 import shutil
@@ -89,25 +90,24 @@ def test_main_tree_passes():
     assert report.drift == []
 
 
-def test_only_the_declared_targets_are_held():
+def test_no_target_is_held():
     """Held drift is reported, never failed; the list must not quietly grow."""
-    assert {(t.path, t.what) for t in HELD} == {
-        ("hub/agents/chat/python/gaia_agent_chat/__init__.py", "__version__"),
-    }
+    assert HELD == []
 
 
 def test_held_drift_is_reported_and_left_alone(tree):
-    for t in HELD:
-        _set(tree, t, "0.0.9", count=t.count)
-    held_bytes = {t.path: (tree / t.path).read_bytes() for t in HELD}
+    held = dataclasses.replace(
+        _target("hub/components/terminal-hub/gaia-agent.yaml", "version"),
+        held="held for this test",
+    )
+    _set(tree, held, "0.0.9")
+    held_bytes = (tree / held.path).read_bytes()
 
-    report = rv.run(tree, stamp=True)
+    report = rv.run(tree, stamp=True, targets=(held,))
 
     assert report.errors == [] and report.drift == []
-    assert len(report.held) == len(HELD)
-    assert all("0.0.9" in line for line in report.held)
-    for t in HELD:
-        assert (tree / t.path).read_bytes() == held_bytes[t.path]
+    assert len(report.held) == 1 and "0.0.9" in report.held[0]
+    assert (tree / held.path).read_bytes() == held_bytes
 
 
 # -- Drift: every target, one at a time -------------------------------------
@@ -149,7 +149,7 @@ def test_one_of_two_lockfile_entries_drifting_fails(tree):
 @pytest.mark.parametrize("floor", ["0.25.0", "0.0.1", "99.0.0"])
 def test_a_floor_that_is_not_core_fails(tree, floor):
     core = rv.read_sources(tree).core_base
-    target = _target("hub/agents/chat/python/pyproject.toml", "amd-gaia floor")
+    target = _target("hub/agents/gaia/python/pyproject.toml", "amd-gaia floor")
     _set(tree, target, floor)
 
     report = rv.run(tree, stamp=False)
@@ -213,31 +213,6 @@ def test_a_flagship_bump_drifts_only_flagship_fields(tree):
     assert "/agents/terminal-hub/0.3.9" not in lock
 
 
-def test_the_chat_shim_requires_the_flagship_it_reexports(tree):
-    """The shim re-exports ChatAgent from gaia-agent-gaia (#6099), so a
-    flagship bump must carry its floor, or a released shim could pair with a
-    flagship that predates the move."""
-    _set_source(tree, rv.FLAGSHIP_INIT, rv._PY_VERSION, "0.3.9")
-    drifted = {line.split(":")[0] for line in rv.run(tree, stamp=False).drift}
-    assert {
-        "hub/agents/chat/python/pyproject.toml (gaia-agent-gaia floor)",
-        "hub/agents/chat/python/gaia-agent.yaml (gaia-agent-gaia floor)",
-    } <= drifted
-    rv.run(tree, stamp=True)
-    assert '"gaia-agent-gaia>=0.3.9"' in _raw(tree / rv.CHAT_PYPROJECT)
-    assert '"gaia-agent-gaia>=0.3.9"' in _raw(
-        tree / "hub/agents/chat/python/gaia-agent.yaml"
-    )
-
-
-def test_the_chat_manifest_follows_chat_not_core_or_flagship(tree):
-    _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, "0.2.5")
-    report = rv.run(tree, stamp=False)
-    assert [line.split(":")[0] for line in report.drift] == [
-        "hub/agents/chat/python/gaia-agent.yaml (version)"
-    ]
-
-
 # -- Unreadable sources and targets ------------------------------------------
 
 
@@ -250,7 +225,7 @@ def test_the_chat_manifest_follows_chat_not_core_or_flagship(tree):
     ],
 )
 def test_a_missing_target_file_is_an_error_and_stamp_writes_nothing(tree, rel):
-    floor = _target("hub/agents/chat/python/pyproject.toml", "amd-gaia floor")
+    floor = _target("hub/agents/gaia/python/pyproject.toml", "amd-gaia floor")
     _set(tree, floor, "0.1.0")
     drifted = (tree / floor.path).read_bytes()
     (tree / rel).unlink()
@@ -263,7 +238,7 @@ def test_a_missing_target_file_is_an_error_and_stamp_writes_nothing(tree, rel):
     assert rv.print_report(report, stamp=True) == 1
 
 
-@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.FLAGSHIP_INIT, rv.CHAT_PYPROJECT])
+@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.FLAGSHIP_INIT])
 def test_a_missing_source_is_an_error(tree, rel):
     (tree / rel).unlink()
     report = rv.run(tree, stamp=False)

@@ -8,6 +8,7 @@ description: "Faster first replies, long recordings and video links, read aloud,
 ## Breaking Changes
 
 - **Dynamic tool loading is on by default, and its old settings are gone** — `GAIA_DYNAMIC_TOOLS_TAU` and `GAIA_DYNAMIC_TOOLS_MAX` no longer do anything, and a choice made under the old Beta toggle is not carried over. Turn it off with `gaia config set dynamic_tools false` or Settings → Advanced. (PR [#6449](https://github.com/amd/gaia/pull/6449))
+- **The `gaia-agent-chat` package is gone** — `ChatAgent` ships in the flagship package, so import it with `from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig`. `ChatAgentLite` and `python -m gaia_agent_chat.app` were removed with it; use `gaia chat`. Sessions saved under the old `chat`, `doc` and `file` agents still reopen on GAIA, and a leftover `gaia-agent-chat` install is now ignored with a warning instead of taking those ids over. (Issue [#6103](https://github.com/amd/gaia/issues/6103))
 
 ## What's New
 
