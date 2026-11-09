@@ -1,7 +1,7 @@
 {
   "name": "gaia-apps",
   "version": "1.0.0",
-  "description": "GAIA Electron Applications",
+  "description": "GAIA repo-level npm tooling",
   "private": true,
   "dependencies": {
     "@prisma/client": "^7.10.1",
