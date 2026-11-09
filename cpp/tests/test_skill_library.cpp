@@ -139,3 +139,40 @@ TEST(SkillLibraryTest, RealHubSkillsParse) {
         EXPECT_NO_THROW(lib.loadFull(name)) << name;
     }
 }
+
+TEST(SkillLibraryTest, InstallValidatesCopiesAndReplaces) {
+    TempTree t;
+    t.skill("src", "data-explore", "Explore a CSV.", "Version one.");
+    const std::string dest = (t.path() / "installed").string();
+    const std::string where = SkillLibrary::installFromFolder((t.path() / "src" / "data-explore").string(), dest);
+    EXPECT_TRUE(fs::is_regular_file(fs::path(where) / "SKILL.md"));
+
+    t.skill("src2", "data-explore", "Explore a CSV.", "Version two.");
+    SkillLibrary::installFromFolder((t.path() / "src2" / "data-explore").string(), dest);
+    SkillLibrary lib({SkillRoot{"user", dest, true, false}});
+    EXPECT_NE(lib.loadFull("data-explore").body.find("Version two."), std::string::npos);
+    for (const auto& e : fs::directory_iterator(dest)) {
+        EXPECT_NE(e.path().filename().string()[0], '.') << "no staging leftovers";
+    }
+
+    EXPECT_TRUE(SkillLibrary::removeInstalled("data-explore", dest));
+    EXPECT_FALSE(SkillLibrary::removeInstalled("data-explore", dest));
+    EXPECT_THROW(SkillLibrary::removeInstalled("../etc", dest), SkillError);
+}
+
+TEST(SkillLibraryTest, InstallRefusesInvalidSkills) {
+    TempTree t;
+    t.raw("src", "broken", "no frontmatter\n");
+    EXPECT_THROW(SkillLibrary::installFromFolder((t.path() / "src" / "broken").string(),
+                                                 (t.path() / "dest").string()),
+                 SkillError);
+    // Folder name must match the skill's name.
+    t.skill("src", "wrong-folder", "x", "y");
+    fs::rename(t.path() / "src" / "wrong-folder", t.path() / "src" / "other-name");
+    EXPECT_THROW(SkillLibrary::installFromFolder((t.path() / "src" / "other-name").string(),
+                                                 (t.path() / "dest").string()),
+                 SkillError);
+    EXPECT_THROW(SkillLibrary::installFromFolder((t.path() / "nowhere").string(),
+                                                 (t.path() / "dest").string()),
+                 SkillError);
+}

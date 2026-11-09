@@ -103,7 +103,8 @@ void printUsage() {
         "Usage:\n"
         "  gaia-cpp [options]                    Interactive session\n"
         "  gaia-cpp -p [PROMPT] [options]        One headless run; PROMPT or stdin\n"
-        "  gaia-cpp serve [options]              OpenAI-compatible server\n\n"
+        "  gaia-cpp serve [options]              OpenAI-compatible server\n"
+        "  gaia-cpp skills list|install DIR|remove NAME   Manage installed skills\n\n"
         "Model:\n"
         "  -m, --model ID            Model id (env GAIA_MODEL_ID)\n"
         "  --base-url URL            OpenAI-compatible endpoint (env GAIA_BASE_URL,\n"
@@ -530,8 +531,45 @@ int runInteractive(const Cli& cli) {
 
 } // namespace
 
+// gaia-cpp skills list | install <folder> | remove <name>
+int runSkills(int argc, char** argv) {
+    const std::string sub = argc > 2 ? argv[2] : "list";
+    if (sub == "list") {
+        gaia::SkillLibrary lib;
+        if (lib.skills().empty()) std::cout << "No skills installed.\n";
+        for (const auto& [name, s] : lib.skills()) {
+            std::cout << name << "  (" << s.root << ")  " << s.description.substr(0, 90) << "\n";
+        }
+        for (const auto& f : lib.failures()) std::cerr << "unreadable: " << f << "\n";
+        for (const auto& s : lib.shadowed()) std::cerr << "shadowed: " << s << "\n";
+        return 0;
+    }
+    if (sub == "install" && argc > 3) {
+        const std::string where = gaia::SkillLibrary::installFromFolder(argv[3]);
+        gaia::SkillLibrary lib;
+        const std::string name = fs::path(where).filename().string();
+        std::cout << "Installed " << name << " in " << where << "\n";
+        if (!lib.skills().at(name).isInstructionOnly()) {
+            std::cout << "Note: its Python tools need the Python GAIA runtime; gaia-cpp uses its "
+                         "instructions only.\n";
+        }
+        return 0;
+    }
+    if (sub == "remove" && argc > 3) {
+        if (!gaia::SkillLibrary::removeInstalled(argv[3])) {
+            std::cerr << "gaia-cpp: no installed skill named " << argv[3] << " in "
+                      << gaia::SkillLibrary::userRoot() << "\n";
+            return 1;
+        }
+        std::cout << "Removed " << argv[3] << "\n";
+        return 0;
+    }
+    usageError("usage: gaia-cpp skills list | install <folder> | remove <name>");
+}
+
 int main(int argc, char** argv) {
     try {
+        if (argc > 1 && std::string(argv[1]) == "skills") return runSkills(argc, argv);
         const Cli cli = parseArgs(argc, argv);
         if (!cli.cwd.empty()) {
             std::error_code ec;

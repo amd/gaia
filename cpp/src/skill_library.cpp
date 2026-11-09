@@ -211,6 +211,63 @@ void SkillLibrary::registerTools(ToolRegistry& registry) {
     registry.registerTool(std::move(load));
 }
 
+std::string SkillLibrary::userRoot() {
+    const std::string gaiaHome = getEnvVar("GAIA_HOME");
+    if (!gaiaHome.empty()) return (fs::path(gaiaHome) / "skills").string();
+    const std::string home = homeDir();
+    if (home.empty()) throw SkillError("Can't find the user skill folder: HOME is not set");
+    return (fs::path(home) / ".gaia" / "skills").string();
+}
+
+std::string SkillLibrary::installFromFolder(const std::string& source, const std::string& destRoot) {
+    std::error_code ec;
+    fs::path src = fs::absolute(source, ec);
+    if (fs::is_regular_file(src, ec) && src.filename() == "SKILL.md") src = src.parent_path();
+    if (!fs::is_regular_file(src / "SKILL.md", ec)) {
+        throw SkillError("No SKILL.md in " + src.string() + ". Point at the skill's folder.");
+    }
+    // Validates the frontmatter and that the folder is named after the skill.
+    const Skill skill = parseSkillFile(src.string(), "user", false, true);
+    validateSkill(skill, (src / "SKILL.md").string());
+
+    const fs::path root(destRoot);
+    fs::create_directories(root, ec);
+    if (ec) throw SkillError("Can't create " + root.string() + ": " + ec.message());
+    const fs::path target = root / skill.name;
+    if (fs::equivalent(src, target, ec)) return target.string();  // already in place
+    const fs::path staging = root / ("." + skill.name + ".installing");
+    fs::remove_all(staging, ec);
+    fs::copy(src, staging, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    if (ec) {
+        std::error_code ignore;
+        fs::remove_all(staging, ignore);
+        throw SkillError("Copying " + src.string() + " failed: " + ec.message());
+    }
+    const fs::path retired = root / ("." + skill.name + ".old");
+    fs::remove_all(retired, ec);
+    if (fs::exists(target, ec)) fs::rename(target, retired, ec);
+    fs::rename(staging, target, ec);
+    if (ec) {
+        std::error_code ignore;
+        if (fs::exists(retired, ignore)) fs::rename(retired, target, ignore);
+        throw SkillError("Installing into " + target.string() + " failed: " + ec.message());
+    }
+    fs::remove_all(retired, ec);
+    return target.string();
+}
+
+bool SkillLibrary::removeInstalled(const std::string& name, const std::string& root) {
+    if (name.empty() || name.find_first_of("/\\") != std::string::npos || name[0] == '.') {
+        throw SkillError("Not a skill name: '" + name + "'");
+    }
+    const fs::path target = fs::path(root) / name;
+    std::error_code ec;
+    if (!fs::is_regular_file(target / "SKILL.md", ec)) return false;
+    fs::remove_all(target, ec);
+    if (ec) throw SkillError("Removing " + target.string() + " failed: " + ec.message());
+    return true;
+}
+
 bool SkillLibrary::loadSkill(const std::string& name) {
     if (skills_.find(name) == skills_.end()) return false;
     Skill s = loadFull(name);
