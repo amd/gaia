@@ -56,7 +56,7 @@ def test_daemon_executor_failure_persists_then_notifies(tmp_path):
         source="email:schedule_store",
         kind=KIND_ONE_SHOT,
         fire_at=1.0,
-        payload={"subject": "Q3"},
+        payload={"kind": "scheduled_send", "payload": {"subject": "Q3"}},
     )
     clock = DaemonClock(
         str(tmp_path / "clock.db"),
@@ -69,6 +69,6 @@ def test_daemon_executor_failure_persists_then_notifies(tmp_path):
     dispatch.assert_called_once_with(
         "notification",
         {"title": "Scheduled email failed"},
-        "GAIA could not send a scheduled email (Q3). RuntimeError: boom",
+        "GAIA could not send the scheduled email (Q3). RuntimeError: boom",
     )
     assert store.get_job(db, job_id=job_id)["status"] == "failed"

@@ -170,14 +170,15 @@ class EmailJobScheduler:
                 current = schedule_store.get_job(db, job_id=job["job_id"]) or job
                 error = str(
                     current.get("error")
-                    or "job stopped renewing its lease while firing"
+                    or "The send was interrupted while firing and may already have "
+                    "been sent; check your Sent folder before retrying."
                 )
                 log.error(
                     "email scheduler: job %s stopped renewing its lease while "
                     "firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
-                self._notify_failed(current, error)
+                self._notify_failed(current, error, source="email scheduler recovery")
                 failed.append(job["job_id"])
         return failed
 
@@ -203,9 +204,11 @@ class EmailJobScheduler:
             )
 
     @staticmethod
-    def _notify_failed(job: Dict[str, Any], error: str) -> None:
+    def _notify_failed(
+        job: Dict[str, Any], error: str, *, source: str = "email scheduler"
+    ) -> None:
         """Best-effort desktop notice after the durable failure write succeeded."""
-        notify_scheduled_failure(job, error, source="email scheduler")
+        notify_scheduled_failure(job, error, source=source)
 
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         now = now if now is not None else self._clock()

@@ -167,14 +167,15 @@ class DaemonClock:
                 current = store.get_job(db, job_id=job["job_id"]) or job
                 error = str(
                     current.get("error")
-                    or "job stopped renewing its lease while firing"
+                    or "The send was interrupted while firing and may already have "
+                    "been sent; check your Sent folder before retrying."
                 )
                 log.error(
                     "daemon clock: one-shot job %s stopped renewing its lease "
                     "while firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
-                self._notify_failed(current, error)
+                self._notify_failed(current, error, source="daemon clock recovery")
                 failed.append(job["job_id"])
         return failed
 
@@ -200,28 +201,44 @@ class DaemonClock:
             )
 
     @staticmethod
-    def _notify_failed(job: Dict[str, Any], error: str) -> None:
+    def _notify_failed(
+        job: Dict[str, Any], error: str, *, source: str = "daemon clock"
+    ) -> None:
         """Best-effort host notification after a durable daemon failure."""
         try:
             from gaia.schedule import sinks
 
             payload = job.get("payload") or {}
             nested_payload = payload.get("payload") or {}
+            kind = str(payload.get("kind") or job.get("kind") or "")
             subject = payload.get("subject") or nested_payload.get("subject")
-            detail = f"a scheduled email ({subject})" if subject else "a scheduled task"
-            sinks.dispatch(
-                "notification",
-                {
-                    "title": (
-                        "Scheduled email failed" if subject else "Scheduled task failed"
-                    )
-                },
-                (
-                    f"GAIA could not send {detail}. {error}"
+            is_recovery = "recovery" in source.lower() or "may already" in error.lower()
+            if kind == "scheduled_send":
+                detail = (
+                    f"the scheduled email ({subject})"
                     if subject
-                    else f"GAIA could not complete {detail}. {error}"
-                ),
-            )
+                    else "the scheduled email"
+                )
+                if is_recovery:
+                    title = "Scheduled email may not have been sent"
+                    message = (
+                        f"GAIA could not confirm {detail} was sent. It may already "
+                        "have been sent; check your Sent folder before retrying. "
+                        f"{error}"
+                    )
+                else:
+                    title = "Scheduled email failed"
+                    message = f"GAIA could not send {detail}. {error}"
+            elif kind == "snooze":
+                detail = (
+                    f"the snoozed email ({subject})" if subject else "the snoozed email"
+                )
+                title = "Snoozed email restore failed"
+                message = f"GAIA could not restore {detail}. {error}"
+            else:
+                title = "Scheduled task failed"
+                message = f"GAIA could not complete the scheduled task. {error}"
+            sinks.dispatch("notification", {"title": title}, message)
         except Exception as exc:  # notification must not mask scheduler state
             log.warning(
                 "daemon clock: could not notify user about failed job %s: %s",

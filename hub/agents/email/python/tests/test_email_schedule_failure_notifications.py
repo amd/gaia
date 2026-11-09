@@ -41,7 +41,7 @@ def test_failure_notice_uses_existing_notification_sink():
     dispatch.assert_called_once_with(
         "notification",
         {"title": "Scheduled email failed"},
-        "GAIA could not send a scheduled email (Q3). RuntimeError: provider down",
+        "GAIA could not send the scheduled email (Q3). RuntimeError: provider down",
     )
 
 
@@ -59,7 +59,37 @@ def test_failure_notice_reads_subject_from_migrated_daemon_payload():
     dispatch.assert_called_once_with(
         "notification",
         {"title": "Scheduled email failed"},
-        "GAIA could not send a scheduled email (Q3). provider down",
+        "GAIA could not send the scheduled email (Q3). provider down",
+    )
+
+
+def test_snooze_failure_is_not_reported_as_email_send():
+    job = {"job_id": "j1", "kind": "snooze", "payload": {}}
+    with patch("gaia.schedule.sinks.dispatch") as dispatch:
+        notify_scheduled_failure(job, "RuntimeError: provider down", source="test")
+    dispatch.assert_called_once_with(
+        "notification",
+        {"title": "Snoozed email restore failed"},
+        "GAIA could not restore the snoozed email. RuntimeError: provider down",
+    )
+
+
+def test_recovery_notice_warns_that_a_send_may_have_happened():
+    job = {"job_id": "j1", "kind": "scheduled_send", "payload": {"subject": "Q3"}}
+    with patch("gaia.schedule.sinks.dispatch") as dispatch:
+        notify_scheduled_failure(
+            job,
+            "The send was interrupted while firing and may already have been sent; "
+            "check your Sent folder before retrying.",
+            source="email scheduler recovery",
+        )
+    dispatch.assert_called_once_with(
+        "notification",
+        {"title": "Scheduled email may not have been sent"},
+        "GAIA could not confirm the scheduled email (Q3) was sent. It may already "
+        "have been sent; check your Sent folder before retrying. The send was "
+        "interrupted while firing and may already have been sent; check your Sent "
+        "folder before retrying.",
     )
 
 

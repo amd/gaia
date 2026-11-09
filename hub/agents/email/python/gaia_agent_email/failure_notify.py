@@ -28,13 +28,34 @@ def notify_scheduled_failure(
     """
     payload = job.get("payload") or {}
     nested_payload = payload.get("payload") or {}
+    kind = str(payload.get("kind") or job.get("kind") or "")
     subject = str(payload.get("subject") or nested_payload.get("subject") or "")
-    detail = f"a scheduled email ({subject})" if subject else "a scheduled email"
-    message = f"GAIA could not send {detail}. {error}"
+    is_recovery = "recovery" in source.lower() or "may already" in error.lower()
+    if kind == "scheduled_send":
+        detail = (
+            f"the scheduled email ({subject})" if subject else "the scheduled email"
+        )
+        if is_recovery:
+            title = "Scheduled email may not have been sent"
+            message = (
+                f"GAIA could not confirm {detail} was sent. It may already have "
+                f"been sent; check your Sent folder before retrying. {error}"
+            )
+        else:
+            title = "Scheduled email failed"
+            message = f"GAIA could not send {detail}. {error}"
+    elif kind == "snooze":
+        detail = f"the snoozed email ({subject})" if subject else "the snoozed email"
+        title = "Snoozed email restore failed"
+        message = f"GAIA could not restore {detail}. {error}"
+    else:
+        detail = "the scheduled task"
+        title = "Scheduled task failed"
+        message = f"GAIA could not complete {detail}. {error}"
     try:
         from gaia.schedule import sinks
 
-        sinks.dispatch("notification", {"title": "Scheduled email failed"}, message)
+        sinks.dispatch("notification", {"title": title}, message)
     except Exception as exc:  # notification must never mask the durable failure
         log.warning(
             "email scheduler: could not notify user about failed job %s (%s): %s",
