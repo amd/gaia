@@ -20,7 +20,7 @@ except ImportError:
 
 from gaia.env import load_env
 from gaia.eval.claude_credential import announce, api_key_credential
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -123,6 +123,7 @@ class ClaudeClient:
             timeout=300.0,  # 5 minute timeout for large documents
         )
         self.model = model
+        self._pricing = claude_pricing(model)
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.temperature = temperature
@@ -155,8 +156,7 @@ class ClaudeClient:
         Returns:
             dict: Cost breakdown with input_cost, output_cost, and total_cost
         """
-        # Get pricing for the current model, fallback to default if not found
-        pricing = MODEL_PRICING.get(self.model, MODEL_PRICING["default"])
+        pricing = self._pricing
 
         # Calculate costs (convert tokens to millions)
         input_cost = (input_tokens / 1_000_000) * pricing["input_per_mtok"]
