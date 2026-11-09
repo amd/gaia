@@ -285,7 +285,13 @@ print(result)
   </Accordion>
 
   <Accordion title="Performance Tuning">
+    `enable_rag` is on `AgentSDK`, not `SimpleChat`. Pick one of the settings below:
+
     ```python
+    from gaia.chat.sdk import AgentSDK, AgentConfig
+
+    chat = AgentSDK(AgentConfig())
+
     # Faster processing
     chat.enable_rag(documents=["doc.pdf"], chunk_size=300, max_chunks=2)
 
