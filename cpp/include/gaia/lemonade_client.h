@@ -154,6 +154,13 @@ public:
     /// Set server-side parameters.
     json setParams(const json& params);
 
+    /// Embed `inputs` with `model` via POST /embeddings (OpenAI shape), in
+    /// batches. One vector per input, in order. Throws on any failure or a
+    /// response that doesn't hold exactly one vector per input.
+    std::vector<std::vector<float>> embeddings(const std::string& model,
+                                               const std::vector<std::string>& inputs,
+                                               size_t batchSize = 32);
+
     /// Load (or reload) a model on the server.
     ///
     /// Mirrors Python LemonadeClient.load_model():

@@ -76,6 +76,10 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade
 
 The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
 
+### Documents
+
+`index_document` indexes a file or a folder: PDFs (through `pdftotext`, so each passage keeps its page number), Word `.docx`, text, Markdown and code. `query_documents` returns the passages that answer a question, with file and page. Retrieval ranks passages by keywords (BM25), and also by meaning when an embedding model is set with `--embedding-model` or `embeddingModel` in the settings file (`--provider fireworks` uses `nomic-ai/nomic-embed-text-v1.5`); the two rankings are merged. Every result says which mode produced it. A PDF with no text layer, or a file that can't be read, is reported as a failure instead of being indexed empty.
+
 ### Skills
 
 `gaia-cpp` reads the same `SKILL.md` skills as the Python agent. It lists installed skills in its prompt by name and description, and loads a skill's instructions with `load_skill` when the request calls for it. It looks in these folders, and an earlier folder's skill wins over a same-named one later (`list_skills` reports the shadowed copy):
