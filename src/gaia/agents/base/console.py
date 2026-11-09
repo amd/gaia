@@ -237,6 +237,22 @@ def terminal_is_interactive() -> bool:
     return True
 
 
+def someone_can_answer(console: Any) -> bool:
+    """Whether a person can answer a prompt on *console* right now.
+
+    Never on a background run or an unattended sidecar query; always on a
+    console that waits for an explicit decision; on a terminal console, only
+    when the terminal is interactive. Every other console denies.
+    """
+    if getattr(console, "background_mode", False) is True:
+        return False
+    if getattr(console, "nobody_answers", False) is True:
+        return False
+    if getattr(console, "blocking_confirmation", False):
+        return True
+    return isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
+
+
 def _shorten(value: str) -> str:
     """Head+tail shortening, so the end of a command/path stays visible."""
     if len(value) <= MAX_CONFIRMATION_VALUE_CHARS:
