@@ -517,6 +517,13 @@ jobs:
               for p in ${PHASES}; do skip+=(--skip "${p}=${tag} carries no gaia-core files"); done
             fi
             ;;
+          tui-rpm)
+            # The Fedora row's engine phase installs the frozen gaia with install.sh.
+            tag="$(python -c "import json;print(json.load(open(r'${RELEASE_JSON}'))['tag'])")"
+            if ! curl -fsIL -o /dev/null "https://github.com/amd/gaia/releases/download/${tag}/gaia-core-SHA256SUMS.txt"; then
+              skip+=(--skip "engine=${tag} carries no gaia-core files")
+            fi
+            ;;
           esac
           python "$J" run --results "$R" --phases "${PHASES}" --logs "${WORK}/logs/phases" ${skip[@]+"${skip[@]}"} \
             --known installer/headless/known_failures.json --thresholds installer/install_time_thresholds.json \
