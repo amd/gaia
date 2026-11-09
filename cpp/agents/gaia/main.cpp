@@ -104,7 +104,8 @@ void printUsage() {
         "  gaia-cpp [options]                    Interactive session\n"
         "  gaia-cpp -p [PROMPT] [options]        One headless run; PROMPT or stdin\n"
         "  gaia-cpp serve [options]              OpenAI-compatible server\n"
-        "  gaia-cpp skills list|install DIR|remove NAME   Manage installed skills\n"
+        "  gaia-cpp skills list|install DIR|NAME[@VER] [--allow-experimental]|remove NAME\n"
+        "                                        Manage installed skills (hub or folder)\n"
         "  gaia-cpp models list|pull NAME        Lemonade models\n\n"
         "Model:\n"
         "  -m, --model ID            Model id (env GAIA_MODEL_ID)\n"
@@ -546,10 +547,28 @@ int runSkills(int argc, char** argv) {
         return 0;
     }
     if (sub == "install" && argc > 3) {
-        const std::string where = gaia::SkillLibrary::installFromFolder(argv[3]);
+        bool allowExperimental = false;
+        for (int i = 4; i < argc; ++i) {
+            if (std::string(argv[i]) == "--allow-experimental") allowExperimental = true;
+            else usageError(std::string("unknown argument '") + argv[i] + "'");
+        }
+        std::string tier;
+        const std::string what = argv[3];
+        std::error_code ec;
+        std::string where;
+        if (fs::exists(what, ec)) {
+            where = gaia::SkillLibrary::installFromFolder(what, gaia::SkillLibrary::userRoot(),
+                                                          allowExperimental, &tier);
+        } else {
+            // name or name@version from the skill hub
+            const size_t at = what.find('@');
+            where = gaia::SkillLibrary::installFromHub(
+                what.substr(0, at), at == std::string::npos ? "" : what.substr(at + 1),
+                gaia::SkillLibrary::userRoot(), allowExperimental, &tier);
+        }
         gaia::SkillLibrary lib;
         const std::string name = fs::path(where).filename().string();
-        std::cout << "Installed " << name << " in " << where << "\n";
+        std::cout << "Installed " << name << " (" << tier << ") in " << where << "\n";
         if (!lib.skills().at(name).isInstructionOnly()) {
             std::cout << "Note: its Python tools need the Python GAIA runtime; gaia-cpp uses its "
                          "instructions only.\n";

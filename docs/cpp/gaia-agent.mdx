@@ -106,7 +106,7 @@ With Lemonade, `gaia-cpp models list` lists the server's models and `gaia-cpp mo
 
 A skill that ships Python tools (`tools.py`) loads as instructions only, and `load_skill` says so. `--no-skills` leaves skills out.
 
-`gaia-cpp skills install <folder>` validates a skill folder and copies it into the user folder, replacing an installed copy of the same name; `gaia-cpp skills list` and `gaia-cpp skills remove <name>` do the rest. Installing is the user's command, not a tool the agent can call. Installing from the skill hub, with its signature checks, is still Python-only.
+`gaia-cpp skills install <name>[@version]` downloads a skill from the hub (`GAIA_HUB_URL`, default `https://hub.amd-gaia.ai`), checks the bundle against the SHA-256 the hub lists, and verifies its `SIGNATURE.json` the same way the Python runtime does: Ed25519 over every file's digest, checked against the built-in AMD key and `~/.gaia/skills/trusted-keys.json`. A signature that doesn't verify, or files that changed after signing, stop the install. The signature sets the skill's tier: AMD-signed skills are `verified`, ones signed by a key you trust are `community`, and unsigned ones or ones signed by an unknown key are `experimental`, which install only with `--allow-experimental`. `gaia-cpp skills install <folder>` applies the same checks to a local folder. `gaia-cpp skills list` and `gaia-cpp skills remove <name>` do the rest. Installing is the user's command, not a tool the agent can call.
 
 ## Headless runs
 

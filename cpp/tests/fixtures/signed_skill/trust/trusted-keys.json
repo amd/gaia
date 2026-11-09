@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "key_id": "157c98968990fb529a3107c86b391a3f",
+      "public_key": "Gec4oPMbQfiRtGbT/AoebCyFTI6qrx7SVD7sI/bSC7g=",
+      "publisher": "Test Publisher",
+      "role": "publisher"
+    }
+  ]
+}

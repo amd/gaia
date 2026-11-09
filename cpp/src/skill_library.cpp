@@ -5,8 +5,12 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
+#include "gaia/http_client.h"
+#include "gaia/process.h"
+#include "gaia/skill_signing.h"
 #include "gaia/types.h"
 
 #ifdef _WIN32
@@ -219,7 +223,8 @@ std::string SkillLibrary::userRoot() {
     return (fs::path(home) / ".gaia" / "skills").string();
 }
 
-std::string SkillLibrary::installFromFolder(const std::string& source, const std::string& destRoot) {
+std::string SkillLibrary::installFromFolder(const std::string& source, const std::string& destRoot,
+                                            bool allowExperimental, std::string* tierOut) {
     std::error_code ec;
     fs::path src = fs::absolute(source, ec);
     if (fs::is_regular_file(src, ec) && src.filename() == "SKILL.md") src = src.parent_path();
@@ -229,6 +234,17 @@ std::string SkillLibrary::installFromFolder(const std::string& source, const std
     // Validates the frontmatter and that the folder is named after the skill.
     const Skill skill = parseSkillFile(src.string(), "user", false, true);
     validateSkill(skill, (src / "SKILL.md").string());
+    const SkillSignature sig =
+        verifySkillBundle(src.string(), skill.name, skill.version.value_or(""), destRoot);
+    if (tierOut) *tierOut = sig.tier();
+    if (sig.tier() == "experimental" && !allowExperimental) {
+        throw SkillError(
+            std::string("'") + skill.name + "' is " +
+            (sig.signedBundle ? "signed by a key you haven't trusted (" + sig.keyId + ")"
+                              : "unsigned") +
+            ", so it is an experimental skill. Install it only if you trust its source: "
+            "rerun with --allow-experimental.");
+    }
 
     const fs::path root(destRoot);
     fs::create_directories(root, ec);
@@ -254,6 +270,91 @@ std::string SkillLibrary::installFromFolder(const std::string& source, const std
     }
     fs::remove_all(retired, ec);
     return target.string();
+}
+
+std::string SkillLibrary::hubUrl() {
+    std::string url = getEnvVar("GAIA_HUB_URL", "https://hub.amd-gaia.ai");
+    while (!url.empty() && url.back() == '/') url.pop_back();
+    return url;
+}
+
+std::string SkillLibrary::installFromHub(const std::string& name, const std::string& version,
+                                         const std::string& destRoot, bool allowExperimental,
+                                         std::string* tierOut) {
+    if (name.empty() || name.find_first_of("/\\.") != std::string::npos) {
+        throw SkillError("Not a skill name: '" + name + "'");
+    }
+    if (version.find_first_of("^~*<>= ,") != std::string::npos) {
+        throw SkillError("gaia-cpp installs exact versions only (e.g. " + name +
+                         "@1.0.3); got the range '" + version + "'.");
+    }
+    HttpClientConfig hc;
+    hc.baseUrl = hubUrl();
+    hc.timeoutSec = 120;
+    HttpClient http(hc);
+    json manifest;
+    try {
+        manifest = json::parse(http.get("/skills/" + name + "/manifest.json").body);
+    } catch (const HttpError& e) {
+        if (e.status() == 404) throw SkillError("The skill hub has no skill named '" + name + "'.");
+        throw SkillError("Couldn't reach the skill hub at " + hubUrl() + ": " + e.what() +
+                         " Check your network, or set GAIA_HUB_URL.");
+    }
+    const std::string ver = version.empty() ? manifest.value("latest_version", "") : version;
+    const json versions = manifest.value("versions", json::object());
+    if (ver.empty() || !versions.contains(ver)) {
+        std::string published;
+        for (auto& [v, _] : versions.items()) published += (published.empty() ? "" : ", ") + v;
+        throw SkillError("Skill '" + name + "' has no published version '" + ver +
+                         "'. Published: " + (published.empty() ? "none" : published) + ".");
+    }
+    json artifact = versions[ver].value("artifact", json());
+    if (!artifact.is_object() && versions[ver].contains("artifacts") &&
+        !versions[ver]["artifacts"].empty()) {
+        artifact = versions[ver]["artifacts"][0];
+    }
+    const std::string filename = artifact.is_object() ? artifact.value("filename", "") : "";
+    const std::string expected = artifact.is_object() ? artifact.value("sha256", "") : "";
+    if (filename.empty() || expected.empty() || filename.find_first_of("/\\") != std::string::npos) {
+        throw SkillError("The hub manifest for '" + name + "' " + ver +
+                         " has no artifact with a filename and sha256, so it can't be verified. "
+                         "This is a hub-side problem; report it.");
+    }
+    const std::string bytes = http.get("/skills/" + name + "/" + ver + "/" + filename).body;
+    const std::string actual = skillSha256Hex(bytes);
+    if (actual != expected) {
+        throw SkillError("The downloaded bundle for '" + name + "' " + ver + " hashes to " + actual +
+                         ", but the hub lists " + expected + ". Refusing to install.");
+    }
+
+    std::error_code ec;
+    const fs::path work = fs::temp_directory_path() / ("gaia-skill-" + name + "-" + actual.substr(0, 12));
+    fs::remove_all(work, ec);
+    fs::create_directories(work / "x");
+    const fs::path zip = work / filename;
+    std::ofstream(zip, std::ios::binary) << bytes;
+#ifdef _WIN32
+    const std::string cmd = "tar -xf \"" + zip.string() + "\" -C \"" + (work / "x").string() + "\"";
+#else
+    const std::string cmd = "unzip -q -o '" + zip.string() + "' -d '" + (work / "x").string() + "'";
+#endif
+    const ProcessResult r = ProcessRunner::run(cmd, 60000);
+    if (r.exitCode != 0) {
+        fs::remove_all(work, ec);
+        throw SkillError("Couldn't unpack " + filename + " (" +
+                         (r.exitCode == 127 ? std::string("unzip is not installed")
+                                            : r.stderr_output.substr(0, 200)) + ").");
+    }
+    fs::path skillDir = work / "x" / name;
+    if (!fs::is_regular_file(skillDir / "SKILL.md", ec)) skillDir = work / "x";
+    try {
+        const std::string where = installFromFolder(skillDir.string(), destRoot, allowExperimental, tierOut);
+        fs::remove_all(work, ec);
+        return where;
+    } catch (...) {
+        fs::remove_all(work, ec);
+        throw;
+    }
 }
 
 bool SkillLibrary::removeInstalled(const std::string& name, const std::string& root) {
