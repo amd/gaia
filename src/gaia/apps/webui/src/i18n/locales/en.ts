@@ -1000,7 +1000,6 @@ export const enMessages = {
     'setup.pc.step': 'This PC',
     'setup.pc.backend.installed': 'Installed',
     'setup.pc.backend.available': 'Downloads when needed',
-    'setup.pc.backend.unsupported': 'Not supported here',
     'setup.gpu.title': 'GPU memory',
     'setup.gpu.lede': 'Optional. GAIA changes nothing unless you pick a new size.',
     'setup.models.step': 'Models',
@@ -1490,7 +1489,6 @@ export const enMessages = {
     'engine.openLog': 'Open log file',
 
     // The GPU memory step and Settings section
-    'gpu.title': 'Give the GPU more memory',
     'gpu.settingsTitle': 'GPU memory',
     'gpu.body': 'This PC shares {total} between the processor (CPU) and graphics (GPU). The GPU has {gpu} now. AI models run on the GPU, so more here means bigger models.',
     'gpu.split.aria': 'Memory split: CPU {cpu}, GPU {gpu}',
