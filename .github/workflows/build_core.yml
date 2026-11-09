@@ -227,6 +227,7 @@ jobs:
           path: gaia-core-${{ matrix.key }}.tar.gz
           if-no-files-found: error
 
+  # Ubuntu 24.04 is the Linux floor: Lemonade's engine needs glibc 2.38.
   # The freshly frozen gaia, on the hosts users have, sets up a REAL Lemonade
   # and answers one chat turn: no fake server, no source install. The freeze
   # job's smoke test runs with Lemonade unreachable, inside a glibc-floor
@@ -243,7 +244,6 @@ jobs:
         include:
           - {label: Windows, os: windows-latest, key: win32-x64, exe: gaia.exe}
           - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
-          - {label: Ubuntu 22.04, os: ubuntu-22.04, key: linux-x64, exe: gaia}
           - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
           - {label: Fedora, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:latest'}
     steps:
@@ -261,7 +261,7 @@ jobs:
 
       - name: Prepare the Fedora container
         if: steps.want.outputs.run == 'true' && matrix.container
-        run: dnf install -y --setopt=install_weak_deps=False tar gzip findutils which procps-ng libatomic
+        run: dnf install -y --setopt=install_weak_deps=False tar gzip findutils which procps-ng libatomic openssl-libs
 
       - uses: actions/checkout@v7
         if: steps.want.outputs.run == 'true'
@@ -282,7 +282,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/core"
-          tar -C "${RUNNER_TEMP}/core" -xzf "${RUNNER_TEMP}/core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
+          # Relative paths: GNU tar on Windows reads "C:" as a remote host.
+          cd "${RUNNER_TEMP}"
+          tar -C core -xzf "core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
 
       - name: Set up and chat through a real Lemonade
         if: steps.want.outputs.run == 'true'
