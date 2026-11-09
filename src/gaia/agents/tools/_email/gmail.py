@@ -44,16 +44,23 @@ _GMAIL_MAX_LIMIT = 100
 # concurrency limit.
 _FETCH_CONCURRENCY = 5
 
-# `metadataHeaders` is only honoured alongside `format=metadata`; sending
-# either alone silently returns the wrong thing.
-_METADATA_HEADERS = (
-    "Subject",
-    "From",
-    "To",
-    "Cc",
-    "Date",
-    "Auto-Submitted",
-    "X-Autoreply",
+# `format=metadata` drops `payload.parts`, which is where attachments live, so
+# listings ask for `full` and use a partial-response mask to leave every
+# body's `data` off the wire. Gmail's `fields` syntax has no recursion, so the
+# part tree is spelled out to a depth no real message reaches.
+_PART_TREE_DEPTH = 8
+
+
+def _part_fields(depth: int) -> str:
+    fields = "mimeType,filename,headers,body/size"
+    if depth:
+        fields += f",parts({_part_fields(depth - 1)})"
+    return fields
+
+
+_SUMMARY_FIELDS = (
+    "id,threadId,labelIds,snippet,internalDate,"
+    f"payload({_part_fields(_PART_TREE_DEPTH)})"
 )
 
 # Gmail label IDs that are mailbox state, not user tags. `categories` must
@@ -193,6 +200,31 @@ def _select_body(payload: Dict[str, Any]) -> tuple:
     return "", "text"
 
 
+def _is_inline(headers: Dict[str, str]) -> bool:
+    """An inline image (signature logo, ``cid:`` reference), not a file."""
+    disposition = headers.get("content-disposition", "").strip().lower()
+    if disposition.startswith("attachment"):
+        return False
+    return disposition.startswith("inline") or bool(headers.get("content-id"))
+
+
+def _attachments(part: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Name, type and size of each attached file. Content is never read."""
+    found: List[Dict[str, Any]] = []
+    filename = part.get("filename") or ""
+    if filename and not _is_inline(_header_map(part)):
+        found.append(
+            {
+                "name": _decode(filename),
+                "mime_type": (part.get("mimeType") or "").lower(),
+                "size": int((part.get("body") or {}).get("size") or 0),
+            }
+        )
+    for child in part.get("parts") or []:
+        found.extend(_attachments(child))
+    return found
+
+
 def _categories(
     label_ids: Optional[Iterable[str]], label_names: Optional[Dict[str, str]]
 ) -> List[str]:
@@ -219,6 +251,7 @@ def message_summary(
     payload = msg.get("payload") or {}
     headers = _header_map(payload)
     labels = set(msg.get("labelIds") or [])
+    attachments = _attachments(payload)
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("threadId") or msg.get("id"),
@@ -232,8 +265,10 @@ def message_summary(
         "categories": _categories(msg.get("labelIds"), label_names),
         # Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
         "preview": html.unescape(msg.get("snippet") or "").strip(),
+        "has_attachments": bool(attachments),
+        "attachments": attachments,
         # Kept for the waiting-on-you detector; not shown as user-facing mail
-        # content. Gmail returns these through metadataHeaders.
+        # content.
         "auto_submitted": _decode(headers.get("auto-submitted")),
         "x_autoreply": _decode(headers.get("x-autoreply")),
     }
@@ -397,13 +432,13 @@ class GmailReadBackend:
         return [m["id"] for m in (data.get("messages") or []) if m.get("id")]
 
     def _fetch_summaries(self, ids: Sequence[str]) -> List[Dict[str, Any]]:
-        """Metadata for every id. `metadataHeaders` needs `format=metadata`."""
+        """Metadata and attachment names for every id, without bodies."""
         if not ids:
             return []
         label_names = self._label_map()
         messages = self._fan_out(
             [f"/users/me/messages/{mid}" for mid in ids],
-            {"format": "metadata", "metadataHeaders": list(_METADATA_HEADERS)},
+            {"format": "full", "fields": _SUMMARY_FIELDS},
         )
         return [message_summary(m, label_names=label_names) for m in messages]
 

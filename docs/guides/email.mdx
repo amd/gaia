@@ -17,7 +17,7 @@ These eight tools are the whole surface.
 | Tool | What you'd ask for |
 |---|---|
 | `check_mailbox_access` | *"Is my email set up?"* — reports which mailbox was picked, the connected address, and the inbox unread count. Also the first thing to call after another mail tool fails. |
-| `list_inbox` | *"What came in today?"*, *"What's unread?"* — recent inbox mail, newest first: sender, subject, received time, unread/flagged state, and a short preview. Never full bodies. |
+| `list_inbox` | *"What came in today?"*, *"What's unread?"* — recent inbox mail, newest first: sender, subject, received time, unread/flagged state, attached files (name, type and size), and a short preview. Never full bodies, and never the attachments themselves. |
 | `search_email` | *"Did I get anything about the Acme invoice?"* — searches every folder, in **relevance** order rather than newest-first. Every term is ANDed, so 2–3 distinctive keywords beat a sentence. If nothing matches, it retries with progressively fewer terms and flags the result as approximate, so you may see hits for a narrower query than you typed. |
 | `read_email` | *"Open that one"* — one message in full, including its body. Very long bodies are truncated, and the result says so. |
 | `list_mail_folders` | *"How much is sitting in Archive?"* — every folder with its unread and total counts. |
