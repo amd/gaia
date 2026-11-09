@@ -428,6 +428,12 @@ class ChatDatabase:
         'autonomous' never had its own behaviour (#2005) and is refused on
         write, so 'goal_driven' is what such a database already ran as.
         """
+        # Read first: reopening a current database must take no write lock.
+        legacy = self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'agent_mode' AND value = 'autonomous'"
+        ).fetchone()
+        if legacy is None:
+            return
         with self._transaction():
             changed = self._conn.execute(
                 "UPDATE settings SET value = 'goal_driven' "
