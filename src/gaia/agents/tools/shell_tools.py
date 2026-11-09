@@ -2754,6 +2754,117 @@ def _posix_pipe_positions(text: str) -> list:
 #: The only characters a cmd.exe line may hold and still be classified read-only.
 _CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
 
+#: What a line run with nobody asked may hold. No quote, caret, %, !, redirect
+#: or bracket, so GAIA and cmd.exe or sh cannot read it two different ways;
+#: no comma or semicolon either, which cmd's ``dir`` reads as a path separator.
+_UNASKED_LINE = re.compile(r"[A-Za-z0-9 \t._\\/:+|&-]*")
+#: Hiding or merging stderr, the one redirect such a line may carry.
+_DISCARDED_STDERR = re.compile(
+    r"(?<!\S)2>(?:/dev/null|nul|\$null|&1)(?=$|[\s;&|])", re.I
+)
+
+#: Commands that may run with nobody asked: each only prints what it reads, and
+#: none takes a flag that writes, runs a program, or reaches another machine.
+_UNASKED_COMMANDS = frozenset(
+    {
+        "ls",
+        "dir",
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "wc",
+        "stat",
+        "df",
+        "whoami",
+        "uname",
+        "which",
+        "whereis",
+        "basename",
+        "dirname",
+        "echo",
+        "git",
+    }
+)
+
+#: An option with nothing attached; a value in its own word gets the path check.
+_UNASKED_FLAG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
+#: A Windows switch carrying a value (``findstr /d:C:\Windows``) hides a path.
+_SWITCH_WITH_VALUE = re.compile(r"/[A-Za-z?]+:")
+#: Any Windows switch: ``/s`` hides in bundles like ``/si``, so none run unasked.
+_WINDOWS_SWITCH = re.compile(r"/[A-Za-z?]+")
+#: ``D:x`` is relative to drive D's own current folder, not to this one.
+_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/])")
+
+
+def _segment_runs_unasked(segment: list) -> bool:
+    """Whether *segment* is a listed command, by bare name, with plain options."""
+    name = segment[0].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name not in _UNASKED_COMMANDS:
+        return False
+    for word in segment[1:]:
+        if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
+            return False
+        if _WINDOWS_SWITCH.fullmatch(word) or _SWITCH_WITH_VALUE.match(word):
+            return False
+        if _DRIVE_RELATIVE.match(word) or ".." in re.split(r"[\\/]", word):
+            # ``link/..`` climbs from where the link lands, not from here.
+            return False
+    return True
+
+
+#: Long options that walk a tree or follow a link.
+_WALKING_OPTIONS = frozenset(
+    {"--recursive", "--dereference", "--dereference-recursive"}
+)
+#: How many entries a walk may check for links before the run asks instead.
+_WALK_LIMIT = 5000
+
+
+def _segment_walks(segment: list) -> bool:
+    """Whether *segment* descends into folders or follows links (-r, -R, -L, /s)."""
+    for word in segment[1:]:
+        lowered = word.lower()
+        if lowered in _WALKING_OPTIONS or lowered == "/s":
+            return True
+        if word.startswith("-") and not word.startswith("--"):
+            if any(letter in word for letter in "rRL"):
+                return True
+    return False
+
+
+def _is_link(path: str) -> bool:
+    """A symlink, or a Windows junction (which ``islink`` does not report)."""
+    if os.path.islink(path):
+        return True
+    if not os.path.isdir(path):
+        return False
+    parent, name = os.path.split(os.path.abspath(path))
+    expected = os.path.join(os.path.realpath(parent), name)
+    return os.path.normcase(os.path.realpath(path)) != os.path.normcase(expected)
+
+
+def _tree_has_links(root: str) -> bool:
+    """Whether a walk of *root* meets a link, or more entries than it will check."""
+    seen = 0
+    pending = [root]
+    while pending:
+        folder = pending.pop()
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            return True
+        for entry in entries:
+            seen += 1
+            if seen > _WALK_LIMIT or _is_link(entry.path):
+                return True
+            if entry.is_dir(follow_symlinks=False):
+                pending.append(entry.path)
+    return False
+
 
 #: git reads that never start a program a repository's own config can name.
 #: ``status`` runs core.fsmonitor; anything that renders a diff can run
@@ -2785,7 +2896,11 @@ def _git_dirs(start: str) -> Optional[List[Path]]:
     for folder in (here, *here.parents):
         dot = folder / ".git"
         if dot.is_dir():
-            return [dot]
+            # git skips a .git that is not a repository and keeps looking up.
+            complete = (dot / "HEAD").is_file() and all(
+                (dot / part).is_dir() for part in ("objects", "refs")
+            )
+            return [dot] if complete else None
         if (folder / "HEAD").is_file() and (folder / "objects").is_dir():
             # A bare repository: git reads this folder's own config.
             return None
@@ -3793,17 +3908,18 @@ class ShellToolsMixin:
         """Whether this call only reads, inside the allowed folders, so nobody is asked.
 
         Asking before ``git log`` or ``ls`` teaches people to click Allow without
-        reading. A line qualifies only when every command on it passes the
-        read-only allowlist with nothing to confirm, ``cd`` aside, and the
-        folders it reaches pass the same path checks as any run; anything the
-        shell itself could rewrite (``$``, backticks, globs, braces, and on
-        Windows a piped line that is not plain text) still asks.
+        reading. A line qualifies only when every command on it is one of
+        :data:`_UNASKED_COMMANDS` with plain options, passes the read-only
+        allowlist with nothing to confirm, ``cd`` aside, and the folders it
+        reaches pass the same path checks as any run. A line holding anything
+        a shell could read differently from GAIA (quotes, ``^``, ``%``, ``$``,
+        redirects, globs) still asks.
         """
         command = tool_args.get("command")
         if not isinstance(command, str) or not command.strip():
             return False
-        bare, _ = _take_stderr_redirections(command)
-        if any(char in bare for char in "$`{*?["):
+        bare = _DISCARDED_STDERR.sub("", command)
+        if not _UNASKED_LINE.fullmatch(bare):
             return False
         lowered = bare.lower()
         if "powershell" in lowered or "pwsh" in lowered:
@@ -3817,7 +3933,8 @@ class ShellToolsMixin:
         cwd = located[0]
         for step in steps:
             if step.is_cd:
-                if len(step.segments[0]) != 2:
+                target = step.segments[0][-1]
+                if len(step.segments[0]) != 2 or ".." in re.split(r"[\\/]", target):
                     return False
                 cwd = os.path.join(cwd, _expand_home(step.cd_target) or "")
                 continue
@@ -3832,7 +3949,7 @@ class ShellToolsMixin:
             for segment in step.segments:
                 if (
                     not segment
-                    or _interpreter_name(segment[0]) == "powershell"
+                    or not _segment_runs_unasked(segment)
                     or _git_may_run_repo_programs(segment, cwd)
                     or self._validate_command(
                         segment[0].lower(),
@@ -3842,10 +3959,48 @@ class ShellToolsMixin:
                         bypass_gates=False,
                     )
                     is not None
+                    or not self._reaches_only_allowed(segment, cwd)
                 ):
                     return False
         error, _ = self._line_verdict(command, tool_args.get("working_directory"))
         return error is None
+
+    def _reaches_only_allowed(self, segment: list, cwd: str) -> bool:
+        """Whether the folder *segment* runs in, every path it names, and every
+        folder it walks really lie in the allowed folders. A link inside them
+        can point anywhere, so each is followed to where it lands."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return False
+
+        def inside(path: str) -> bool:
+            real = os.path.realpath(path)
+            return bool(validator.is_path_allowed(real, prompt_user=False))
+
+        if not inside(cwd):
+            return False
+        if (_program_behind(segment[0]) or segment[0]).lower() == "git":
+            # A .git file can point at a repository anywhere.
+            where, rest = cwd, segment[1:]
+            while len(rest) >= 2 and rest[0] == "-C":
+                where, rest = os.path.join(where, rest[1]), rest[2:]
+            dirs = _git_dirs(where)
+            if dirs is None or not all(inside(str(d)) for d in dirs):
+                return False
+        walked = []
+        for word in segment[1:]:
+            if word.startswith("-"):
+                continue
+            path = os.path.join(cwd, word)
+            if not os.path.lexists(path):
+                continue
+            if not inside(path):
+                return False
+            if os.path.isdir(path):
+                walked.append(path)
+        if _segment_walks(segment):
+            return not any(_tree_has_links(path) for path in walked or [cwd])
+        return True
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
