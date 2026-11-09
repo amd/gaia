@@ -47,6 +47,8 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
             };
         }
         docs_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel);
+        // Code gets its own index so a document question never ranks source files.
+        code_ = std::make_unique<DocumentIndex>(embed, options_.embeddingModel, ChunkingConfig{200, 40});
     }
     init();
 }
@@ -81,6 +83,7 @@ void GaiaAgent::registerTools() {
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
     if (memory_) memory_->registerTools(toolRegistry());
+    if (code_) registerCodeTools(ws);
     if (options_.vision) registerVisionTool(ws);
 }
 
@@ -142,6 +145,59 @@ std::string GaiaAgent::systemContext() const {
     }
 #endif
     return out.str();
+}
+
+void GaiaAgent::registerCodeTools(std::shared_ptr<const Workspace> ws) {
+    ToolInfo index;
+    index.name = "index_codebase";
+    index.description =
+        "Index a code project (default: the working folder) so search_code can find code by "
+        "meaning or keywords. Honors .gitignore and skips dependency and build folders.";
+    index.parameters = {{"path", ToolParamType::STRING, false, "Project folder."}};
+    index.policy = ToolPolicy::ALLOW;
+    index.callback = [this, ws](const json& a) -> json {
+        std::error_code ec;
+        const std::string root = a.value("path", fs::current_path(ec).string());
+        if (ws) {
+            const std::string why = ws->checkPath(root);
+            if (!why.empty()) return {{"status", "error"}, {"error", why}};
+        }
+        if (!fs::is_directory(root, ec)) return {{"status", "error"}, {"error", "Not a folder: " + root}};
+        std::vector<std::string> failed;
+        const size_t chunks = code_->indexDirectory(root, &failed);
+        json out = {{"status", chunks ? "success" : "error"}, {"files", code_->files().size()},
+                    {"chunks", chunks}};
+        if (!chunks) out["error"] = "No source files found under " + root;
+        if (!failed.empty()) out["failed"] = failed;
+        return out;
+    };
+    toolRegistry().registerTool(std::move(index));
+
+    ToolInfo search;
+    search.name = "search_code";
+    search.description =
+        "Find code that matches a description or identifiers (e.g. 'where are retries "
+        "configured'). Returns file paths and snippets. Index the codebase first.";
+    search.parameters = {{"query", ToolParamType::STRING, true, "What to find."},
+                         {"top_k", ToolParamType::INTEGER, false, "Snippets (default 8, max 25)."},
+                         {"file", ToolParamType::STRING, false, "Only files whose path contains this."}};
+    search.policy = ToolPolicy::ALLOW;
+    search.callback = [this](const json& a) -> json {
+        if (code_->files().empty()) {
+            return {{"status", "error"}, {"error", "The codebase isn't indexed yet. Call index_codebase first."}};
+        }
+        const size_t k = static_cast<size_t>(std::clamp<long long>(a.value("top_k", 8LL), 1, 25));
+        json results = json::array();
+        try {
+            for (const auto& h : code_->query(a.value("query", ""), k, a.value("file", ""))) {
+                results.push_back({{"file", h.chunk.file}, {"snippet", h.chunk.text}});
+            }
+        } catch (const std::exception& e) {
+            return {{"status", "error"}, {"error", std::string("Code search failed: ") + e.what()}};
+        }
+        return {{"status", "success"}, {"results", results}};
+    };
+    toolRegistry().registerTool(std::move(search));
 }
 
 void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {

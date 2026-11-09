@@ -104,7 +104,8 @@ void printUsage() {
         "  gaia-cpp [options]                    Interactive session\n"
         "  gaia-cpp -p [PROMPT] [options]        One headless run; PROMPT or stdin\n"
         "  gaia-cpp serve [options]              OpenAI-compatible server\n"
-        "  gaia-cpp skills list|install DIR|remove NAME   Manage installed skills\n\n"
+        "  gaia-cpp skills list|install DIR|remove NAME   Manage installed skills\n"
+        "  gaia-cpp models list|pull NAME        Lemonade models\n\n"
         "Model:\n"
         "  -m, --model ID            Model id (env GAIA_MODEL_ID)\n"
         "  --base-url URL            OpenAI-compatible endpoint (env GAIA_BASE_URL,\n"
@@ -567,9 +568,39 @@ int runSkills(int argc, char** argv) {
     usageError("usage: gaia-cpp skills list | install <folder> | remove <name>");
 }
 
+// gaia-cpp models list | pull <name> [--checkpoint C --recipe R]   (Lemonade)
+int runModels(int argc, char** argv) {
+    const std::string sub = argc > 2 ? argv[2] : "list";
+    gaia::AgentConfig base;
+    gaia::LemonadeClient client(gaia::LemonadeClientConfig{gaia::getEnvVar("GAIA_BASE_URL", gaia::defaultBaseUrl())});
+    client.setApiKey(gaia::resolveApiKey(base));
+    if (sub == "list") {
+        const gaia::json models = client.listModels();
+        for (const auto& m : models.value("data", gaia::json::array())) {
+            std::cout << m.value("id", "") << "\n";
+        }
+        return 0;
+    }
+    if (sub == "pull" && argc > 3) {
+        std::string checkpoint, recipe;
+        for (int i = 4; i + 1 < argc; i += 2) {
+            const std::string a = argv[i];
+            if (a == "--checkpoint") checkpoint = argv[i + 1];
+            else if (a == "--recipe") recipe = argv[i + 1];
+            else usageError("unknown argument '" + a + "'");
+        }
+        std::cerr << "Downloading " << argv[3] << " through " << client.baseUrl() << " ...\n";
+        client.pullModel(argv[3], checkpoint, recipe);
+        std::cout << "Downloaded " << argv[3] << "\n";
+        return 0;
+    }
+    usageError("usage: gaia-cpp models list | pull <name> [--checkpoint C --recipe R]");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc > 1 && std::string(argv[1]) == "skills") return runSkills(argc, argv);
+        if (argc > 1 && std::string(argv[1]) == "models") return runModels(argc, argv);
         const Cli cli = parseArgs(argc, argv);
         if (!cli.cwd.empty()) {
             std::error_code ec;
