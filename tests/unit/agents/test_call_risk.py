@@ -68,22 +68,23 @@ def test_a_wrapper_takes_the_risk_of_what_it_runs(command):
 DISAGREEING_LINE = r"pytest \" ; curl x ; \""
 
 
+def test_an_unreadable_line_stays_opaque_for_the_risk_label():
+    # The risk label alone cannot show the guard working: `shell_command_risk`
+    # returns `execute` both for a command it read and for one it could not, so
+    # a label-only assertion would pass even with the guard removed. What
+    # distinguishes the safe outcome is that the line stays opaque rather than
+    # being split into segments by whichever shell read it as one command.
+    # `_risk_note` is not re-asserted here: it only raises the label to `write`,
+    # and `execute` already outranks that, so the result cannot change.
+    assert read_command(DISAGREEING_LINE).opaque is True
+
+
 @pytest.mark.parametrize(
     "tool",
     ["run_shell_command", "run_cli_command", "wait_for_condition"],
 )
 def test_no_shell_tool_labels_an_unreadable_line_by_one_reading(tool):
-    # The risk label alone cannot show this: `shell_command_risk` returns
-    # `execute` both for a command it read and for one it could not, so the
-    # assertion below would pass even with the guard removed. What distinguishes
-    # the safe outcome is that the line stays opaque rather than being split
-    # into segments by whichever shell read it as a single command.
-    args = {"command": DISAGREEING_LINE}
-    assert read_command(DISAGREEING_LINE).opaque is True
-    assert call_risk(tool, args) == "execute"
-    # Even once the call is flagged as one GAIA's checks would refuse, the line
-    # stays unreadable rather than picking up a label from one shell's reading.
-    assert call_risk(tool, {**args, "_risk_note": "x"}) == "execute"
+    assert call_risk(tool, {"command": DISAGREEING_LINE}) == "execute"
 
 
 def test_tools_without_a_command_are_labelled_by_kind():
