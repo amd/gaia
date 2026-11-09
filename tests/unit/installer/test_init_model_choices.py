@@ -446,6 +446,13 @@ def test_npu_profile_ignores_a_downloaded_gpu_last_model(lemonade, home, monkeyp
     assert choice.model_id == NPU_DEFAULT_MODEL_NAME
     assert choice.user_set is False
 
+    # The guard drops only GPU models, not every saved one.
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+
 
 def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
     """`gaia init` must agree with the check and not pull the hardware default."""
@@ -458,31 +465,6 @@ def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
     assert _download(InitCommand(profile="gaia", yes=True))
     assert DEFAULT_MODEL_NAME not in _pulled(fake)
     assert LARGE_DEFAULT_MODEL_NAME not in _pulled(fake)
-
-
-def test_npu_profile_ignores_a_gpu_model_last_chatted_on(lemonade, home):
-    """`--profile npu` asks for the NPU; a GPU last_model must not replace it."""
-    from gaia.installer.init_command import resolve_init_chat_model
-
-    fake = lemonade(
-        downloaded=[EMBEDDER, DEFAULT_MODEL_NAME],
-        npu=True,
-        extra=[(NPU_DEFAULT_MODEL_NAME, 9.1, ["chat"], "flm")],
-    )
-    home.write_text(
-        json.dumps({"last_provider": "local", "last_model": DEFAULT_MODEL_NAME})
-    )
-    choice = resolve_init_chat_model(
-        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
-    )
-    assert (choice.model_id, choice.user_set) == (NPU_DEFAULT_MODEL_NAME, False)
-    # An NPU model last chatted on still holds on the NPU profile.
-    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
-    fake.entries[FLM]["downloaded"] = True
-    choice = resolve_init_chat_model(
-        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
-    )
-    assert (choice.model_id, choice.user_set) == (FLM, True)
 
 
 def test_check_ignores_a_last_model_that_is_not_downloaded_or_not_local(
