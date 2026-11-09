@@ -48,6 +48,7 @@ ToolInfo BashTools::bashExecute() {
     };
     info.callback = doBashExecute;
     info.policy = ToolPolicy::CONFIRM;
+    info.grantScope = [](const json& args) { return shellCommandScope(args.value("command", "")); };
     return info;
 }
 

@@ -131,3 +131,35 @@ TEST(GaiaAgentTest, AnalyzeImageSendsTheImageToTheModel) {
         "analyze_image", json{{"path", "/etc/hostname"}, {"question", "?"}});
     EXPECT_EQ(outside["status"], "error");
 }
+
+TEST(GaiaAgentTest, ClaimingTestsRanWithoutRunningThemIsSentBack) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Fixed the bug, and all 12 tests pass."));
+    mock.pushResponse(answer("Fixed the bug; I did not run the tests."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("fix it");
+    EXPECT_EQ(r["result"], "Fixed the bug; I did not run the tests.");
+    EXPECT_NE(mock.receivedBodies()[1].find("no command ran"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, SayingAFileIsMissingWithoutLookingIsSentBack) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("budget.xlsx doesn't exist in your folder."));
+    mock.pushResponse(answer("I checked: budget.xlsx is not in the folder."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("total budget.xlsx");
+    EXPECT_EQ(r["result"], "I checked: budget.xlsx is not in the folder.");
+    EXPECT_NE(mock.receivedBodies()[1].find("you didn't look"), std::string::npos);
+    EXPECT_EQ(mock.receivedBodies().size(), 2u) << "sent back once, then accepted";
+}
+
+TEST(GaiaAgentTest, PlainAnswersAreNotSentBack) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Paris is the capital of France."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    agent.processQuery("capital of France?");
+    EXPECT_EQ(mock.receivedBodies().size(), 1u);
+}

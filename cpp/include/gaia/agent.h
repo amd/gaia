@@ -312,6 +312,16 @@ protected:
         return std::nullopt;
     }
 
+    /// One tool call made during the current query.
+    struct ToolCallRecord {
+        std::string name;
+        json args;
+        bool succeeded = false;
+    };
+
+    /// Every tool call of the query in progress, in order (for answer review).
+    const std::vector<ToolCallRecord>& turnToolCalls() const { return turnToolCalls_; }
+
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
     /// conversation turn: concurrency guard, empty-input validation,
@@ -410,6 +420,7 @@ private:
     int planIterations_ = 0;
 
     std::vector<std::string> errorHistory_;
+    std::vector<ToolCallRecord> turnToolCalls_;
     std::vector<Message> conversationHistory_;
 
     // Full text of recent tool outputs, by id, for read_tool_output.

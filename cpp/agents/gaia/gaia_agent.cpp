@@ -241,17 +241,59 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
         return false;
     };
 
+    std::vector<std::string> notes;
+
     std::vector<std::string> missing;
     for (const auto& f : claimedFiles(answer)) {
         if (!exists(f)) missing.push_back(f);
     }
-    if (missing.empty()) return std::nullopt;
-    std::string list;
-    for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
-    return "Your answer says " + list + (missing.size() == 1 ? " was" : " were") +
-           " created or saved, but no such file exists in the working folders. Create " +
-           (missing.size() == 1 ? "it" : "them") +
-           " now, or correct the answer so it doesn't claim work that wasn't done.";
+    if (!missing.empty()) {
+        std::string list;
+        for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
+        notes.push_back("Your answer says " + list + (missing.size() == 1 ? " was" : " were") +
+                        " created or saved, but no such file exists in the working folders. "
+                        "Create " + (missing.size() == 1 ? "it" : "them") +
+                        " now, or correct the answer so it doesn't claim work that wasn't done.");
+    }
+
+    const auto& calls = turnToolCalls();
+    auto called = [&calls](std::initializer_list<const char*> names, bool mustSucceed) {
+        return std::any_of(calls.begin(), calls.end(), [&](const ToolCallRecord& c) {
+            if (mustSucceed && !c.succeeded) return false;
+            for (const char* n : names) {
+                if (c.name == n) return true;
+            }
+            return false;
+        });
+    };
+
+    static const std::regex ranClaim(
+        R"(\b(I ran|I've run|I have run|ran the (tests?|script|command|program|code)|executed the|)"
+        R"(tests? (all )?pass(ed|es)?|all \d+ tests pass))",
+        std::regex::icase);
+    if (std::regex_search(answer, ranClaim) && !called({"bash_execute"}, true)) {
+        notes.push_back("Your answer says a command or the tests ran, but no command ran "
+                        "successfully in this request. Run it, or say it wasn't run.");
+    }
+
+    static const std::regex absentClaim(
+        R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
+        R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
+        std::regex::icase);
+    if (std::regex_search(answer, absentClaim) &&
+        !called({"file_search", "file_read", "bash_execute", "list_skills", "query_documents",
+                 "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch",
+                 "recall"},
+                false)) {
+        notes.push_back("Your answer says something is missing or not found, but you didn't "
+                        "look. Check (list the folder, search, or read the file) before "
+                        "saying it isn't there.");
+    }
+
+    if (notes.empty()) return std::nullopt;
+    std::string out;
+    for (const auto& n : notes) out += (out.empty() ? "" : " ") + n;
+    return out;
 }
 
 } // namespace gaia
