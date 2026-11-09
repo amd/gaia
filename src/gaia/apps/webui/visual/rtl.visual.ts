@@ -2183,6 +2183,34 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the chat-create error sits below the window controls and is not a drag handle (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await p.route((u) => u.pathname === '/api/sessions', async (route) => {
+                if (route.request().method() === 'POST') return route.fulfill({ json: SESSIONS[0] });
+                return route.fallback();
+            });
+            await p.route(`**/api/chat/permissions/${SESSIONS[0].id}`, async (route) => {
+                if (route.request().method() === 'GET') return route.fallback();
+                return route.fulfill({ status: 500, json: { detail: 'The permission service did not answer' } });
+            });
+        });
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const error = page.locator('.toast-dismissible');
+        await expect(error).toBeVisible();
+        const { top, region } = await error.evaluate((el) => ({
+            top: el.getBoundingClientRect().top,
+            region: getComputedStyle(el).getPropertyValue('-webkit-app-region'),
+        }));
+        expect(top).toBeGreaterThanOrEqual(48);
+        expect(region).toBe('no-drag');
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
