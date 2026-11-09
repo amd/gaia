@@ -2900,7 +2900,14 @@ def _git_dirs(start: str) -> Optional[List[Path]]:
             complete = (dot / "HEAD").is_file() and all(
                 (dot / part).is_dir() for part in ("objects", "refs")
             )
-            return [dot] if complete else None
+            if not complete:
+                return None
+            # git follows commondir inside a .git folder too.
+            dirs = [dot]
+            common = dot / "commondir"
+            if common.is_file():
+                dirs.append((dot / common.read_text().strip()).resolve())
+            return dirs
         if (folder / "HEAD").is_file() and (folder / "objects").is_dir():
             # A bare repository: git reads this folder's own config.
             return None
@@ -3987,19 +3994,22 @@ class ShellToolsMixin:
             dirs = _git_dirs(where)
             if dirs is None or not all(inside(str(d)) for d in dirs):
                 return False
-        walked = []
+        walked, named = [], False
         for word in segment[1:]:
             if word.startswith("-"):
                 continue
             path = os.path.join(cwd, word)
             if not os.path.lexists(path):
                 continue
+            named = True
             if not inside(path):
                 return False
             if os.path.isdir(path):
                 walked.append(path)
         if _segment_walks(segment):
-            return not any(_tree_has_links(path) for path in walked or [cwd])
+            # With no path named it walks the working folder; a file walks nothing.
+            targets = walked if named else [cwd]
+            return not any(_tree_has_links(path) for path in targets)
         return True
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:

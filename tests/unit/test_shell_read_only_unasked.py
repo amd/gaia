@@ -166,8 +166,8 @@ def test_a_line_a_shell_could_read_differently_still_asks(host, tmp_path, comman
     "command",
     [
         # A value attached to a switch is a path the folder check never sees.
-        "findstr /d:C:\Windows . win.ini",
-        "findstr /g:C:\secret.txt notes.txt",
+        r"findstr /d:C:\Windows . win.ini",
+        r"findstr /g:C:\secret.txt notes.txt",
         "grep --file=/etc/passwd notes.txt",
         "grep -f/etc/passwd notes.txt",
         # These reach another machine, or run a script.
@@ -305,3 +305,18 @@ def test_a_dot_git_file_pointing_outside_still_asks(tmp_path):
 def test_a_git_range_is_not_a_climb(host, tmp_path):
     _repo(tmp_path)
     assert _unasked(host, tmp_path, "git log --oneline main..feature")
+
+
+def test_a_dot_git_folder_reads_its_common_config_too(host, tmp_path):
+    """git follows commondir inside a .git folder, not only from a .git file."""
+    other = tmp_path / "other"
+    other.mkdir()
+    _repo(other, PLAIN_CONFIG + "[core]\n    fsmonitor = ./evil\n")
+    _repo(tmp_path)
+    (tmp_path / ".git" / "commondir").write_text("../other/.git")
+    assert not _unasked(host, tmp_path, "git log -1")
+
+
+def test_a_recursive_read_of_one_file_walks_nothing(host, tmp_path):
+    (tmp_path / "notes.txt").write_text("TODO")
+    assert _unasked(host, tmp_path, "grep -r TODO notes.txt")
