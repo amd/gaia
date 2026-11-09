@@ -36,9 +36,7 @@ def test_failing_collector_is_logged_and_the_rest_still_builds(monkeypatch, capl
     assert "machine probe exploded" in logged[0].getMessage()
 
 
-def test_unreadable_project_manifest_logs_warning_with_path(
-    tmp_path, monkeypatch, caplog
-):
+def test_unreadable_project_manifest_is_logged_with_path(tmp_path, monkeypatch, caplog):
     fake_home = tmp_path / "fake_home"
     project = fake_home / "Projects" / "proj"
     project.mkdir(parents=True)
@@ -54,14 +52,14 @@ def test_unreadable_project_manifest_logs_warning_with_path(
         return real_read_text(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    caplog.set_level(logging.WARNING, logger="gaia.agents.base.discovery")
+    caplog.set_level(logging.DEBUG, logger="gaia.agents.base.discovery")
 
     facts = SystemDiscovery().scan_project_manifests()
 
     warnings = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and str(manifest) in r.getMessage()
+        if r.levelno == logging.DEBUG and str(manifest) in r.getMessage()
     ]
     assert len(warnings) == 1
     assert "access denied" in warnings[0].getMessage()

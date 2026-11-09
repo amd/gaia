@@ -2719,7 +2719,7 @@ class SystemDiscovery:
                                                 project_names.append(pname)
                                             break
                                 except Exception as e:
-                                    logger.warning(
+                                    logger.debug(
                                         "Could not read project manifest %s: %s",
                                         fpath,
                                         e,
@@ -2738,7 +2738,7 @@ class SystemDiscovery:
                                                 project_names.append(pname)
                                             break
                                 except Exception as e:
-                                    logger.warning(
+                                    logger.debug(
                                         "Could not read project manifest %s: %s",
                                         fpath,
                                         e,
