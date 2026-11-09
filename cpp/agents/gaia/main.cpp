@@ -88,6 +88,8 @@ struct Cli {
     bool skipPermissions = false;
     bool noWeb = false;
     bool noSkills = false;
+    bool fullAccess = false;
+    std::vector<std::string> allowDirs;
     bool debug = false;
     bool exposeToolRoutes = false;
 };
@@ -121,6 +123,9 @@ void printUsage() {
         "                            ~/.config/gaia-cpp/config.json when present)\n"
         "  --no-web                  Leave out web_fetch\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
+        "  --allow-dir DIR           Also let the tools use DIR (repeatable). By default\n"
+        "                            they are confined to the working directory\n"
+        "  --full-access             Let the tools reach any path the user can\n"
         "  --dangerously-skip-permissions\n"
         "                            Run gated tools (shell, writes, web) without asking.\n"
         "                            Without it, headless runs deny them.\n"
@@ -186,6 +191,8 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--config") cli.configFile = need(i, a);
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
+        else if (a == "--allow-dir") cli.allowDirs.push_back(need(i, a));
+        else if (a == "--full-access") cli.fullAccess = true;
         else if (a == "--dangerously-skip-permissions") cli.skipPermissions = true;
         else if (a == "--host") cli.host = need(i, a);
         else if (a == "--port") cli.port = toInt(a, need(i, a));
@@ -335,6 +342,21 @@ std::string readAll(std::istream& in) {
     return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+// The working directory first (relative paths resolve there), then --allow-dir.
+gaia::GaiaAgent::Options agentOptions(const Cli& cli) {
+    gaia::GaiaAgent::Options o;
+    o.webTools = !cli.noWeb;
+    o.skills = !cli.noSkills;
+    o.fullAccess = cli.fullAccess;
+    std::error_code ec;
+    o.workspaceRoots.push_back(fs::current_path(ec).string());
+    for (const auto& d : cli.allowDirs) {
+        if (!fs::is_directory(d, ec)) usageError("--allow-dir " + d + " is not a folder");
+        o.workspaceRoots.push_back(fs::absolute(d).string());
+    }
+    return o;
+}
+
 std::atomic<gaia::Agent*> g_agent{nullptr};
 std::atomic<gaia::ApiServer*> g_server{nullptr};
 
@@ -365,7 +387,7 @@ int runPrint(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;  // stdout carries only the answer
-    gaia::GaiaAgent agent(cfg, gaia::GaiaAgent::Options{!cli.noWeb, !cli.noSkills});
+    gaia::GaiaAgent agent(cfg, agentOptions(cli));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     agent.setToolConfirmCallback([skip = cli.skipPermissions](const std::string& tool, const gaia::json&) {
@@ -419,7 +441,7 @@ int runServe(const Cli& cli) {
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;
-    gaia::GaiaAgent agent(cfg, gaia::GaiaAgent::Options{!cli.noWeb, !cli.noSkills});
+    gaia::GaiaAgent agent(cfg, agentOptions(cli));
     pinConfig(agent, cfg);
     agent.setOutputHandler(std::make_unique<gaia::CleanConsole>());
     // No person at the keyboard: the client that started the server owns safety.
@@ -472,7 +494,7 @@ int runServe(const Cli& cli) {
 
 int runInteractive(const Cli& cli) {
     const Settings settings = buildSettings(cli);
-    gaia::GaiaAgent agent(settings.cfg, gaia::GaiaAgent::Options{!cli.noWeb, !cli.noSkills});
+    gaia::GaiaAgent agent(settings.cfg, agentOptions(cli));
     pinConfig(agent, settings.cfg);
     if (cli.skipPermissions) {
         agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {

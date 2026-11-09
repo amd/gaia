@@ -72,6 +72,10 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade
 
 `--mcp-config FILE` connects every server in an `mcp.json` (`mcpServers` object). Both transports work: `command`/`args` for stdio, and `url` (or `"type": "http"`) for Streamable HTTP, such as Lemonade's own MCP server. Header values may reference variables, for example `"Authorization": "Bearer ${LEMONADE_API_KEY}"`; an unset variable is an error. A server that fails to connect stops the agent.
 
+### Where the agent may work
+
+The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
+
 ### Skills
 
 `gaia-cpp` reads the same `SKILL.md` skills as the Python agent. It lists installed skills in its prompt by name and description, and loads a skill's instructions with `load_skill` when the request calls for it. It looks in these folders, and an earlier folder's skill wins over a same-named one later (`list_skills` reports the shadowed copy):
