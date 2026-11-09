@@ -192,7 +192,17 @@ def test_a_listed_name_given_as_a_path_still_asks(host, tmp_path):
 
 @pytest.mark.parametrize(
     "command",
-    ["ls -la", "head -n 5 notes.txt", "grep -rn TODO .", "dir", "dir /b notes.txt"],
+    [
+        "ls -la",
+        "head -n 5 notes.txt",
+        "grep -rn TODO .",
+        "dir",
+        # Off Windows `dir` is GNU dir, and /b is a path at the root.
+        pytest.param(
+            "dir /b notes.txt",
+            marks=pytest.mark.skipif(os.name != "nt", reason="cmd.exe switch"),
+        ),
+    ],
 )
 def test_plain_reads_with_options_run_unasked(host, tmp_path, command):
     (tmp_path / "notes.txt").write_text("hi\n")
