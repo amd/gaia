@@ -24,8 +24,6 @@ import { log } from '../utils/logger';
 import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
-import { isAuthRequiredMessage } from './email/EmailConnectCta';
-import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
 
 import './ChatView.css';
@@ -147,7 +145,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
     const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
     const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
-    // A chat made by a retired agent (chat/doc/file) can be read but not continued.
+    // A chat made by a retired agent (chat/doc/file/email) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
     // Smooth streaming exit — snapshot last content so fade-out shows real text
@@ -801,7 +799,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Stateless confirmation card (email /query, #2109 D1) ──
+                // ── Stateless confirmation card (sidecar relay, #2109 D1) ──
                 // Informational: the sidecar run is already over, so this is
                 // a chat-flow card via the generic #2108 mechanism — NEVER
                 // the blocking PermissionPrompt/confirm_id path above. Only
@@ -1234,8 +1232,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [sessionId, runningHere, pollIsNewer, isStreaming]);
 
     // Listen for programmatic message dispatches from rich-content
-    // components (currently the EmailPreScanCard's Approve / Reply
-    // buttons). Wired as a window-level CustomEvent rather than prop
+    // components. Wired as a window-level CustomEvent rather than prop
     // drilling so any embedded component can reach the active session
     // without ChatView having to know about it ahead of time.
     useEffect(() => {
@@ -1388,17 +1385,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [queue, isStreaming, sessionId, setQueue]);
 
 
-    // Retry the last question after a connector was connected (#2119). Resends
-    // the last user message, which also drops the stale connector-error reply.
-    const handleRetryLast = useCallback(() => {
-        for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'user') {
-                handleResendMessage(messages[i]);
-                return;
-            }
-        }
-    }, [messages, handleResendMessage]);
-
     // Try again on a failed reply: resend the question it answers.
     const handleTryAgain = useCallback((reply: Message) => {
         const at = messages.indexOf(reply);
@@ -1460,14 +1446,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
-
-    // Stale connector-reply cue (#2119): when the newest reply was a connector
-    // auth-required error, offer to re-run once the account is connected.
-    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    const lastIsConnectorError = !isStreaming
-        && !isLoadingMessages
-        && lastMessage?.role === 'assistant'
-        && isAuthRequiredMessage(lastMessage.content);
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1701,9 +1679,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
             <div className="input-area">
                 <div className="input-column">
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} />
-                    {lastIsConnectorError && lastMessage && (
-                        <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
-                    )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />

@@ -182,7 +182,7 @@ describe('Can read and write', () => {
 
     it('shows Internet as text for an agent that keeps its own network rules', async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false, internet_enforced: false });
-        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'my-sidecar' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
@@ -191,7 +191,7 @@ describe('Can read and write', () => {
 
     it("doesn't claim another agent's scope", async () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
-        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'email' }] });
+        useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'my-sidecar' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText(/applies its own limits/)).toBeInTheDocument();
         expect(screen.queryByText(/inside your user folder/)).not.toBeInTheDocument();

@@ -10,7 +10,6 @@ import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
 import { AgentActivity } from './AgentActivity';
-import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -344,10 +343,6 @@ const KNOWN_CODE_LANGS = new Set([
     'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
     'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
     'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
-    // Retired fence-payload tags (#2109 cutover): cards now arrive via
-    // tool_result.render, never fences. Kept ONLY so pre-cutover session
-    // history shows those payloads as fenced JSON code blocks, not bare prose.
-    'email_pre_scan', 'email-pre-scan',
 ]);
 
 /**
@@ -707,11 +702,6 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
                         <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
                     )}
-                    {message.role === 'assistant'
-                        && !isStreaming
-                        && isAuthRequiredMessage(cleanedContent) && (
-                        <EmailConnectCta content={cleanedContent} />
-                    )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
@@ -1036,9 +1026,6 @@ const MARKDOWN_COMPONENTS: Components = {
     code: InlineCode,
     // Fenced code blocks: react-markdown wraps them in <pre><code>.
     // Extract the language and code text, render as CodeBlock.
-    // (The fence→card mount for email_pre_scan was retired at the
-    // #2109 cutover — cards arrive via tool_result.render now;
-    // pre-cutover history renders those fences as code blocks.)
     pre({ children }) {
         // children is <code className="language-xxx">...</code>
         const codeChild = React.Children.toArray(children)[0];

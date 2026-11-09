@@ -908,7 +908,7 @@ describe('status hues stay on status', () => {
     const STATUS_WORDS = [
         'error', 'danger', 'fail', 'warn', 'deny', 'cancel',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'unsupported', 'bad',
+        'missing', 'unsupported', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

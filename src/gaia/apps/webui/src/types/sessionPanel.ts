@@ -23,7 +23,7 @@ export interface SessionEnvironment {
     internet: boolean;
     /** False when the chat's agent keeps its own file scope (a relayed sidecar). */
     enforced: boolean;
-    /** False when the chat's agent keeps its own network rules (the email agent). */
+    /** False when the chat's agent keeps its own network rules (a relayed sidecar). */
     internet_enforced: boolean;
 }
 
