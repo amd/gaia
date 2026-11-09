@@ -28,7 +28,7 @@ from gaia.llm.providers.lemonade import (
 )
 from gaia.llm.retry import retry_state_of
 from gaia.ui._chat_helpers import _done_event, _turn_failure_kind
-from gaia.ui.email_sidecar.relay import _dispatch_one
+from gaia.ui.sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 from tests.unit.agents.test_model_unreachable_retry import (

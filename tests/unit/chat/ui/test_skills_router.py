@@ -150,7 +150,7 @@ class _FakeHandle:
 
 def _no_agent_package(monkeypatch, handle=None, acquire_error=None):
     """The Hub-binary install: no ``gaia_agent`` package beside the UI."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
     calls = []
@@ -203,7 +203,7 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
 
 def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar.errors import SidecarError
 
     _no_agent_package(
         monkeypatch, acquire_error=SidecarError("daemon not reachable at :59171")
@@ -216,7 +216,7 @@ def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
 
 
 def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar.errors import SidecarError
 
     _no_agent_package(
         monkeypatch,
@@ -231,7 +231,7 @@ def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatc
 
 def test_the_proxy_asks_the_flagships_skills_route():
     """Pin the outgoing call, not just that one was made."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = {}
 

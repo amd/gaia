@@ -446,7 +446,7 @@ class TestResolveRelayInput:
     def test_sidecar_rejection_propagates_uncaught(self, handler):
         """A stale/already-answered question (409) must reach the caller as
         an error -- never be swallowed into a silent no-op."""
-        from gaia.ui.email_sidecar.errors import SidecarHTTPError
+        from gaia.ui.sidecar.errors import SidecarHTTPError
 
         proxy = _FakeRespondProxy(raises=SidecarHTTPError(409, "no longer pending"))
         handler.active_relay_proxy = proxy

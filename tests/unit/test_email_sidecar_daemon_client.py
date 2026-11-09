@@ -1,12 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""``gaia.ui.email_sidecar.daemon_client`` — the UI backend's client seam onto
+"""``gaia.ui.sidecar.daemon_client`` — the UI backend's client seam onto
 the daemon's ``/daemon/v1/agents`` control plane (#2142 T3 cutover).
 
 Patch-seam choice (documented per the T3 increment spec, so the implementer
 matches it): tests patch ``daemon_client_module.start_or_attach`` /
 ``daemon_client_module.attach`` — module-level names resolved inside
-``gaia.ui.email_sidecar.daemon_client`` (mirroring how every other
+``gaia.ui.sidecar.daemon_client`` (mirroring how every other
 ``gaia.daemon.client`` consumer imports it) — and
 ``daemon_client_module.requests.post`` for the HTTP boundary. The module must
 therefore ``import requests`` at module level, exactly like
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module  # noqa: E402
+import gaia.ui.sidecar.daemon_client as daemon_client_module  # noqa: E402
 from gaia.daemon import paths
 from gaia.daemon.errors import DaemonStartError, DaemonVersionError
 from gaia.daemon.instance import DaemonInstance
@@ -32,7 +32,7 @@ from gaia.daemon.sidecars.errors import (
     SidecarError,
 )
 from gaia.llm.surface_hints import APP_RESTART_HINT
-from gaia.ui.email_sidecar.proxy import EmailSidecarProxy  # noqa: E402
+from gaia.ui.sidecar.proxy import EmailSidecarProxy  # noqa: E402
 
 ENSURE_PAYLOAD = {
     "agent_id": "email",

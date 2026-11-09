@@ -31,7 +31,7 @@ sidecar-authored one.
 
 Cancel semantics: a client disconnect (or a non-terminal stream end) triggers a
 best-effort ``POST /v1/<agent>/query/<run_id>/cancel`` upstream — mirroring
-``gaia.ui.email_sidecar.relay``'s crash/cancel handling — so an abandoned run
+``gaia.ui.sidecar.relay``'s crash/cancel handling — so an abandoned run
 stops occupying the single-tenant LLM slot. Best-effort by design: the sidecar
 may already be dead, so transport failures are logged, never raised.
 

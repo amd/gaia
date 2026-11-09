@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.ui._chat_helpers import _active_sse_handlers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+from gaia.ui.sidecar.proxy import EmailSidecarProxy
 from gaia.ui.routers import sessions as sessions_router
 from gaia.ui.run_manager import Run, run_manager
 from gaia.ui.server import create_app

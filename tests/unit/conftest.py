@@ -187,7 +187,7 @@ def _isolate_gaia_home(_session_gaia_home, monkeypatch):
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
-    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.ui.sidecar.daemon_client.acquire_handle or "
     "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
 )
 

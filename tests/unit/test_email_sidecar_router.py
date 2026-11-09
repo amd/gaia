@@ -7,17 +7,17 @@ passthrough, and the security allowlist (no connector write routes).
 The router no longer reads a spawning manager off ``request.app.state`` — it
 calls ``daemon_client.acquire_handle()`` (off the event loop) per request and
 forwards through the returned handle's bound proxy. Tests patch the seam at
-``gaia.ui.email_sidecar.daemon_client.acquire_handle``.
+``gaia.ui.sidecar.daemon_client.acquire_handle``.
 """
 
 import requests as _requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
 from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
-from gaia.ui.email_sidecar.router import router as email_router
+from gaia.ui.sidecar.errors import SidecarHTTPError
+from gaia.ui.sidecar.router import router as email_router
 
 
 class _FakeProxy:

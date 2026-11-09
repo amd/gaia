@@ -25,9 +25,9 @@ from fastapi.testclient import TestClient
 
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     confirmations_supported,
@@ -341,7 +341,7 @@ def live_gaia_sidecar(monkeypatch):
 
 
 def _relay_in_background(base_url):
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     handler = SSEOutputHandler()
     proxy = SidecarProxy(base_url, agent_id="gaia")
@@ -434,7 +434,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 ):
     """Full access pre-approves on the sidecar, yet a gated shell call reaches
     the Agent UI's prompt and runs only on its answer."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
     from gaia_agent import server as server_mod
@@ -483,7 +483,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 
 def test_a_decision_without_a_confirm_id_is_never_sent():
     """The sidecar would resolve whichever prompt is live; refuse instead."""
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     with pytest.raises(SidecarError, match="confirm_id"):
         SidecarProxy("http://127.0.0.1:9", agent_id="gaia").tool_decision(

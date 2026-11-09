@@ -11,8 +11,8 @@ import asyncio
 from types import SimpleNamespace
 
 import gaia.ui._chat_helpers as chat_helpers_module
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-import gaia.ui.email_sidecar.relay as relay_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest

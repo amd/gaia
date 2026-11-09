@@ -18,7 +18,7 @@ Two verified sources, checked in order; there is NO 'use it anyway' path:
 
 A tampered/truncated binary is rejected before it can ever be spawned.
 
-Relocated from ``gaia.ui.email_sidecar.fetch`` (issue #2142, T1). Generalization
+Relocated from ``gaia.ui.sidecar.fetch`` (issue #2142, T1). Generalization
 capped to relocation: ``default_cache_dir`` now takes the agent's cache dir
 name (from its spec) instead of hardcoding "email" — everything else is
 unchanged.

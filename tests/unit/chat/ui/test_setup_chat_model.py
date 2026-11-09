@@ -18,7 +18,7 @@ from gaia.config import GaiaConfig
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, NPU_DEFAULT_MODEL_NAME
 from gaia.ui import setup_runner as sr
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client
+from gaia.ui.sidecar import daemon_client
 from gaia.ui.routers import providers
 
 CLOUD = "fireworks.deepseek-v4p1-flash"

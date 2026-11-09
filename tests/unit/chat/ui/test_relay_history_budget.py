@@ -21,8 +21,8 @@ from gaia.llm.lemonade_client import GPU_CTX_SIZE, LemonadeClientError
 from gaia.llm.model_fit import ModelFitError
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar import daemon_client
-from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
+from gaia.ui.sidecar import daemon_client
+from gaia.ui.sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 

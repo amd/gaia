@@ -162,7 +162,7 @@ def test_cancelled_goal_and_queued_sibling_survive_a_stopped_tick(loop, monkeypa
 def test_a_relayed_set_loop_state_reaches_the_loop(args, directive):
     """Relayed, set_loop_state runs on the sidecar's console, so the relay
     hands its call to the tick's handler, checked as the tool checks it."""
-    from gaia.ui.email_sidecar.relay import _loop_state_directive
+    from gaia.ui.sidecar.relay import _loop_state_directive
 
     got = _loop_state_directive(args)
     assert (got["directive"], got["wake_in_seconds"]) == directive

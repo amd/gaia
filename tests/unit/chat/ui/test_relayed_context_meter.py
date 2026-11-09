@@ -15,8 +15,8 @@ import pytest
 
 import gaia.ui._chat_helpers as helpers
 from gaia.ui import turn_insights
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, context_supported
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, context_supported
 from gaia.ui.routers.chat import get_context_usage
 from gaia.ui.sse_handler import SSEOutputHandler
 

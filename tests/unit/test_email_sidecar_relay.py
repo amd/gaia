@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Contract tests for ``gaia.ui.email_sidecar.relay`` (#2109 query relay).
+"""Contract tests for ``gaia.ui.sidecar.relay`` (#2109 query relay).
 
 ``relay.py`` does not exist yet — this file pins its designed public surface
 (``relay.relay_query`` + the crash text from ``stream_ended_text()``) as a
@@ -35,8 +35,8 @@ import pytest
 pytestmark = pytest.mark.allow_network
 
 from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
-from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.email_sidecar.errors import (  # noqa: E402
+from gaia.ui.sidecar import relay  # noqa: E402 - expected to fail (red phase)
+from gaia.ui.sidecar.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
@@ -1185,7 +1185,7 @@ class TestPreScanOmitsRenderCardByDesign:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _PreScanFakeAgent()
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1210,7 +1210,7 @@ class TestPreScanOmitsRenderCardByDesign:
     def test_relay_query_omits_render_card_by_design(self, live_email_app, monkeypatch):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _PreScanFakeAgent()
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1239,7 +1239,7 @@ class TestConfirmationSequenceRealPipeline:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _ConfirmFakeAgent()
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1264,7 +1264,7 @@ class TestConfirmationSequenceRealPipeline:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _ConfirmFakeAgent()
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1291,7 +1291,7 @@ class TestReadTimeoutMidStream:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _StallFakeAgent(stall_seconds=2.0)
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1319,7 +1319,7 @@ class TestCancelParkPattern:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _CancelParkFakeAgent(park_seconds=8.0)
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1379,7 +1379,7 @@ class TestStreamingIsNotBuffered:
     ):
         from gaia_agent_email import query_routes
 
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
         fake = _TimingFakeAgent(gap_seconds=0.4)
         monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)

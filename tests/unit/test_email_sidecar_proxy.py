@@ -8,8 +8,8 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
 
 class _Resp:
@@ -434,7 +434,7 @@ def test_live_triage_roundtrip_through_manager_proxy():
 
     from gaia.daemon.sidecars.manager import AgentSidecarManager
     from gaia.daemon.sidecars.spec import builtin_specs
-    from gaia.ui.email_sidecar.errors import SidecarHTTPError
+    from gaia.ui.sidecar.errors import SidecarHTTPError
 
     payload = SingleEmailInput(
         message=EmailMessage(

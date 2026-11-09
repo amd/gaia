@@ -40,9 +40,9 @@ def list_skills() -> Dict[str, Any]:
 
 def _skills_from_agent() -> Dict[str, Any]:
     """Ask the installed GAIA agent, through the daemon, which skills it has."""
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, skills_supported
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.errors import SidecarError
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE, skills_supported
 
     try:
         handle = daemon_client.acquire_handle(GAIA_PROFILE.agent_id)

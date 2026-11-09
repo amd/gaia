@@ -15,7 +15,7 @@ import pytest
 
 from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     profile_for,
@@ -89,7 +89,7 @@ def test_the_relay_asks_the_daemon_for_the_flagship_not_the_legacy_id(legacy):
         raise SidecarError("not running")
 
     handler = MagicMock()
-    with patch("gaia.ui.email_sidecar.daemon_client.acquire_handle", acquire):
+    with patch("gaia.ui.sidecar.daemon_client.acquire_handle", acquire):
         helpers._dispatch_sidecar_query(
             handler,
             SimpleNamespace(message="hi", session_id="s1"),

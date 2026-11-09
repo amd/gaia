@@ -21,8 +21,8 @@ import gaia.ui._chat_helpers as chat_helpers
 from gaia.security import ALLOWED_PATHS_ENV, AllowedPathsEnvError, PathValidator
 from gaia.ui import session_environment
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client, relay
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import daemon_client, relay
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     scope_supported,

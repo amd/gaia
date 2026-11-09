@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers
-from gaia.ui.email_sidecar import daemon_client, relay
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import daemon_client, relay
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     reasoning_supported,

@@ -22,7 +22,7 @@ import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     turns_supported,

@@ -15,7 +15,7 @@ from gaia.hub import catalog as catalog_mod
 from gaia.hub import installer as installer_mod
 from gaia.hub.catalog import UnifiedCatalog
 from gaia.hub.installer import NotInstalledError
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.routers import hub as hub_router
 from gaia.ui.server import create_app
 

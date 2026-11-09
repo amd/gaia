@@ -158,11 +158,11 @@ def test_error_hierarchy_relocated_verbatim():
 
 
 def test_ui_email_sidecar_errors_is_a_reexport_shim():
-    # gaia.ui.email_sidecar.errors becomes a pure re-export shim: identity, not
+    # gaia.ui.sidecar.errors becomes a pure re-export shim: identity, not
     # just equality, so existing `from ... import SidecarError` callers still
     # get the exact same class object as the new location.
     import gaia.daemon.sidecars.errors as new_errors
-    import gaia.ui.email_sidecar.errors as old_errors
+    import gaia.ui.sidecar.errors as old_errors
 
     assert old_errors.SidecarError is new_errors.SidecarError
     assert old_errors.VersionMismatchError is new_errors.VersionMismatchError

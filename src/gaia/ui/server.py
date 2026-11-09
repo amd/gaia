@@ -979,12 +979,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # cutover / design decision 4). The core backend never imports the email
     # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
     # we ship. Since #2142 the GAIA daemon supervises the sidecar; each request
-    # acquires a handle via gaia.ui.email_sidecar.daemon_client (lazy — users
+    # acquires a handle via gaia.ui.sidecar.daemon_client (lazy — users
     # who never use email never pay for a daemon or sidecar). The sidecar is
     # the SOLE /v1/email surface — there is no in-process fallback (a missing/
     # unpublished binary fails loudly with a remedy, never silently re-mounts
     # the wheel).
-    from gaia.ui.email_sidecar.router import router as email_sidecar_router
+    from gaia.ui.sidecar.router import router as email_sidecar_router
 
     app.include_router(email_sidecar_router)
     logger.info(

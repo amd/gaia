@@ -60,7 +60,7 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/sessions.py'
       - 'src/gaia/ui/routers/system.py'
-      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/ui/sidecar/**'
       - 'src/gaia/daemon/sidecars/**'
       - 'src/gaia/daemon/lemonade.py'
   pull_request:
@@ -92,7 +92,7 @@ on:
       - 'src/gaia/ui/routers/chat.py'
       - 'src/gaia/ui/routers/sessions.py'
       - 'src/gaia/ui/routers/system.py'
-      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/ui/sidecar/**'
       - 'src/gaia/daemon/sidecars/**'
       - 'src/gaia/daemon/lemonade.py'
 

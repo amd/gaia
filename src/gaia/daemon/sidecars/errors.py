@@ -3,8 +3,8 @@
 """Loud, actionable error types for daemon-supervised sidecar agents (no
 silent fallbacks).
 
-Relocated verbatim from ``gaia.ui.email_sidecar.errors`` (issue #2142, T1) —
-``gaia.ui.email_sidecar.errors`` is now a pure re-export shim over this
+Relocated verbatim from ``gaia.ui.sidecar.errors`` (issue #2142, T1) —
+``gaia.ui.sidecar.errors`` is now a pure re-export shim over this
 module so existing importers keep working unchanged.
 """
 

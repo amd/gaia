@@ -47,7 +47,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
-        "gaia.ui.email_sidecar",
+        "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",
         "gaia.talk",

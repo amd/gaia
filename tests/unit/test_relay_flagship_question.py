@@ -17,9 +17,9 @@ import uuid
 
 import pytest
 
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
-from gaia.ui.email_sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network

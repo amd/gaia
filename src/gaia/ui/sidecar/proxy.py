@@ -32,7 +32,7 @@ import os
 from typing import Any, Callable, Dict, Iterator, Optional
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
 

@@ -14,7 +14,7 @@
 After the daemon-client cutover (#2142 T3), ``_dispatch_sidecar_query`` no
 longer owns a spawning ``EmailSidecarManager`` — it acquires a
 ``SidecarHandle`` from the daemon via
-``gaia.ui.email_sidecar.daemon_client.acquire_handle()`` and forwards through
+``gaia.ui.sidecar.daemon_client.acquire_handle()`` and forwards through
 the handle's bound proxy.
 """
 
@@ -22,12 +22,12 @@ import threading
 
 import pytest
 
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-import gaia.ui.email_sidecar.relay as relay_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError
-from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
-from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+from gaia.ui.sidecar.errors import SidecarError
+from gaia.ui.sidecar.profiles import EMAIL_PROFILE, api_version_supported
+from gaia.ui.sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
 from gaia.ui.turn_summary import TurnLedger
 

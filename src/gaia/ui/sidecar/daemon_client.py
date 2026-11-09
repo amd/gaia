@@ -73,7 +73,7 @@ class SidecarHandle:
         agent-agnostic transport, so a flagship proxy cannot offer a mailbox
         route it would only 404 on.
         """
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy, SidecarProxy
+        from gaia.ui.sidecar.proxy import EmailSidecarProxy, SidecarProxy
 
         kwargs.setdefault("auth_token", self.token)
         if self.agent_id == "email":

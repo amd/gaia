@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from gaia.logger import get_logger
 from gaia.ui import permissions as session_permissions
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
+from gaia.ui.sidecar.errors import SidecarHTTPError
 
 logger = get_logger(__name__)
 

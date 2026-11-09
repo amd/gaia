@@ -30,8 +30,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar import daemon_client
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar import daemon_client
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
 

@@ -63,7 +63,7 @@ def _shutdown_email_sidecar(agent_id: str) -> None:
     if agent_id != "email":
         return
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     logger.info(
         "hub: stopping any daemon-supervised email sidecar before mutating its dir"

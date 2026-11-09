@@ -9,7 +9,7 @@ handle from the daemon per request (``daemon_client.acquire_handle()``).
 import pytest
 from fastapi.testclient import TestClient
 
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
 from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui.server import create_app
 

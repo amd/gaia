@@ -7,7 +7,7 @@ for the current host and what its SHA-256 must be. Platform keys are
 ``{os}-{arch}`` normalized to the npm package's key space
 (``win32``/``darwin``/``linux`` + ``x64``/``arm64``).
 
-Relocated from ``gaia.ui.email_sidecar.platform`` (issue #2142, T1).
+Relocated from ``gaia.ui.sidecar.platform`` (issue #2142, T1).
 """
 
 from __future__ import annotations

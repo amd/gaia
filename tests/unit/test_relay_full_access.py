@@ -23,10 +23,10 @@ from fastapi.testclient import TestClient
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     full_access_supported,
@@ -379,7 +379,7 @@ def live_gaia_sidecar(monkeypatch):
 
 
 def test_the_flagship_follows_the_chats_mode_turn_by_turn(live_gaia_sidecar):
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
     proxy = SidecarProxy(base_url, agent_id="gaia")

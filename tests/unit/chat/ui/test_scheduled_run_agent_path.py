@@ -23,7 +23,7 @@ from gaia.agents.registry import AgentRegistry
 from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import server
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import daemon_client as daemon_client_module
 from gaia.ui.sse_handler import SSEOutputHandler
 
 

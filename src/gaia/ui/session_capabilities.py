@@ -71,9 +71,9 @@ def describe(session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _from_sidecar(session_id: str, agent_type: str) -> List[Dict[str, str]]:
-    from .email_sidecar import daemon_client
-    from .email_sidecar.errors import SidecarError, SidecarHTTPError
-    from .email_sidecar.profiles import profile_for, tools_supported
+    from .sidecar import daemon_client
+    from .sidecar.errors import SidecarError, SidecarHTTPError
+    from .sidecar.profiles import profile_for, tools_supported
 
     profile = profile_for(agent_type)
     if profile is None or profile.min_tools_api_version is None:

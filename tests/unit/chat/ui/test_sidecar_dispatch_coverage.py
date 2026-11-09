@@ -11,7 +11,7 @@ and surfaced that RuntimeError to the user.
 Three sets have to agree, and nothing used to check that they did:
 
   daemon can supervise it   -> gaia.daemon.sidecars.spec.builtin_specs()
-  UI can relay to it        -> gaia.ui.email_sidecar.profiles.SIDECAR_AGENT_IDS
+  UI can relay to it        -> gaia.ui.sidecar.profiles.SIDECAR_AGENT_IDS
   chat dispatch admits it   -> gaia.ui._chat_helpers._SIDECAR_AGENT_TYPES
 """
 
@@ -27,7 +27,7 @@ from gaia.ui._chat_helpers import (
     _agent_type_unknown,
     _should_relay_to_sidecar,
 )
-from gaia.ui.email_sidecar.profiles import SIDECAR_AGENT_IDS, profile_for
+from gaia.ui.sidecar.profiles import SIDECAR_AGENT_IDS, profile_for
 
 
 class _Registry:
@@ -70,7 +70,7 @@ def test_every_supervised_sidecar_has_a_relay_profile(agent_id):
     assert profile_for(agent_id) is not None, (
         f"'{agent_id}' is in builtin_specs() but has no RelayProfile, so "
         f"Agent UI chat cannot relay it. Add one in "
-        f"gaia/ui/email_sidecar/profiles.py."
+        f"gaia/ui/sidecar/profiles.py."
     )
 
 

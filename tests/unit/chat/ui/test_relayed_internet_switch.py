@@ -25,14 +25,14 @@ import gaia.ui._chat_helpers as helpers
 from gaia.agents.base.agent import Agent
 from gaia.ui import session_environment, turn_insights
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client, relay
-from gaia.ui.email_sidecar.errors import SidecarError
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import daemon_client, relay
+from gaia.ui.sidecar.errors import SidecarError
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     internet_supported,
 )
-from gaia.ui.email_sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar.proxy import SidecarProxy
 from gaia.ui.models import ChatRequest
 from gaia.ui.sse_handler import SSEOutputHandler
 

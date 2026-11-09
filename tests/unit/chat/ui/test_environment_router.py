@@ -220,7 +220,7 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
 @pytest.fixture
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     agent = SimpleNamespace(api_version="2.21", asked=[])
@@ -357,8 +357,8 @@ def test_a_relayed_agent_too_old_for_folders_cannot_start_with_one(
 def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     client, folder, relayed_gaia, monkeypatch
 ):
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.errors import SidecarError
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")

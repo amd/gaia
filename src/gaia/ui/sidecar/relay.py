@@ -28,7 +28,7 @@ retired in favor of this relay (#2109).
 
 Agent-agnostic since #4161: everything that differs between sidecars — the
 contract floor, the user-facing copy, tool labels, which tools mutate — lives
-in :mod:`gaia.ui.email_sidecar.profiles`, so the flagship relays through this
+in :mod:`gaia.ui.sidecar.profiles`, so the flagship relays through this
 same code path rather than a parallel one.
 
 Cancellation: the relay registers the live (still-open) HTTP response on
@@ -52,8 +52,8 @@ from gaia.agents.base.tool_grants import (
     PROJECT_TRUST_PROMPT_TOOL,
 )
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
-from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
+from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.ui.sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_handler import (
     SSEOutputHandler,

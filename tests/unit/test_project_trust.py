@@ -481,6 +481,6 @@ def test_the_prompt_names_the_folder_and_the_files():
 
 
 def test_the_sidecar_relay_never_offers_always_for_it():
-    from gaia.ui.email_sidecar import relay
+    from gaia.ui.sidecar import relay
 
     assert PROJECT_TRUST_PROMPT_TOOL in relay._FRESH_CONSENT_TOOLS

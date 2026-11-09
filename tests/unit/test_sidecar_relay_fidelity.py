@@ -23,9 +23,9 @@ from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     SIDECAR_AGENT_IDS,

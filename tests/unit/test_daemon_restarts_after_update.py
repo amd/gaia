@@ -808,8 +808,8 @@ def test_a_parked_agent_ui_turn_keeps_the_daemon_from_restarting(
     daemon_reports, monkeypatch, event
 ):
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.email_sidecar import relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
     from gaia.ui.sse_handler import SSEOutputHandler
 
     monkeypatch.setattr(helpers, "_active_sse_handlers", {})
@@ -850,7 +850,7 @@ def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
     from types import SimpleNamespace
 
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
     from gaia.ui.models import ChatRequest
     from gaia.ui.sse_handler import SSEOutputHandler
 

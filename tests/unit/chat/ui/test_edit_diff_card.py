@@ -21,7 +21,7 @@ from gaia.security import PathValidator
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import sse_handler as sse_handler_module
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.relay import _dispatch_one
+from gaia.ui.sidecar.relay import _dispatch_one
 from gaia.ui.models import ChatRequest
 from gaia.ui.run_manager import RunManager
 from gaia.ui.sse_handler import SSEOutputHandler

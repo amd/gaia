@@ -21,7 +21,7 @@ from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
-from .email_sidecar.profiles import profile_for
+from .sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
@@ -113,9 +113,9 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     Raises:
         EnvironmentChangeError: The relayed agent could not be started to ask.
     """
-    from .email_sidecar import daemon_client
-    from .email_sidecar.errors import SidecarError
-    from .email_sidecar.profiles import profile_for, scope_supported
+    from .sidecar import daemon_client
+    from .sidecar.errors import SidecarError
+    from .sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
     if not relayed({"agent_type": agent_type}):
@@ -133,7 +133,7 @@ def takes_folders(agent_type: Optional[str]) -> bool:
 
 def folders_refusal(agent_type: Optional[str]) -> str:
     """What to tell the user when *agent_type* can't be given folders."""
-    from .email_sidecar.profiles import profile_for
+    from .sidecar.profiles import profile_for
 
     profile = profile_for(agent_type or "chat")
     if profile is not None and profile.min_scope_api_version is not None:
@@ -438,7 +438,7 @@ def _tell_running_relay(session_id: str, internet_off: bool) -> None:
         RelayedSwitchError: When the running turn's sidecar couldn't be told.
     """
     from ._chat_helpers import _active_sse_handlers
-    from .email_sidecar.errors import SidecarError
+    from .sidecar.errors import SidecarError
 
     handler = _active_sse_handlers.get(session_id)
     if internet_off and getattr(handler, "relay_ignores_internet", False) is True:

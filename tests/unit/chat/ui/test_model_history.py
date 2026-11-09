@@ -318,8 +318,8 @@ def test_switching_to_a_smaller_model_streams_the_cut(monkeypatch):
 
 
 def test_a_relayed_chat_says_once_when_older_turns_leave_the_view(monkeypatch):
-    from gaia.ui.email_sidecar import daemon_client, relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import daemon_client, relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
     proxy = SimpleNamespace(init=lambda: (200, {}))
     handle = SimpleNamespace(api_version="2.17", proxy=lambda: proxy)

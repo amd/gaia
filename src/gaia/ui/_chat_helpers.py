@@ -54,7 +54,7 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
@@ -2060,7 +2060,7 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# profile (``gaia.ui.sidecar.profiles``); ``api_version_supported``
 # applies it. The daemon's own gate only pins MAJOR (the spec's
 # expected_api_major), so a too-old Hub binary passes that handshake and then
 # 404s every /query call — the profile's finer MAJOR.MINOR check catches it
@@ -2600,9 +2600,9 @@ def _dispatch_sidecar_query(
     from gaia.config import GaiaConfigError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
-    from gaia.ui.email_sidecar.relay import relay_query
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.errors import SidecarError
+    from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
     if profile is None:
@@ -2816,8 +2816,8 @@ def _dispatch_sidecar_query(
         )
         return
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.profiles import full_access_supported
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.profiles import full_access_supported
 
     answers_confirmations = confirmations_supported(profile, handle.api_version)
     offers_always = bool(

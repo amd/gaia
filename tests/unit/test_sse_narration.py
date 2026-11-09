@@ -541,8 +541,8 @@ class TestCommentary:
         assert "commentary" not in [e["type"] for e in _drain(handler)]
 
     def test_a_relayed_turn_gets_the_same_commentary(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -624,8 +624,8 @@ class TestRelayedNarration:
     """A relayed call reaches the window in the same plain words as an in-process one."""
 
     def test_the_relay_passes_the_sidecars_narration_on(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -644,8 +644,8 @@ class TestRelayedNarration:
         assert events["tool_args"]["narration"] == "Searching the web: seattle weather"
 
     def test_an_older_sidecar_without_narration_still_gets_plain_words(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -678,8 +678,8 @@ class TestRelayedPhase:
     """A relayed turn's live line names the model's phase, as an in-process one does."""
 
     def test_the_relay_keeps_the_phase_and_its_counts(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(
@@ -699,8 +699,8 @@ class TestRelayedPhase:
         assert event["message"] == "Reading your request (18,641 tokens)"
 
     def test_a_plain_status_stays_plain(self):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
         handler = SSEOutputHandler()
         relay._dispatch_one(

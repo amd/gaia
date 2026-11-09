@@ -1,18 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Backward-compat re-export shim (issue #2142, T1).
+"""Sidecar support for the Agent UI backend (daemon-client side).
 
-The sidecar error hierarchy moved to :mod:`gaia.daemon.sidecars.errors` so the
-daemon (which owns sidecar spawning) never has to import ``gaia.ui``. This
-module re-exports the same class objects so existing
-``from gaia.ui.email_sidecar.errors import ...`` callers (``proxy.py``,
-``relay.py``, ``router.py``, and their tests) keep working unmodified. Retired
-once those callers move to the daemon client (V2-7).
+Since #2142 the GAIA daemon owns fetch/spawn/health/tree-kill
+(:mod:`gaia.daemon.sidecars`); the UI acquires a running sidecar through
+:mod:`gaia.ui.sidecar.daemon_client` and keeps only the request-side
+pieces here (proxy, relay, REST router).
 """
 
-from __future__ import annotations
-
-from gaia.daemon.sidecars.errors import (
+from gaia.ui.sidecar.daemon_client import SidecarHandle
+from gaia.ui.sidecar.errors import (
     BinaryNotFoundError,
     HealthTimeoutError,
     IntegrityError,
@@ -23,6 +20,7 @@ from gaia.daemon.sidecars.errors import (
     SidecarSpawnError,
     VersionMismatchError,
 )
+from gaia.ui.sidecar.proxy import EmailSidecarProxy
 
 __all__ = [
     "SidecarError",
@@ -34,4 +32,6 @@ __all__ = [
     "RouteNotAvailableError",
     "SidecarHTTPError",
     "VersionMismatchError",
+    "SidecarHandle",
+    "EmailSidecarProxy",
 ]

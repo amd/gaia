@@ -6,7 +6,7 @@ Everything about relaying a sidecar run is identical between agents except a
 handful of values: the contract floor to refuse below, the copy the user sees,
 which tool names deserve a friendly label, and which tools change durable state
 and so warrant a visible status line. Those live here, one :class:`RelayProfile`
-per agent, so :mod:`gaia.ui.email_sidecar.relay` stays agent-agnostic and adding
+per agent, so :mod:`gaia.ui.sidecar.relay` stays agent-agnostic and adding
 the next sidecar is a profile, not another branch.
 
 Deliberately NOT in ``gaia.daemon.sidecars.spec``: that spec describes what the

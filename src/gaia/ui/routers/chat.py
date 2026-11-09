@@ -410,8 +410,8 @@ async def _confirm_relayed_tool(
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.errors import SidecarError
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -557,7 +557,7 @@ async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -616,9 +616,9 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     """Revoke a grant the chat's relayed agent holds, through its sidecar."""
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -661,7 +661,7 @@ async def user_input(request: UserInputRequest):
     the sidecar). Tried in that order; a session with neither pending is a
     404, never a silent no-op accept.
     """
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -817,7 +817,7 @@ async def send_followup(request: FollowUpRequest):
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.sidecar.errors import SidecarError
 
     text = request.text.strip()
     if not text:

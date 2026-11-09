@@ -27,17 +27,17 @@ from pathlib import Path
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers_module
-import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-import gaia.ui.email_sidecar.relay as relay_module
+import gaia.ui.sidecar.daemon_client as daemon_client_module
+import gaia.ui.sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarSpawnError
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.sidecar.errors import SidecarError, SidecarSpawnError
+from gaia.ui.sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
     api_version_supported,
     profile_for,
 )
-from gaia.ui.email_sidecar.proxy import EmailSidecarProxy, SidecarProxy
+from gaia.ui.sidecar.proxy import EmailSidecarProxy, SidecarProxy
 from gaia.ui.models import ChatRequest
 from gaia.ui.turn_summary import TurnLedger
 
@@ -676,12 +676,12 @@ class TestSessionIdGating:
         ],
     )
     def test_email_takes_it_only_from_contract_2_12(self, version, expected):
-        from gaia.ui.email_sidecar.profiles import session_id_supported
+        from gaia.ui.sidecar.profiles import session_id_supported
 
         assert session_id_supported(EMAIL_PROFILE, version) is expected
 
     def test_gaia_takes_it_at_its_own_floor(self):
-        from gaia.ui.email_sidecar.profiles import session_id_supported
+        from gaia.ui.sidecar.profiles import session_id_supported
 
         floor = ".".join(str(n) for n in GAIA_PROFILE.min_api_version)
         assert session_id_supported(GAIA_PROFILE, floor)

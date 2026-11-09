@@ -19,7 +19,7 @@ import pytest
 from fastapi import HTTPException
 
 from gaia.ui import _chat_helpers as helpers
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
+from gaia.ui.sidecar.errors import SidecarHTTPError
 from gaia.ui.routers.chat import UserInputRequest, user_input
 
 pytestmark = pytest.mark.asyncio

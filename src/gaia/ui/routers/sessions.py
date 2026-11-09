@@ -38,7 +38,7 @@ from ..database import (
     resolved_default_model,
 )
 from ..dependencies import get_db
-from ..email_sidecar.profiles import profile_for
+from ..sidecar.profiles import profile_for
 from ..models import (
     AttachDocumentRequest,
     CreateSessionRequest,

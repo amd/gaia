@@ -712,7 +712,7 @@ def test_online_tools_are_refused_offline_and_status_is_not():
 
 
 def test_new_tools_have_a_plain_language_label_in_the_flagship_ui():
-    from gaia.ui.email_sidecar.profiles import _GAIA_TOOL_LABELS
+    from gaia.ui.sidecar.profiles import _GAIA_TOOL_LABELS
 
     assert NEW_TOOLS <= set(_GAIA_TOOL_LABELS)
 
