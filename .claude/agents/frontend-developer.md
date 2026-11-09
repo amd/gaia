@@ -1,6 +1,6 @@
 ---
 name: frontend-developer
-description: GAIA Electron and web UI developer. Use PROACTIVELY for the Agent UI (React/Vite/Electron), standalone app UIs, or backend↔renderer IPC.
+description: GAIA Electron and web UI developer. Use PROACTIVELY for the Agent UI (React/Vite/Electron) or backend↔renderer IPC.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
@@ -14,7 +14,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 ## When to use
 
 - Editing the Agent UI (`src/gaia/apps/webui/`) — React/TypeScript/Vite/Electron
-- Working on standalone app UIs (LLM, Example)
 - Adding or modifying IPC calls between renderer and main process
 - Wiring a new frontend feature to a backend endpoint in `src/gaia/ui/`
 
