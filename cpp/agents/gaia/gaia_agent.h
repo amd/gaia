@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gaia/agent.h>
 #include <gaia/skill_library.h>
@@ -20,6 +21,10 @@ public:
     struct Options {
         bool webTools = true;  // web_fetch (still CONFIRM-gated)
         bool skills = true;    // SKILL.md catalog, list_skills, load_skill
+        // Folders the tools may touch; empty = the working directory. Ignored
+        // with fullAccess, which lets the tools reach anywhere the user can.
+        std::vector<std::string> workspaceRoots;
+        bool fullAccess = false;
     };
 
     explicit GaiaAgent(const AgentConfig& config);
@@ -32,7 +37,7 @@ protected:
 
 private:
     /// OS, working directory and date, appended to the system prompt.
-    static std::string systemContext();
+    std::string systemContext() const;
 
     Options options_;
     std::unique_ptr<SkillLibrary> skills_;

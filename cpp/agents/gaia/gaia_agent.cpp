@@ -12,6 +12,7 @@
 #include <gaia/file_tools.h>
 #include <gaia/git_tools.h>
 #include <gaia/web_tools.h>
+#include <gaia/workspace.h>
 
 #include "../bash/bash_tools.h"
 
@@ -33,9 +34,24 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
 GaiaAgent::~GaiaAgent() = default;
 
 void GaiaAgent::registerTools() {
-    FileIOTools::registerAll(toolRegistry());
-    GitTools::registerAll(toolRegistry());
-    BashTools::registerAll(toolRegistry());
+    if (options_.fullAccess) {
+        FileIOTools::registerAll(toolRegistry());
+        GitTools::registerAll(toolRegistry());
+        BashTools::registerAll(toolRegistry());
+    } else {
+        auto ws = std::make_shared<const Workspace>(options_.workspaceRoots);
+        auto& reg = toolRegistry();
+        reg.registerTool(Workspace::confine(FileIOTools::fileRead(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(FileIOTools::fileWrite(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(FileIOTools::fileEdit(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(FileIOTools::fileSearch(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(GitTools::gitStatus(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
+        reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
+        reg.registerTool(Workspace::confineShell(BashTools::bashExecute(), ws));
+        reg.registerTool(BashTools::envInspect());
+    }
     if (options_.webTools) WebTools::registerAll(toolRegistry());
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
 }
@@ -63,7 +79,7 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
            (skills_ ? "\n" + skills_->renderPrompt() : std::string());
 }
 
-std::string GaiaAgent::systemContext() {
+std::string GaiaAgent::systemContext() const {
     std::ostringstream out;
     out << "\n\n## Environment\n";
     std::error_code ec;
@@ -72,6 +88,13 @@ std::string GaiaAgent::systemContext() {
     char date[32];
     std::strftime(date, sizeof date, "%Y-%m-%d (%A)", std::localtime(&now));
     out << "- Today: " << date << "\n";
+    if (!options_.fullAccess) {
+        out << "- Folders you may use:";
+        if (options_.workspaceRoots.empty()) out << " " << fs::current_path(ec).string();
+        for (const auto& r : options_.workspaceRoots) out << " " << r;
+        out << ". Tools refuse other locations, so don't search the whole disk or the home "
+               "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
 #ifdef _WIN32
     out << "- OS: Windows. bash_execute runs bash when one is installed, else cmd.exe.\n";
 #elif defined(__APPLE__)

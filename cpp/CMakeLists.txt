@@ -277,6 +277,7 @@ add_library(gaia_core
     src/database.cpp
     src/api_server.cpp
     src/web_tools.cpp
+    src/workspace.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -469,6 +470,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
         tests/test_skill_library.cpp
+        tests/test_workspace.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
