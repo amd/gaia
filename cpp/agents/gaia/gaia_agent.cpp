@@ -7,6 +7,8 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
+#include <regex>
 #include <sstream>
 
 #include <gaia/file_tools.h>
@@ -133,6 +135,66 @@ std::string GaiaAgent::systemContext() const {
     }
 #endif
     return out.str();
+}
+
+std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
+    static const std::regex claim(
+        R"(\b(saved|wrote|written|created|exported|generated|produced)\b[^\n]{0,80}?)"
+        R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
+        R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
+        std::regex::icase);
+    std::vector<std::string> out;
+    for (auto it = std::sregex_iterator(answer.begin(), answer.end(), claim);
+         it != std::sregex_iterator(); ++it) {
+        std::string p = (*it)[2].str();
+        while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
+        if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+    }
+    return out;
+}
+
+std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answer) {
+    std::error_code ec;
+    std::vector<fs::path> roots;
+    for (const auto& r : options_.workspaceRoots) roots.emplace_back(r);
+    if (roots.empty()) roots.push_back(fs::current_path(ec));
+
+    auto exists = [&](std::string p) {
+#ifndef _WIN32
+        // Under WSL a Windows path the user wrote lives under /mnt/<drive>.
+        if (p.size() > 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':') {
+            std::string mapped = "/mnt/" + std::string(1, static_cast<char>(std::tolower(p[0]))) + p.substr(2);
+            std::replace(mapped.begin(), mapped.end(), '\\', '/');
+            p = mapped;
+        }
+#endif
+        const fs::path path(p);
+        if (path.is_absolute()) return fs::exists(path, ec);
+        const std::string name = path.filename().string();
+        for (const auto& root : roots) {
+            if (fs::exists(root / path, ec)) return true;
+            // Mentioned by bare name but written into a subfolder.
+            fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+            int budget = 20000;  // a huge workspace is not searched exhaustively
+            for (; it != end && !ec && budget-- > 0; it.increment(ec)) {
+                if (it.depth() > 5) { it.disable_recursion_pending(); continue; }
+                if (it->path().filename() == name) return true;
+            }
+        }
+        return false;
+    };
+
+    std::vector<std::string> missing;
+    for (const auto& f : claimedFiles(answer)) {
+        if (!exists(f)) missing.push_back(f);
+    }
+    if (missing.empty()) return std::nullopt;
+    std::string list;
+    for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
+    return "Your answer says " + list + (missing.size() == 1 ? " was" : " were") +
+           " created or saved, but no such file exists in the working folders. Create " +
+           (missing.size() == 1 ? "it" : "them") +
+           " now, or correct the answer so it doesn't claim work that wasn't done.";
 }
 
 } // namespace gaia

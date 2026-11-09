@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,13 @@ public:
 protected:
     void registerTools() override;
     std::string getSystemPrompt() const override;
+
+    /// Sends an answer back once when it says a file was saved that doesn't exist.
+    std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
+
+public:
+    /// Files the answer says were created or saved, as written in it.
+    static std::vector<std::string> claimedFiles(const std::string& answer);
 
 private:
     /// OS, working directory and date, appended to the system prompt.
