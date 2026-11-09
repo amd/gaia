@@ -67,7 +67,7 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 	t.Setenv(daemon.EnvHome, dir)
 
 	f := &fakeDaemon{t: t}
-	f.catalogBody = emailCatalog(false)
+	f.catalogBody = emailCatalog()
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 
@@ -154,7 +154,7 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 
 // emailCatalog is a GET /daemon/v1/catalog body with one supervised,
 // non-verified agent.
-func emailCatalog(installed bool) map[string]any {
+func emailCatalog() map[string]any {
 	entry := map[string]any{
 		"id":                  "email",
 		"name":                "Email",
@@ -167,13 +167,10 @@ func emailCatalog(installed bool) map[string]any {
 		"download_size_bytes": 39845888,
 		"latest_version":      "0.5.0",
 		"deprecated":          false,
-		"installed":           installed,
+		"installed":           false,
 		"installed_version":   nil,
 		"update_available":    false,
 		"supervised":          true,
-	}
-	if installed {
-		entry["installed_version"] = "0.5.0"
 	}
 	return map[string]any{
 		"agents":                []map[string]any{entry},
