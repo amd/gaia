@@ -317,6 +317,27 @@ json LemonadeClient::setParams(const json& params) {
     return json::parse(body);
 }
 
+json LemonadeClient::pullModel(const std::string& modelName, const std::string& checkpoint,
+                               const std::string& recipe, int timeoutSec) {
+    if (modelName.empty()) throw std::invalid_argument("pullModel: no model named");
+    const bool registers = !checkpoint.empty() || !recipe.empty();
+    if (registers && modelName.rfind("user.", 0) != 0) {
+        throw std::invalid_argument(
+            "A checkpoint or recipe registers a new model, so its name must start with 'user.' "
+            "(got '" + modelName + "'). To download a built-in model, pass its name alone.");
+    }
+    json body = {{"model_name", modelName}};
+    if (!checkpoint.empty()) body["checkpoint"] = checkpoint;
+    if (!recipe.empty()) body["recipe"] = recipe;
+    const std::string raw = httpPost("/pull", body.dump(), timeoutSec);
+    throwIfErrorBody(raw);
+    try {
+        return json::parse(raw);
+    } catch (const json::parse_error&) {
+        return json{{"status", "success"}, {"raw", raw}};
+    }
+}
+
 std::vector<std::vector<float>> LemonadeClient::embeddings(const std::string& model,
                                                            const std::vector<std::string>& inputs,
                                                            size_t batchSize) {

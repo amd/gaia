@@ -63,6 +63,9 @@ private:
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
+    std::unique_ptr<DocumentIndex> code_;
+
+    void registerCodeTools(std::shared_ptr<const Workspace> ws);
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
 

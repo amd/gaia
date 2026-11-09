@@ -58,6 +58,11 @@ public:
     /// Index (or re-index) a file. Returns the number of chunks added.
     size_t indexFile(const std::string& path);
 
+    /// Index every supported file under `root`, skipping what .gitignore
+    /// ignores, VCS / dependency / build folders and files over 1 MB.
+    /// `failures` collects "path: reason" for files that couldn't be read.
+    size_t indexDirectory(const std::string& root, std::vector<std::string>* failures = nullptr);
+
     /// Top `k` chunks for `query`, optionally only from files whose path contains `fileFilter`.
     std::vector<DocumentHit> query(const std::string& query, size_t k = 5,
                                    const std::string& fileFilter = "") const;

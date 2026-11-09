@@ -80,6 +80,14 @@ The file, git and shell tools are confined to the working directory (`--cwd`) an
 
 `index_document` indexes a file or a folder: PDFs (through `pdftotext`, so each passage keeps its page number), Word `.docx`, text, Markdown and code. `query_documents` returns the passages that answer a question, with file and page. Retrieval ranks passages by keywords (BM25), and also by meaning when an embedding model is set with `--embedding-model` or `embeddingModel` in the settings file (`--provider fireworks` uses `nomic-ai/nomic-embed-text-v1.5`); the two rankings are merged. Every result says which mode produced it. A PDF with no text layer, or a file that can't be read, is reported as a failure instead of being indexed empty.
 
+### Code
+
+`index_codebase` indexes a project (default: the working folder), honoring `.gitignore` and skipping `.git`, `node_modules`, virtual environments, build output and files over 1 MB. `search_code` then finds code by keywords or, with an embedding model, by meaning, and returns file paths and snippets. Code has its own index, so document questions never rank source files.
+
+### Models
+
+With Lemonade, `gaia-cpp models list` lists the server's models and `gaia-cpp models pull <name>` downloads one. A built-in model is pulled by name alone; `--checkpoint` and `--recipe` register a new model and need a name starting with `user.`.
+
 ### Images
 
 `analyze_image` sends an image file (PNG, JPEG, GIF, WebP, BMP) to a model that accepts images and returns its answer about it: text, charts, tables, screenshots, photos. It uses the agent's own model unless `--vision-model` names another on the same endpoint. A model that can't read images is reported as an error that says to set `--vision-model`.

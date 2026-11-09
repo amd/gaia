@@ -154,6 +154,13 @@ public:
     /// Set server-side parameters.
     json setParams(const json& params);
 
+    /// Download a model with POST /pull. A built-in model is pulled by name
+    /// alone; `checkpoint` / `recipe` register a new one and are only valid for
+    /// a `user.` model (Lemonade rejects them for built-ins). Throws
+    /// std::invalid_argument on that misuse, HttpError on a server refusal.
+    json pullModel(const std::string& modelName, const std::string& checkpoint = "",
+                   const std::string& recipe = "", int timeoutSec = 3600);
+
     /// Embed `inputs` with `model` via POST /embeddings (OpenAI shape), in
     /// batches. One vector per input, in order. Throws on any failure or a
     /// response that doesn't hold exactly one vector per input.

@@ -11,6 +11,7 @@
 #include <regex>
 #include <set>
 
+#include "gaia/ignore.h"
 #include "gaia/process.h"
 
 namespace fs = std::filesystem;
@@ -222,6 +223,34 @@ size_t DocumentIndex::indexFile(const std::string& path) {
         chunks_.push_back(std::move(fresh[j]));
     }
     return fresh.size();
+}
+
+size_t DocumentIndex::indexDirectory(const std::string& root, std::vector<std::string>* failures) {
+    static const std::set<std::string> skipDirs = {
+        ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", "build", "dist",
+        "target", ".tox", ".mypy_cache", ".pytest_cache", ".next", ".gradle", "out"};
+    const GitignoreMatcher ignore = GitignoreMatcher::forDirectory(root);
+    std::error_code ec;
+    size_t total = 0;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+    for (; it != end && !ec; it.increment(ec)) {
+        const fs::path& p = it->path();
+        const bool dir = it->is_directory(ec);
+        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.string(), true))) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (dir || !it->is_regular_file(ec)) continue;
+        if (ignore.isIgnored(p.string(), false)) continue;
+        if (it->file_size(ec) > (1u << 20)) continue;
+        if (!isSupportedExtension(lowerExt(p.string()))) continue;
+        try {
+            total += indexFile(p.string());
+        } catch (const std::exception& e) {
+            if (failures) failures->push_back(p.string() + ": " + e.what());
+        }
+    }
+    return total;
 }
 
 std::vector<DocumentHit> DocumentIndex::query(const std::string& q, size_t k,

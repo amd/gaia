@@ -6,6 +6,11 @@
 #include <gtest/gtest.h>
 #include <gaia/lemonade_client.h>
 
+#include <chrono>
+#include <thread>
+
+#include "support/mock_llm_server.h"
+
 using namespace gaia;
 
 // ---------------------------------------------------------------------------
@@ -298,4 +303,33 @@ TEST(LemonadeHealthTest, MissingRecipeOptions) {
 
     EXPECT_EQ(h.modelId, "SomeModel");
     EXPECT_EQ(h.contextSize, 0);  // no recipe_options → default 0
+}
+
+TEST(LemonadeClientPull, CheckpointOrRecipeNeedsUserPrefix) {
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:9/api/v1"});
+    EXPECT_THROW(c.pullModel("Gemma-4-E4B-it-GGUF", "", "llamacpp"), std::invalid_argument);
+    EXPECT_THROW(c.pullModel("Some-Model", "org/repo:Q4"), std::invalid_argument);
+    EXPECT_THROW(c.pullModel(""), std::invalid_argument);
+}
+
+TEST(LemonadeClientPull, BuiltInPullSendsNameOnly) {
+    httplib::Server srv;
+    std::string seen;
+    srv.Post("/api/v1/pull", [&seen](const httplib::Request& req, httplib::Response& res) {
+        seen = req.body;
+        res.set_content(R"({"status":"success"})", "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    LemonadeClient c(LemonadeClientConfig{"http://127.0.0.1:" + std::to_string(port) + "/api/v1"});
+    c.pullModel("Gemma-4-E4B-it-GGUF");
+    const json built = json::parse(seen);
+    EXPECT_EQ(built, json({{"model_name", "Gemma-4-E4B-it-GGUF"}})) << "no recipe for a built-in (#1655)";
+    c.pullModel("user.My-Model", "org/repo:Q4_K_M", "llamacpp");
+    const json reg = json::parse(seen);
+    EXPECT_EQ(reg["recipe"], "llamacpp");
+    EXPECT_EQ(reg["checkpoint"], "org/repo:Q4_K_M");
+    srv.stop();
+    t.join();
 }
