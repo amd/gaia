@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <mutex>
@@ -161,14 +162,20 @@ ToolConfirmCallback makeStdinConfirmCallback() {
 
 std::string AllowedToolsStore::defaultConfigDir() {
 #ifdef _WIN32
-    const char* profile = std::getenv("USERPROFILE");
-    std::string home = profile ? profile : "C:\\Users\\Default";
-    return home + "\\.gaia\\security";
+    const char* name = "USERPROFILE";
+    const char* sep = "\\";
 #else
-    const char* home = std::getenv("HOME");  // NOLINT(concurrency-mt-unsafe)
-    std::string h = home ? home : "/tmp";
-    return h + "/.gaia/security";
+    const char* name = "HOME";
+    const char* sep = "/";
 #endif
+    const char* home = std::getenv(name);  // NOLINT(concurrency-mt-unsafe)
+    if (!home || !*home) {
+        // A shared folder such as /tmp would let another account pre-approve tools.
+        throw std::runtime_error(std::string(name) +
+                                 " is not set, so there is no private folder for saved tool approvals. Set " + name +
+                                 " to your home folder, or pass a folder to AllowedToolsStore.");
+    }
+    return std::string(home) + sep + ".gaia" + sep + "security";
 }
 
 AllowedToolsStore::AllowedToolsStore()
@@ -243,11 +250,21 @@ void AllowedToolsStore::save() const {
     for (const auto& name : allowed_) {
         j["allowed_tools"].push_back(name);
     }
-    std::ofstream f(filePath_);
-    if (f.is_open()) {
+    // Write beside the file and rename, so a crash never leaves half a list.
+    const std::string tmp = filePath_ + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
         f << j.dump(2) << "\n";
-    } else {
-        std::cerr << "[gaia] warning: could not write allowed_tools store: " << filePath_ << "\n";
+        if (!f.flush()) {
+            std::cerr << "[gaia] warning: could not write allowed_tools store: " << tmp << "\n";
+            return;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, filePath_, ec);
+    if (ec) {
+        std::cerr << "[gaia] warning: could not replace " << filePath_ << ": " << ec.message() << "\n";
+        std::filesystem::remove(tmp, ec);
     }
 }
 
@@ -256,12 +273,9 @@ std::string lowerAscii(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
 }
+}  // namespace
 
-// Split a command line into segments at ; | && || outside quotes, and each
-// segment into words with quotes removed. False when the line holds anything
-// that could run or write something else: & or a redirection outside quotes,
-// an unbalanced quote, or an expansion anywhere.
-bool splitCommand(const std::string& line, std::vector<std::vector<std::string>>& segments) {
+bool splitShellCommand(const std::string& line, bool posixShell, std::vector<std::vector<std::string>>& segments) {
     segments.assign(1, {});
     std::string word;
     bool inWord = false;
@@ -274,12 +288,17 @@ bool splitCommand(const std::string& line, std::vector<std::vector<std::string>>
     for (size_t i = 0; i < line.size(); ++i) {
         const char c = line[i];
         if (c == '`' || c == '$' || c == '%' || c == '^' || c == '!' || c == '\n' || c == '\r') return false;
+        // bash removes a backslash everywhere but inside '...'; cmd.exe keeps it.
+        if (posixShell && c == '\\' && quote != '\'') return false;
         if (quote) {
             if (c == quote) quote = 0;
             else word += c;
             continue;
         }
-        if (c == '\'' || c == '"') {
+        // cmd.exe has one quote character; ' is an ordinary letter there.
+        if (c == '"' || (posixShell && c == '\'')) {
+            // A quoted program name is resolved differently by each shell.
+            if (segments.back().empty()) return false;
             quote = c;
             inWord = true;
             continue;
@@ -304,17 +323,20 @@ bool splitCommand(const std::string& line, std::vector<std::vector<std::string>>
     endWord();
     return !segments.back().empty();
 }
-}  // namespace
 
 bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
     if (command.find_first_not_of(" \t") == std::string::npos) return false;
-    // Throwing away output or merging stderr writes nothing.
+    // Throwing away output or merging stderr writes nothing. Each shell has its
+    // own null device; the other shell's name would be a real file.
     std::string cmd = " " + command + " ";
-    for (const char* quiet : {" 2>/dev/null ", " >/dev/null ", " 2>nul ", " >nul ", " 2>&1 "}) {
-        for (size_t at; (at = cmd.find(quiet)) != std::string::npos;) cmd.replace(at, std::strlen(quiet), " ");
+    const std::vector<const char*> quiet = posixShell
+        ? std::vector<const char*>{" 2>/dev/null ", " >/dev/null ", " 2>&1 "}
+        : std::vector<const char*>{" 2>nul ", " >nul ", " 2>&1 "};
+    for (const char* q : quiet) {
+        for (size_t at; (at = cmd.find(q)) != std::string::npos;) cmd.replace(at, std::strlen(q), " ");
     }
     std::vector<std::vector<std::string>> segments;
-    if (!splitCommand(cmd, segments)) return false;
+    if (!splitShellCommand(cmd, posixShell, segments)) return false;
     // Only programs with no flag that writes, deletes or runs code. Under
     // cmd.exe only built-ins: cmd runs a find.bat in the current folder before
     // the real find.
@@ -324,15 +346,17 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
     static const std::set<std::string> cmdReaders = {"dir", "type", "cd", "echo"};
     const auto& readers = posixShell ? posixReaders : cmdReaders;
     for (const auto& argv : segments) {
-        std::string program = lowerAscii(argv[0]);
-        if (posixShell && program.find('\\') != std::string::npos) return false;
-        if (program.size() > 4 && program.compare(program.size() - 4, 4, ".exe") == 0) program.resize(program.size() - 4);
+        // cmd.exe ignores case; bash runs a different program for LS.
+        const std::string program = posixShell ? argv[0] : lowerAscii(argv[0]);
         if (!readers.count(program)) return false;
-        if (program != "find") continue;
         for (size_t i = 1; i < argv.size(); ++i) {
-            // bash drops a backslash before a letter: `-\delete` is -delete.
-            std::string a = argv[i];
-            if (posixShell) a.erase(std::remove(a.begin(), a.end(), '\\'), a.end());
+            const std::string& a = argv[i];
+            if (a.empty()) continue;
+            // \\host\share and //host/share read from the network.
+            if (a.rfind("//", 0) == 0 || a.rfind("\\\\", 0) == 0) return false;
+            // hostname with a name sets it.
+            if (program == "hostname" && a[0] != '-') return false;
+            if (program != "find") continue;
             for (const char* bad : {"-exec", "-ok", "-delete", "-fprint", "-fls"}) {
                 if (a.rfind(bad, 0) == 0) return false;
             }
@@ -392,15 +416,26 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             R"(|uv\s+(?:add|sync|tool\s+install)\b|cargo\s+(?:install|fetch|update)\b)"
             R"(|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b)"
             R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b)"
-            R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b))",
+            R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
+            R"(|nslookup\b|dig\b|ping\b|traceroute\b|tracert\b|/dev/(?:tcp|udp)/)"
+            R"(|(?:https?|all|ftp)_proxy=)"
+            R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
+            R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
             std::regex::icase);
         static const std::regex fetch(R"(\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b)", std::regex::icase);
-        if (std::regex_search(command, online) || mentionsRemoteUrl(command)) {
+        // bash opens a socket for a redirect to these names.
+        const bool socketFile = command.find("/dev/tcp/") != std::string::npos ||
+                                command.find("/dev/udp/") != std::string::npos;
+        if (socketFile || std::regex_search(command, online) || mentionsRemoteUrl(command)) {
             return why + "`" + command.substr(0, 80) + "`, which goes online.";
         }
         // A fetch stays local only when every destination it names is this PC.
         if (std::regex_search(command, fetch)) {
             static const std::regex anyUrl(R"([A-Za-z][A-Za-z0-9+.\-]*://)");
+            // A proxy or a pinned address sends a "localhost" request elsewhere.
+            static const std::regex reroute(
+                R"((?:^|\s)(?:-x|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
+            if (std::regex_search(command, reroute)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
             if (!std::regex_search(command, anyUrl) || command.find("$(") != std::string::npos ||
                 command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
                 return why + "`" + command.substr(0, 80) + "`, which goes online.";
@@ -419,29 +454,34 @@ std::string shellCommandScope(const std::string& command) {
     const size_t start = command.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) return "exact:";
     const std::string cmd = command.substr(start, command.find_last_not_of(" \t\r\n") - start + 1);
-    // Anything that runs a second thing is approved only as written.
-    for (const char* op : {";", "&", "|", "`", "$(", ">", "<", "\n"}) {
+    // Anything that runs a second thing or hides a word is approved only as written.
+    for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'"}) {
         if (cmd.find(op) != std::string::npos) return "exact:" + cmd;
     }
     std::istringstream words(cmd);
     std::string program, sub;
     words >> program;
-    // `VAR=x cmd` or a path to the program: approve exactly.
-    if (program.find('=') != std::string::npos) return "exact:" + cmd;
+#ifdef _WIN32
+    program = lowerAscii(program);
+    if (program.size() > 4 && program.compare(program.size() - 4, 4, ".exe") == 0) program.resize(program.size() - 4);
+#endif
+    // Tools whose subcommands differ in risk: the grant covers one subcommand.
     static const std::set<std::string> withSubcommand = {
-        "git", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv", "cargo", "go", "docker",
-        "kubectl", "gh", "make", "dotnet", "brew", "apt", "apt-get", "winget", "python", "python3",
-        "node", "bash", "sh", "pwsh", "powershell"};
+        "git", "npm", "pnpm", "yarn", "pip", "pip3", "uv", "cargo", "go", "docker",
+        "kubectl", "gh", "make", "dotnet", "brew", "apt", "apt-get", "winget"};
+    // Programs that do one thing, whatever their arguments.
+    static const std::set<std::string> plain = {
+        "ls", "dir", "cat", "type", "head", "tail", "wc", "grep", "rg", "pwd", "echo", "cd", "which",
+        "stat", "du", "df", "tree", "diff", "sort", "uniq", "mkdir", "md", "touch", "cp", "copy",
+        "mv", "move", "ren", "rm", "del", "rmdir", "chmod", "pytest", "ctest", "cmake", "ninja", "tsc"};
     if (withSubcommand.count(program)) {
-        words >> sub;
-        // An interpreter's script or -c code is the real command.
-        if (program.rfind("python", 0) == 0 || program == "node" || program == "bash" ||
-            program == "sh" || program == "pwsh" || program == "powershell") {
-            return "exact:" + cmd;
-        }
-        return "cmd:" + program + (sub.empty() ? "" : " " + sub);
+        // A flag before the subcommand (git -C elsewhere ...) changes what runs.
+        if (!(words >> sub) || sub[0] == '-') return "exact:" + cmd;
+        return "cmd:" + program + " " + sub;
     }
-    return "cmd:" + program;
+    if (plain.count(program)) return "cmd:" + program;
+    // Interpreters, wrappers (env, xargs, sudo), a path to a program, VAR=x cmd.
+    return "exact:" + cmd;
 }
 
 } // namespace gaia

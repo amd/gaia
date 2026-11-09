@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "gaia/export.h"
+
 namespace gaia {
 
 using json = nlohmann::json;
@@ -40,7 +42,7 @@ using json = nlohmann::json;
 /// Returns "" (empty string) for full-sized (>= 12 byte) buffers with
 /// unrecognized magic. Callers must handle empty by throwing or requiring
 /// the caller to supply an explicit mimeType.
-std::string detectImageMimeType(const std::uint8_t* data, std::size_t size);
+GAIA_API std::string detectImageMimeType(const std::uint8_t* data, std::size_t size);
 
 /// A single piece of message content — either text or a base64 data-URI image.
 struct ContentPart {
@@ -50,10 +52,10 @@ struct ContentPart {
     std::string text;        // populated when kind == TEXT
     std::string imageUrl;    // populated when kind == IMAGE_URL ("data:...;base64,...")
 
-    json toJson() const;
+    GAIA_API json toJson() const;
 
-    static ContentPart makeText(std::string t);
-    static ContentPart makeImageUrl(std::string url);
+    GAIA_API static ContentPart makeText(std::string t);
+    GAIA_API static ContentPart makeImageUrl(std::string url);
 };
 
 /// Image bytes plus a MIME type, carrying everything needed to compose a
@@ -65,24 +67,24 @@ public:
     /// bytes unless explicitly provided.
     /// Throws std::invalid_argument if bytes are empty, or if an explicit
     /// MIME type is outside the whitelist (image/{png,jpeg,gif,webp,bmp}).
-    static Image fromBytes(std::vector<std::uint8_t> bytes,
-                           const std::string& mimeType = "");
+    GAIA_API static Image fromBytes(std::vector<std::uint8_t> bytes,
+                                    const std::string& mimeType = "");
 
     /// Load an image from a regular file on disk.
     /// Throws std::runtime_error if the path can't be opened.
     /// Throws std::invalid_argument for: non-regular files (directory/symlink/
     /// FIFO/device), zero-byte files, or files exceeding GAIA_MAX_IMAGE_BYTES.
-    static Image fromFile(const std::string& path);
+    GAIA_API static Image fromFile(const std::string& path);
 
     const std::vector<std::uint8_t>& bytes() const { return bytes_; }
     const std::string& mimeType() const { return mimeType_; }
     std::size_t size() const { return bytes_.size(); }
 
     /// Produce a ContentPart{IMAGE_URL} with a data:<mime>;base64,<...> URI.
-    ContentPart toContentPart() const;
+    GAIA_API ContentPart toContentPart() const;
 
     /// Produce the raw data URI string (same value as toContentPart().imageUrl).
-    std::string toDataUri() const;
+    GAIA_API std::string toDataUri() const;
 
 private:
     Image() = default;
@@ -152,14 +154,14 @@ struct ToolCall {
     /// An empty/whitespace-only string decodes to ``{}`` (what servers emit for
     /// a zero-argument function). Anything that is not a JSON object throws
     /// std::runtime_error naming the tool, the id, and the offending payload.
-    json parsedArgs() const;
+    GAIA_API json parsedArgs() const;
 
     /// Serialize to the OpenAI ``tool_calls`` element shape.
-    json toJson() const;
+    GAIA_API json toJson() const;
 
     /// Parse one ``tool_calls`` element. Throws std::runtime_error with an
     /// actionable message when ``id`` or ``function.name`` is missing or blank.
-    static ToolCall fromJson(const json& j);
+    GAIA_API static ToolCall fromJson(const json& j);
 };
 
 struct Message {
@@ -182,15 +184,15 @@ struct Message {
     /// Serialize to OpenAI-compatible chat message JSON.
     /// Defined out-of-line in types.cpp to avoid ODR hazards for consumers
     /// linked against a prebuilt gaia_core.
-    json toJson() const;
+    GAIA_API json toJson() const;
 
     /// Factory: build a user message with optional images. Text is placed
     /// first, followed by image parts in the order supplied. When `text`
     /// is empty and images are provided, the content array contains only
     /// image parts (no empty-text stub). When both are empty, the message
     /// has empty string content.
-    static Message fromUser(const std::string& text,
-                            const std::vector<Image>& images = {});
+    GAIA_API static Message fromUser(const std::string& text,
+                                     const std::vector<Image>& images = {});
 };
 
 // ---- Tool Types ----
@@ -384,8 +386,8 @@ inline std::string nativeToolCallsToString(NativeToolCalls m) {
 }
 
 /// Throws std::invalid_argument on an unrecognized value (no silent default).
-ResponseMode responseModeFromString(const std::string& s);
-NativeToolCalls nativeToolCallsFromString(const std::string& s);
+GAIA_API ResponseMode responseModeFromString(const std::string& s);
+GAIA_API NativeToolCalls nativeToolCallsFromString(const std::string& s);
 
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
@@ -458,27 +460,27 @@ struct AgentConfig {
     bool stepBudgetNotices = true;
 
     /// Resolve the Auto policy against ``modelId``.
-    bool useNativeToolCalls() const;
+    GAIA_API bool useNativeToolCalls() const;
 
     /// Validate config fields; throws std::invalid_argument on violation.
-    void validate() const;
+    GAIA_API void validate() const;
 
     /// Construct from a JSON object. Missing fields retain defaults.
     /// Throws std::invalid_argument if any field is out of range.
-    static AgentConfig fromJson(const json& j);
+    GAIA_API static AgentConfig fromJson(const json& j);
 
     /// Load config from a JSON file. All fields are optional.
     /// Throws std::runtime_error on file/parse error, std::invalid_argument on invalid values.
-    static AgentConfig fromJsonFile(const std::string& path);
+    GAIA_API static AgentConfig fromJsonFile(const std::string& path);
 
     /// Serialize all fields to JSON (round-trips through fromJson). Never
     /// includes apiKey.
-    json toJson() const;
+    GAIA_API json toJson() const;
 };
 
 /// The key an agent sends: apiKey, else the variable apiKeyEnv names (unset or
 /// empty throws), else GAIA_API_KEY, else LEMONADE_API_KEY when baseUrl is a
 /// loopback address, else "".
-std::string resolveApiKey(const AgentConfig& config);
+GAIA_API std::string resolveApiKey(const AgentConfig& config);
 
 } // namespace gaia

@@ -45,6 +45,13 @@ TEST(MemoryStoreTest, RefusesCredentialsAndBadInput) {
     MemoryStore m(":memory:");
     EXPECT_THROW(m.remember("my api key: sk-abcdefghijklmnopqrstu"), std::invalid_argument);
     EXPECT_THROW(m.remember("password = hunter2hunter2"), std::invalid_argument);
+    EXPECT_THROW(m.remember("my bank password is swordfish"), std::invalid_argument);
+    EXPECT_THROW(m.remember("PIN for the garage: 4471"), std::invalid_argument);
+    EXPECT_THROW(m.remember("Visa 4111 1111 1111 1111 expires in May"), std::invalid_argument);
+    EXPECT_THROW(m.remember("SSN 078-05-1120"), std::invalid_argument);
+    const std::string id = m.remember("Prefers tea");
+    EXPECT_THROW(m.update(id, "the cvv is 123"), std::invalid_argument);
+    EXPECT_NO_THROW(m.remember("Read up to page 4471 of the manual"));
     EXPECT_THROW(m.remember("  "), std::invalid_argument);
     EXPECT_THROW(m.remember("x", "gossip"), std::invalid_argument);
     EXPECT_NO_THROW(m.remember("The API key is in the team password manager"));

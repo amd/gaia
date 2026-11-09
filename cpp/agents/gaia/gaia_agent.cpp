@@ -4,6 +4,7 @@
 #include "gaia_agent.h"
 
 #include <cctype>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,7 @@
 #include <gaia/file_tools.h>
 #include <gaia/git_tools.h>
 #include <gaia/media_tools.h>
+#include <gaia/security.h>
 #include <gaia/web_tools.h>
 #include <gaia/workspace.h>
 
@@ -62,7 +64,8 @@ void GaiaAgent::registerTools() {
     if (options_.fullAccess) {
         FileIOTools::registerAll(toolRegistry());
         GitTools::registerAll(toolRegistry());
-        BashTools::registerAll(toolRegistry());
+        toolRegistry().registerTool(BashTools::bashExecute(options_.shell));
+        toolRegistry().registerTool(BashTools::envInspect());
     } else {
         ws = std::make_shared<const Workspace>(options_.workspaceRoots);
         auto& reg = toolRegistry();
@@ -74,7 +77,31 @@ void GaiaAgent::registerTools() {
         reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
-        reg.registerTool(Workspace::confineShell(BashTools::bashExecute(), ws));
+        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws);
+        const std::shared_ptr<ShellSession> shell = options_.shell;
+        // A read skips the approval card only while it stays in the chat's folders.
+        sh.needsConfirm = [ws, shell](const json& args) {
+            const bool posix = !BashTools::detectShell().empty();
+            std::string cmd = " " + args.value("command", "") + " ";
+            if (!isReadOnlyShellCommand(cmd, posix)) return true;
+            ShellSession& session = shell ? *shell : BashTools::defaultSession();
+            // An exported PATH or preload decides which program `ls` is.
+            for (const auto& [name, value] : session.environment()) {
+                static const std::set<std::string> steering = {"PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV",
+                                                               "ENV", "PS4", "CDPATH", "PROMPT_COMMAND", "IFS"};
+                std::string upper = name;
+                std::transform(upper.begin(), upper.end(), upper.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+                if (steering.count(upper)) return true;
+            }
+            for (const char* q : {" 2>/dev/null ", " >/dev/null ", " 2>nul ", " >nul ", " 2>&1 "}) {
+                for (size_t at; (at = cmd.find(q)) != std::string::npos;) cmd.replace(at, std::strlen(q), " ");
+            }
+            std::vector<std::vector<std::string>> segments;
+            if (!splitShellCommand(cmd, posix, segments)) return true;
+            return !ws->readsStayInside(segments, session.cwd());
+        };
+        reg.registerTool(std::move(sh));
         reg.registerTool(BashTools::envInspect());
     }
     if (options_.webTools) WebTools::registerAll(toolRegistry());

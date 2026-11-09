@@ -127,6 +127,9 @@ public:
     /// Number of POSTs to /api/v1/load seen so far.
     int loadRequestCount() const { return loadCount_.load(); }
 
+    /// Status every later POST /api/v1/load answers with (200 by default).
+    void setLoadStatus(int status) { loadStatus_ = status; }
+
     /// All captured request bodies posted to /api/v1/chat/completions, in order.
     std::vector<std::string> receivedBodies() const {
         std::lock_guard<std::mutex> lk(mu_);
@@ -153,7 +156,8 @@ private:
 
         server_->Post("/api/v1/load", [this](const httplib::Request&, httplib::Response& res) {
             ++loadCount_;
-            res.set_content(kLoadOk, "application/json");
+            res.status = loadStatus_.load();
+            res.set_content(res.status == 200 ? kLoadOk : R"({"error":"load refused"})", "application/json");
         });
 
         server_->Get("/api/v1/models", [](const httplib::Request&, httplib::Response& res) {
@@ -307,6 +311,7 @@ private:
     std::thread thread_;
     int port_ = 0;
     bool reportModelLoaded_ = true;
+    std::atomic<int> loadStatus_{200};
     mutable std::mutex mu_;
     std::deque<QueuedResponse> responseQueue_;
     std::deque<std::string> sseQueue_;

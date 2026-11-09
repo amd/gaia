@@ -259,6 +259,13 @@ gaia/                           # repo root
     │   ├── console.cpp
     │   ├── clean_console.cpp
     │   └── database.cpp
+    ├── agents/
+    │   ├── gaia/               # gaiacpp — the general-purpose GAIA agent (CLI, headless, server)
+    │   ├── bash/               # gaia-bash — the coding agent
+    │   └── <id>/gaia-agent.yaml  # Packaging manifest per agent (see agents/README.md)
+    ├── packaging/
+    │   ├── package_agents.py   # Packages each agent's binary for the Agent Hub
+    │   └── package_lemonade.py # Packages gaiacpp as a Lemonade release archive
     ├── examples/
     │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)

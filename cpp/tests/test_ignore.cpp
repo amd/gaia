@@ -182,6 +182,26 @@ TEST_F(GitignoreTest, ForDirectoryOutsideRepoUsesOnlyItsOwnFile) {
     EXPECT_FALSE(matcher.isIgnored((root_ / "loose" / "public.txt").string(), false));
 }
 
+TEST_F(GitignoreTest, ForDirectoryIgnoredByItsRepositoryStillSearchesIt) {
+    fs::create_directories(root_ / "repo" / ".git");
+    fs::create_directories(root_ / "repo" / "build" / "proj" / "src");
+    {
+        std::ofstream f(root_ / "repo" / ".gitignore");
+        f << "build/\n*.py\n";
+    }
+    {
+        std::ofstream f(root_ / "repo" / "build" / "proj" / ".gitignore");
+        f << "generated/\n";
+    }
+
+    const fs::path proj = root_ / "repo" / "build" / "proj";
+    auto matcher = GitignoreMatcher::forDirectory(proj.string());
+    EXPECT_FALSE(matcher.isIgnored((proj / "src").string(), true));
+    EXPECT_FALSE(matcher.isIgnored((proj / "src" / "net.py").string(), false))
+        << "the repository's rules go with its decision to ignore the folder";
+    EXPECT_TRUE(matcher.isIgnored((proj / "generated").string(), true)) << "the folder's own file still applies";
+}
+
 TEST_F(GitignoreTest, PathsOutsideBaseDirAreNeverIgnored) {
     auto matcher = withRules("*.log\n");
     EXPECT_FALSE(matcher.isIgnored((fs::temp_directory_path() / "elsewhere.log").string(),

@@ -32,17 +32,28 @@ GAIA_API bool validatePath(const std::string& basePath, const std::string& reque
 /// Generalizes the ad-hoc checks in wifi_agent.cpp / test_tool_integration.cpp.
 GAIA_API bool isSafeShellArg(const std::string& arg);
 
-/// What an "always allow" for a shell command covers: the program ("pytest"),
-/// program + subcommand for tools whose subcommands differ in risk
-/// ("git status", "npm test"), or the exact command when it chains, pipes,
-/// substitutes or redirects — so approving one command never approves another.
+/// What an "always allow" for a shell command covers: the program for a short
+/// list of single-purpose programs ("pytest", "mkdir"), program + subcommand
+/// for tools whose subcommands differ in risk ("git status", "npm test"), and
+/// the exact command for everything else: interpreters, wrappers, unknown
+/// programs, and anything that chains, pipes, quotes, substitutes or redirects.
 GAIA_API std::string shellCommandScope(const std::string& command);
 
-/// True for a command that only reads: programs from a short list (ls, cat,
-/// grep, find without -exec/-delete...), piped or chained, with quotes
-/// removed as the shell would, no expansion and no redirection except
-/// discarding output. Under cmd.exe (`posixShell` false) only the built-ins
-/// dir, type, cd and echo. Anything uncertain is false.
+/// Split a command line into segments at ; | && || and each segment into words
+/// with quotes removed, the way `posixShell` (bash) or cmd.exe would. False
+/// when the line holds anything that could run or write something else: & or
+/// a redirection, an expansion, a backslash bash would consume, an unbalanced
+/// quote, or a quoted program name.
+GAIA_API bool splitShellCommand(const std::string& line, bool posixShell,
+                                std::vector<std::vector<std::string>>& segments);
+
+/// True for a command that only reads: programs from a short list that have
+/// no flag that writes or runs code (ls, cat, grep, find without
+/// -exec/-delete...), piped or chained, no expansion, no network share, and no
+/// redirection except discarding output to that shell's own null device.
+/// Under cmd.exe (`posixShell` false) only the built-ins dir, type, cd and
+/// echo. It says nothing about where the command reads; see
+/// Workspace::readsStayInside(). Anything uncertain is false.
 GAIA_API bool isReadOnlyShellCommand(const std::string& command, bool posixShell = true);
 
 struct ToolInfo;

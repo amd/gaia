@@ -283,6 +283,8 @@ add_library(gaia_core
     src/memory_store.cpp
     src/media_tools.cpp
     src/keyring.cpp
+    src/mcp_stdio_server.cpp
+    src/secrets.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -437,7 +439,7 @@ if(GAIA_BUILD_GAIA_AGENT)
         target_link_libraries(gaiacpp PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
     if(WIN32)
-        target_link_libraries(gaiacpp PRIVATE psapi)
+        target_link_libraries(gaiacpp PRIVATE psapi ws2_32)
     endif()
     # Release archives must run on older distros than the build host (Lemonade
     # ships to Ubuntu 24.04, Debian 13, Fedora): carry the C++ runtime inside.
@@ -484,6 +486,8 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
         tests/test_mcp_registry.cpp
+        tests/test_mcp_stdio_server.cpp
+        tests/test_secrets.cpp
         tests/test_mcp_http.cpp
         tests/test_agent_resilience.cpp
         tests/test_skill_library.cpp

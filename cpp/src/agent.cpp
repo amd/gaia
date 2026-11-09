@@ -164,7 +164,6 @@ void Agent::setConfig(const AgentConfig& newConfig) {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_ = newConfig;
         config_.apiKey = key;
-        modelEnsured_ = false;
         systemPromptDirty_ = true;
     }
     // Update LemonadeClient outside configMutex_ to avoid holding the lock
@@ -180,7 +179,6 @@ void Agent::setModel(const std::string& modelId) {
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         config_.modelId = modelId;
-        modelEnsured_ = false;
         // The model decides whether native tool calling is on, which decides
         // whether the response-format template belongs in the prompt.
         systemPromptDirty_ = true;
@@ -558,6 +556,15 @@ UsageStats extractUsage(const json& responseJson) {
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg, bool allowTools) {
+    // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
+    if (!cfg.modelId.empty()) {
+        try {
+            lemonade_.ensureModelLoaded();
+        } catch (const HttpError& e) {
+            throw HttpError("Could not load model " + cfg.modelId + ": " + e.what(), e.url(), e.status(), e.body());
+        }
+    }
+
     // Build OpenAI-compatible request.
     // NOTE: n_ctx is intentionally omitted — context size is set at model load
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
@@ -1431,17 +1438,6 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;
-
-    // Ensure the model is loaded with the requested context size (once per agent lifetime).
-    // Context size is a server-side setting applied at load time, not per-request.
-    if (!modelEnsured_ && !cfg.modelId.empty()) {
-        try {
-            lemonade_.ensureModelLoaded(); // uses stored model_ and contextSize_
-            modelEnsured_ = true;
-        } catch (const std::exception& e) {
-            console_->printWarning(std::string("Could not ensure model loaded: ") + e.what());
-        }
-    }
 
     // Reset state
     executionState_ = AgentState::PLANNING;

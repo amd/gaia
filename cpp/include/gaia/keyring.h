@@ -3,7 +3,7 @@
 //
 // Read secrets that the Python runtime stored with the `keyring` library, so a
 // `{"$keyring": "gaia.connections:<connector>:<KEY>"}` reference written by
-// `gaia connectors` works from C++ too (#2819). Read-only: C++ never writes or
+// `gaia connectors` works from C++ too. Read-only: C++ never writes or
 // deletes keyring entries.
 //
 //   Windows  Credential Manager generic credential: target <service> with that

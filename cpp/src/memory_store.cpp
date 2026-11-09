@@ -11,6 +11,7 @@
 #include <regex>
 #include <sstream>
 
+#include "gaia/secrets.h"
 #include "gaia/types.h"
 
 namespace fs = std::filesystem;
@@ -104,7 +105,7 @@ std::string MemoryStore::refusalFor(const std::string& content) {
     static const std::regex secret(
         R"((sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY|\b(password|passwd|api[ _-]?key|secret|token)\b\s*[:=]\s*\S{6,}))",
         std::regex::icase);
-    if (std::regex_search(content, secret)) {
+    if (std::regex_search(content, secret) || looksLikeCredential(content)) {
         return "Refused: this looks like a credential. Secrets don't go in memory; store where "
                "the user keeps it instead (for example \"the API key is in the password "
                "manager\").";
