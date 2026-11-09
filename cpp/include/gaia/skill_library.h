@@ -75,8 +75,27 @@ public:
     /// replacing an installed copy of the same name. The skill must validate
     /// and its folder must be named after it. Returns the installed folder.
     /// Throws SkillError / std::runtime_error naming what was wrong.
+    ///
+    /// A signed bundle (SIGNATURE.json) must verify, or the install is refused
+    /// as tampered. A skill that is unsigned, or signed by a key the trust store
+    /// doesn't know, is experimental and installs only with allowExperimental —
+    /// the same gate as `gaia skill install --allow-experimental`. `tierOut`
+    /// receives verified / community / experimental.
     static std::string installFromFolder(const std::string& source,
-                                         const std::string& destRoot = userRoot());
+                                         const std::string& destRoot = userRoot(),
+                                         bool allowExperimental = false,
+                                         std::string* tierOut = nullptr);
+
+    /// The skill hub origin: $GAIA_HUB_URL, else https://hub.amd-gaia.ai.
+    static std::string hubUrl();
+
+    /// Download `name` (exact `version`, or the latest when empty) from the
+    /// hub, check the bundle's SHA-256 against the hub manifest, unpack it and
+    /// install it through installFromFolder (signature check and tier gate).
+    static std::string installFromHub(const std::string& name, const std::string& version = "",
+                                      const std::string& destRoot = userRoot(),
+                                      bool allowExperimental = false,
+                                      std::string* tierOut = nullptr);
 
     /// Remove an installed skill from `root`. Returns false when absent.
     static bool removeInstalled(const std::string& name, const std::string& root = userRoot());

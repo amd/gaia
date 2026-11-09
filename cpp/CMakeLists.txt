@@ -274,6 +274,7 @@ add_library(gaia_core
     src/skill_yaml.cpp
     src/skill_sets.cpp
     src/skill_library.cpp
+    src/skill_signing.cpp
     src/database.cpp
     src/api_server.cpp
     src/web_tools.cpp
@@ -476,6 +477,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_document_index.cpp
         tests/test_gaia_agent.cpp
         tests/test_memory_store.cpp
+        tests/test_skill_signing.cpp
         agents/gaia/gaia_agent.cpp
         agents/bash/bash_tools.cpp
         tests/test_console.cpp

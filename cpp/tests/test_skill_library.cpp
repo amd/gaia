@@ -144,11 +144,11 @@ TEST(SkillLibraryTest, InstallValidatesCopiesAndReplaces) {
     TempTree t;
     t.skill("src", "data-explore", "Explore a CSV.", "Version one.");
     const std::string dest = (t.path() / "installed").string();
-    const std::string where = SkillLibrary::installFromFolder((t.path() / "src" / "data-explore").string(), dest);
+    const std::string where = SkillLibrary::installFromFolder((t.path() / "src" / "data-explore").string(), dest, true);
     EXPECT_TRUE(fs::is_regular_file(fs::path(where) / "SKILL.md"));
 
     t.skill("src2", "data-explore", "Explore a CSV.", "Version two.");
-    SkillLibrary::installFromFolder((t.path() / "src2" / "data-explore").string(), dest);
+    SkillLibrary::installFromFolder((t.path() / "src2" / "data-explore").string(), dest, true);
     SkillLibrary lib({SkillRoot{"user", dest, true, false}});
     EXPECT_NE(lib.loadFull("data-explore").body.find("Version two."), std::string::npos);
     for (const auto& e : fs::directory_iterator(dest)) {
