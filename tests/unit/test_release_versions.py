@@ -9,7 +9,6 @@ release.
 
 from __future__ import annotations
 
-import dataclasses
 import fnmatch
 import re
 import shutil
@@ -26,8 +25,7 @@ import release_tag  # noqa: E402
 import release_versions as rv  # noqa: E402
 
 CORE_TARGETS = [t for t in rv.TARGETS if t.path != rv.CORE_PY]
-ENFORCED = [t for t in CORE_TARGETS if not t.held]
-HELD = [t for t in rv.TARGETS if t.held]
+ENFORCED = CORE_TARGETS
 
 
 def _all_paths() -> list[str]:
@@ -88,26 +86,6 @@ def test_main_tree_passes():
     report = rv.run(REPO_ROOT, stamp=False)
     assert report.errors == []
     assert report.drift == []
-
-
-def test_no_target_is_held():
-    """Held drift is reported, never failed; the list must not quietly grow."""
-    assert HELD == []
-
-
-def test_held_drift_is_reported_and_left_alone(tree):
-    held = dataclasses.replace(
-        _target("hub/components/terminal-hub/gaia-agent.yaml", "version"),
-        held="held for this test",
-    )
-    _set(tree, held, "0.0.9")
-    held_bytes = (tree / held.path).read_bytes()
-
-    report = rv.run(tree, stamp=True, targets=(held,))
-
-    assert report.errors == [] and report.drift == []
-    assert len(report.held) == 1 and "0.0.9" in report.held[0]
-    assert (tree / held.path).read_bytes() == held_bytes
 
 
 # -- Drift: every target, one at a time -------------------------------------
@@ -201,9 +179,7 @@ def test_a_flagship_bump_drifts_only_flagship_fields(tree):
     _set_source(tree, rv.FLAGSHIP_INIT, rv._PY_VERSION, "0.3.9")
     report = rv.run(tree, stamp=False)
     assert {line.split(":")[0] for line in report.drift} == {
-        f"{t.path} ({t.what})"
-        for t in rv.TARGETS
-        if t.source == "flagship" and not t.held
+        f"{t.path} ({t.what})" for t in rv.TARGETS if t.source == "flagship"
     }
     rv.run(tree, stamp=True)
     lock = _raw(tree / "hub/agents/gaia/npm/binaries.lock.json")

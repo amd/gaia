@@ -77,8 +77,6 @@ class Target:
     count: int = 1
     # Spelling an RC tag stamps: "pep440" (PyPI) or "npm"; None = not stamped.
     rc: str | None = None
-    # Non-empty: drift is reported but does not fail, and --stamp leaves it.
-    held: str = ""
 
 
 TARGETS: tuple[Target, ...] = (
@@ -220,7 +218,6 @@ class Sources:
 class Report:
     ok: list[str] = field(default_factory=list)
     drift: list[str] = field(default_factory=list)
-    held: list[str] = field(default_factory=list)
     stamped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -311,9 +308,7 @@ def run(root: Path, stamp: bool, targets: tuple[Target, ...] = TARGETS) -> Repor
             f"{_label(t)}: {', '.join(bad)}, expected {want} "
             f"(follows {SOURCE_FILES[t.source]})"
         )
-        if t.held:
-            report.held.append(f"{line} -- {t.held}")
-        elif stamp:
+        if stamp:
             texts[path] = t.pattern.sub(
                 lambda m, w=want: f"{m.group(1)}{w}{m.group(3)}", texts[path]
             )
@@ -374,8 +369,6 @@ def print_report(report: Report, stamp: bool) -> int:
     print(f"  OK     {len(report.ok)} field(s) match their source")
     for line in report.stamped:
         print(f"  STAMP  {line}")
-    for line in report.held:
-        print(f"  HELD   {line}")
     for line in report.drift:
         print(f"  DRIFT  {line}")
     for line in report.errors:
@@ -395,11 +388,10 @@ def print_report(report: Report, stamp: bool) -> int:
         )
     if report.errors or report.drift:
         return 1
-    held = f" ({len(report.held)} held, listed above)" if report.held else ""
     if stamp:
-        print(f"\nStamped {len(report.stamped)} field(s){held}.")
+        print(f"\nStamped {len(report.stamped)} field(s).")
     else:
-        print(f"\nEvery version field matches its source{held}.")
+        print("\nEvery version field matches its source.")
     return 0
 
 

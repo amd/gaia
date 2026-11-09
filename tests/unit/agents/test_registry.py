@@ -559,6 +559,60 @@ class TestEntryPointDiscovery:
         assert registry.canonical_id(legacy_id) == "gaia"
         assert "gaia-agent-chat" in caplog.text
 
+    def test_a_retired_entry_point_is_rejected_without_importing_it(
+        self, monkeypatch, caplog
+    ):
+        def _import_would_fail():
+            raise AssertionError("the stale package must not be imported")
+
+        entry_point = SimpleNamespace(
+            name="chat",
+            value="gaia_agent_chat:build_registration",
+            load=_import_would_fail,
+            dist=SimpleNamespace(name="gaia-agent-chat", version="0.1.0"),
+        )
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_installed_agents()
+
+        assert "chat" not in registry._agents
+        assert "retired" in caplog.text
+        assert "Failed to load" not in caplog.text
+
+    def test_a_renamed_entry_point_still_cannot_register_a_retired_id(
+        self, monkeypatch, caplog
+    ):
+        stale = AgentRegistration(
+            id="doc",
+            name="Stale Doc",
+            description="",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: "stale",
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("doc-agent", lambda: stale)
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_installed_agents()
+
+        assert "doc" not in registry._agents
+        assert registry.canonical_id("doc") == "gaia"
+        assert "retired" in caplog.text
+
     def test_bad_entry_point_is_skipped_with_warning(self, monkeypatch, caplog):
         entry_point = self._entry_point("broken-agent", object())
         monkeypatch.setattr(
