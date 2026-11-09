@@ -834,6 +834,8 @@ class EmbeddedLemonade:
         self.version = version
         self.root = (home or gaia_home()) / "lemonade"
         self.progress_callback = progress_callback
+        # Where this start's output begins in lemond.log, to quote its error.
+        self._spawn_log_offset = 0
 
     # -- paths ------------------------------------------------------------
 
@@ -2178,7 +2180,7 @@ class EmbeddedLemonade:
         )
         try:
             said = _startup_output(
-                self.log_path, getattr(self, "_spawn_log_offset", 0), (api_key,)
+                self.log_path, self._spawn_log_offset, (api_key,)
             )
         except OSError as e:
             return f"{head} Its log {self.log_path} could not be read ({e})."
