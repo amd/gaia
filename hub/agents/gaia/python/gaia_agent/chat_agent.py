@@ -2203,7 +2203,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         Any server that can't be offered leaves a notice naming it and why,
         shown to the user by :meth:`report_mcp_dropped`. The agent starts either way.
         """
-        if not (gaia_home() / "mcp_servers.json").exists():
+        _mcp_config_path = gaia_home() / "mcp_servers.json"
+        if not _mcp_config_path.exists():
             self._set_mcp_dropped_notice(None)
             return
         if self._mcp_manager is None:
