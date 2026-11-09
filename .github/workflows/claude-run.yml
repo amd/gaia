@@ -118,6 +118,7 @@ jobs:
           # input — never executed. The ONLY step that runs PR code (the evidence stage below) is
           # gated to head.repo.fork == false. INVARIANT: any future step that builds/installs/runs
           # the checked-out tree MUST carry that same fork gate, or this opt-in becomes an RCE.
+          # Enforced by tests/unit/test_claude_run_fork_gate.py.
           allow-unsafe-pr-checkout: true
 
       - name: Generate PR diff
