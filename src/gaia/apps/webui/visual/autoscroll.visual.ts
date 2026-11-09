@@ -49,6 +49,16 @@ function streamReplies(): void {
     };
 }
 
+let unhandled: string[] = [];
+
+test.beforeEach(() => {
+    unhandled = [];
+});
+
+test.afterEach(() => {
+    expect(unhandled, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+});
+
 const list = (page: Page) => page.locator('.messages-scroll');
 
 const distFromBottom = (page: Page): Promise<number> =>
@@ -59,7 +69,7 @@ const scrollTop = (page: Page): Promise<number> => list(page).evaluate((el) => e
 /** Open the answered chat, send a prompt, and wait until the reply overflows the list and is followed. */
 async function streamingChat(page: Page, locale = 'en'): Promise<void> {
     await page.addInitScript(streamReplies);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await useTheme(page, 'light');
     await useLocale(page, locale);
     await page.goto(`/#${ANSWER_SESSION}`);

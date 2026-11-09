@@ -37,9 +37,29 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+let unhandled: string[] = [];
+let noticeExpected = false;
+
+test.beforeEach(() => {
+    unhandled = [];
+    noticeExpected = false;
+});
+
+test.afterEach(async ({ page }) => {
+    expect.soft(unhandled, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+    // A warning across the top is a state a test shows on purpose, never fixture noise.
+    if (!noticeExpected) await expect.soft(page.locator('.app-notice.is-warning'), 'a top warning showed in a test that did not ask for one').toHaveCount(0);
+});
+
+/** No agents installed, so the "GAIA agent isn't installed" notice shows. */
+async function withoutFlagship(page: Page): Promise<void> {
+    noticeExpected = true;
+    await page.route((u) => u.pathname === '/api/agents', (route) => route.fulfill({ json: { agents: [] } }));
+}
+
 async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await before?.(page);
     await useTheme(page, theme);
     await useLocale(page, locale);
@@ -398,13 +418,13 @@ for (const [title, locale, name] of [
 ] as const) {
     test(title, async ({ page }, info) => {
         await open(page, '', locale);
-        await page.route('**/api/files/upload', (route) =>
+        await page.route(/\/api\/files\/upload-media\?/, (route) =>
             route.fulfill({
                 json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
             }),
         );
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
-        await expect(page.locator('.composer-attachment-state')).toBeVisible();
+        await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -2165,7 +2185,10 @@ const WINDOW_CONTROLS_W = 138;
 
 for (const locale of ['ar', 'en']) {
     test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
-        await open(page, '', locale, withWindowsControls);
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await withoutFlagship(p);
+        });
         await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
         const notice = page.locator('.app-notice').first();
         await expect(notice.getByRole('button')).toBeVisible();
@@ -2212,7 +2235,7 @@ for (const locale of ['ar', 'en']) {
 }
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
-    await open(page);
+    await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });

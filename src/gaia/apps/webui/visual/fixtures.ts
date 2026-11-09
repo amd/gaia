@@ -199,18 +199,32 @@ const ROUTES: Record<string, unknown> = {
         files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
     },
     [`GET /sessions/${ANSWER_SESSION}/outputs`]: { session_id: ANSWER_SESSION, items: [] },
+    [`GET /sessions/${ANSWER_SESSION}/capabilities`]: {
+        session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [],
+        tools: [
+            { name: 'fetch_page', description: 'Read a web page.', category: 'browser' },
+            { name: 'read_file', description: 'Read a file.', category: 'file_io' },
+            { name: 'write_file', description: 'Write a file.', category: 'file_io' },
+        ],
+    },
+    'GET /spending/prices/fireworks': {
+        provider: 'fireworks', source: 'list price', note: null,
+        models: [{ model: 'fireworks.glm-5p3-flash', name: 'GLM 5.3 Flash', rank: 1, note: 'fast, strong tools',
+            price: { input_per_million: 0.4, cached_input_per_million: 0.1, output_per_million: 1.6, source: 'list price' } }],
+    },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /documents': DOCUMENTS,
-    'GET /agents': { agents: [] },
+    'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: 'The GAIA agent.', source: 'installed', conversation_starters: [], models: [] }] },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/model': { downloaded: true, size_gb: 0.3 },
     'GET /speech/settings': {
         voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
         voices: [
@@ -224,13 +238,32 @@ const ROUTES: Record<string, unknown> = {
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
 
+/** Read-aloud audio: a tenth of a second of 8 kHz, 8-bit mono silence. */
+function silentWav(): Buffer {
+    const samples = 800;
+    const wav = Buffer.alloc(44 + samples, 0x80);
+    wav.write('RIFF', 0);
+    wav.writeUInt32LE(36 + samples, 4);
+    wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24);
+    wav.writeUInt32LE(8000, 28);
+    wav.writeUInt16LE(1, 32);
+    wav.writeUInt16LE(8, 34);
+    wav.write('data', 36);
+    wav.writeUInt32LE(samples, 40);
+    return wav;
+}
+
 /**
  * Answer every /api call from ROUTES. An unlisted call gets a 501 naming it and
  * is returned in the list, so a screen that starts calling a new endpoint fails
  * its test by name instead of rendering whatever an empty body produces.
  */
 /** Server-sent event streams the app subscribes to; each opens quiet. */
-const STREAMS = new Set(['GET /sessions/events']);
+const STREAMS = new Set(['GET /sessions/events', 'GET /connectors/events']);
 
 export async function mockApi(page: Page): Promise<string[]> {
     const unhandled: string[] = [];
@@ -240,6 +273,10 @@ export async function mockApi(page: Page): Promise<string[]> {
         const key = `${route.request().method()} ${path}`;
         if (STREAMS.has(key)) {
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': no events\n\n' });
+            return;
+        }
+        if (key === 'POST /speech') {
+            await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
             return;
         }
         if (!(key in ROUTES)) {
