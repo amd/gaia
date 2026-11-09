@@ -48,7 +48,7 @@ emit these fields:
 - **[#1451](https://github.com/amd/gaia/issues/1451)** (tool-loader Part 3)
   *reads* the `tools_required` field to union a recipe's tools into per-turn tool
   selection — a hard cross-spec dependency already written down in
-  `tool-loader.mdx`.
+  [`tool-loader.mdx`](/plans/tool-loader#part-3-skill-driven-signal-gated-on-887).
 - **[#647](https://github.com/amd/gaia/issues/647)** (marketplace) and
   **[#648](https://github.com/amd/gaia/issues/648)** (OEM bundling) need a stable
   definition of "a skill" and its trust tiers to publish and pre-bundle.
@@ -1198,7 +1198,7 @@ breaks because a GAIA feature is absent.
 
 **Future-gated phases are additive with precedence.** The `tools_required`
 signal that #1451 consumes returns `[]` cleanly until #887 lands
-(`tool-loader.mdx`),
+([`tool-loader.mdx`](/plans/tool-loader#part-3-skill-driven-signal-gated-on-887)),
 so a recipe skill authored today is valid but inert until its consumer ships —
 it never blocks or errors.
 
@@ -1393,7 +1393,7 @@ loudly** when its engine is absent rather than publishing un-audited.
   `--allow-experimental`; the per-tier permission ceiling is honored. (Met.)
 - #887-synthesized files validate against this schema unchanged.
 - #1451 unions a matched skill's `tools_required` **ahead of** semantic results
-  (the contract in `tool-loader.mdx`).
+  (the contract in [`tool-loader.mdx`](/plans/tool-loader#part-3-skill-driven-signal-gated-on-887)).
 
 ---
 
@@ -1509,7 +1509,7 @@ external standards plus the in-repo drafts.
 **Design inputs:** [Agent Skills](https://agentskills.io) (base), Hermes
 (`metadata.hermes`), OpenClaw (`metadata.openclaw`), Claude Code (reference
 impl); in-repo [Agent Skills](/spec/agent-skills) (architecture / compatibility
-surface) and `tool-loader.mdx` Part 3 (the `tools_required`
+surface) and [`tool-loader.mdx`](/plans/tool-loader) Part 3 (the `tools_required`
 contract).
 
 **Downstream consumers.** The features whose contract this format must satisfy. A

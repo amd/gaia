@@ -9,7 +9,7 @@ icon: "wand-magic-sparkles"
 
   **Proposed runtime (not written yet):** `src/gaia/agents/base/skill_synthesis.py` and the new `procedures` table + `MemoryStore` skill methods. Every such symbol is marked **PROPOSED** where it appears.
 
-  **Sibling specs:** [Skill Format](/plans/skill-format) defines the `SKILL.md` field grammar this spec *emits*; Dynamic Tool Loader Part 3 *consumes* the `recall_skill` / `tools_required` contract.
+  **Sibling specs:** [Skill Format](/plans/skill-format) defines the `SKILL.md` field grammar this spec *emits*; [Dynamic Tool Loader](/plans/tool-loader) Part 3 *consumes* the `recall_skill` / `tools_required` contract.
 </Info>
 
 <Note>
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS procedures (
 
 This honours the corpus name the tool-loader spec already published —
 `procedures.embedding`
-(`tool-loader.mdx:358`) —
+([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
 and adds a **separate** FAISS index over it, distinct from the `knowledge`
 embedding index ([`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
 Migration is additive only — a **v2→v3** migration mirroring `_migrate_schema_locked`
@@ -214,13 +214,13 @@ already uses. This:
   gaining a tool it must reason about choosing;
 - **matches the tool-loader's programmatic use** — Part 3 calls `recall_skill(goal)`
   itself to union `tools_required` into selection
-  (`tool-loader.mdx:350`),
+  ([`tool-loader.mdx:350`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)),
   it does not wait for the model to call a tool.
 
 **Injection budget.** Each matched body lands in the planner's system prompt, so an
 unbounded body would both bloat the context on a small local model **and** defeat the
 tool-loader's cache-warm seam, which recomputes the system prompt only when the tool
-*selection* changes (`tool-loader.mdx:294`).
+*selection* changes ([`tool-loader.mdx:294`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
 The spec therefore caps the injection at a default **`MAX_RECALL_BODY_CHARS = 1500`
 per body** at `top_k = 2` — a ≤ 3 KB worst-case prompt addition. `DISTILL_SYSTEM_PROMPT`
 already targets short, single-screen procedures, so the cap is a guardrail rather than
@@ -337,23 +337,23 @@ parser.
 
 ## The tool-loader contract
 
-Dynamic Tool Loader Part 3 is the named consumer. It is
+[Dynamic Tool Loader](/plans/tool-loader) Part 3 is the named consumer. It is
 **gated on #887** and returns `[]` cleanly until this lands, so the contract must
 match its already-published wording byte-for-byte:
 
 - `recall_skill(goal)` is *"a vector search over `procedures.embedding`"* in the
   same `MemoryStore`
-  (`tool-loader.mdx:358`) —
+  ([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
   this spec's [`procedures` table](#decided-design) provides exactly that column
   and index.
 - When a skill matches, the loader unions its `tools_required` **ahead of**
   semantic results
-  (`tool-loader.mdx:351`) —
+  ([`tool-loader.mdx:351`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
   this spec emits `tools_required` (the locked #691 field) on every recipe
   procedure.
 - The selection formula is `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`,
   precedence `CORE > SKILL > SEMANTIC`
-  (`tool-loader.mdx:362`).
+  ([`tool-loader.mdx:362`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
   #887 is the producer of the `SKILL` input; it adds nothing to and removes
   nothing from that formula.
 
@@ -411,7 +411,7 @@ Two consequences make a shared table actively harmful:
    ([`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
    pollutes both result sets — procedures need their **own** index over
    `procedures.embedding`, exactly what the tool-loader spec promised
-   (`tool-loader.mdx:358`).
+   ([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
 2. **`category='skill'` is already taken for something else.**
    `VALID_CATEGORIES` already contains `"skill"`
    ([`memory_store.py:97`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
@@ -585,7 +585,7 @@ Part 3 union.
 - **Disabling a procedure** (`enabled = 0`) prevents it from being recalled (the
   issue AC) — verified directly against the recall path.
 - A fixture procedure's `tools_required` are unioned **ahead of** semantic results
-  by the tool-loader, per `tool-loader.mdx:369`
+  by the tool-loader, per [`tool-loader.mdx:369`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)
   — and with #887 absent the loader's `SKILL` signal is `[]` (regression test).
 
 ### Deferred — Memory Dashboard "Procedures" tab (NOT #887)
@@ -618,7 +618,7 @@ What `DistilledProcedure.parse()` writes after distillation — a valid #691 doc
 `description`, `license`, `version`, and `metadata.gaia.tools_required` are all the
 locked schema. Each `tools_required` name is a real registry tool (`query_documents`
 from `RAGToolsMixin`, `read_file` from `FileIOToolsMixin`, `remember` from the
-tool-loader CORE set, `tool-loader.mdx:269`).
+tool-loader CORE set, [`tool-loader.mdx:269`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
 **No `security_tier` is emitted** — skill security tiers are explicitly out of
 #887's scope (→ #647); the field is optional in #691 and the loader defaults an
 omitted tier to the most-restrictive `experimental` ([`skill-format.mdx:154`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)).
@@ -750,7 +750,7 @@ maintainer said he will *"steer from the PR"*
    plus `GAIA_MEMORY_DISABLED`. This spec proposes surfacing the five thresholds on
    the **existing** memory-settings surface (mirroring how the tool-loader dropped
    its proposed `config.toml` section for `ChatAgentConfig` + env,
-   `tool-loader.mdx:312`).
+   [`tool-loader.mdx:312`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
    Confirm the exact key location at PR.
 2. **`procedures` table vs `knowledge.kind`.** This spec chose a separate table
    ([Why procedures is a separate table](#why-procedures-is-a-separate-table)); the
@@ -758,7 +758,7 @@ maintainer said he will *"steer from the PR"*
 3. **`recall_skill` injection-budget tuning.** The spec sets a default cap of
    `MAX_RECALL_BODY_CHARS = 1500` per body at `top_k = 2` (see [Decided design](#decided-design)),
    which bounds the prompt addition and protects the tool-loader's cache-warm seam
-   (`tool-loader.mdx:294`).
+   ([`tool-loader.mdx:294`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
    Confirm the exact value against a small-model eval at PR — a tuning question, no
    longer an open design fork.
 4. **Synthesis cadence.** #606's maintenance pass runs once per process on the
