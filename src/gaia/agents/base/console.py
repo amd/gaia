@@ -25,6 +25,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.env import child_env
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -1754,7 +1755,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -1773,7 +1779,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass
 

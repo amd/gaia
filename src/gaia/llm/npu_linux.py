@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -408,6 +409,7 @@ def validate(flm: Path) -> List[NpuProblem]:
     try:
         result = subprocess.run(
             [str(flm), "validate", "--json"],
+            env=child_env(),
             capture_output=True,
             text=True,
             errors="replace",
