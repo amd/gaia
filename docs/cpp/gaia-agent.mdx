@@ -96,6 +96,8 @@ With Lemonade, `gaia-cpp models list` lists the server's models and `gaia-cpp mo
 
 `transcribe_audio` turns a recording (wav, mp3, m4a, ogg, flac, webm) into text through the endpoint's `/audio/transcriptions`, and `generate_image` saves a PNG made by `/images/generations`. Lemonade serves both. Each tool exists only when its model is set: `--transcribe-model` (for example `Whisper-Base`) and `--image-model` (for example `SDXL-Turbo`), or `transcribeModel` / `imageModel` in the settings file; `audioBaseUrl` sends transcription to a different host. A failed request is reported with the server's reason.
 
+`--screenshots` adds `take_screenshot`, which saves the screen to a PNG in the working folder (PowerShell on Windows, `screencapture` on macOS, `grim`, `gnome-screenshot`, `scrot` or ImageMagick on Linux) for `analyze_image` to read. It is off by default and asks before each capture, because a screenshot can show anything on screen.
+
 ### Memory
 
 `remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.

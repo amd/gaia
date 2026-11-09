@@ -39,6 +39,7 @@ public:
         std::string transcribeModel; // empty = no transcribe_audio
         std::string audioBaseUrl;    // empty = the agent's endpoint
         std::string imageModel;      // empty = no generate_image
+        bool screenshots = false;    // take_screenshot (off unless asked: privacy)
     };
 
     DocumentIndex* documents() { return docs_.get(); }
