@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "gaia/export.h"
 
@@ -28,6 +29,14 @@ using HttpHeaders = std::map<std::string, std::string>;
 
 /// Streaming body callback. Return false to stop reading — that is treated as
 /// normal completion, not an error (e.g. an SSE `[DONE]` sentinel).
+/// One part of a multipart/form-data body (a field, or a file when filename is set).
+struct HttpMultipartPart {
+    std::string name;
+    std::string content;
+    std::string filename;
+    std::string contentType;
+};
+
 using HttpChunkCallback = std::function<bool(const char* data, std::size_t len)>;
 
 // ---- Response ----
@@ -160,6 +169,11 @@ public:
     /// passed to `onChunk`.
     ///
     /// @throws HttpError on connection failure, timeout, or non-2xx status
+    /// POST multipart/form-data (file uploads such as /audio/transcriptions).
+    HttpResponse postMultipart(const std::string& path, const std::vector<HttpMultipartPart>& parts,
+                               const HttpHeaders& headers = {}, int timeoutSec = 0,
+                               int connectTimeoutSec = 0);
+
     HttpResponse postStreaming(const std::string& path, const std::string& body,
                                HttpChunkCallback onChunk,
                                const HttpHeaders& headers = {}, int timeoutSec = 0,

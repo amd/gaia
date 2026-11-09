@@ -63,6 +63,10 @@ TEST(WorkspaceTest, CommandChecks) {
     EXPECT_EQ(ws.checkCommand("awk -F, '{gsub(/ /,\"\",$4); t+=$4}' data.csv"), "")
         << "a regex delimiter is not the root folder";
     EXPECT_EQ(ws.checkCommand("python3 -c \"print('a/b'.split('/'))\""), "");
+    EXPECT_EQ(ws.checkCommand("python3 - <<'EOF'\nratio = total / count\nEOF"), "")
+        << "division in inline code is not the root folder";
+    EXPECT_NE(ws.checkCommand("sudo find / -name x"), "");
+    EXPECT_NE(ws.checkCommand("cd /tmp && rm -rf / "), "");
     EXPECT_NE(ws.checkCommand("cat " + (d.other / "secret.txt").string()), "");
     EXPECT_NE(ws.checkCommand("python3 -c \"open('" + (d.other / "f").string() + "')\""), "");
 #ifndef _WIN32

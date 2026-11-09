@@ -7,6 +7,8 @@
 #include <cctype>
 #include <filesystem>
 #include <regex>
+#include <set>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -107,6 +109,19 @@ std::string Workspace::checkCommand(const std::string& command) const {
                               (std::isspace(static_cast<unsigned char>(after)) ||
                                std::string(";|&>").find(after) != std::string::npos);
             if (!word) continue;
+            // ...and only as an argument to a command that walks or changes the
+            // filesystem; `a / b` in inline code is division.
+            static const std::set<std::string> fsCommands = {
+                "find", "ls", "du", "cd", "rm", "cp", "mv", "tar", "chmod", "chown", "grep",
+                "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "Get-ChildItem"};
+            const size_t segStart = command.find_last_of(";|&\n(", at);
+            std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
+                                                  at - (segStart == std::string::npos ? 0 : segStart + 1)));
+            std::string w, program;
+            while (seg >> w) {
+                if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
+            }
+            if (!fsCommands.count(fs::path(program).filename().string())) continue;
         }
         const std::string expanded = expandHome(token);
         if (contains(expanded)) continue;

@@ -78,6 +78,8 @@ struct Cli {
     std::string mcpConfig;
     std::string embeddingModel;
     std::string visionModel;
+    std::string transcribeModel;
+    std::string imageModel;
     std::string configFile;
     std::string host = "127.0.0.1";
     std::string serveKeyEnv;
@@ -126,6 +128,8 @@ void printUsage() {
         "  --max-steps N             Step budget (default 50)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
+        "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
+        "  --image-model ID          Image model for generate_image (e.g. SDXL-Turbo on Lemonade)\n"
         "  --embedding-model ID      Embedding model for document search (default with\n"
         "                            --provider fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIA_CPP_CONFIG, else\n"
@@ -200,6 +204,8 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
         else if (a == "--vision-model") cli.visionModel = need(i, a);
+        else if (a == "--transcribe-model") cli.transcribeModel = need(i, a);
+        else if (a == "--image-model") cli.imageModel = need(i, a);
         else if (a == "--config") cli.configFile = need(i, a);
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
@@ -256,6 +262,7 @@ struct Settings {
     gaia::AgentConfig cfg;
     std::string mcpConfig;
     std::string embeddingModel;  // empty = keyword-only document retrieval
+    std::string transcribeModel, audioBaseUrl, imageModel;
 };
 
 Settings buildSettings(const Cli& cli) {
@@ -317,11 +324,18 @@ Settings buildSettings(const Cli& cli) {
     if (cli.temperature) merged["temperature"] = *cli.temperature;
     if (!cli.mcpConfig.empty()) mcpConfig = cli.mcpConfig;
     if (!cli.embeddingModel.empty()) merged["embeddingModel"] = cli.embeddingModel;
+    if (!cli.transcribeModel.empty()) merged["transcribeModel"] = cli.transcribeModel;
+    if (!cli.imageModel.empty()) merged["imageModel"] = cli.imageModel;
 
     Settings s;
-    if (merged.contains("embeddingModel")) {
-        s.embeddingModel = merged["embeddingModel"].get<std::string>();
-        merged.erase("embeddingModel");
+    for (auto [key, field] : {std::pair<const char*, std::string*>{"embeddingModel", &s.embeddingModel},
+                              {"transcribeModel", &s.transcribeModel},
+                              {"audioBaseUrl", &s.audioBaseUrl},
+                              {"imageModel", &s.imageModel}}) {
+        if (merged.contains(key)) {
+            *field = merged[key].get<std::string>();
+            merged.erase(key);
+        }
     }
     s.cfg = gaia::AgentConfig::fromJson(merged);
     s.cfg.debug = cli.debug;
@@ -366,6 +380,9 @@ std::string readAll(std::istream& in) {
 gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) {
     gaia::GaiaAgent::Options o;
     o.embeddingModel = settings.embeddingModel;
+    o.transcribeModel = settings.transcribeModel;
+    o.audioBaseUrl = settings.audioBaseUrl;
+    o.imageModel = settings.imageModel;
     o.visionModel = cli.visionModel;
     o.webTools = !cli.noWeb;
     o.skills = !cli.noSkills;
