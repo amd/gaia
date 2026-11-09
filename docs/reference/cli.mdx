@@ -750,7 +750,7 @@ gaia kill [OPTIONS]
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `--lemonade` | flag | Kill Lemonade Server and child processes |
+| `--lemonade` | flag | Stop the Lemonade Server GAIA uses: GAIA's own server with its child processes, or, by its port, the server `LEMONADE_BASE_URL` or setup chose when it runs on this machine. Exits 0 if it isn't running, 1 if it can't be stopped |
 | `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 | `--daemons` | flag | List every running GAIA daemon with its pid, age and home folder, and stop the orphaned ones |
 

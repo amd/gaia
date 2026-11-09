@@ -2192,7 +2192,7 @@ Use `gaia download --agent talk` to download the local Kokoro TTS model.
     kill_parser.add_argument(
         "--lemonade",
         action="store_true",
-        help="Kill Lemonade server (port 13305)",
+        help="Stop the Lemonade Server GAIA uses: its own, or the one you set",
     )
     kill_parser.add_argument(
         "--daemons",
@@ -5489,34 +5489,7 @@ Let me know your answer!
         if args.daemons:
             sys.exit(kill_stray_daemons())
         if args.lemonade:
-            # Use lemonade-server stop for graceful shutdown
-            try:
-                result = subprocess.run(
-                    ["lemonade-server", "stop"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    print("✅ Lemonade server stopped")
-                else:
-                    # Fallback to port kill if stop command fails
-                    log.warning(f"lemonade-server stop failed: {result.stderr}")
-                    port_result = kill_process_by_port(13305)
-                    if port_result["success"]:
-                        print(f"✅ {port_result['message']}")
-                    else:
-                        print(f"❌ {port_result['message']}")
-                        sys.exit(1)
-            except FileNotFoundError:
-                # lemonade-server not in PATH, fallback to port kill
-                log.warning("lemonade-server not found, falling back to port kill")
-                port_result = kill_process_by_port(13305)
-                if port_result["success"]:
-                    print(f"✅ {port_result['message']}")
-                else:
-                    print(f"❌ {port_result['message']}")
-                    sys.exit(1)
+            sys.exit(kill_lemonade())
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
@@ -5530,7 +5503,7 @@ Let me know your answer!
             # A refusal must not report success — `gaia kill && next-step`
             # would otherwise run next-step having killed nothing.
             print("❌ gaia kill needs a target:")
-            print("     --lemonade        stop Lemonade Server (port 13305)")
+            print("     --lemonade        stop the Lemonade Server GAIA uses")
             print("     --port <number>   kill the GAIA/Lemonade process")
             print("                       listening on <number>")
             print("     --daemons         list GAIA daemons, stop orphaned ones")
@@ -6615,6 +6588,52 @@ def kill_stray_daemons() -> int:
         )
         return 1
     return 0
+
+
+def kill_lemonade() -> int:
+    """Stop the Lemonade Server GAIA uses, through whatever owns it.
+
+    GAIA's own server is stopped the way ``gaia lemonade embedded stop`` stops
+    it. Any other server is stopped by its port, when it runs on this machine.
+
+    Returns:
+        The exit code: 0 once nothing is left running, 1 when it can't be stopped.
+    """
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+    from gaia.llm.lemonade_supervisor import _is_loopback
+
+    if configured_lemonade_url() is None:
+        manager = EmbeddedLemonade()
+        current = manager.status()
+        pid = current.pid or current.unresponsive_pid
+        if pid:
+            try:
+                stopped = manager.stop()
+            except EmbeddedLemonadeError as e:
+                print(f"❌ Could not stop GAIA's Lemonade Server (pid {pid}): {e}")
+                return 1
+            if stopped:
+                print(f"✅ Stopped GAIA's Lemonade Server (pid {pid})")
+            else:
+                print(f"✅ GAIA's Lemonade Server (pid {pid}) had already stopped")
+            return 0
+
+    url = resolve_lemonade_base_url()
+    target = urlparse(url)
+    if not _is_loopback(target.hostname or ""):
+        print(
+            f"❌ GAIA uses the Lemonade Server at {url}, which runs on another "
+            "machine, so `gaia kill` can't stop it. Stop it on that machine."
+        )
+        return 1
+    result = kill_process_by_port(
+        target.port or (443 if target.scheme == "https" else 80)
+    )
+    print(f"{'✅' if result['success'] else '❌'} {result['message']}")
+    return 0 if result["success"] else 1
 
 
 def kill_process_by_port(port):
