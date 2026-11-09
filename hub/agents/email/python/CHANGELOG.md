@@ -7,6 +7,15 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **Under the daemon, a forwarded-token hiccup no longer asks for a browser
+  re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
+  unexpected error in the check, now reports `error` ("couldn't check") like the
+  standalone path; a token short on scopes reports `connection_missing_scopes`
+  with the scopes to add. Only a missing forwarded token still reports
+  `reauth_required`.
+
 ### Changed
 
 - **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
