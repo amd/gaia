@@ -11,6 +11,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **GAIA sounds more like a person.** Replies use contractions and match how
   you write, with at most one emoji and only for tone, never in an error.
   On Discord the emoji becomes a reaction on your message instead.
+- **The "not confirmed" line on an answer is now documented.** An answer that
+  ends with `I haven't confirmed this works — …` is the agent saying a check
+  failed, was blocked, or never ran after a change. README, SPEC and SKILL say
+  when it appears and that it is part of `final.answer`.
 - **The first reply reads far less, and the prompt cache stays warm.**
   A session now starts on the 26 most-used tools in short form and moves to every
   tool at most once, with the full list kept ready so a first task starts as fast
