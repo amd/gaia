@@ -177,7 +177,7 @@ func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
 	}
 	<-started
 	err := c.Close()
-	if err == nil || !strings.Contains(err.Error(), "could not tell the 'email' agent to stop run") {
+	if err == nil || !strings.Contains(err.Error(), "could not tell the 'notes' agent to stop run") {
 		t.Fatalf("Close error = %v, want an undeliverable-cancel report", err)
 	}
 }

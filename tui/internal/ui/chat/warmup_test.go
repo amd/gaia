@@ -170,7 +170,7 @@ func TestAMessageTypedDuringWarmUpWaitsForIt(t *testing.T) {
 // would receive the sentinel as a question.
 func TestOnlyTheFlagshipWarmsUp(t *testing.T) {
 	c := &warmClient{}
-	for _, id := range []string{"email", "gaia"} {
+	for _, id := range []string{"notes", "gaia"} {
 		m := NewChatModel(c, id, "", false)
 		if got := m.warmUpApplies(); got != (id == "gaia") {
 			t.Errorf("warmUpApplies for %q = %t", id, got)
@@ -210,7 +210,7 @@ func TestNoHintWhenAQuestionIsAlreadyWaiting(t *testing.T) {
 func TestAWrappedStatusStaysIndented(t *testing.T) {
 	m, _ := warmModel(t)
 	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: client.WarmedUp})
-	rendered := ansi.Strip(m.renderMessage(&m.messages[len(m.messages)-1], map[string]bool{}))
+	rendered := ansi.Strip(m.renderMessage(&m.messages[len(m.messages)-1]))
 	for _, row := range strings.Split(rendered, "\n") {
 		if strings.TrimSpace(row) != "" && !strings.HasPrefix(row, "  ") {
 			t.Errorf("row lost its indent: %q", row)

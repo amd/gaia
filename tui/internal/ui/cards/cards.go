@@ -2,12 +2,11 @@
 // text.
 //
 // The `/query` SSE contract (docs/spec/agent-ui-query-sse-contract.md §4.2/§4.3)
-// lets a sidecar declare how its result should be drawn — `email_pre_scan` for
-// the email agent's inbox triage, plus six generic primitives any agent can
-// emit with no client work. §7 makes the receiving end's obligations explicit:
-// an unknown key degrades to a visible generic card with a raw dump, and a
-// payload that fails its schema says so. A card is never dropped and never
-// blanks the message.
+// lets a sidecar declare how its result should be drawn with six generic
+// primitives any agent can emit with no client work. §7 makes the receiving
+// end's obligations explicit: an unknown key degrades to a visible generic card
+// with a raw dump, and a payload that fails its schema says so. A card is never
+// dropped and never blanks the message.
 //
 // Of the six primitives this package draws four. `image` and `audio` cannot be
 // shown or played in a terminal, so they degrade to a caption, the saved path
@@ -19,63 +18,35 @@ import (
 	"strings"
 )
 
+// maxCardRows bounds the card's interior. 22 interior rows plus two borders is
+// 24 lines — an 80x24 terminal's whole screen. Beyond it a card stops being a
+// card and becomes a scroll trap, so the overflow becomes "+N more" instead.
+const maxCardRows = 22
+
 // Render draws the card for a tool_result's `render` key at the given outer
 // width. It always returns something visible: unknown keys and malformed
 // payloads become explicit fallback cards rather than empty strings.
 //
 // width is the total width the card may occupy, borders included.
 func Render(renderKey string, data json.RawMessage, width int) string {
-	rendered, _ := RenderDeduped(renderKey, data, width, nil)
-	return rendered
-}
-
-// RenderDeduped draws a card exactly like Render, except for the two email
-// card types (email_pre_scan, email_attention): an item whose message_id is
-// already in seen is skipped rather than shown a second time, and every
-// message_id this card ends up showing is returned so a caller rendering
-// more than one card in one turn can thread the accumulated set into the
-// next call. Every other render key returns no ids and behaves exactly like
-// Render. seen may be nil, equivalent to Render (nothing is deduped).
-func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[string]bool) (rendered string, ids []string) {
 	key := strings.TrimSpace(renderKey)
 	if key == "" {
-		return renderUnsupported("(none)", data, width), nil
+		return renderUnsupported("(none)", data, width)
 	}
 	switch key {
-	case "email_pre_scan":
-		return renderEmailPreScan(data, width, seen)
-	case "email_attention":
-		return RenderEmailAttention(data, width, seen)
 	case "table":
-		return renderTable(data, width), nil
+		return renderTable(data, width)
 	case "key_value":
-		return renderKeyValue(data, width), nil
+		return renderKeyValue(data, width)
 	case "list":
-		return renderList(data, width), nil
+		return renderList(data, width)
 	case "image":
-		return renderImage(data, width), nil
+		return renderImage(data, width)
 	case "audio":
-		return renderAudio(data, width), nil
+		return renderAudio(data, width)
 	case "diff":
-		return renderDiff(data, width), nil
+		return renderDiff(data, width)
 	default:
-		return renderUnsupported(key, data, width), nil
+		return renderUnsupported(key, data, width)
 	}
-}
-
-// dedupByMessageID drops items whose id is already in seen (an item with an
-// empty id is never treated as a duplicate) and returns the surviving items
-// plus the non-empty ids they carry.
-func dedupByMessageID[T any](items []T, id func(T) string, seen map[string]bool) (kept []T, ids []string) {
-	for _, it := range items {
-		mid := strings.TrimSpace(id(it))
-		if mid != "" && seen[mid] {
-			continue
-		}
-		kept = append(kept, it)
-		if mid != "" {
-			ids = append(ids, mid)
-		}
-	}
-	return kept, ids
 }

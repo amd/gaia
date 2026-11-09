@@ -207,8 +207,7 @@ func (m Model) footer(w int) string {
 	// when a report is neither ready nor refusing, and when the screen is
 	// holding after a fix so the user can read what it did.
 	if !firstRun && (m.HeldForReview() ||
-		(!m.Busy() && !m.rep.Ready() &&
-			(!m.rep.Blocked() || m.rep.OfferableDespiteFailure()))) {
+		(!m.Busy() && !m.rep.Ready() && !m.rep.Blocked())) {
 		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})

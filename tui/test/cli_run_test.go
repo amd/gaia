@@ -178,7 +178,7 @@ func TestRunQueryIsAGenuineOneShot(t *testing.T) {
 	}
 }
 
-// A tool's own error carries the remedy its author wrote — for the mailbox it
+// A tool's own error carries the remedy its author wrote — for a mailbox it
 // is a `gaia connectors connect …` line explicitly marked "no Agent UI
 // required". Relayed through the model it came back as "use Settings →
 // Connections in the Agent UI", a GUI a terminal user cannot reach. It has to
@@ -193,7 +193,7 @@ func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
 	cmd.Stderr = &stderr
 	_ = cmd.Run()
 
-	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`"
+	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`"
 	if !strings.Contains(stderr.String(), remedy) {
 		t.Errorf("the tool's remedy did not reach stderr:\n%s", stderr.String())
 	}
@@ -276,7 +276,7 @@ func TestUnknownAgentErrorNamesTheIdsThatExist(t *testing.T) {
 	}
 
 	text := stderr.String()
-	if !strings.Contains(text, "gaia") || !strings.Contains(text, "email") {
+	if !strings.Contains(text, "Known ids: gaia") {
 		t.Errorf("the error does not name the ids that do exist:\n%s", text)
 	}
 	// The old text pointed at a browser to go find one in.

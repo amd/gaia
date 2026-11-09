@@ -19,7 +19,7 @@ func blockedGate(t *testing.T, opts Options) Model {
 	prev := update.Current
 	update.Current = "0.25.0"
 	t.Cleanup(func() { update.Current = prev; update.Cancel() })
-	m := New(newFake(), EmailConfig(), opts)
+	m := New(newFake(), testConfig(), opts)
 	m.rep = Report{Rows: []Row{{Key: KeyModel, Label: "AI model", State: StateFailed, Line: "too old"}}}
 	m.phase = phaseIdle
 	return m

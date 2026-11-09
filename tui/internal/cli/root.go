@@ -340,7 +340,7 @@ func init() {
 //
 // A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
 // Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
-// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// it `gaia tui …`, so `gaia-tui tui run gaia` would otherwise fail with
 // "unknown command". Both spellings work; only the first argument is
 // considered, so an agent named "tui" is unaffected.
 func Execute() error {

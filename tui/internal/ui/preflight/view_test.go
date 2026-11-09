@@ -17,10 +17,10 @@ import (
 // what a monochrome terminal shows — colour must never be the only signal.
 func renderAt(t *testing.T, f *fakeTransport, w, h int) (Model, []string) {
 	t.Helper()
-	m := autoStartSpent(New(f, EmailConfig(), Options{ManualProceed: true}))
+	m := autoStartSpent(New(f, testConfig(), Options{ManualProceed: true}))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 	m = updated.(Model)
-	updated, _ = m.Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
+	updated, _ = m.Update(reportMsg{rep: Check(context.Background(), f, testConfig())})
 	m = updated.(Model)
 	return m, strings.Split(ansi.Strip(m.View()), "\n")
 }
@@ -70,12 +70,11 @@ func TestRenderAllFailedAt80x24(t *testing.T) {
 	// in progress rather than a fixed caption — a blocked screen is a SETUP
 	// screen, and saying so is what tells the user the work happens here.
 	for _, want := range []string{
-		"Setting up Email",
+		"Setting up GAIA",
 		"Background service",
-		"Email agent",
+		"GAIA agent",
 		"Lemonade",
 		"Language model",
-		"Mailbox",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("screen does not show %q:\n%s", want, screen)
@@ -113,7 +112,6 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		"0.5.0",
 		"Lemonade 8.1.10",
 		"Gemma-4-E4B-it-GGUF · 64K context",
-		"you@gmail.com (Gmail) · can read and send",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("screen does not show %q:\n%s", want, screen)
@@ -123,26 +121,26 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		t.Errorf("an all-ready screen shows a failure marker:\n%s", screen)
 	}
 	// This capture is under ManualProceed, where nothing is being launched, so
-	// the hand-off line must be absent — claiming "Starting Email…" while the
+	// the hand-off line must be absent — claiming "Starting GAIA…" while the
 	// screen just sits there is a lie the user would wait on.
-	if strings.Contains(screen, "Starting Email") {
+	if strings.Contains(screen, "Starting GAIA") {
 		t.Errorf("ManualProceed screen claims it is starting the agent:\n%s", screen)
 	}
 }
 
-// The auto-proceed path is where "Starting Email…" is true.
+// The auto-proceed path is where "Starting GAIA…" is true.
 func TestReadyScreenSaysItIsStartingOnlyWhenItIs(t *testing.T) {
 	f := newFake()
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, testConfig())})
 	m = updated.(Model)
 
 	if cmd == nil {
 		t.Fatal("a ready report did not schedule the hand-off")
 	}
 	screen := ansi.Strip(m.View())
-	if !strings.Contains(screen, "Starting Email…") {
+	if !strings.Contains(screen, "Starting GAIA…") {
 		t.Errorf("the auto-proceed screen does not say what happens next:\n%s", screen)
 	}
 	assertFits(t, splitLines(screen), 80, 24)
@@ -151,21 +149,15 @@ func TestReadyScreenSaysItIsStartingOnlyWhenItIs(t *testing.T) {
 // The screen has to survive every failure mode, not just the one that fits.
 func TestRenderFitsEveryScenarioAt80x24(t *testing.T) {
 	scenarios := map[string]*fakeTransport{
-		"lemonade unreachable": newFake().with("GET /v1/email/init", 503, initUnreachable),
-		"lemonade too old":     newFake().with("GET /v1/email/init", 503, initTooOld),
-		"version unknown":      newFake().with("GET /v1/email/init", 200, initUnknownVersion),
-		"model missing":        newFake().with("GET /v1/email/init", 503, initModelMissing),
+		"lemonade unreachable": newFake().with("GET /v1/gaia/init", 503, initUnreachable),
+		"lemonade too old":     newFake().with("GET /v1/gaia/init", 503, initTooOld),
+		"version unknown":      newFake().with("GET /v1/gaia/init", 200, initUnknownVersion),
+		"model missing":        newFake().with("GET /v1/gaia/init", 503, initModelMissing),
 		// The longest remedy on the screen: a stop instruction, its reason, the app
 		// alternative, the terminal caveat and the memory caveat, all in one row.
-		"context shortfall":  newFake().with("GET /v1/email/init", 200, initCtxShortfall),
-		"no mailbox":         newFake().with("GET /v1/email/connectors", 200, connectorsNone),
-		"send not granted":   newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
-		"grant missing":      newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
-		"credentials dead":   newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
-		"mailbox unverified": newFake().with("POST /v1/email/search", 502, searchRelayDown),
-		"two mailboxes":      newFake().with("GET /v1/email/connectors", 200, connectorsBoth).with("POST /v1/email/search", 400, searchAmbiguous),
-		"sidecar stopped":    newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
-		"not installed":      newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
+		"context shortfall": newFake().with("GET /v1/gaia/init", 200, initCtxShortfall),
+		"sidecar stopped":   newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
+		"not installed":     newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
 	}
 	for name, f := range scenarios {
 		t.Run(name, func(t *testing.T) {
@@ -180,7 +172,7 @@ func TestRenderFitsEveryScenarioAt80x24(t *testing.T) {
 // the footer is the last thing to go, never the first.
 func TestRenderSurvivesSmallTerminals(t *testing.T) {
 	sizes := []struct{ w, h int }{{80, 24}, {60, 20}, {50, 14}, {40, 12}, {30, 10}}
-	f := newFake().with("GET /v1/email/init", 503, initUnreachable)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachable)
 	for _, s := range sizes {
 		_, lines := renderAt(t, f, s.w, s.h)
 		w, h := s.w, s.h
@@ -198,15 +190,15 @@ func TestRenderSurvivesSmallTerminals(t *testing.T) {
 		// The promise: the remedy shrinks, the checklist never does. Labels
 		// themselves may be truncated on a narrow terminal — a missing ROW is the
 		// failure, a shortened label is not.
-		if got := countMarkedRows(lines); got != 5 {
-			t.Errorf("%dx%d shows %d checklist rows, want 5:\n%s", s.w, s.h, got, screen)
+		if got := countMarkedRows(lines); got != 4 {
+			t.Errorf("%dx%d shows %d checklist rows, want 4:\n%s", s.w, s.h, got, screen)
 		}
 	}
 }
 
 // `d` shows the raw probe answer — what a user pastes into a bug report.
 func TestDetailsShowsTheRawAnswer(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	m, _ := renderAt(t, f, 80, 24)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
@@ -231,27 +223,8 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		}
 	})
 
-	t.Run("f on a mailbox row hands off to the connector flow", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
-		m, _ := renderAt(t, f, 80, 24)
-		if m.FocusKey() != KeyMailbox {
-			t.Fatalf("focus = %q, want the first row needing attention", m.FocusKey())
-		}
-		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
-		msg, ok := cmd().(ConnectMailboxMsg)
-		if !ok {
-			t.Fatalf("f produced %T, want ConnectMailboxMsg", cmd())
-		}
-		// No provider: with nothing connected, choosing Gmail vs Outlook is the
-		// user's call and belongs to the connector flow. Naming one here would
-		// walk an Outlook user into a Google sign-in.
-		if msg.Provider != "" || msg.AgentID != "email" {
-			t.Errorf("connect message = %+v", msg)
-		}
-	})
-
 	t.Run("f on a row with no safe fix says what to run instead", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/init", 503, initUnreachable)
+		f := newFake().with("GET /v1/gaia/init", 503, initUnreachable)
 		m, _ := renderAt(t, f, 80, 24)
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 		m = updated.(Model)
@@ -274,8 +247,6 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 	})
 
 	t.Run("enter is refused while a check is blocked", func(t *testing.T) {
-		// A stopped sidecar blocks; a bad mailbox does not, because the agent
-		// repairs that one in the conversation the launch reaches.
 		f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 		m, _ := renderAt(t, f, 80, 24)
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -284,20 +255,8 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		}
 	})
 
-	t.Run("enter is offered over a mailbox the agent can repair", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
-		m, lines := renderAt(t, f, 80, 24)
-		screen := strings.Join(lines, "\n")
-		if !strings.Contains(screen, "continue") {
-			t.Errorf("a repairable mailbox hid the launch that reaches the fix:\n%s", screen)
-		}
-		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
-			t.Error("enter did nothing on a mailbox the agent could have fixed")
-		}
-	})
-
 	t.Run("enter proceeds when only an indeterminate row remains", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/init", 200, initUnknownVersion)
+		f := newFake().with("GET /v1/gaia/init", 200, initUnknownVersion)
 		m, _ := renderAt(t, f, 80, 24)
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		if cmd == nil {
@@ -326,8 +285,8 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 // An all-ready report auto-proceeds; nothing else does.
 func TestAutoProceedOnlyWhenReady(t *testing.T) {
 	f := newFake()
-	m := New(f, EmailConfig(), Options{ReadyHold: 1})
-	updated, cmd := m.Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
+	m := New(f, testConfig(), Options{ReadyHold: 1})
+	updated, cmd := m.Update(reportMsg{rep: Check(context.Background(), f, testConfig())})
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("a ready report did not schedule the hand-off to chat")
@@ -340,29 +299,25 @@ func TestAutoProceedOnlyWhenReady(t *testing.T) {
 		t.Fatalf("the hold produced %T, want ProceedMsg", cmd())
 	}
 
-	blocked := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
-	m2 := New(blocked, EmailConfig(), Options{ReadyHold: 1})
-	_, cmd = m2.Update(reportMsg{rep: Check(context.Background(), blocked, EmailConfig())})
+	blocked := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	m2 := autoStartSpent(New(blocked, testConfig(), Options{ReadyHold: 1}))
+	_, cmd = m2.Update(reportMsg{rep: Check(context.Background(), blocked, testConfig())})
 	if cmd != nil {
 		t.Fatalf("a blocked report scheduled %T", cmd())
 	}
 }
 
 func TestRenderWrapsLongRemediesInsteadOfOverflowing(t *testing.T) {
-	// The mailbox remedy is the longest string the screen ever shows: a full
-	// `gaia connectors connect` line with a scope URL.
-	f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+	// The wedged-sidecar remedy chains two commands and names a log path.
+	f := newFake().with("GET /v1/gaia/health", 503, healthWedged)
 	_, lines := renderAt(t, f, 80, 24)
 	screen := joined(lines)
 	assertFits(t, lines, 80, 24)
 
 	// Wrapping must not lose the command: the whole thing has to be readable.
 	flat := strings.Join(strings.Fields(screen), " ")
-	if !strings.Contains(flat, "gaia connectors connect google --grant-agent installed:email") {
-		t.Errorf("the connect command did not survive wrapping:\n%s", screen)
-	}
-	if !strings.Contains(flat, "https://www.googleapis.com/auth/gmail.send") {
-		t.Errorf("the scope did not survive wrapping:\n%s", screen)
+	if !strings.Contains(flat, "gaia daemon stop-agent gaia && gaia daemon start-agent gaia") {
+		t.Errorf("the restart command did not survive wrapping:\n%s", screen)
 	}
 }
 
@@ -421,7 +376,7 @@ func TestFixableRowMarksTheCommandAsAnAlternative(t *testing.T) {
 // right here.
 func TestTitleSaysReadyWhenNothingIsBlocking(t *testing.T) {
 	m, _ := renderAt(t, newFake(), 80, 24)
-	if got := headerTitle(m); got != "Getting Email ready" {
+	if got := headerTitle(m); got != "Getting GAIA ready" {
 		t.Errorf("unblocked title = %q, want the ready caption", got)
 	}
 }
@@ -429,7 +384,7 @@ func TestTitleSaysReadyWhenNothingIsBlocking(t *testing.T) {
 func TestTitleSaysSettingUpWhileProvisioning(t *testing.T) {
 	m, _ := renderAt(t, newFake(), 80, 24)
 	m.phase = phaseProvisioning
-	if got := headerTitle(m); got != "Setting up Email" {
+	if got := headerTitle(m); got != "Setting up GAIA" {
 		t.Errorf("provisioning title = %q, want the setup caption", got)
 	}
 }

@@ -33,9 +33,6 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 				snap.Overlay = "setup-" + screen
 			}
 		}
-		if m.connect != nil {
-			snap.Overlay = "connect-mailbox"
-		}
 	case viewChat:
 		snap.View = control.ViewChat
 		if m.chat != nil {

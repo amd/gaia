@@ -19,7 +19,7 @@ func transcriptText(m ChatModel) string {
 	m.updateViewport()
 	var b strings.Builder
 	for i := range m.messages {
-		b.WriteString(ansi.Strip(m.renderMessage(&m.messages[i], nil)))
+		b.WriteString(ansi.Strip(m.renderMessage(&m.messages[i])))
 		b.WriteString("\n")
 	}
 	return b.String()

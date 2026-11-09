@@ -92,29 +92,15 @@ func TestTransportZeroValueIsSubprocess(t *testing.T) {
 	}
 }
 
-// email is an HTTP sidecar the daemon supervises; there is no binary for the
-// TUI to spawn. Marking it subprocess would send the launch looking for one.
-func TestEmailUsesTheDaemonTransport(t *testing.T) {
-	email := NewCatalog().Get("email")
-	if email == nil {
-		t.Fatal("the seed catalog no longer has an email entry")
-	}
-	if email.Transport != TransportDaemon {
-		t.Errorf("email transport = %v, want daemon", email.Transport)
-	}
-	if email.BinaryPath != "" {
-		t.Errorf("email declares a binary %q; the daemon owns its lifecycle", email.BinaryPath)
-	}
-}
-
 // --mock stands in for the agent binary, so it must not touch a daemon agent —
 // there is nothing to spawn there for it to replace.
 func TestSetMockBinarySkipsDaemonTransport(t *testing.T) {
 	c := NewCatalog()
+	c.applyInstalledRecord("sidecar", "1.0.0", ArtifactKindBinary)
 	c.SetMockBinary("/tmp/mock-agent")
 
-	if got := c.Get("email").BinaryPath; got != "" {
-		t.Errorf("--mock gave the daemon-transport email a binary %q", got)
+	if got := c.Get("sidecar").BinaryPath; got != "" {
+		t.Errorf("--mock gave a daemon-transport sidecar a binary %q", got)
 	}
 	if got := c.Get(FlagshipID).BinaryPath; got != "/tmp/mock-agent" {
 		t.Errorf("--mock left the flagship pointing at %q", got)

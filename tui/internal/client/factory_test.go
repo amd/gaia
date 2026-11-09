@@ -51,7 +51,7 @@ func TestModelOverrideRejectsUnsupportedSubprocessAgent(t *testing.T) {
 }
 
 func TestForAgentBuildsTheDeclaredTransport(t *testing.T) {
-	daemonAgent := catalog.Agent{ID: "email", Transport: catalog.TransportDaemon}
+	daemonAgent := catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon}
 	c, err := ForAgent(daemonAgent, ForAgentOptions{})
 	if err != nil {
 		t.Fatalf("ForAgent(daemon): %v", err)
@@ -130,7 +130,7 @@ func TestForAgentRejectsAnUnknownTransport(t *testing.T) {
 // Model / MaxSteps must reach the request body, not be silently dropped.
 func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 	c, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{Model: "Gemma-4-E4B-it-GGUF", MaxSteps: 7},
 	)
 	if err != nil {
@@ -264,7 +264,7 @@ func TestForwardingUseClaudeDoesNotMutateTheCatalogEntry(t *testing.T) {
 // keeps using Lemonade.
 func TestUseClaudeOnTheDaemonTransportIsRefused(t *testing.T) {
 	_, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{UseClaude: true},
 	)
 	if err == nil {
@@ -319,7 +319,7 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 }
 
 func TestDaemonFullAccessFailsBeforeConnection(t *testing.T) {
-	for _, id := range []string{"gaia", "email"} {
+	for _, id := range []string{"gaia", "notes"} {
 		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{FullAccess: true})
 		if c != nil {
 			c.Close()

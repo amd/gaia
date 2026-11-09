@@ -81,10 +81,10 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 	t.Setenv(daemon.EnvHome, dir)
 
 	f := &fakeDaemon{t: t}
-	f.catalogBody = emailCatalog(false)
+	f.catalogBody = notesCatalog(false)
 	f.progress = []map[string]any{
-		{"agent_id": "email", "status": "running", "phase": "download", "percent": 42.0, "version": "0.5.0"},
-		{"agent_id": "email", "status": "completed", "phase": "completed", "percent": 100.0, "version": "0.5.0"},
+		{"agent_id": "notes", "status": "running", "phase": "download", "percent": 42.0, "version": "0.5.0"},
+		{"agent_id": "notes", "status": "completed", "phase": "completed", "percent": 100.0, "version": "0.5.0"},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
@@ -157,14 +157,14 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		body := f.catalogBody
 		if f.trustedAccepted {
-			body = emailCatalog(true)
+			body = notesCatalog(true)
 		}
 		f.mu.Unlock()
 		writeJSON(w, body)
 
 	case r.URL.Path == daemon.APIPrefix+"/agents":
 		writeJSON(w, map[string]any{"agents": []map[string]any{
-			{"agent_id": "email", "state": "stopped"},
+			{"agent_id": "notes", "state": "stopped"},
 		}})
 
 	case strings.HasSuffix(r.URL.Path, "/install"):
@@ -208,12 +208,12 @@ func (f *fakeDaemon) handleInstall(w http.ResponseWriter, r *http.Request) {
 	// explicit opt-in is a 403 naming --trust.
 	if !trusted {
 		w.WriteHeader(http.StatusForbidden)
-		writeJSON(w, map[string]any{"detail": "installing 'email' runs code AMD has not verified. " +
-			"From the CLI: `gaia hub install email --trust`."})
+		writeJSON(w, map[string]any{"detail": "installing 'notes' runs code AMD has not verified. " +
+			"From the CLI: `gaia hub install notes --trust`."})
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
-	writeJSON(w, map[string]any{"agent_id": "email", "status": "queued", "version": "0.5.0"})
+	writeJSON(w, map[string]any{"agent_id": "notes", "status": "queued", "version": "0.5.0"})
 }
 
 func (f *fakeDaemon) installCallCount() int {
@@ -237,18 +237,18 @@ func (f *fakeDaemon) uninstallCalls() []string {
 	return append([]string(nil), f.uninstalled...)
 }
 
-// emailCatalog is a GET /daemon/v1/catalog body with one supervised,
+// notesCatalog is a GET /daemon/v1/catalog body with one supervised,
 // non-verified agent — the real shape as of the install routes landing.
-func emailCatalog(installed bool) map[string]any {
+func notesCatalog(installed bool) map[string]any {
 	entry := map[string]any{
-		"id":                  "email",
-		"name":                "Email",
-		"description":         "Email triage, drafting, and calendar",
+		"id":                  "notes",
+		"name":                "Notes",
+		"description":         "Note taking and search",
 		"category":            "Productivity",
-		"icon":                "📧",
+		"icon":                "📝",
 		"author":              "AMD",
 		"security_tier":       "experimental",
-		"permissions":         []string{"gmail:read", "gmail:send", "calendar:write"},
+		"permissions":         []string{"filesystem:read", "filesystem:write"},
 		"download_size_bytes": 39845888,
 		"latest_version":      "0.5.0",
 		"deprecated":          false,

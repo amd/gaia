@@ -13,7 +13,7 @@ import (
 // The ladder's whole value is picking the RIGHT cause. These cases are the ones
 // where a plausible-looking wrong answer sends the user to the wrong process.
 func TestLadderPicksTheRightSubject(t *testing.T) {
-	l := Ladder{AgentID: "email"}
+	l := Ladder{AgentID: "gaia"}
 
 	cases := []struct {
 		name     string
@@ -70,7 +70,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 		{
 			name: "the relay giving up on a long pull is not a missing model",
 			diagnose: func() Diagnosis {
-				return l.Text("download the model", "sidecar for agent 'email' dropped the connection mid-response on /v1/email/init (ReadTimeout)")
+				return l.Text("download the model", "sidecar for agent 'gaia' dropped the connection mid-response on /v1/gaia/init (ReadTimeout)")
 			},
 			wantCmd: "gaia init",
 			wantIn:  "gave up relaying",
@@ -96,13 +96,13 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 			name:     "404 means the agent is not registered",
 			diagnose: func() Diagnosis { return l.Status("call the agent", 404, `{"detail":"unknown agent"}`) },
 			wantCmd:  "gaia daemon restart",
-			wantIn:   "gaia hub install email",
+			wantIn:   "gaia init",
 		},
 		{
 			name:     "502 from a dead sidecar points at the sidecar",
 			diagnose: func() Diagnosis { return l.Status("call the agent", 502, `{"detail":"sidecar did not answer"}`) },
-			wantCmd:  "gaia daemon start-agent email",
-			wantIn:   "email agent",
+			wantCmd:  "gaia daemon start-agent gaia",
+			wantIn:   "gaia agent",
 		},
 		{
 			// Same status, different subject: the relay gave up on a long
@@ -110,7 +110,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 			name: "502 from the relay giving up is not a dead sidecar",
 			diagnose: func() Diagnosis {
 				return l.Status("download the model", 502,
-					`{"detail":"sidecar for agent 'email' dropped the connection mid-response (ReadTimeout)"}`)
+					`{"detail":"sidecar for agent 'gaia' dropped the connection mid-response (ReadTimeout)"}`)
 			},
 			wantCmd: "gaia init",
 			wantIn:  "gave up relaying",
@@ -119,7 +119,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 		{
 			name:     "an unrecognised body still names a next step",
 			diagnose: func() Diagnosis { return l.Text("check the local AI", "<html>gateway</html>") },
-			wantCmd:  "gaia daemon start-agent email",
+			wantCmd:  "gaia daemon start-agent gaia",
 			wantIn:   "sidecar",
 		},
 		{
@@ -152,7 +152,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 // Every diagnosis has to name what to do and where to look, or it is just an
 // error message with extra steps.
 func TestEveryDiagnosisIsActionable(t *testing.T) {
-	l := Ladder{AgentID: "email"}
+	l := Ladder{AgentID: "gaia"}
 	for _, status := range []int{400, 401, 403, 404, 500, 502, 503} {
 		d := l.Status("call the agent", status, "")
 		if d.Cause == "" || d.Remedy == "" || d.Where == "" {
@@ -167,7 +167,7 @@ func TestEveryDiagnosisIsActionable(t *testing.T) {
 // A remedy a user cannot copy verbatim is not a remedy, so no diagnosis may
 // contain a placeholder — including one built without an agent id.
 func TestNoDiagnosisEverPrintsAPlaceholder(t *testing.T) {
-	for _, l := range []Ladder{{}, {AgentID: "email"}} {
+	for _, l := range []Ladder{{}, {AgentID: "gaia"}} {
 		for _, status := range []int{400, 401, 404, 500, 502, 503} {
 			d := l.Status("call the agent", status, "")
 			if strings.ContainsAny(d.Command, "<>") {

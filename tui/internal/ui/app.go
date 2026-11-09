@@ -427,8 +427,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 	// Interactive goes through the same splash -> readiness -> chat router the
 	// flagship launch uses, and that router builds its own client once the gate
 	// passes. That is what gains an interactive --agent launch a gate: it had
-	// none, and email in particular went straight to chat and reported a
-	// missing daemon as a failed first message.
+	// none, and went straight to chat and reported a missing daemon as a failed
+	// first message.
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
@@ -499,7 +499,7 @@ func launchFullAccess(agent catalog.Agent, fullAccess, saved bool) (bool, string
 // the turn runs on, so a cloud model is checked rather than the local default.
 func oneShotConfig(agentID, name, model string) preflight.Config {
 	cfg := preflight.ConfigFor(agentID, name)
-	// Only the flagship takes a per-turn model; email ignores one.
+	// Only the flagship takes a per-turn model.
 	if agentID == catalog.FlagshipID {
 		cfg.Model = model
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 // maxFrameBytes caps one SSE line. A tool_result payload can be large (search
-// hits, an inbox pre-scan), so the ceiling is generous; beyond it the scanner
+// hits, an inbox listing), so the ceiling is generous; beyond it the scanner
 // errors instead of silently truncating the JSON into something unparseable.
 const maxFrameBytes = 4 << 20
 

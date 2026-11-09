@@ -12,24 +12,16 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
-const prescanPayload = `{
-  "kind": "email_pre_scan",
-  "urgent": [], "actionable": [], "informational_count": 6,
-  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
-  "preferences_applied": null,
-  "scanned": 9,
-  "needs_you": [
-    {"ref":1,"kind":"urgent","message_id":"m1","sender":"\"Sarah Chen\" <sarah@example.com>",
-     "subject":"Prod incident follow-up","why":"asked for a reply by Friday"}
-  ],
-  "needs_you_total": 1,
-  "bulk": {"count": 7, "filter_tests": ["no_deadline_signal"]}
+const tablePayload = `{
+  "title": "Inbox",
+  "columns": ["from", "subject", "why"],
+  "rows": [["Sarah Chen", "Prod incident follow-up", "asked for a reply by Friday"]]
 }`
 
 // newTestChat returns a model sized to an 80x24 terminal with a turn in flight.
 func newTestChat(t *testing.T) ChatModel {
 	t.Helper()
-	m := NewChatModel(&nullClient{}, "email", "", false)
+	m := NewChatModel(&nullClient{}, "notes", "", false)
 	m.width, m.height = 80, 24
 	m.resize()
 	m.streaming = true
@@ -47,18 +39,17 @@ func repaint(t *testing.T, m ChatModel) ChatModel {
 	return updated.(ChatModel)
 }
 
-// The flagship path: the email agent's pre-scan tool deliberately tells the model
-// NOT to describe its results in prose because it expects the client to draw the
-// card. A client that ignores `render` therefore shows a terse one-liner and
-// nothing else — the data is on the wire and nobody draws it.
+// A tool that declares a card expects the client to draw it. A client that
+// ignores `render` therefore shows a terse one-liner and nothing else — the data
+// is on the wire and nobody draws it.
 func TestToolResultWithRenderDrawsACard(t *testing.T) {
 	m := feed(t, newTestChat(t),
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
 		event.CanonicalToolResultEvent{
 			Type:   "tool_result",
-			Tool:   "pre_scan_inbox",
-			Render: "email_pre_scan",
-			Data:   json.RawMessage(prescanPayload),
+			Tool:   "list_inbox",
+			Render: "table",
+			Data:   json.RawMessage(tablePayload),
 		},
 	)
 
@@ -69,15 +60,15 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 		}
 	}
 	if card == nil {
-		t.Fatal("tool_result carrying render=email_pre_scan produced no card message")
+		t.Fatal("tool_result carrying render=table produced no card message")
 	}
-	if card.Render != "email_pre_scan" || card.ToolName != "pre_scan_inbox" {
-		t.Errorf("card = {render:%q tool:%q}, want {email_pre_scan pre_scan_inbox}", card.Render, card.ToolName)
+	if card.Render != "table" || card.ToolName != "list_inbox" {
+		t.Errorf("card = {render:%q tool:%q}, want {table list_inbox}", card.Render, card.ToolName)
 	}
 
-	rendered := ansi.Strip(m.renderMessage(card, nil))
+	rendered := ansi.Strip(m.renderMessage(card))
 	t.Logf("\n%s", rendered)
-	for _, want := range []string{"Inbox", "9 inbox messages scanned", "NEEDS A REPLY", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
+	for _, want := range []string{"Inbox", "Sarah Chen", "Prod incident follow-up"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("card render missing %q:\n%s", want, rendered)
 		}
@@ -99,7 +90,7 @@ func TestUnknownRenderStillDrawsACard(t *testing.T) {
 	})
 
 	card := lastCard(t, m)
-	rendered := ansi.Strip(m.renderMessage(&card, nil))
+	rendered := ansi.Strip(m.renderMessage(&card))
 	t.Logf("\n%s", rendered)
 	if !strings.Contains(rendered, "Unsupported card type") {
 		t.Errorf("unknown render did not degrade to the generic card:\n%s", rendered)
@@ -132,15 +123,15 @@ func TestCardRendersInlineAboveTheLiveRegion(t *testing.T) {
 
 	m := feed(t, tall,
 		event.CanonicalStatusEvent{Type: "status", Message: "scanning inbox"},
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox",
-			Render: "email_pre_scan", Data: json.RawMessage(prescanPayload)},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox",
+			Render: "table", Data: json.RawMessage(tablePayload)},
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "archive_messages"},
 	)
 	m.updateViewport()
 
 	view := ansi.Strip(m.viewport.View())
-	cardAt := strings.Index(view, "NEEDS A REPLY")
+	cardAt := strings.Index(view, "Sarah Chen")
 	liveAt := strings.Index(view, "archive_messages")
 	if cardAt < 0 || liveAt < 0 {
 		t.Fatalf("expected both the card and the live region in the viewport:\n%s", view)
@@ -152,11 +143,11 @@ func TestCardRendersInlineAboveTheLiveRegion(t *testing.T) {
 
 func TestCardFitsAn80ColumnTerminal(t *testing.T) {
 	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
-		Type: "tool_result", Tool: "pre_scan_inbox",
-		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
+		Type: "tool_result", Tool: "list_inbox",
+		Render: "table", Data: json.RawMessage(tablePayload),
 	})
 
-	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c, nil)) }()
+	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c)) }()
 	for i, line := range strings.Split(rendered, "\n") {
 		if w := ansi.StringWidth(line); w > 80 {
 			t.Errorf("card line %d is %d columns wide, overflowing an 80-column terminal: %q", i, w, line)
@@ -168,11 +159,11 @@ func TestCardFitsAn80ColumnTerminal(t *testing.T) {
 // scrolls inside the viewport, it never widens the screen.
 func TestFullViewAt80x24(t *testing.T) {
 	m := feed(t, newTestChat(t),
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox",
-			Render: "email_pre_scan", Data: json.RawMessage(prescanPayload)},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox",
+			Render: "table", Data: json.RawMessage(tablePayload)},
 	)
-	m.messages = append([]Message{{Role: RoleUser, Content: "triage my inbox"}}, m.messages...)
+	m.messages = append([]Message{{Role: RoleUser, Content: "what is in my inbox"}}, m.messages...)
 	m.updateViewport()
 
 	view := ansi.Strip(m.View())
@@ -204,8 +195,8 @@ func lastCard(t *testing.T, m ChatModel) Message {
 // invalidate it — serving the old layout at a new width shears the border.
 func TestCardCacheInvalidatesOnResize(t *testing.T) {
 	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
-		Type: "tool_result", Tool: "pre_scan_inbox",
-		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
+		Type: "tool_result", Tool: "list_inbox",
+		Render: "table", Data: json.RawMessage(tablePayload),
 	})
 
 	card := lastCard(t, m)

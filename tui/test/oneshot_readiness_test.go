@@ -50,14 +50,30 @@ func lemonadeDown() *gateTransport {
 // said rather than where a renderer happened to wrap it.
 func flatten(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func emailConfig() preflight.Config { return preflight.ConfigFor("email", "Email") }
+func sidecarConfig() preflight.Config { return preflight.ConfigFor(sidecarID, "Notes") }
+
+// sidecarHome is a home directory whose install root lists sidecarID as a
+// hub-installed daemon sidecar, so `run <id>` reaches it through the daemon.
+func sidecarHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gaia", "agents", sidecarID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := `{"id":"` + sidecarID + `","version":"0.5.0","artifact_kind":"binary"}`
+	if err := os.WriteFile(filepath.Join(dir, ".installed"), []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
 
 // The one-shot must refuse, name the unmet precondition, and name the command
 // that fixes it — the interactive gate is never rendered, because a script has
 // nobody to press a key.
 func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 	var errW bytes.Buffer
-	rep := ui.ReportReadiness(context.Background(), lemonadeDown(), emailConfig(), &errW)
+	rep := ui.ReportReadiness(context.Background(), lemonadeDown(), sidecarConfig(), &errW)
 
 	if !rep.Blocked() {
 		t.Fatalf("an unreachable model server must block the run:\n%s", rep)
@@ -67,7 +83,7 @@ func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 		"Lemonade",                            // which precondition
 		"not running at",                      // what is wrong with it
 		"run",                                 // how to fix it
-		"Nothing was sent to the Email agent", // and that nothing half-ran
+		"Nothing was sent to the Notes agent", // and that nothing half-ran
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal is missing %q:\n%s", want, errW.String())
@@ -88,14 +104,14 @@ func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 // is what the one-shot prints for the same condition.
 func TestOneShotRefusalMatchesTheInteractiveGate(t *testing.T) {
 	var errW bytes.Buffer
-	ui.ReportReadiness(context.Background(), lemonadeDown(), emailConfig(), &errW)
+	ui.ReportReadiness(context.Background(), lemonadeDown(), sidecarConfig(), &errW)
 	headless := flatten(errW.String())
 
 	d := newRootDriver(t, lemonadeDown(), 100, 40)
-	d.launchEmail()
+	d.launchSidecar()
 	gate := d.flat()
 
-	blocker, ok := preflight.Check(context.Background(), lemonadeDown(), emailConfig()).Blocker()
+	blocker, ok := preflight.Check(context.Background(), lemonadeDown(), sidecarConfig()).Blocker()
 	if !ok {
 		t.Fatal("the check reported no blocker for an unreachable model server")
 	}
@@ -120,7 +136,7 @@ func TestOneShotRefusalMatchesTheInteractiveGate(t *testing.T) {
 // nothing that could pollute a caller's log.
 func TestOneShotReadinessIsSilentWhenEverythingIsReady(t *testing.T) {
 	var errW bytes.Buffer
-	rep := ui.ReportReadiness(context.Background(), readyGateTransport(), emailConfig(), &errW)
+	rep := ui.ReportReadiness(context.Background(), readyGateTransport(), sidecarConfig(), &errW)
 
 	if rep.Blocked() || !rep.Ready() {
 		t.Fatalf("a healthy machine must pass the check:\n%s", rep)
@@ -140,46 +156,13 @@ func TestOneShotReadinessProceedsPastAnUnverifiableRow(t *testing.T) {
 	delete(lemonade, "version")
 
 	var errW bytes.Buffer
-	rep := ui.ReportReadiness(context.Background(), g, emailConfig(), &errW)
+	rep := ui.ReportReadiness(context.Background(), g, sidecarConfig(), &errW)
 
 	if rep.Blocked() {
 		t.Fatalf("an unverifiable row must not refuse the run:\n%s", rep)
 	}
 	if !strings.Contains(errW.String(), "could not be verified") {
 		t.Errorf("what went unproven must still be said:\n%s", errW.String())
-	}
-}
-
-// A triage query reads no mail: POST /v1/email/triage classifies the subject and
-// body carried in the request. So `run email --query …` must still work with no
-// mailbox connected — while still saying, on stderr, that the mailbox is not
-// usable and what to run about it.
-func TestOneShotRunsAMailboxFreeQueryAndStillWarnsAboutTheMailbox(t *testing.T) {
-	var errW bytes.Buffer
-	rep := ui.ReportReadiness(context.Background(),
-		readyGateTransport().mailboxMissing(), emailConfig(), &errW)
-
-	if rep.Blocked() {
-		t.Fatalf("a query that needs no mailbox was refused over the mailbox:\n%s", rep)
-	}
-	if _, blocked := rep.Blocker(); blocked {
-		t.Error("the mailbox row was reported as what refuses the run")
-	}
-	// Refused is not the same as unmentioned: the row is a failure and says so.
-	row, _ := rep.Find("mailbox")
-	if row.State != preflight.StateFailed {
-		t.Errorf("mailbox = %s, want failed — nothing about it works", row.State.Word())
-	}
-	msg := flatten(errW.String())
-	for _, want := range []string{
-		"Mailbox", "not connected", "gaia connectors connect google",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("the run said nothing about the unusable mailbox (%q):\n%s", want, errW.String())
-		}
-	}
-	if strings.Contains(msg, "Nothing was sent to the Email agent") {
-		t.Errorf("the run refused a query that needs no mailbox:\n%s", errW.String())
 	}
 }
 
@@ -198,7 +181,7 @@ type relayDaemon struct {
 	release chan struct{}
 
 	mu sync.Mutex
-	// queries counts POSTs to /v1/email/query — what proves a refusal really
+	// queries counts POSTs to /v1/<agent>/query — what proves a refusal really
 	// sent nothing rather than sending and discarding the answer.
 	queries int
 }
@@ -213,7 +196,7 @@ func (d *relayDaemon) queryCount() int {
 // starts: a handler runs on its own goroutine, so anything set afterwards would
 // be a data race, not a test knob.
 type relayOptions struct {
-	// initStatus / initBody are the answer to GET /v1/email/init. The zero value
+	// initStatus / initBody are the answer to GET /v1/<agent>/init. The zero value
 	// means "everything ready".
 	initStatus int
 	initBody   map[string]any
@@ -267,25 +250,17 @@ func (d *relayDaemon) handle(w http.ResponseWriter, r *http.Request) {
 
 	case r.URL.Path == daemon.APIPrefix+"/agents":
 		writeJSON(w, map[string]any{"agents": []map[string]any{
-			{"agent_id": "email", "state": "running", "pid": os.Getpid(),
+			{"agent_id": sidecarID, "state": "running", "pid": os.Getpid(),
 				"agent_version": "0.5.0", "api_version": "1.0"},
 		}})
 
 	case strings.HasSuffix(r.URL.Path, "/ensure"):
-		writeJSON(w, map[string]any{"agent_id": "email", "state": "running"})
+		writeJSON(w, map[string]any{"agent_id": sidecarID, "state": "running"})
 
 	case strings.HasSuffix(r.URL.Path, "/init"):
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(d.opts.initStatus)
 		_ = json.NewEncoder(w).Encode(d.opts.initBody)
-
-	case strings.HasSuffix(r.URL.Path, "/connectors"):
-		writeJSON(w, readyGateTransport().connectors)
-
-	case strings.HasSuffix(r.URL.Path, "/search"):
-		// The mailbox row's credential probe. "connected and granted" in the
-		// connector list is not proof the mailbox reads, so the gate asks.
-		writeJSON(w, readyGateTransport().searchBody)
 
 	case strings.HasSuffix(r.URL.Path, "/query"):
 		d.mu.Lock()
@@ -325,10 +300,11 @@ func TestRunQueryRefusesInSecondsWhenAPreconditionIsUnmet(t *testing.T) {
 		initBody:   lemonadeDown().initBody,
 	})
 
-	cmd := exec.Command(gaiaBin, "run", "email", "--query", "triage my inbox")
+	home := sidecarHome(t)
+	cmd := exec.Command(gaiaBin, "run", sidecarID, "--query", "what is new")
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		daemon.EnvHome+"="+d.home)
+		daemon.EnvHome+"="+d.home, "HOME="+home, "USERPROFILE="+home)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
@@ -354,7 +330,7 @@ func TestRunQueryRefusesInSecondsWhenAPreconditionIsUnmet(t *testing.T) {
 	if strings.Contains(stdout.String(), altScreenEnter) || strings.Contains(stderr.String(), altScreenEnter) {
 		t.Error("the refusal opened the alt screen; a script has nobody to press a key")
 	}
-	// The refusal promises "Nothing was sent to the Email agent". Prove it.
+	// The refusal promises "Nothing was sent to the Notes agent". Prove it.
 	if n := d.queryCount(); n != 0 {
 		t.Errorf("the run sent %d quer(ies) after refusing — the message is a lie", n)
 	}
@@ -369,10 +345,11 @@ func TestRunQueryAbandonsAStalledAgentAtTheTimeout(t *testing.T) {
 
 	d := newRelayDaemon(t, relayOptions{stallQuery: true})
 
-	cmd := exec.Command(gaiaBin, "run", "email", "--query", "triage my inbox", "--timeout", "3s")
+	home := sidecarHome(t)
+	cmd := exec.Command(gaiaBin, "run", sidecarID, "--query", "what is new", "--timeout", "3s")
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		daemon.EnvHome+"="+d.home)
+		daemon.EnvHome+"="+d.home, "HOME="+home, "USERPROFILE="+home)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 
@@ -402,7 +379,7 @@ func TestRunQueryAbandonsAStalledAgentAtTheTimeout(t *testing.T) {
 func TestOneShotAgainstAStallingDaemonHitsTheDeadline(t *testing.T) {
 	newRelayDaemon(t, relayOptions{stallQuery: true})
 
-	c := client.NewSSEClient("email", daemon.New(daemon.Options{
+	c := client.NewSSEClient(sidecarID, daemon.New(daemon.Options{
 		PIDAlive: func(int) bool { return true },
 		// A failed attach must never fall through to the production launcher and
 		// start a real daemon on the machine running the tests.

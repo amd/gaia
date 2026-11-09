@@ -101,8 +101,6 @@ type FlagshipModel struct {
 	preflight *preflight.Model
 	// pending is the agent that gate is guarding — launched only on ProceedMsg.
 	pending *catalog.Agent
-	// connect is the mailbox hand-off shown over the gate, nil when there is none.
-	connect *connectHandoff
 	// pfTransport is built on first launch and reused for the session.
 	pfTransport preflight.Transport
 	pfOpts      preflight.Options
@@ -300,7 +298,7 @@ func (m FlagshipModel) WithClaude(enabled bool, model string) FlagshipModel {
 // WithModel overrides the agent's own default model (--model).
 //
 // It has to be threaded all the way here because the router builds the client
-// AFTER the gate passes: dropping it made `gaia tui run email --model X` accept
+// AFTER the gate passes: dropping it made `gaia tui run gaia --model X` accept
 // the flag and quietly run the default instead, which is the silent-fallback
 // shape the rules forbid.
 func (m FlagshipModel) WithModel(model string) FlagshipModel {
@@ -464,12 +462,6 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.providerPanel = &panel
 		return m, panel.Init()
 
-	case preflight.ConnectMailboxMsg:
-		if !m.gateIsFor(msg.AgentID) {
-			return m, nil
-		}
-		return m.openConnectHandoff(msg.Provider)
-
 	case agents.SelectedMsg:
 		// The chat model's own agentsPanel does NOT close itself on a pick —
 		// agents.Model emits SelectedMsg, never ClosedMsg, on Enter (see its
@@ -516,11 +508,6 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// it — HelpState owns that vocabulary for every view.
 			m.help.HandleKey(msg, m.width, m.height)
 			return m, nil
-		}
-		// The mailbox hand-off owns every key while it is up — otherwise esc
-		// would cancel the launch behind it.
-		if m.activeView == viewPreflight && m.connect != nil {
-			return m.handleConnectKey(msg)
 		}
 		// Nothing on the splash is interactive except the way out, and a user
 		// who presses ctrl+c there means it.
@@ -601,10 +588,7 @@ func (m FlagshipModel) View() string {
 	case viewSplash:
 		base = m.renderSplash()
 	case viewPreflight:
-		switch {
-		case m.connect != nil:
-			base = m.connect.view(m.width, m.height)
-		case m.preflight != nil:
+		if m.preflight != nil {
 			base = m.preflight.View()
 		}
 	case viewChat:

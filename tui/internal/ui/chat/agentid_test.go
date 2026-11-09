@@ -4,23 +4,23 @@ import "testing"
 
 // RunAgent (the direct `chat --agent` launch) used to construct the model
 // with the display name in the id slot, so the value reaching m.agentID was
-// "Email" instead of the catalog id "email". This pins both constructors
+// "Notes" instead of the catalog id "notes". This pins both constructors
 // against that regression.
 func TestChatModelAgentIDIsCatalogIDNotDisplayNameForBothLaunchPaths(t *testing.T) {
 	cases := []struct {
 		name string
 		m    ChatModel
 	}{
-		{"direct-CLI (RunAgent)", NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)},
-		{"flagship launch", NewChatModelForFlagship(&nullClient{}, "email", "Email", false, false)},
+		{"direct-CLI (RunAgent)", NewChatModelForCatalogAgent(&nullClient{}, "notes", "Notes", false)},
+		{"flagship launch", NewChatModelForFlagship(&nullClient{}, "notes", "Notes", false, false)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.m.AgentID(); got != "email" {
-				t.Errorf("AgentID() = %q, want the catalog id %q, not the display name", got, "email")
+			if got := tc.m.AgentID(); got != "notes" {
+				t.Errorf("AgentID() = %q, want the catalog id %q, not the display name", got, "notes")
 			}
-			if got := tc.m.ControlSnapshot().Agent; got != "email" {
-				t.Errorf("ControlSnapshot().Agent = %q, want %q -- the loopback control API reports this", got, "email")
+			if got := tc.m.ControlSnapshot().Agent; got != "notes" {
+				t.Errorf("ControlSnapshot().Agent = %q, want %q -- the loopback control API reports this", got, "notes")
 			}
 		})
 	}

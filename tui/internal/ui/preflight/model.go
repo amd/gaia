@@ -22,14 +22,6 @@ type ProceedMsg struct{ AgentID string }
 // CancelMsg tells the host the user backed out of the launch.
 type CancelMsg struct{ AgentID string }
 
-// ConnectMailboxMsg asks the host to open the connector flow for Provider. The
-// gate deliberately does not run OAuth itself: that flow is its own screen, and
-// owning it here would fork it.
-type ConnectMailboxMsg struct {
-	AgentID  string
-	Provider string
-}
-
 // Timeouts for the work the screen kicks off. Each is bounded so a wedged
 // daemon or sidecar surfaces as an actionable row instead of a frozen screen.
 const (
@@ -610,8 +602,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.openChooser()
 		}
 		// A row the user can fix with one keypress holds the screen even when it
-		// does not block: the mailbox row is exactly that, and handing off past it
-		// would take `f connect a mailbox` away with the screen it was on.
+		// does not block: handing off past it would take its `f` away with the
+		// screen it was on.
 		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.fixApplied && !m.rep.HasOneKeyFix() {
 			if m.rep.HasHalt() {
 				// Three edits together: the tick, the phase, and the note each
@@ -805,7 +797,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
 			return m.applyFix()
 		}
-		if blocker, blocked := m.rep.Blocker(); blocked && !m.rep.OfferableDespiteFailure() {
+		if blocker, blocked := m.rep.Blocker(); blocked {
 			m.note = fmt.Sprintf("%s cannot start yet: %s is %s. Fix that row first.",
 				m.cfg.AgentName, blocker.Label, blocker.Line)
 			return m, nil
@@ -876,11 +868,6 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Switching GAIA to your Lemonade…"
 		return m, tea.Batch(m.quickFixCmd(KeyLemonade, FixUseRunningLemonade, startTimeout), m.spin.Tick)
-	case FixConnectMailbox:
-		agentID, provider := m.cfg.AgentID, row.Provider
-		return m, func() tea.Msg {
-			return ConnectMailboxMsg{AgentID: agentID, Provider: provider}
-		}
 	case FixChooseChat:
 		return m.openChooser(), nil
 	case FixConnectProvider:
@@ -904,15 +891,11 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 // indeterminate report is handed off.
 //
 // A known failure outranks an unproven row: if the launch proceeds over a broken
-// mailbox, saying "could not be verified" would understate a state we measured.
+// row, saying "could not be verified" would understate a state we measured.
 func (m Model) unverifiedSummary() string {
 	for _, row := range m.rep.Rows {
 		if row.State != StateFailed {
 			continue
-		}
-		if agentRepairable[row.Key] {
-			return row.Label + " is not working (" + row.Line +
-				") — ask " + m.cfg.AgentName + " to fix it."
 		}
 		return row.Label + " is not working (" + row.Line +
 			"). Press enter to start without it, or fix it first."
@@ -932,9 +915,7 @@ func (m Model) proceed() tea.Cmd {
 
 // haltOutcomesCmd emits one status.Outcome per HaltingRows() row, for the
 // host's listener to act on. Only reached from the HasHalt() branch above —
-// a Blocked() report never calls this, so an offerable failure (a mailbox
-// the agent repairs in conversation) never gets a second prompt in front of
-// the one it already offers.
+// a Blocked() report never calls this.
 func (m Model) haltOutcomesCmd() tea.Cmd {
 	rows := m.rep.HaltingRows()
 	cmds := make([]tea.Cmd, 0, len(rows))

@@ -18,7 +18,7 @@ type reportingClient struct {
 func (c *reportingClient) SupportsLivePermissions() bool { return c.live }
 
 func TestAPromptIsLiveOnlyWhenThePeerCanAnswerIt(t *testing.T) {
-	// Implementing the interface is a fact about the Go type. The email agent
+	// Implementing the interface is a fact about the Go type. Another agent
 	// over the daemon is the same type as gaia and serves neither route, so
 	// the modal must not promise a decision that will never be delivered.
 	for _, tc := range []struct {

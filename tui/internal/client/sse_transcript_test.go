@@ -14,10 +14,10 @@ import (
 // A card is drawn by this client, so its rows never reach the sidecar's history
 // on their own. If the transcript records only the model's framing sentence, a
 // follow-up referring to something on screen ("when is that one?") resolves
-// against nothing — which is exactly what happened with a visible email.
+// against nothing — which is exactly what happened with a visible message.
 func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 	payload := map[string]any{
-		"kind": "email_pre_scan",
+		"kind": "table",
 		"suggested_archives": []map[string]string{{
 			"message_id": "abc123",
 			"sender":     "DMW Martial Arts",
@@ -29,12 +29,12 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 		t.Fatalf("fixture: %v", err)
 	}
 	line := displayedCard(event.CanonicalToolResultEvent{
-		Type: "tool_result", Tool: "pre_scan_inbox",
-		Render: "email_pre_scan", Data: raw,
+		Type: "tool_result", Tool: "list_inbox",
+		Render: "table", Data: raw,
 	})
 
 	s := &SSEClient{}
-	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.", []string{line}, nil)
+	s.appendTurn("triage my inbox", "Here's what is in your inbox.", []string{line}, nil)
 
 	turns := s.Transcript()
 	if len(turns) != 2 {
@@ -42,8 +42,8 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 	}
 	got := turns[1].Content
 	for _, want := range []string{
-		"Here's your inbox pre-scan.", // the model's own words survive
-		"SUMMER HOLIDAY SALE",         // and so does the row the user can see
+		"Here's what is in your inbox.", // the model's own words survive
+		"SUMMER HOLIDAY SALE",           // and so does the row the user can see
 		"DMW Martial Arts",
 		"abc123", // the id, so "that one" can become an action
 	} {
@@ -69,7 +69,7 @@ func TestAnOrdinaryTurnIsRecordedUnchanged(t *testing.T) {
 // it still needs to carry the row content a follow-up resolves against.
 func TestCardMarkerCannotBeMistakenForContent(t *testing.T) {
 	s := &SSEClient{}
-	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.",
+	s.appendTurn("triage my inbox", "Here's what is in your inbox.",
 		[]string{"- [suggested_archives] DMW Martial Arts — SUMMER HOLIDAY SALE (id abc123)"}, nil)
 
 	got := s.Transcript()[1].Content

@@ -73,12 +73,12 @@ func TestAFlagshipBelowTheSwitchContractIsRefusedWithTheFix(t *testing.T) {
 	}
 }
 
-// Every sidecar numbers its own contract: email at 2.15+ still has no model switch.
+// Every sidecar numbers its own contract: another sidecar at 2.15+ still has no model switch.
 func TestOnlyTheFlagshipSwitchesModels(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.15"
-	if err := f.clientFor(t, "email").CheckModelSwitch(context.Background()); err == nil {
-		t.Fatal("the email agent was offered a model switch")
+	if err := f.clientFor(t, "notes").CheckModelSwitch(context.Background()); err == nil {
+		t.Fatal("another agent was offered a model switch")
 	}
 }
 

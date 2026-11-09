@@ -107,8 +107,8 @@ type CanonicalToolCallEvent struct {
 
 // CanonicalToolResultEvent — a tool's structured result.
 //
-// Render is the sidecar's declared card key (e.g. "email_pre_scan", or one of the
-// generic primitives "table" / "key_value" / "list" / "image" / "audio" / "diff"). Data is
+// Render is the sidecar's declared card key: one of the generic primitives
+// "table" / "key_value" / "list" / "image" / "audio" / "diff". Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
 //

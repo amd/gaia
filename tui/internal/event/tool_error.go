@@ -8,8 +8,8 @@ import (
 // ToolError is the failure a tool result carries in its payload.
 //
 // It exists because a tool's own error message is the most actionable text in a
-// run — the email sidecar's CONNECTOR_ERROR ends with the exact
-// `gaia connectors connect …` line that fixes it — and routing it through the
+// run — a CONNECTOR_ERROR ends with the exact `gaia connectors connect …` line
+// that fixes it — and routing it through the
 // model's summary loses that. Surfacing it verbatim keeps the tool author's
 // remedy intact.
 type ToolError struct {
@@ -23,8 +23,7 @@ type ToolError struct {
 // ToolOutcome is what a tool result PROVES about its call.
 //
 // Unknown is a real answer, never a pass: `ok` is an agent convention today
-// (documented for the email agent as `{"ok": true, "data": …}` /
-// `{"ok": false, "error": …}`), not a contract guarantee, so an agent that
+// (`{"ok": true, "data": …}` / `{"ok": false, "error": …}`), not a contract guarantee, so an agent that
 // sends no outcome at all must not be reported green on its behalf.
 type ToolOutcome int
 
@@ -49,9 +48,9 @@ func (o ToolOutcome) String() string {
 }
 
 // ToolOutcomeOf classifies a canonical tool result, returning the error when
-// there is one. Failure is checked first: the email sidecar sends `success:
-// true` on the event while the tool's own envelope says `ok: false`, so a
-// positive field proves nothing until the error checks have run.
+// there is one. Failure is checked first: a sidecar can send `success: true`
+// on the event while the tool's own envelope says `ok: false`, so a positive
+// field proves nothing until the error checks have run.
 func ToolOutcomeOf(e CanonicalToolResultEvent) (ToolOutcome, ToolError) {
 	if te, failed := ToolErrorOf(e); failed {
 		return ToolOutcomeFailed, te
@@ -145,7 +144,7 @@ func toolErrorFrom(data json.RawMessage, failedHint bool) (ToolError, bool) {
 		failed = true
 	}
 	// `success` on the event and `ok` inside a GAIA tool's return value. Only
-	// FALSE is read: the email sidecar sends success:true on a tool whose own
+	// FALSE is read: a sidecar can send success:true on a tool whose own
 	// result says ok:false, so a true here proves nothing.
 	for _, key := range []string{"success", "ok"} {
 		if raw, ok := payload[key]; ok {
@@ -176,7 +175,7 @@ func toolErrorFrom(data json.RawMessage, failedHint bool) (ToolError, bool) {
 		}
 	}
 
-	// The email sidecar string-encodes the tool's whole return value into
+	// A sidecar can string-encode the tool's whole return value into
 	// `summary`, so the failure is one level down.
 	if summary, ok := stringField(payload, "summary"); ok {
 		if nested, nestedFailed := toolErrorFromEncoded(summary, summaryTruncated); nestedFailed {

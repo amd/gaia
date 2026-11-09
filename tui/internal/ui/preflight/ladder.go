@@ -62,8 +62,7 @@ func (d Diagnosis) String() string {
 
 // Ladder maps a failed call to a Diagnosis, most specific cause first.
 //
-// Ported from the email agent's playground `diagnose` (playground_html.py) and
-// extended with the daemon's own typed errors, which the browser never sees. The
+// It covers the daemon's own typed errors as well as relayed bodies. The
 // ordering is the point: "Lemonade is not running" and "the model is missing"
 // both surface as a 502 with a body, and answering "the call timed out" to
 // either sends the user down the wrong path.
@@ -318,9 +317,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 	return l.Text(op, trimmed)
 }
 
-// Text is the message ladder itself: specific causes before generic ones,
-// mirroring the email playground's `diagnose` so the TUI and the browser never
-// disagree about what a given failure means.
+// Text is the message ladder itself: specific causes before generic ones.
 func (l Ladder) Text(op, text string) Diagnosis {
 	body := strings.ToLower(text)
 

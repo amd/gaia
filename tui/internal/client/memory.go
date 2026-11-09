@@ -143,9 +143,9 @@ func (e *ErrMemoryContractTooOld) Error() string {
 }
 
 // FetchMemory implements MemoryProvider for the daemon-relayed transport:
-// GET /v1/<agent>/memory through the daemon relay, cloning FetchPreScan's
-// shape (prescan.go) -- ensure the sidecar, negotiate the peer's contract,
-// gate on it before trusting the response, then relay the request.
+// GET /v1/<agent>/memory through the daemon relay -- ensure the sidecar,
+// negotiate the peer's contract, gate on it before trusting the response, then
+// relay the request.
 func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 	// First, before any network work: this answer needs nothing from the peer,
 	// and asking anyway would spawn a sidecar just to refuse — and a probe that
@@ -216,11 +216,32 @@ func (s *SSEClient) FetchMemory(ctx context.Context) (MemoryDump, error) {
 		)
 	}
 
-	// Unlike /prescan, the route returns build_memory_dump()'s payload
-	// directly as the response body -- no `result` envelope to unwrap.
+	// The route returns build_memory_dump()'s payload directly as the
+	// response body -- no `result` envelope to unwrap.
 	var dump MemoryDump
 	if err := json.Unmarshal(raw, &dump); err != nil {
 		return MemoryDump{}, fmt.Errorf("could not decode the '%s' memory response: %w", s.agentID, err)
 	}
 	return dump, nil
+}
+
+// errorDetailFromBody mirrors daemon.ErrorDetail's parsing but works from
+// already-read bytes, since the body can only be consumed once and this
+// caller needs it both for the success path (decode `result`) and the
+// error path (extract `detail`).
+func errorDetailFromBody(statusCode int, raw []byte) string {
+	if len(raw) == 0 {
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+	var body struct {
+		Detail json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &body); err == nil && len(body.Detail) > 0 {
+		var s string
+		if err := json.Unmarshal(body.Detail, &s); err == nil && s != "" {
+			return fmt.Sprintf("HTTP %d: %s", statusCode, s)
+		}
+		return fmt.Sprintf("HTTP %d: %s", statusCode, string(body.Detail))
+	}
+	return fmt.Sprintf("HTTP %d", statusCode)
 }

@@ -15,7 +15,7 @@ import (
 // destructive action, and the run ends on `final` with the agent explaining it
 // declined. That satisfied every existing exit-code rule — no tool failed, the
 // terminal event was a success — so
-// `gaia tui run email --query "quarantine that phishing message" && echo done`
+// `gaia tui run notes --query "quarantine that phishing message" && echo done`
 // printed `done` while the message sat untouched.
 func TestAWithheldActionDoesNotExitZero(t *testing.T) {
 	res, out, errW := captureOneShot(t,
@@ -114,7 +114,7 @@ func TestAGatedActionThatRanAndFailedIsAFailure(t *testing.T) {
 func TestAFailureOutranksAGateButBothAreReported(t *testing.T) {
 	res, _, errW := captureOneShot(t,
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox", Data: okEnvelope(false, "CONNECTOR_ERROR"),
+			Type: "tool_result", Tool: "list_inbox", Data: okEnvelope(false, "CONNECTOR_ERROR"),
 		},
 		event.CanonicalNeedsConfirmationEvent{Type: "needs_confirmation", Action: "quarantine_phishing_message"},
 		event.CanonicalFinalEvent{Type: "final", Answer: "I could not do either."},
@@ -123,7 +123,7 @@ func TestAFailureOutranksAGateButBothAreReported(t *testing.T) {
 	if res.ExitCode != 1 {
 		t.Errorf("exit = %d, want 1: a real failure outranks a gate", res.ExitCode)
 	}
-	if !strings.Contains(errW, "pre_scan_inbox failed") {
+	if !strings.Contains(errW, "list_inbox failed") {
 		t.Errorf("the failure was not reported:\n%s", errW)
 	}
 	if !strings.Contains(errW, "quarantine_phishing_message") {
@@ -135,7 +135,7 @@ func TestAFailureOutranksAGateButBothAreReported(t *testing.T) {
 // it; when there is none, do not invent a way to approve — the interactive chat
 // cannot answer a gate either.
 func TestAConfirmURLIsSurfacedWhenTheAgentSendsOne(t *testing.T) {
-	const url = "http://127.0.0.1:8765/v1/email/confirm/abc123"
+	const url = "http://127.0.0.1:8765/v1/notes/confirm/abc123"
 	_, _, withURL := captureOneShot(t,
 		event.CanonicalNeedsConfirmationEvent{
 			Type: "needs_confirmation", Action: "send_now", ConfirmURL: url,

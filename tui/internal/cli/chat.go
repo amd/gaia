@@ -55,16 +55,16 @@ var chatCmd = &cobra.Command{
 			} {
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
-						"--%s is not supported with --subprocess: %s. Use `gaia-tui chat --agent <id> --%s …` "+
-							"(the ids are `gaia` and `email`), or drop --%s",
+						"--%s is not supported with --subprocess: %s. Use `gaia-tui chat --agent gaia --%s …`, "+
+							"or drop --%s",
 						f.name, f.why, f.name, f.name)
 				}
 			}
 		}
 		if agentID == "" && subprocess == "" {
 			return fmt.Errorf("one of --agent or --subprocess is required\n\n" +
-				"Usage: gaia-tui chat --agent email\n" +
-				"       gaia-tui chat --agent email --query \"triage my inbox\"\n" +
+				"Usage: gaia-tui chat --agent gaia\n" +
+				"       gaia-tui chat --agent gaia --query \"summarize my inbox\"\n" +
 				"       gaia-tui chat --subprocess \"./gaia-bash --json-events\"")
 		}
 		// Opened only once the command is known to be runnable, so a refused
@@ -112,7 +112,7 @@ func orSubprocess(agentID string) string {
 }
 
 func init() {
-	chatCmd.Flags().StringVar(&agentID, "agent", "", "catalog agent id to chat with (e.g. \"email\")")
+	chatCmd.Flags().StringVar(&agentID, "agent", "", "catalog agent id to chat with (e.g. \"gaia\")")
 	chatCmd.Flags().StringVar(&chatModel, "model", "", "model id override (--agent only; the sidecar default is used when unset)")
 	chatCmd.Flags().StringVar(&subprocess, "subprocess", "", "command to spawn agent subprocess (e.g. \"./gaia-bash --json-events\")")
 	chatCmd.Flags().StringVar(&query, "query", "", "single query to send. With --agent it is a genuine non-interactive one-shot: it refuses in seconds when a precondition is unmet, answers on stdout, and exits 0 answered / 1 failed / 3 needs approval / 130 interrupted. With --subprocess it opens the interactive chat and sends this as the first message, so it still needs a terminal")

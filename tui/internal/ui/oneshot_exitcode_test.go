@@ -8,7 +8,7 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
-// okEnvelope is the shape the email agent documents for its tools:
+// okEnvelope is the shape GAIA's tools document:
 // `{"ok": true, "data": …}` / `{"ok": false, "error": …}`.
 func okEnvelope(ok bool, body string) []byte {
 	if ok {
@@ -23,9 +23,9 @@ func okEnvelope(ok bool, body string) []byte {
 // `gaia tui run … && next-step` fired over work that never happened.
 func TestFailedToolMakesTheTurnExitNonZero(t *testing.T) {
 	res, out, errW := captureOneShot(t,
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: okEnvelope(false, "CONNECTOR_ERROR: no forwarded credential"),
 		},
 		event.CanonicalFinalEvent{Type: "final", Answer: "There seems to be a connection issue."},
@@ -34,8 +34,8 @@ func TestFailedToolMakesTheTurnExitNonZero(t *testing.T) {
 	if res.ExitCode != 1 {
 		t.Fatalf("exit = %d, want 1: the only tool call failed and no work was done", res.ExitCode)
 	}
-	if len(res.FailedTools) != 1 || res.FailedTools[0] != "pre_scan_inbox" {
-		t.Errorf("FailedTools = %v, want [pre_scan_inbox]", res.FailedTools)
+	if len(res.FailedTools) != 1 || res.FailedTools[0] != "list_inbox" {
+		t.Errorf("FailedTools = %v, want [list_inbox]", res.FailedTools)
 	}
 	if !strings.Contains(errW, "exit 1") {
 		t.Errorf("stderr does not explain the exit code:\n%s", errW)
@@ -50,11 +50,11 @@ func TestFailedToolMakesTheTurnExitNonZero(t *testing.T) {
 func TestARetriedToolThatSucceedsClearsTheFailure(t *testing.T) {
 	res, _, _ := captureOneShot(t,
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: okEnvelope(false, "CONNECTOR_ERROR: token expired"),
 		},
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: okEnvelope(true, `"unread": 3`),
 		},
 		event.CanonicalFinalEvent{Type: "final", Answer: "You have 3 unread."},
@@ -72,7 +72,7 @@ func TestARetriedToolThatSucceedsClearsTheFailure(t *testing.T) {
 func TestAnotherToolSucceedingDoesNotClearAFailure(t *testing.T) {
 	res, _, _ := captureOneShot(t,
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: okEnvelope(false, "CONNECTOR_ERROR: no credential"),
 		},
 		event.CanonicalToolResultEvent{
@@ -83,7 +83,7 @@ func TestAnotherToolSucceedingDoesNotClearAFailure(t *testing.T) {
 	)
 
 	if res.ExitCode != 1 {
-		t.Fatalf("exit = %d, want 1: pre_scan_inbox never recovered", res.ExitCode)
+		t.Fatalf("exit = %d, want 1: list_inbox never recovered", res.ExitCode)
 	}
 }
 
@@ -91,11 +91,11 @@ func TestAnotherToolSucceedingDoesNotClearAFailure(t *testing.T) {
 func TestAnUnknownResultDoesNotClearAFailure(t *testing.T) {
 	res, _, _ := captureOneShot(t,
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: okEnvelope(false, "CONNECTOR_ERROR: no credential"),
 		},
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
+			Type: "tool_result", Tool: "list_inbox",
 			Data: []byte(`{"messages": []}`), // no ok, no status, no error
 		},
 		event.CanonicalFinalEvent{Type: "final", Answer: "Done."},
@@ -163,7 +163,7 @@ func TestATurnWithNoToolsStillExitsZero(t *testing.T) {
 	}
 }
 
-// The email sidecar's real shape: event says success:true, the tool's own
+// A sidecar's real shape: event says success:true, the tool's own
 // envelope inside `summary` says ok:false. The envelope wins.
 func TestTheSidecarsEncodedEnvelopeDecidesTheExitCode(t *testing.T) {
 	res, _, _ := captureOneShot(t,

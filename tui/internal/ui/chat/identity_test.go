@@ -26,13 +26,13 @@ func TestHeaderNamesTheRunningAgent(t *testing.T) {
 		t.Errorf("flagship header does not name the agent: %q", header)
 	}
 
-	email := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)
-	email.width, email.height = 100, 30
-	email = feed(t, email, versionedPing("0.1.0", ""))
+	other := NewChatModelForCatalogAgent(&nullClient{}, "notes", "Notes", false)
+	other.width, other.height = 100, 30
+	other = feed(t, other, versionedPing("0.1.0", ""))
 
-	header = ansi.Strip(email.renderHeader())
-	if !strings.Contains(header, "agent email v0.1.0") {
-		t.Errorf("email header does not name the agent: %q", header)
+	header = ansi.Strip(other.renderHeader())
+	if !strings.Contains(header, "agent notes v0.1.0") {
+		t.Errorf("the other agent's header does not name the agent: %q", header)
 	}
 }
 
@@ -82,11 +82,11 @@ func versionedPing(agentVersion, gaiaVersion string) event.CanonicalStatusEvent 
 // The stable agent id belongs on screen somewhere a user would actually read
 // it, not just in debug logging or the control API.
 func TestTheAgentIDAppearsInTheRenderedFrame(t *testing.T) {
-	m := NewChatModelForCatalogAgent(&nullClient{}, "email", "Email", false)
+	m := NewChatModelForCatalogAgent(&nullClient{}, "notes", "Notes", false)
 	m.width, m.height = 100, 30
 	m.resize()
 
-	if !strings.Contains(ansi.Strip(m.View()), "email") {
+	if !strings.Contains(ansi.Strip(m.View()), "notes") {
 		t.Errorf("the agent id never appears in the frame:\n%s", ansi.Strip(m.View()))
 	}
 }

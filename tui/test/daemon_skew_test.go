@@ -84,8 +84,8 @@ func TestEveryDaemonRouteReportsSkewTheSameWay(t *testing.T) {
 			_, err := f.client().Agents(context.Background(), false)
 			return err
 		}},
-		{"uninstall", daemon.APIPrefix + "/agents/email", func(f *fakeDaemon) error {
-			return f.client().Uninstall(context.Background(), "email")
+		{"uninstall", daemon.APIPrefix + "/agents/notes", func(f *fakeDaemon) error {
+			return f.client().Uninstall(context.Background(), "notes")
 		}},
 	}
 

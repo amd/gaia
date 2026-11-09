@@ -20,10 +20,18 @@ func TestInstalledFlagshipRejectsFullAccessBeforeReadiness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installed, ".installed"), []byte(`{"id":"gaia","version":"0.1.1","artifact_kind":"binary"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// A hub-installed daemon sidecar other than the flagship.
+	sidecar := filepath.Join(home, ".gaia", "agents", sidecarID)
+	if err := os.MkdirAll(sidecar, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sidecar, ".installed"), []byte(`{"id":"`+sidecarID+`","version":"0.1.0","artifact_kind":"binary"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{"--full-access"},
 		{"run", "gaia", "--full-access", "--query", "hello"},
-		{"run", "email", "--full-access", "--query", "hello"},
+		{"run", sidecarID, "--full-access", "--query", "hello"},
 		{"chat", "--subprocess", "missing-agent-binary", "--full-access", "--query", "hello"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -6,14 +6,11 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/update"
-
-	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // beginPreflight puts the readiness gate between the splash and the chat.
@@ -43,7 +40,7 @@ func (m FlagshipModel) beginPreflightCarrying(agent catalog.Agent, stepsDone int
 	m.gateSteps = 0
 	var gate preflight.Model
 	if agent.Transport == catalog.TransportDaemon {
-		// Only the flagship's sidecar takes a per-turn model; email ignores one.
+		// Only the flagship's sidecar takes a per-turn model.
 		if agent.ID == catalog.FlagshipID {
 			cfg.Model = m.launchModel(agent)
 		}
@@ -53,7 +50,6 @@ func (m FlagshipModel) beginPreflightCarrying(agent catalog.Agent, stepsDone int
 	}
 	m.preflight = &gate
 	m.pending = &agent
-	m.connect = nil
 	m.activeView = viewPreflight
 
 	cmds := []tea.Cmd{gate.Init()}
@@ -137,7 +133,6 @@ func (m *FlagshipModel) closeGate() {
 		m.preflight = nil
 	}
 	m.pending = nil
-	m.connect = nil
 	// Whatever was halting belonged to THIS gate session — leaving it, by
 	// proceeding or backing out, resolves it. Automation's Overlay must not
 	// keep reading "halt" once the gate that raised it is gone.
@@ -273,253 +268,4 @@ func (m FlagshipModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.preflight = &gate
 	return m, cmd
-}
-
-// --- the mailbox hand-off ---------------------------------------------------
-
-// connectHandoff is what ConnectMailboxMsg turns into.
-//
-// The TUI has no connector screen, and half of one would be worse than none:
-// OAuth already has a working implementation behind `gaia connectors`, and a
-// second one here would fork the flow that owns tokens, scopes and grants. So the
-// gate hands over the exact command — the one the mailbox row already computed,
-// with the scope union and the agent grant in it — and re-checks when the user
-// comes back. Swallowing the request, or answering it with "coming soon", would
-// leave the user on a screen that names a problem and no way past it.
-type connectHandoff struct {
-	agentName string
-	// provider is the mailbox to reconnect. Empty means the user has nothing
-	// connected and the choice of provider is still theirs.
-	provider string
-	row      preflight.Row
-	haveRow  bool
-}
-
-func (m FlagshipModel) openConnectHandoff(provider string) (tea.Model, tea.Cmd) {
-	rep := m.preflight.Report()
-	row, ok := rep.Find(preflight.KeyMailbox)
-	m.connect = &connectHandoff{
-		agentName: rep.AgentName,
-		provider:  provider,
-		row:       row,
-		haveRow:   ok,
-	}
-	return m, nil
-}
-
-// handleConnectKey owns every key while the hand-off is up.
-func (m FlagshipModel) handleConnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "ctrl+c":
-		// Same as everywhere else: ctrl+c leaves the app, not just the screen.
-		// Back to the splash so the last frame is never a view whose model has
-		// just been torn out from under it.
-		m.closeGate()
-		m.activeView = viewSplash
-		return m, tea.Quit
-	case "r":
-		// Dismiss, then let the gate's own `r` do the re-check — the screen that
-		// owns the probes owns the re-check too.
-		m.connect = nil
-		return m.updatePreflight(key)
-	case "esc", "q":
-		m.connect = nil
-		return m, nil
-	}
-	return m, nil
-}
-
-var (
-	connectTitle   = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
-	connectDim     = lipgloss.NewStyle().Foreground(theme.Dim)
-	connectDivider = lipgloss.NewStyle().Foreground(theme.Divider)
-	connectText    = lipgloss.NewStyle().Foreground(theme.Text)
-	connectCmd     = lipgloss.NewStyle().Foreground(theme.Accent)
-	connectKey     = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
-)
-
-// outlookSetupDoc is where the Outlook path continues. It is a doc, not a
-// command, because Outlook needs a one-time Microsoft app registration (or the
-// device-code flow) before any connect command can succeed — and the mailbox
-// row's Gmail scopes are wrong for Microsoft, so "swap google for microsoft"
-// would hand the user a command that fails.
-const outlookSetupDoc = "https://amd-gaia.ai/docs/connectors/microsoft"
-
-func (h connectHandoff) view(width, height int) string {
-	w := width
-	if w < 40 {
-		w = 40
-	}
-
-	title := fmt.Sprintf("Connect a mailbox for %s", h.agentName)
-	if h.provider != "" {
-		title = fmt.Sprintf("Reconnect %s for %s", providerLabel(h.provider), h.agentName)
-	}
-
-	head := []string{
-		"  " + connectTitle.Render(title),
-		"  " + connectDivider.Render(strings.Repeat("─", w-4)),
-	}
-	var body []block
-	cur := dropContext
-	add := func(style lipgloss.Style, text string, indent int) {
-		prefix := strings.Repeat(" ", indent)
-		for _, line := range wrapLines(text, w-indent-2) {
-			body = append(body, block{line: prefix + style.Render(line), drop: cur})
-		}
-	}
-	blank := func() { body = append(body, block{line: "", drop: cur}) }
-
-	if h.row.Detail != "" {
-		add(connectDim, h.row.Detail, 2)
-		blank()
-	}
-
-	switch {
-	case !h.haveRow || h.row.Remedy.Command == "":
-		// The gate asked for a mailbox and recorded no command to get one. That is
-		// a bug, and it must not read as a shrug.
-		add(connectText, "The readiness check asked for a mailbox connection but recorded no "+
-			"command for it. Report that, then connect from a terminal:", 2)
-		cur = dropNever
-		add(connectCmd, "gaia connectors list", 4)
-		cur = dropContext
-		add(connectDim, "look:  https://amd-gaia.ai/docs/guides/email", 4)
-
-	case h.provider != "":
-		add(connectText, "This cannot be done from here — it opens a browser sign-in. Run this in "+
-			"another terminal, then come back and press r.", 2)
-		// The command is printed verbatim, so if the check produced one for a
-		// different provider than the mailbox it is talking about, say so rather
-		// than let the title vouch for it.
-		if named := providerFromCommand(h.row.Remedy.Command); named != "" && named != h.provider {
-			cur = dropNever
-			add(connectText, fmt.Sprintf(
-				"Heads up: the check produced a %s command for a %s mailbox. Check it before "+
-					"running it, and report it.", providerLabel(named), providerLabel(h.provider)), 2)
-		}
-		cur = dropNever
-		blank()
-		add(connectCmd, h.row.Remedy.Command, 4)
-		cur = dropContext
-		if h.row.Remedy.Where != "" {
-			blank()
-			add(connectDim, "look:  "+h.row.Remedy.Where, 4)
-		}
-
-	default:
-		// Provider is empty: nothing is connected, so the choice is the user's.
-		// Both paths are named, and neither is a command that would fail.
-		add(connectText, "This cannot be done from here — it opens a browser sign-in. "+
-			"Pick one, run it in another terminal, then come back and press r.", 2)
-		offered := providerFromCommand(h.row.Remedy.Command)
-		heading := "Run this:"
-		if offered != "" {
-			heading = providerLabel(offered) + " — one command, about a minute:"
-		}
-		cur = dropNever
-		blank()
-		add(connectText, heading, 2)
-		add(connectCmd, h.row.Remedy.Command, 4)
-		if offered != "microsoft" {
-			cur = dropAlternative
-			blank()
-			add(connectText, "Outlook — needs a one-time Microsoft app setup first:", 2)
-			add(connectDim, outlookSetupDoc, 4)
-		}
-	}
-
-	foot := "  " + connectKey.Render("r") + " " + connectDim.Render("re-check") +
-		connectDim.Render(" · ") + connectKey.Render("esc") + " " + connectDim.Render("back to the checks")
-
-	out := append(head, fitBody(body, height-len(head)-2)...)
-	return strings.Join(append(out, "", foot), "\n")
-}
-
-// Which lines the hand-off gives up first when the terminal is too short. The
-// command sits in the MIDDLE of the screen, so trimming by position — from
-// either end — can eat the one thing the user came here for. Lines are dropped
-// by what they are instead.
-const (
-	// dropNever is the command itself and the sentence that introduces it.
-	dropNever = iota
-	// dropAlternative is the second way to do it (the Outlook pointer).
-	dropAlternative
-	// dropContext is explanation: why this is needed, where to read more.
-	dropContext
-)
-
-// block is one rendered line plus how readily it can be dropped.
-type block struct {
-	line string
-	drop int
-}
-
-// fitBody drops whole categories of line, least important first, until the body
-// fits room rows. Below that it hard-trims and lets the caller's footer stand —
-// a terminal that short is under every size this app supports.
-func fitBody(body []block, room int) []string {
-	if room < 1 {
-		room = 1
-	}
-	for prio := dropContext; prio > dropNever && len(body) > room; prio-- {
-		kept := body[:0:0]
-		for _, b := range body {
-			if b.drop != prio {
-				kept = append(kept, b)
-			}
-		}
-		body = kept
-	}
-	lines := make([]string, 0, len(body))
-	for _, b := range body {
-		lines = append(lines, b.line)
-	}
-	if len(lines) > room {
-		lines = lines[:room]
-	}
-	return lines
-}
-
-// providerFromCommand reads the connector id out of a
-// `gaia connectors connect <id> …` command, so the heading above a command can
-// never name a provider the command does not use.
-func providerFromCommand(cmd string) string {
-	fields := strings.Fields(cmd)
-	for i, f := range fields {
-		if f == "connect" && i+1 < len(fields) {
-			return fields[i+1]
-		}
-	}
-	return ""
-}
-
-func providerLabel(provider string) string {
-	switch provider {
-	case "google":
-		return "Gmail"
-	case "microsoft":
-		return "Outlook"
-	case "microsoft_work":
-		return "Microsoft 365"
-	default:
-		return provider
-	}
-}
-
-// wrapLines wraps plain text to w columns, hard-breaking a single token that is
-// longer than the line — a connect command with full OAuth scope URLs in it must
-// be readable in full, never truncated.
-func wrapLines(s string, w int) []string {
-	if w < 8 {
-		w = 8
-	}
-	rendered := lipgloss.NewStyle().Width(w).Render(s)
-	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
-	for i := range lines {
-		// Width() pads every line to w; the padding would show up as trailing
-		// whitespace in a captured screen.
-		lines[i] = strings.TrimRight(lines[i], " ")
-	}
-	return lines
 }

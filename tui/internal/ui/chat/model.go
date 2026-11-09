@@ -3,7 +3,6 @@ package chat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -83,20 +82,6 @@ const queuedSendTimeout = 180 * time.Second
 // easy to miss until it has been silent a while, so this names it instead of
 // leaving the spinner to run out the general 300s watchdog with no word.
 type queuedSendStalledMsg struct{ turnSeq int }
-
-// preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
-// result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
-// attention fetch) — a side-channel read, never a chat turn, so it carries
-// no query/answer pair and never touches the host-owned transcript Send()
-// pushes as `context`.
-type preScanFetchedMsg struct{ data json.RawMessage }
-type preScanFetchFailedMsg struct{ err error }
-
-// preScanDegradedMsg is delivered when the peer's contract predates
-// needs_you (client.ErrPreScanContractTooOld) — rendered as an honest
-// status note, never as the confident (and wrong) empty-needs_you card a
-// naive decode of an old sidecar's response would produce.
-type preScanDegradedMsg struct{ notice string }
 
 // ToggleHelpMsg signals the root model to toggle help overlay.
 type ToggleHelpMsg struct{}
@@ -486,17 +471,6 @@ type ChatModel struct {
 	// sending a new message) restores it.
 	followTail bool
 
-	// pendingPreScan buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
-	pendingPreScan json.RawMessage
-	// preScanRenderedThisTurn is true once the CURRENT turn's own typed
-	// tool_result has drawn the pre-scan card (#2743 checkpoint review).
-	// drainPendingPreScan checks it before draining the buffered on-open
-	// snapshot: without this, a "triage my inbox" turn that itself
-	// produces a fresh card would have that fresh data immediately
-	// clobbered by the shallower snapshot the on-open fetch buffered
-	// before the turn started.
-	preScanRenderedThisTurn bool
-
 	// setupChecking is true from construction (applyFirstBootGate) until the
 	// first-boot readiness probe (`gaia init --check`, fired by Init) answers.
 	// Enter queues rather than sends while true, same reasoning as m.streaming
@@ -662,18 +636,6 @@ func (m *ChatModel) CloseAgentsPanel() {
 	m.agentsPanel = nil
 }
 
-// preScanAgentID is the one agent this on-open fetch applies to today.
-// Scoped by id rather than by capability alone so a future agent that
-// happens to reuse the PreScanFetcher interface for something unrelated
-// doesn't unexpectedly get this fetch too.
-const preScanAgentID = "email"
-
-// preScanCardIdentity marks the singular inbox pre-scan card (#2743) so
-// both entry points that can produce one — the on-open fetch below and a
-// typed turn's own tool_result (canonical.go) — update the SAME message in
-// place instead of each appending its own. See Message.Identity.
-const preScanCardIdentity = "email_prescan"
-
 func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
@@ -714,15 +676,6 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
-		// The on-open pre-scan card (#2743) is gone: it spent a Gmail scan
-		// before the user asked for anything, and showed a shallower version
-		// of what "triage my inbox" answers properly a moment later. The
-		// card still renders when a turn's own pre_scan_inbox result arrives.
-	} else if m.dev && m.preScanGateMismatch() {
-		// A client that could serve the pre-scan view but an agentID that
-		// doesn't match must not fail with no signal at all.
-		control.DevLogf("pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q",
-			m.agentID, preScanAgentID)
 	}
 	// Behind the first-boot gate the warm-up waits for it: there may be no
 	// model to load yet (releaseAfterSetupGate starts it then).
@@ -733,96 +686,14 @@ func (m ChatModel) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// preScanGateMismatch reports whether m.client could serve the pre-scan
-// view even though m.agentID didn't earn the fetch.
-func (m ChatModel) preScanGateMismatch() bool {
-	if m.agentID == preScanAgentID {
-		return false
-	}
-	_, hasFetcher := m.client.(client.PreScanFetcher)
-	return hasFetcher
-}
-
-// fetchPreScan builds the Cmd that fetches the email agent's inbox pre-scan
-// (#2743). A transport that doesn't implement client.PreScanFetcher
-// (subprocess mode has no HTTP relay to ask) is skipped silently — this is
-// a best-effort side-channel read, never a requirement for the chat
-// surface to function. A peer whose contract predates needs_you degrades
-// to an honest notice rather than the confident empty card an unguarded
-// decode would produce.
-func (m ChatModel) fetchPreScan() tea.Cmd {
-	fetcher, ok := m.client.(client.PreScanFetcher)
-	if !ok {
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		data, err := fetcher.FetchPreScan(ctx)
-		if err != nil {
-			var tooOld *client.ErrPreScanContractTooOld
-			if errors.As(err, &tooOld) {
-				return preScanDegradedMsg{notice: tooOld.Error()}
-			}
-			return preScanFetchFailedMsg{err: err}
-		}
-		return preScanFetchedMsg{data: data}
-	}
-}
-
-// upsertCard appends a RoleCard message, or — when identity is non-empty and
-// a message already carries it — replaces that message's payload in place
-// (#2743). Looked up by identity across the CURRENT m.messages slice on
-// every call, never a tracked index: `/clear` sets m.messages to nil
-// (see the "/clear" case below), so a stale index would panic or silently
-// overwrite an unrelated message. The render cache is cleared so an
-// in-place update is never served the stale layout (Message.cardCache is
-// otherwise keyed on width alone).
-func (m *ChatModel) upsertCard(identity, toolName, render string, data json.RawMessage) {
-	if identity != "" {
-		for i := range m.messages {
-			if m.messages[i].Role == RoleCard && m.messages[i].Identity == identity {
-				m.messages[i].ToolName = toolName
-				m.messages[i].Render = render
-				m.messages[i].Data = data
-				m.messages[i].cardCache = ""
-				m.messages[i].cardCacheWidth = 0
-				return
-			}
-		}
-	}
+// appendCard appends a RoleCard message.
+func (m *ChatModel) appendCard(toolName, render string, data json.RawMessage) {
 	m.messages = append(m.messages, Message{
 		Role:     RoleCard,
-		Identity: identity,
 		ToolName: toolName,
 		Render:   render,
 		Data:     data,
 	})
-}
-
-// upsertPreScanCard draws or updates-in-place the one pre-scan card for
-// this session (#2743). Cross-card duplicate items against OTHER card
-// types are resolved at render time (see Message.renderCardDeduped), not
-// here.
-func (m *ChatModel) upsertPreScanCard(data json.RawMessage) {
-	m.upsertCard(preScanCardIdentity, "pre_scan_inbox", "email_pre_scan", data)
-}
-
-// drainPendingPreScan appends the buffered on-open pre-scan card now that
-// its turn has ended, whichever way it ended — UNLESS the turn's own typed
-// tool_result already drew a fresher card this same turn (#2743 checkpoint
-// review): draining the buffered snapshot over it would clobber the
-// fresher data with a shallower one.
-func (m *ChatModel) drainPendingPreScan() {
-	if m.pendingPreScan == nil {
-		return
-	}
-	data := m.pendingPreScan
-	m.pendingPreScan = nil
-	if m.preScanRenderedThisTurn {
-		return
-	}
-	m.upsertPreScanCard(data)
 }
 
 // Update dispatches the message, then releases a queued follow-up if that
@@ -1071,39 +942,6 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
-	case preScanFetchedMsg:
-		if m.streaming {
-			// Buffer -- appending now would land the card between this turn's question and its reply.
-			m.pendingPreScan = msg.data
-			return m, nil
-		}
-		m.upsertPreScanCard(msg.data)
-		m.updateViewport()
-		return m, nil
-
-	case preScanFetchFailedMsg:
-		// Best-effort side-channel read (#2743) — a failure (no mailbox
-		// connected, daemon unreachable, a transient connector error) is
-		// worth telling the user about, but it must never block or clutter
-		// the surface like a turn-ending error would.
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] inbox pre-scan unavailable: %v", msg.err),
-		})
-		m.updateViewport()
-		return m, nil
-
-	case preScanDegradedMsg:
-		// The peer's contract predates needs_you — an honest notice, never
-		// the confident (and wrong) empty card an unguarded decode would
-		// have produced (#2743).
-		m.messages = append(m.messages, Message{
-			Role:    RoleStatus,
-			Content: "[!] " + msg.notice,
-		})
-		m.updateViewport()
-		return m, nil
-
 	case memoryDumpMsg:
 		return m.handleMemoryDump(msg)
 
@@ -1173,7 +1011,6 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: "Nothing was switched — this session is still on " + m.currentModelName() + ".",
 			})
 		}
-		m.drainPendingPreScan()
 		m.updateViewport()
 		return m, nil
 
@@ -1222,9 +1059,8 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case components.ConfirmationTimeoutMsg:
 		if m.confirmation == nil {
-			// Already resolved (the run's own final/error got there first, the
-			// overwhelmingly common case against the current stateless email
-			// sidecar) or the turn moved on. Dropping is correct — nothing to warn.
+			// Already resolved (the run's own final/error got there first) or
+			// the turn moved on. Dropping is correct — nothing to warn.
 			return m, nil
 		}
 		c, cmd := m.confirmation.ResolveTimeout(msg)
@@ -1668,8 +1504,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // read of the SSE stream, and that local abort is what closed the channel —
 // well before the daemon's session run_lock was actually released by the
 // sidecar's worker thread, which notices a cancel only cooperatively, at the
-// next agent-loop step boundary (see
-// hub/agents/email/python/gaia_agent_email/query_routes.py). Calling
+// next agent-loop step boundary. Calling
 // cancelFn() here reproduced the exact race it was meant to close: 5/5
 // cancel-then-resend attempts still hit a bare-lock 409 downstream.
 //
@@ -1710,7 +1545,6 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 		Role:    RoleStatus,
 		Content: cancellingNotice + m.cancelHint(),
 	})
-	m.drainPendingPreScan()
 	m.updateViewport()
 
 	if canceler, ok := m.client.(client.AgentCanceler); ok {
@@ -2060,8 +1894,6 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
 	// no usage.steps reported the PREVIOUS turn's count as its own.
 	m.totalSteps = 0
-	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
-	m.preScanRenderedThisTurn = false
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2597,12 +2429,6 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	// seen accumulates message_ids across cards within one turn so a second
-	// card doesn't redraw an item its turn's first card already showed. It
-	// resets at each RoleUser message: a new turn's mail can legitimately
-	// repeat an id an earlier turn's card already rendered (still urgent on
-	// the next scan is not a duplicate), so dedup must not span turns.
-	seen := make(map[string]bool)
 	// Counted as the transcript is written rather than measured afterwards:
 	// re-scanning the buffer per message is quadratic in a long session, and
 	// this runs on every spinner tick of a streaming turn.
@@ -2613,7 +2439,6 @@ func (m *ChatModel) updateViewport() {
 	}
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
-			seen = make(map[string]bool)
 			// A blank line ahead of every turn but the first. Without it the
 			// transcript is one unbroken block and the eye has nothing to
 			// anchor on when scrolling back for "where did I ask that?".
@@ -2623,7 +2448,7 @@ func (m *ChatModel) updateViewport() {
 		}
 		start := line
 		// By index, not by value: rendering a card memoizes onto the message.
-		write(m.renderMessage(&m.messages[i], seen))
+		write(m.renderMessage(&m.messages[i]))
 		write("\n")
 		m.msgSpans = append(m.msgSpans, m.copyRegion(&m.messages[i], msgSpan{start: start, end: line, index: i}))
 		if spacedAfter(m.messages[i].Role) {
@@ -2895,10 +2720,8 @@ func (m ChatModel) answerStats(msg *Message) string {
 	return strings.Join(stats, " · ")
 }
 
-// renderMessage draws one message. seen threads cross-card dedup for the
-// RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
-// render with no dedup.
-func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
+// renderMessage draws one message.
+func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
 		// The WHOLE line is dimmed, prefix and text alike. Styling only the
@@ -2943,7 +2766,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		return panel
 
 	case RoleCard:
-		return msg.renderCardDeduped(m.cardWidth(), seen)
+		return msg.renderCard(m.cardWidth())
 
 	case RoleError:
 		panelWidth := m.width - 4

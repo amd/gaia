@@ -14,7 +14,7 @@ import (
 // to it, and act on the three messages it emits. If this stops compiling, the
 // wiring in root/model.go is stale.
 func Example_mounting() {
-	agentID, agentName := "email", "Email"
+	agentID, agentName := "gaia", "GAIA"
 	logf := func(string, ...any) {}
 
 	gate := preflight.New(
@@ -39,8 +39,8 @@ func Example_mounting() {
 			return "launch " + msg.AgentID
 		case preflight.CancelMsg:
 			return "back to the hub from " + msg.AgentID
-		case preflight.ConnectMailboxMsg:
-			return "open the connector flow for " + msg.Provider
+		case preflight.ConnectProviderMsg:
+			return "open the provider panel for " + msg.Provider
 		}
 		return ""
 	}

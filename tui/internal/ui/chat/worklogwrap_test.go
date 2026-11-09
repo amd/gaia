@@ -131,7 +131,7 @@ func TestWorkLogWrapsRatherThanClipping(t *testing.T) {
 				event.CanonicalToolResultEvent{
 					// Render is what puts this on the typed-error path
 					// (canonical.go gates the classifier on a declared card).
-					Type: "tool_result", Tool: "list_inbox", Render: "email_pre_scan",
+					Type: "tool_result", Tool: "list_inbox", Render: "table",
 					Data: []byte(`{"success":false,"error":{"code":"CONNECTOR_ERROR","message":"the Google connector is not authorised for this mailbox; run gaia connectors login google and try again"}}`),
 				},
 			},

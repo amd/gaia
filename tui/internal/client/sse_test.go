@@ -73,12 +73,6 @@ type fakeRelay struct {
 	// onEnsure runs after a successful ensure — used to simulate a daemon
 	// restart (and therefore a token rotation) mid-Send.
 	onEnsure func()
-	// prescanStatus, when non-zero, is the HTTP status POST /v1/<agent>/prescan
-	// returns instead of prescanBody (e.g. 503 for "no mailbox connected").
-	prescanStatus int
-	// prescanBody is the raw JSON body POST /v1/<agent>/prescan returns on
-	// success (prescanStatus == 0, defaulting to 200).
-	prescanBody string
 	// lockSession, when true, makes /query behave like the real daemon's
 	// per-session run_lock (query_routes.py): a second concurrent /query
 	// while one is already "in flight" (sessionBusy) gets 409 with the same
@@ -260,7 +254,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"email"}`,
+		fmt.Fprintf(w, `{"apiVersion":%q,"version":%q,"agent":"notes"}`,
 			f.contractVersion, f.agentReleaseVersion)
 
 	case strings.HasSuffix(r.URL.Path, "/memory"):
@@ -276,22 +270,6 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		body := f.memoryBody
 		if body == "" {
 			body = `{"available":true,"stats":{"total_knowledge":0,"by_category":{},"by_context":{},"sensitive_count":0,"entity_count":0,"avg_confidence":0},"contexts":[],"shown":0,"total":0,"items":[]}`
-		}
-		_, _ = w.Write([]byte(body))
-
-	case strings.HasSuffix(r.URL.Path, "/prescan"):
-		if r.Method != http.MethodPost {
-			f.t.Errorf("prescan request method = %q, want POST", r.Method)
-		}
-		if f.prescanStatus != 0 {
-			w.WriteHeader(f.prescanStatus)
-			_, _ = w.Write([]byte(`{"detail":"no mailbox connected"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		body := f.prescanBody
-		if body == "" {
-			body = `{"schema_version":"2.11","result":{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":0,"needs_you":[],"needs_you_total":0,"bulk":{"count":0,"filter_tests":[]}}}`
 		}
 		_, _ = w.Write([]byte(body))
 
@@ -489,7 +467,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(f.queryStatus)
 			body := f.queryBody
 			if body == "" {
-				body = `{"detail":"the email sidecar is not running"}`
+				body = `{"detail":"the notes sidecar is not running"}`
 			}
 			_, _ = w.Write([]byte(body))
 			return
@@ -560,13 +538,13 @@ func (f *fakeRelay) lastQuery() queryRequest {
 	return f.queries[len(f.queries)-1]
 }
 
-// client builds a relay-backed client for the `email` agent, which is what
+// client builds a relay-backed client for the `notes` agent, which is what
 // most of this file's tests exercise. Memory tests must use clientFor with the
-// flagship id instead — memory is gaia-only, so a relay client named `email`
+// flagship id instead — memory is gaia-only, so a relay client named `notes`
 // is refused before any request is made.
 func (f *fakeRelay) client(t *testing.T) *SSEClient {
 	t.Helper()
-	return f.clientFor(t, "email")
+	return f.clientFor(t, "notes")
 }
 
 func (f *fakeRelay) clientFor(t *testing.T, agentID string) *SSEClient {
@@ -642,8 +620,8 @@ func TestSSEClientFullRun(t *testing.T) {
 	f := newFakeRelay(t)
 	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
 		frame(w, `{"type":"status","message":"Scanning inbox"}`)
-		frame(w, `{"type":"tool_call","tool":"pre_scan_inbox","args":{"max":50}}`)
-		frame(w, `{"type":"tool_result","tool":"pre_scan_inbox","render":"email_pre_scan","data":{"urgent":[]}}`)
+		frame(w, `{"type":"tool_call","tool":"list_inbox","args":{"max":50}}`)
+		frame(w, `{"type":"tool_result","tool":"list_inbox","render":"table","data":{"urgent":[]}}`)
 		frame(w, `{"type":"token","delta":"You have "}`)
 		frame(w, `{"type":"token","delta":"3 urgent emails."}`)
 		frame(w, `{"type":"final","answer":"You have 3 urgent emails.","usage":{"steps":2,"tools_used":1}}`)
@@ -672,7 +650,7 @@ func TestSSEClientFullRun(t *testing.T) {
 	}
 
 	tr := got[2].(event.CanonicalToolResultEvent)
-	if tr.Render != "email_pre_scan" {
+	if tr.Render != "table" {
 		t.Errorf("render hint lost: %+v", tr)
 	}
 	if !strings.Contains(string(tr.Data), "urgent") {
@@ -1219,7 +1197,7 @@ func TestSSEClientFailsLoudlyWithNoDaemon(t *testing.T) {
 			return nil, fmt.Errorf("no launcher in this test")
 		},
 	})
-	c := NewSSEClient("email", dc, SSEOptions{})
+	c := NewSSEClient("notes", dc, SSEOptions{})
 	defer c.Close()
 
 	_, err := c.Send(context.Background(), "triage")
@@ -1403,7 +1381,7 @@ func TestSSEClientReadIdleTimeout(t *testing.T) {
 			return nil, fmt.Errorf("unused")
 		},
 	})
-	c := NewSSEClient("email", dc, SSEOptions{ReadTimeout: 300 * time.Millisecond})
+	c := NewSSEClient("notes", dc, SSEOptions{ReadTimeout: 300 * time.Millisecond})
 	defer c.Close()
 
 	ch, err := c.Send(context.Background(), "triage")

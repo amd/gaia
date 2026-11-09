@@ -206,15 +206,15 @@ func TestDoDoesNotCarryARunScopedCallToARestartedDaemon(t *testing.T) {
 	}
 	f.restartOnNewPort("token-B")
 
-	cancelPath := "/v1/email/query/run-1/cancel"
+	cancelPath := "/v1/gaia/query/run-1/cancel"
 	_, got, err := c.Do(context.Background(), inst, Request{
-		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'email' run", RunScoped: true,
+		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'gaia' run", RunScoped: true,
 	})
 	var restarted *DaemonRestartedError
 	if !errors.As(err, &restarted) {
 		t.Fatalf("want a DaemonRestartedError, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "restarted") || !strings.Contains(err.Error(), "cancel the 'email' run") {
+	if !strings.Contains(err.Error(), "restarted") || !strings.Contains(err.Error(), "cancel the 'gaia' run") {
 		t.Errorf("error must name the restart and the operation: %v", err)
 	}
 	if f.sawPath("POST " + cancelPath) {
@@ -237,15 +237,15 @@ func TestDoEnsuresTheAgentBeforeReplayingARelayCallToARestartedDaemon(t *testing
 	}
 	f.restartOnNewPort("token-B")
 
-	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/email/memory"})
+	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/gaia/memory"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 	resp.Body.Close()
-	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+	if !f.sawPath("POST " + APIPrefix + "/agents/gaia/ensure") {
 		t.Error("the agent was not ensured on the restarted daemon before the replay")
 	}
-	if !f.sawPath("GET /v1/email/memory") {
+	if !f.sawPath("GET /v1/gaia/memory") {
 		t.Error("the call was not replayed")
 	}
 }
@@ -286,9 +286,9 @@ func TestDoDoesNotCarryARunScopedCallAcrossASamePortRestart(t *testing.T) {
 	}
 	f.rotateToken("token-B")
 
-	cancelPath := "/v1/email/query/run-1/cancel"
+	cancelPath := "/v1/gaia/query/run-1/cancel"
 	_, got, err := c.Do(context.Background(), inst, Request{
-		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'email' run", RunScoped: true,
+		Method: http.MethodPost, Path: cancelPath, Op: "cancel the 'gaia' run", RunScoped: true,
 	})
 	var restarted *DaemonRestartedError
 	if !errors.As(err, &restarted) {
@@ -320,12 +320,12 @@ func TestDoEnsuresTheAgentBeforeReplayingAcrossASamePortRestart(t *testing.T) {
 	}
 	f.rotateToken("token-B")
 
-	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/email/memory"})
+	resp, _, err := c.Do(context.Background(), inst, Request{Method: http.MethodGet, Path: "/v1/gaia/memory"})
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 	resp.Body.Close()
-	if !f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
+	if !f.sawPath("POST " + APIPrefix + "/agents/gaia/ensure") {
 		t.Error("the agent was not ensured on the restarted daemon before the replay")
 	}
 }

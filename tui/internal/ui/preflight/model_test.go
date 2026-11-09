@@ -17,13 +17,13 @@ import (
 // settle applies a fresh Check result the way Init's command would.
 func settle(t *testing.T, m Model, f *fakeTransport) Model {
 	t.Helper()
-	updated, _ := m.Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, _ := m.Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	return updated.(Model)
 }
 
 func newModel(t *testing.T, f *fakeTransport) Model {
 	t.Helper()
-	m := New(f, EmailConfig(), Options{ManualProceed: true, ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ManualProceed: true, ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return settle(t, autoStartSpent(updated.(Model)), f)
 }
@@ -100,7 +100,7 @@ func TestAFailedFixExplainsItselfInsteadOfSilentlyRetrying(t *testing.T) {
 }
 
 func TestFixDownloadsTheModelAndUsesTheFinalLine(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	f.streamBody = "→ Pulling Gemma-4-E4B-it-GGUF…\n✓ Provisioning complete.\n"
 
 	m := newModel(t, f)
@@ -147,7 +147,7 @@ func TestFixDownloadsTheModelAndUsesTheFinalLine(t *testing.T) {
 }
 
 func TestALateProvisionEventCannotDriveTheScreen(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	m := newModel(t, f)
 
 	stale := make(chan provisionEvent, 1)
@@ -216,7 +216,7 @@ func TestRecheckResetsTheScreen(t *testing.T) {
 }
 
 func TestCancelStopsInFlightWork(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	// A body that never completes would block the goroutine; an empty one is
 	// enough to prove Cancel tears the channel reference down.
 	m := newModel(t, f)
@@ -248,8 +248,8 @@ func TestCtrlCQuitsTheApp(t *testing.T) {
 // out of in the 800 ms before it fired.
 func TestProceedTickAfterCancelDoesNotLaunch(t *testing.T) {
 	f := newFake()
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Second})
-	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	m := New(f, testConfig(), Options{ReadyHold: time.Second})
+	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("a ready report did not schedule the hand-off")
@@ -266,7 +266,7 @@ func TestProceedTickAfterCancelDoesNotLaunch(t *testing.T) {
 // esc must leave the screen usable: a phase left at "provisioning" makes Busy()
 // true forever and a re-shown gate rejects every key.
 func TestCancelLeavesTheScreenUsable(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	m := newModel(t, f)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	m = updated.(Model)
@@ -290,7 +290,7 @@ func TestCancelLeavesTheScreenUsable(t *testing.T) {
 // remedy — "Download failed." with nothing after it is the failure mode the
 // fail-loudly rule exists to prevent.
 func TestAClosedProvisionChannelStillExplainsItself(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	f := newFake().with("GET /v1/gaia/init", 503, initModelMissing)
 	m := newModel(t, f)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 	m = updated.(Model)
@@ -343,9 +343,6 @@ func TestSendPrefersDeliveryOverACancelledContext(t *testing.T) {
 }
 
 // Pressing enter on a blocked report must say why, not silently do nothing.
-//
-// A stopped sidecar, not a bad mailbox: a mailbox the agent can repair in the
-// conversation is offerable, so it would no longer refuse here.
 func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
 	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 	m := newModel(t, f)
@@ -365,19 +362,19 @@ func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
 // sidecar does not treat it as fatal) while naming what went unproven.
 //
 // This exercises the DispositionNotify path specifically — the unadvertised
-// Lemonade version is one of the two BLOCKER-1 guard rows. It is pinned with
+// Lemonade version is the BLOCKER-1 guard row. It is pinned with
 // an explicit Disposition assertion so a future change that accidentally
 // flips this row's Disposition to Halt fails HERE, with a message that says
 // why, rather than only surfacing as a silent behaviour change a user
 // reports weeks later.
 func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 200, initUnknownVersion)
-	rep := Check(t.Context(), f, EmailConfig())
+	f := newFake().with("GET /v1/gaia/init", 200, initUnknownVersion)
+	rep := Check(t.Context(), f, testConfig())
 	if row, ok := rep.Find(KeyLemonade); !ok || row.Disposition != status.DispositionNotify {
 		t.Fatalf("test setup: want the lemonade row DispositionNotify, got %+v", row)
 	}
 
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
 	m = updated.(Model)
@@ -402,8 +399,8 @@ func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) 
 // so this asserts the absence of the automatic path behaviourally, in three
 // parts, matching the acceptance criterion exactly.
 func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
-	rep := Check(t.Context(), f, EmailConfig())
+	f := newFake().with("GET /v1/gaia/init", 200, initCtxShortfall)
+	rep := Check(t.Context(), f, testConfig())
 	if rep.Blocked() || rep.Ready() {
 		t.Fatalf("test setup: want Blocked()==false && Ready()==false, got Blocked=%v Ready=%v",
 			rep.Blocked(), rep.Ready())
@@ -412,7 +409,7 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 		t.Fatal("test setup: want a Halt row present")
 	}
 
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
 	m = updated.(Model)
@@ -455,44 +452,17 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 // a tick, before or after this issue.
 func TestBlockedReportSchedulesNoTick(t *testing.T) {
 	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
-	rep := Check(t.Context(), f, EmailConfig())
+	rep := Check(t.Context(), f, testConfig())
 	if !rep.Blocked() {
 		t.Fatal("test setup: want a blocked report")
 	}
 
-	m := autoStartSpent(New(f, EmailConfig(), Options{ReadyHold: time.Millisecond}))
+	m := autoStartSpent(New(f, testConfig(), Options{ReadyHold: time.Millisecond}))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
 
 	if cmd != nil {
 		t.Fatalf("a blocked report scheduled %T — Blocked() must never auto-proceed", cmd())
-	}
-}
-
-// BLOCKER-1's other guard, at the model layer: 2+ linked mailboxes is a
-// StateUnknown, DispositionNotify row (report.go/check.go), so it must still
-// schedule the hold and proceed — never halt. A blanket rule here would fire
-// on every launch with 2+ mailboxes linked, forever.
-func TestMultiMailboxReportSchedulesTheHoldNotAHalt(t *testing.T) {
-	f := newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
-	rep := Check(t.Context(), f, EmailConfig())
-	if rep.Blocked() || rep.Ready() {
-		t.Fatalf("test setup: want Blocked()==false && Ready()==false, got Blocked=%v Ready=%v",
-			rep.Blocked(), rep.Ready())
-	}
-	if rep.HasHalt() {
-		t.Fatal("test setup: guards BLOCKER-1 — multi-mailbox must never be a Halt row")
-	}
-
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
-
-	if cmd == nil {
-		t.Fatal("a multi-mailbox report did not schedule the hand-off — BLOCKER-1 would fire on every launch with 2+ mailboxes linked")
-	}
-	if _, ok := cmd().(proceedTickMsg); !ok {
-		t.Fatalf("multi-mailbox report scheduled %T, want proceedTickMsg", cmd())
 	}
 }
 

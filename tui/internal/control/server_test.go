@@ -43,7 +43,7 @@ func (m testModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		lines = append(lines, "key:"+msg.String())
 		switch msg.String() {
 		case "enter":
-			m.snap = Snapshot{View: "chat", Agent: "email"}
+			m.snap = Snapshot{View: "chat", Agent: "notes"}
 		case "esc":
 			m.snap = newTestModel().snap
 		case "tab":
@@ -511,7 +511,7 @@ func TestWaitResolvesOnLaterChange(t *testing.T) {
 
 	start := time.Now()
 	status, body := request(t, srv, http.MethodPost, "/wait",
-		map[string]any{"state": map[string]any{"view": "chat", "agent": "email"}, "timeout_ms": 5000}, srv.Token())
+		map[string]any{"state": map[string]any{"view": "chat", "agent": "notes"}, "timeout_ms": 5000}, srv.Token())
 	elapsed := time.Since(start)
 
 	if status != http.StatusOK {

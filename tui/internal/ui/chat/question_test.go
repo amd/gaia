@@ -36,14 +36,14 @@ func needsInput() event.CanonicalNeedsInputEvent {
 			{Value: "no", Label: "Not now", Description: "Change nothing."},
 		},
 		AllowFreeText:  true,
-		RespondURL:     "/v1/email/query/run-1/respond",
+		RespondURL:     "/v1/notes/query/run-1/respond",
 		TimeoutSeconds: 240,
 	}
 }
 
 func modelWith(t *testing.T, c *respondingClient) ChatModel {
 	t.Helper()
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "", false)
 	m.width, m.height = 80, 24
 	m.resize()
 	m.streaming = true
@@ -105,7 +105,7 @@ func TestAnsweringDeliversValueToTheTransport(t *testing.T) {
 // A failed delivery is surfaced, never swallowed — otherwise it looks exactly
 // like an agent that stopped thinking.
 func TestFailedAnswerIsSurfaced(t *testing.T) {
-	c := &respondingClient{err: errors.New("the 'email' run had already ended")}
+	c := &respondingClient{err: errors.New("the 'notes' run had already ended")}
 	m := modelWith(t, c)
 	m = feed(t, m, needsInput())
 
@@ -126,7 +126,7 @@ func TestFailedAnswerIsSurfaced(t *testing.T) {
 // A transport with no Respond is a dead end for the user; say so.
 func TestAnswerOnTransportWithoutRespondIsLoud(t *testing.T) {
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "", false)
 	m.width, m.height = 80, 24
 	m.streaming = true
 	m = feed(t, m, needsInput())
@@ -269,9 +269,9 @@ func stripANSIChat(s string) string {
 // is the remedy: the version that fixes it and the command to run. Losing that
 // leaves an error that says what broke and nothing about what to do.
 func TestLongStatusLineWrapsInsteadOfLosingItsTail(t *testing.T) {
-	notice := "the installed 'email' agent speaks contract 2.5, so it cannot ask " +
-		"questions mid-task — in-conversation mailbox setup needs 2.6 or newer. " +
-		"Update it with `gaia hub uninstall email` then `gaia hub install email`."
+	notice := "the installed 'notes' agent speaks contract 2.5, so it cannot ask " +
+		"questions mid-task — that needs 2.6 or newer. " +
+		"Update it with `gaia hub uninstall notes` then `gaia hub install notes`."
 
 	for _, cols := range []int{80, 100, 120} {
 		t.Run(fmt.Sprintf("%dcols", cols), func(t *testing.T) {
@@ -282,7 +282,7 @@ func TestLongStatusLineWrapsInsteadOfLosingItsTail(t *testing.T) {
 
 			view := stripANSIChat(m.View())
 			// The remedy — the actionable half — has to be on screen somewhere.
-			for _, want := range []string{"2.6 or newer", "gaia hub install email"} {
+			for _, want := range []string{"2.6 or newer", "gaia hub install notes"} {
 				if !strings.Contains(view, want) {
 					t.Errorf("the notice lost %q at %d cols:\n%s", want, cols, view)
 				}

@@ -125,8 +125,8 @@ func TestMissingVersionRouteDegradesQuietlyButWorks(t *testing.T) {
 }
 
 // An interactive user whose agent cannot be asked anything is TOLD so — once.
-// Otherwise the in-conversation mailbox fix just never appears and reads as
-// broken rather than as out of date.
+// Otherwise the agent's questions just never appear, which reads as broken
+// rather than as out of date.
 func TestInteractiveUserIsToldWhenThePeerIsTooOld(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.4"
@@ -147,7 +147,7 @@ func TestInteractiveUserIsToldWhenThePeerIsTooOld(t *testing.T) {
 	if notice == "" {
 		t.Fatalf("no notice on the first turn: %#v", first)
 	}
-	for _, want := range []string{"2.4", "cannot ask questions", "gaia hub install email"} {
+	for _, want := range []string{"2.4", "cannot ask questions", "gaia hub install notes"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice is missing %q: %s", want, notice)
 		}
@@ -249,18 +249,18 @@ func firstNotice(events []interface{}) string {
 // exist and look right — which is the trap — but they are GAIA-WIDE: bare
 // `gaia uninstall` is the tiered cleanup of the GAIA install itself, one flag
 // from `--purge`. They also reject a trailing agent id, so a user handed
-// `gaia uninstall email` gets an argparse error and may retry without the
+// `gaia uninstall notes` gets an argparse error and may retry without the
 // argument, landing on the wrong tool entirely.
 func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
-	notice := noticeForMissingCapability("email", "2.4")
+	notice := noticeForMissingCapability("notes", "2.4")
 
-	for _, want := range []string{"gaia hub uninstall email", "gaia hub install email"} {
+	for _, want := range []string{"gaia hub uninstall notes", "gaia hub install notes"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("remedy does not name %q: %s", want, notice)
 		}
 	}
 	// The bare forms must not appear even as a substring of the advice.
-	for _, forbidden := range []string{"`gaia install ", "`gaia uninstall ", "gaia install email", "gaia uninstall email"} {
+	for _, forbidden := range []string{"`gaia install ", "`gaia uninstall ", "gaia install notes", "gaia uninstall notes"} {
 		if strings.Contains(notice, forbidden) && !strings.Contains(notice, "hub "+strings.TrimPrefix(forbidden, "`")) {
 			t.Errorf("remedy names the GAIA-wide command %q: %s", forbidden, notice)
 		}
@@ -272,7 +272,7 @@ func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
 
 // Every agent id the notice is built for keeps the scoped form.
 func TestRemedyIsScopedForAnyAgent(t *testing.T) {
-	for _, id := range []string{"email", "gaia", "chat"} {
+	for _, id := range []string{"notes", "gaia", "chat"} {
 		notice := noticeForMissingCapability(id, "2.5")
 		if !strings.Contains(notice, "gaia hub install "+id) {
 			t.Errorf("remedy for %q is not agent-scoped: %s", id, notice)
@@ -448,7 +448,7 @@ func TestOlderPeersAndOtherAgentsGetNoSurface(t *testing.T) {
 	for _, tc := range []struct{ agent, version string }{
 		{"gaia", "2.19"},
 		{"gaia", ""},
-		{"email", "2.20"},
+		{"notes", "2.20"},
 	} {
 		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
 			f := newFakeRelay(t)

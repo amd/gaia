@@ -20,12 +20,11 @@ import (
 
 // modelSwitchAgentID is the only agent whose transport understands `/model`
 // today — the flagship's stdio.py intercepts it before it ever reaches the
-// LLM (run_model_command). Every other agent (a daemon-relay agent like
-// email, or another subprocess agent) has no such interception, so sending it
-// the literal text would ship as an uncomprehended chat question — mirrors
-// the existing preScanAgentID scoping (model.go) for the same reason: the
-// feature lives agent-side, not transport-side, so it has to be gated by
-// WHICH agent, not by what kind of connection this is.
+// LLM (run_model_command). Every other agent (a daemon-relay agent, or another
+// subprocess agent) has no such interception, so sending it the literal text
+// would ship as an uncomprehended chat question. The feature lives agent-side,
+// not transport-side, so it has to be gated by WHICH agent, not by what kind
+// of connection this is.
 const modelSwitchAgentID = "gaia"
 
 // supportsModelCommand reports whether this session's agent understands

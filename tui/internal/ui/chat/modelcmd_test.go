@@ -180,11 +180,11 @@ func TestOrdinaryStatusEventsDoNotTouchTheModelChip(t *testing.T) {
 }
 
 // Only the gaia flagship agent's stdio.py understands /model — every other
-// agent (a daemon-relay agent like email, or another subprocess agent) would
+// agent (a daemon-relay agent, or another subprocess agent) would
 // otherwise receive the literal text as an uncomprehended chat question.
 func TestModelCommandRefusedOnAnUnsupportedAgent(t *testing.T) {
 	c := &queryCapturingClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "", false)
 	m.width, m.height = 100, 30
 
 	updated, _ := m.submit("/model claude-sonnet-5")
@@ -329,4 +329,24 @@ func TestARefusedOrUnrequestedModelChangeIsNotKeptForRespawn(t *testing.T) {
 	if len(c.recorded) != 0 {
 		t.Fatalf("nothing was confirmed, but the respawn model changed: %v", c.recorded)
 	}
+}
+
+// findBatchedMsg runs every Cmd in a (possibly batched) tea.Cmd and returns
+// the first message matching want's dynamic type, or nil if none did.
+func findBatchedMsg(cmd tea.Cmd, isWanted func(tea.Msg) bool) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if isWanted(msg) {
+		return msg
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if found := findBatchedMsg(sub, isWanted); found != nil {
+				return found
+			}
+		}
+	}
+	return nil
 }

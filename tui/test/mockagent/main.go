@@ -149,9 +149,9 @@ func handleQuery(query string) {
 				"ok":     false,
 				"status": "error",
 				"code":   "CONNECTOR_ERROR",
-				"error": "no forwarded 'google' credential is available to the email sidecar.\n" +
+				"error": "no forwarded 'google' credential is available to GAIA.\n" +
 					"Connect and grant it in one command — no Agent UI required:\n" +
-					"`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`",
+					"`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`",
 			},
 		})
 		delay(50, 100)

@@ -27,7 +27,7 @@ func (n *nullClient) ResetTranscript() { n.resets++ }
 func newTestModel(t *testing.T) (ChatModel, *nullClient) {
 	t.Helper()
 	c := &nullClient{}
-	m := NewChatModel(c, "email", "", false)
+	m := NewChatModel(c, "notes", "", false)
 	m.width, m.height = 100, 30
 	return m, c
 }
@@ -117,7 +117,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 		t.Fatalf("Tokens = %d, want 42", last.Tokens)
 	}
 
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	if !strings.Contains(rendered, "42 tokens") {
 		t.Errorf("rendered stats line missing \"42 tokens\":\n%s", rendered)
 	}
@@ -142,7 +142,7 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 		Content:   "a reasonably long answer that would have guessed a nonzero token count under the old code",
 	}
 
-	rendered := m.renderMessage(msg, nil)
+	rendered := m.renderMessage(msg)
 	if strings.Contains(rendered, "tokens") || strings.Contains(rendered, "tok/s") {
 		t.Errorf("expected no tokens/tok-per-sec sub-line when Tokens == 0:\n%s", rendered)
 	}
@@ -204,7 +204,7 @@ func TestLegacyTransportRendersTheBackendsMeasurements(t *testing.T) {
 	})
 
 	last := m.messages[len(m.messages)-1]
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	for _, want := range []string{"ttft 31.7s", "68 tokens", "13.3 tok/s"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("stats line missing %q:\n%s", want, rendered)
@@ -235,7 +235,7 @@ func TestCanonicalServerReportedTTFTReachesTheUser(t *testing.T) {
 		t.Fatalf("TTFT = %v, want the backend-reported %v", last.TTFT, wantTTFT)
 	}
 
-	rendered := m.renderMessage(&last, nil)
+	rendered := m.renderMessage(&last)
 	if !strings.Contains(rendered, "ttft 9.4s") {
 		t.Errorf("rendered stats line missing \"ttft 9.4s\" — ttft still never reaches the user:\n%s", rendered)
 	}
@@ -338,7 +338,7 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if card.Render != "table" {
 		t.Errorf("card render = %q, want table", card.Render)
 	}
-	if rendered := m.renderMessage(card, nil); !strings.Contains(rendered, "a@b.c") {
+	if rendered := m.renderMessage(card); !strings.Contains(rendered, "a@b.c") {
 		t.Errorf("table card did not draw its row:\n%s", rendered)
 	}
 }
@@ -561,7 +561,7 @@ func TestStatsLineSingularForOne(t *testing.T) {
 		Steps:     1,
 		ToolsUsed: 1,
 		Content:   "391",
-	}, nil)
+	})
 	for _, bad := range []string{"1 steps", "1 tools"} {
 		if strings.Contains(rendered, bad) {
 			t.Errorf("stats line says %q:\n%s", bad, rendered)

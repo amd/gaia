@@ -63,7 +63,7 @@ func TestRawDumpIsBounded(t *testing.T) {
 func TestRenderNeverReturnsEmpty(t *testing.T) {
 	// The one invariant that matters everywhere: whatever comes off the wire,
 	// something visible comes back.
-	keys := []string{"email_pre_scan", "table", "key_value", "list", "image", "diff", "", "🙂", "unknown"}
+	keys := []string{"table", "key_value", "list", "image", "diff", "", "🙂", "unknown"}
 	payloads := []json.RawMessage{
 		nil,
 		json.RawMessage(`null`),
