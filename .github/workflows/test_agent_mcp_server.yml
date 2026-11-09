@@ -130,7 +130,7 @@ jobs:
       # TODO: Start Lemonade server for integration tests
       # For now, integration tests requiring LLM will be skipped.
       # When enabling: there is no `lemonade-server serve` to call. Use
-      # installer/scripts/start-lemonade.ps1 on Windows (see test_api.yml)
+      # installer/scripts/ensure-lemonade-running.ps1 -JobScoped on Windows (see test_api.yml)
       # and build_start_command() on Linux (see test_gaia_cli_linux.yml).
 
       - name: Run MCPAgent tests (fast tests only)
