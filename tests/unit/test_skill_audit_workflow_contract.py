@@ -213,8 +213,12 @@ def test_the_gate_runs_even_on_fork_pull_requests(gate):
 # the step's real shell body so the behaviour, not its spelling, is asserted.
 
 import os  # noqa: E402
-import shutil  # noqa: E402
 import subprocess  # noqa: E402
+
+#: Windows ships `C:\Windows\System32\bash.exe` as a WSL launcher that exists
+#: even when no distribution is installed, so a PATH lookup says yes and every
+#: invocation fails. Probe by running a trivial script instead.
+_BASH_PROBE = ["bash", "-c", "exit 0"]
 
 #: Every count `Audit each changed skill` publishes; the verdict refuses to read
 #: a partial set, so all of them are required for a meaningful check.
@@ -270,8 +274,15 @@ _RUNNER_SUBSTITUTIONS = {
 
 @pytest.fixture(scope="module")
 def runnable_enforce(enforce_step: dict) -> dict:
-    if shutil.which("bash") is None:
-        pytest.skip("the verdict step is a bash script; bash is not on PATH")
+    try:
+        probe = subprocess.run(
+            _BASH_PROBE, capture_output=True, text=True, timeout=60, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"the verdict step is a bash script; bash cannot run: {exc}")
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip()
+        pytest.skip(f"the verdict step is a bash script; bash cannot run: {detail}")
     run = enforce_step["run"]
     for expression, value in _RUNNER_SUBSTITUTIONS.items():
         run = run.replace("${{ " + expression + " }}", value)
