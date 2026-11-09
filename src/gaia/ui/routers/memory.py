@@ -622,7 +622,7 @@ def admin_seed(body: AdminSeedRequest) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Entities & Contexts
+# Entities
 # ---------------------------------------------------------------------------
 
 
@@ -638,12 +638,6 @@ def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
     return _get_store().get_by_entity(entity, limit=limit)
 
 
-@router.get("/api/memory/contexts")
-def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
-    """List all contexts with their knowledge counts."""
-    return _get_store().get_contexts(limit=limit)
-
-
 # ---------------------------------------------------------------------------
 # Tool Performance
 # ---------------------------------------------------------------------------
@@ -653,23 +647,6 @@ def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
 def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
     return _get_store().get_tool_summary()
-
-
-@router.get("/api/memory/tools/{tool_name}/history")
-def tool_history(tool_name: str, limit: int = Query(50, ge=1, le=200)) -> List[Dict]:
-    """Recent call history for a specific tool."""
-    return _get_store().get_tool_history(tool_name, limit=limit)
-
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/memory/errors")
-def recent_errors(limit: int = Query(20, ge=1, le=100)) -> List[Dict]:
-    """Recent tool errors across all tools."""
-    return _get_store().get_recent_errors(limit=limit)
 
 
 # ---------------------------------------------------------------------------

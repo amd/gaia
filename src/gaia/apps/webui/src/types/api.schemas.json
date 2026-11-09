@@ -4648,24 +4648,6 @@
     "title": "SpeechSettingsUpdate",
     "type": "object"
   },
-  "StartAgentServerRequest": {
-    "properties": {
-      "backend_url": {
-        "default": "http://localhost:4200",
-        "title": "Backend Url",
-        "type": "string"
-      },
-      "port": {
-        "default": 8766,
-        "maximum": 65535.0,
-        "minimum": 1024.0,
-        "title": "Port",
-        "type": "integer"
-      }
-    },
-    "title": "StartAgentServerRequest",
-    "type": "object"
-  },
   "SystemStatus": {
     "description": "System readiness status.",
     "properties": {
@@ -5078,58 +5060,6 @@
       "description"
     ],
     "title": "TaskCreate",
-    "type": "object"
-  },
-  "TaskListResponse": {
-    "description": "List of background tasks.",
-    "properties": {
-      "tasks": {
-        "items": {
-          "$ref": "#/components/schemas/TaskResponse"
-        },
-        "title": "Tasks",
-        "type": "array"
-      }
-    },
-    "required": [
-      "tasks"
-    ],
-    "title": "TaskListResponse",
-    "type": "object"
-  },
-  "TaskResponse": {
-    "description": "A single background task visible to the frontend.",
-    "properties": {
-      "error": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Error"
-      },
-      "id": {
-        "title": "Id",
-        "type": "string"
-      },
-      "name": {
-        "title": "Name",
-        "type": "string"
-      },
-      "status": {
-        "title": "Status",
-        "type": "string"
-      }
-    },
-    "required": [
-      "id",
-      "name",
-      "status"
-    ],
-    "title": "TaskResponse",
     "type": "object"
   },
   "TaskStatusUpdate": {

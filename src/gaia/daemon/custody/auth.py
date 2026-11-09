@@ -89,8 +89,3 @@ class CustodyAuth:
             old = self._by_agent.pop(agent_id, None)
             if old is not None:
                 self._by_secret.pop(old, None)
-
-    def secret_for(self, agent_id: str) -> "str | None":
-        """The current secret bound to *agent_id*, if any (spawn-env wiring)."""
-        with self._lock:
-            return self._by_agent.get(agent_id)

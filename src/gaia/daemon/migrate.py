@@ -37,9 +37,7 @@ Invariants (CLAUDE.md — critical for a migration):
   (originals intact, version left un-stamped so the next start retries) — never a
   partial success that swallows the error.
 
-The custody target paths below are what a pre-#2153 daemon writes; #2153 (the
-``/host/v1`` custody API, V2-12) reads from the same layout. They are centralized
-here so a rebase onto #2153's final scoping repoints one place, not the logic.
+The custody target paths below are the layout the ``/host/v1`` custody API reads.
 """
 
 from __future__ import annotations
@@ -62,7 +60,7 @@ logger = get_logger(__name__)
 SCHEMA_VERSION = 1
 
 # Pre-v2 state predates per-agent scoping, so it all belongs to one agent: the
-# host chat agent that owned the single Agent-UI process. #2153 may repoint this.
+# host chat agent that owned the single Agent-UI process.
 DEFAULT_HOST_AGENT_ID = "chat"
 
 
@@ -74,7 +72,7 @@ class MigrationState:
 
 
 # ---------------------------------------------------------------------------
-# Path helpers (centralized so a #2153 rebase repoints here, not the logic)
+# Path helpers
 # ---------------------------------------------------------------------------
 
 

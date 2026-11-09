@@ -628,9 +628,7 @@ class TestFileSearch:
             "/api/files/search",
             params={"query": "test", "max_results": 0},
         )
-        # FastAPI validates ge=1 on the query model for FileSearchRequest,
-        # but the endpoint uses plain int param with manual clamping.
-        # max(0, 1) = 1, so it should return at most 1 result.
+        # The endpoint clamps max_results itself: max(0, 1) = 1.
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1

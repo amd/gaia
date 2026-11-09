@@ -34,7 +34,7 @@ from gaia.llm.lemonade_manager import gpu_display_info
 from .. import security, warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
-from ..dependencies import get_db, get_dispatch_queue
+from ..dependencies import get_db
 from ..models import (
     DownloadProgress,
     InitTaskInfo,
@@ -46,8 +46,6 @@ from ..models import (
     SettingsResponse,
     SettingsUpdateRequest,
     SystemStatus,
-    TaskListResponse,
-    TaskResponse,
     UnloadModelResponse,
     WarmUpStatus,
     WorkInProgress,
@@ -84,36 +82,6 @@ def _norm_model_id(model_id: str) -> str:
 # Sourced from ``gaia.llm.lemonade_client`` to keep the GAIA-wide ctx
 # requirement in a single module (see that module's ``DEFAULT_CONTEXT_SIZE``).
 _MIN_CONTEXT_SIZE = DEFAULT_CONTEXT_SIZE
-
-
-async def _lemonade_post(
-    path: str,
-    payload: dict,
-    *,
-    timeout: float,
-    log_context: str,
-) -> None:
-    """POST to a Lemonade API endpoint, logging the result."""
-    try:
-        import httpx  # pylint: disable=import-outside-toplevel
-
-        base_url = resolve_lemonade_base_url()
-        headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{base_url}/{path}", json=payload, headers=headers
-            )
-            if resp.status_code == 200:
-                logger.info("%s succeeded", log_context)
-            else:
-                logger.warning(
-                    "%s returned %d: %s",
-                    log_context,
-                    resp.status_code,
-                    resp.text[:200],
-                )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("%s failed: %s", log_context, exc)
 
 
 async def _pull_body(model_name: str) -> Dict[str, Any]:
@@ -1025,25 +993,6 @@ async def request_warm_up(fresh: bool = False):
 async def get_warm_up():
     """The warm-up state alone, cheap enough to poll while one runs."""
     return WarmUpStatus(**warmup.warm_up_status())
-
-
-@router.get("/api/system/tasks", response_model=TaskListResponse)
-async def list_tasks(queue=Depends(get_dispatch_queue)):
-    """Return visible background tasks (startup initialization, etc.)."""
-    if not queue:
-        return TaskListResponse(tasks=[])
-    visible = queue.get_visible_jobs()
-    return TaskListResponse(
-        tasks=[
-            TaskResponse(
-                id=j.id,
-                name=j.name,
-                status=j.status.value,
-                error=None,  # Sanitized: don't expose raw exception strings
-            )
-            for j in visible
-        ]
-    )
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:

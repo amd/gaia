@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .._chat_helpers import UnreadableDocumentError, index_progress
@@ -537,19 +537,6 @@ async def upload_document_blob(
         doc.get("chunk_count", 0),
     )
     return doc_to_response(doc)
-
-
-@router.get("/api/documents/monitor/status")
-async def monitor_status(request: Request):
-    """Get status of the document file monitor."""
-    monitor = getattr(request.app.state, "document_monitor", None)
-    if not monitor:
-        return {"running": False, "interval_seconds": 0, "reindexing": []}
-    return {
-        "running": monitor.is_running,
-        "interval_seconds": monitor._interval,
-        "reindexing": list(monitor.reindexing_docs),
-    }
 
 
 @router.get("/api/documents/{doc_id}/status")

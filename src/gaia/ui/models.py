@@ -238,21 +238,6 @@ class InitTaskInfo(BaseModel):
     status: str  # pending | running | done | failed
 
 
-class TaskResponse(BaseModel):
-    """A single background task visible to the frontend."""
-
-    id: str
-    name: str
-    status: str  # pending | running | done | failed
-    error: Optional[str] = None
-
-
-class TaskListResponse(BaseModel):
-    """List of background tasks."""
-
-    tasks: List[TaskResponse]
-
-
 # ── Settings ────────────────────────────────────────────────────────────────
 
 
@@ -844,19 +829,6 @@ class IndexFolderResponse(BaseModel):
 
 
 # ── File Search & Preview ─────────────────────────────────────────────
-
-
-class FileSearchRequest(BaseModel):
-    """Request to search for files across the filesystem."""
-
-    query: str = Field(..., description="Search pattern (file name or keywords)")
-    file_types: Optional[str] = Field(
-        None, description="Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf')"
-    )
-    locations: Optional[List[str]] = Field(
-        None, description="Specific directories to search in"
-    )
-    max_results: int = Field(default=20, ge=1, le=100)
 
 
 class FileSearchResult(BaseModel):

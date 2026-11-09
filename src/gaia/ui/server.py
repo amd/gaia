@@ -47,11 +47,8 @@ from gaia.security import AllowedPathsEnvError, env_allowed_paths
 # in ``_chat_helpers`` (shared by both server.py and the router modules).
 # pylint: disable=unused-import
 from ._chat_helpers import _attach_chat_stream  # noqa: F401
-from ._chat_helpers import _build_history_pairs  # noqa: F401
-from ._chat_helpers import _compute_allowed_paths  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
-from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
 from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
@@ -87,13 +84,9 @@ from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
-from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import UploadStaticFiles
-from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
-from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
-from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

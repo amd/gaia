@@ -935,14 +935,6 @@ class ChatDatabase:
             deleted = cursor.rowcount > 0
         return deleted
 
-    def touch_session(self, session_id: str):
-        """Update the session's updated_at timestamp."""
-        with self._transaction():
-            self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?",
-                (self._now(), session_id),
-            )
-
     # ── Messages ────────────────────────────────────────────────────────
 
     def add_message(
@@ -1097,20 +1089,6 @@ class ChatDatabase:
                 (session_id, limit, offset),
             ).fetchall()
 
-        return self._decode_messages(rows)
-
-    def get_recent_messages(
-        self, session_id: str, limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """Get the newest messages in chronological order for agent context."""
-        with self._lock:
-            rows = self._conn.execute(
-                """SELECT * FROM (
-                       SELECT * FROM messages WHERE session_id = ?
-                       ORDER BY created_at DESC, id DESC LIMIT ?
-                   ) ORDER BY created_at ASC, id ASC""",
-                (session_id, limit),
-            ).fetchall()
         return self._decode_messages(rows)
 
     @staticmethod
@@ -1996,12 +1974,6 @@ class ChatDatabase:
                     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                     (key, value),
                 )
-
-    def get_all_settings(self) -> Dict[str, str]:
-        """Get all settings as a dict."""
-        with self._lock:
-            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
-            return {row["key"]: row["value"] for row in rows}
 
     # ── Scheduled tasks ─────────────────────────────────────────────────
 

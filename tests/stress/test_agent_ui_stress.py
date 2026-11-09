@@ -927,30 +927,6 @@ async def test_document_library(client: httpx.AsyncClient, report: StressReport)
         report.add(TestResult("Document Library", False, time.time() - t0, str(e)))
 
 
-async def test_document_monitor_status(client: httpx.AsyncClient, report: StressReport):
-    """Test document monitor status endpoint."""
-    t0 = time.time()
-    try:
-        resp = await client.get(f"{BASE_URL}/api/documents/monitor/status", timeout=10)
-        assert resp.status_code == 200
-        data = resp.json()
-
-        passed = "running" in data
-        report.add(
-            TestResult(
-                name="Document Monitor Status",
-                passed=passed,
-                duration=time.time() - t0,
-                details=f"Running: {data.get('running')} | "
-                f"Interval: {data.get('interval_seconds')}s",
-            )
-        )
-    except Exception as e:
-        report.add(
-            TestResult("Document Monitor Status", False, time.time() - t0, str(e))
-        )
-
-
 async def test_edge_empty_message(client: httpx.AsyncClient, report: StressReport):
     """Test sending an empty or whitespace-only message."""
     t0 = time.time()
@@ -1378,7 +1354,6 @@ async def main():
         await test_file_browse(client, report)
         await test_file_search_api(client, report)
         await test_document_library(client, report)
-        await test_document_monitor_status(client, report)
 
         # ── Phase 4: Agent Capability Tests (require LLM) ──
         print("\n--- Phase 4: Agent Capabilities ---")
