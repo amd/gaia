@@ -219,7 +219,7 @@ def _can_open(node: Path) -> bool:
     return os.access(node, os.R_OK | os.W_OK)
 
 
-def _bound_devices(root: Path) -> List[Tuple[str, Path]]:
+def bound_devices(root: Path) -> List[Tuple[str, Path]]:
     """``(accel name, PCI device dir)`` for each NPU bound to ``amdxdna``."""
     return [
         (accel.name, accel / "device")
@@ -318,7 +318,7 @@ def host_problems(
     """
     if not (root / "sys/module/amdxdna").exists():
         return [_driver_problem()]
-    devices = _bound_devices(root)
+    devices = bound_devices(root)
     if not devices:
         return [_device_problem()]
     found: List[NpuProblem] = []

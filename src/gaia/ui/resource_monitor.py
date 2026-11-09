@@ -8,7 +8,8 @@ so the two agree: CPU is ``% Processor Utility`` (not psutil's ``% Processor
 Time``, which reads low on a boosting CPU), a GPU or NPU is its busiest engine,
 and adapters are told apart through D3DKMT (an NPU is a compute-only adapter),
 and network adapters are the connected hardware ones Task Manager lists.
-Elsewhere CPU, memory and network come from psutil and AMD GPUs from sysfs.
+Elsewhere CPU, memory and network come from psutil, AMD GPUs from sysfs, and
+on Linux an AMD NPU from its ``amdxdna`` driver's busiest column.
 
 One sampler thread runs while someone is watching and stops on its own once
 nobody has asked for a while, so a closed strip costs nothing.
@@ -17,7 +18,10 @@ nobody has asked for a while, so a closed strip costs nothing.
 from __future__ import annotations
 
 import ctypes
+import errno
+import os
 import re
+import struct
 import sys
 import threading
 import time
@@ -90,6 +94,8 @@ class Sample:
     # Why GPUs/NPUs or networks can't be read, when only that part failed.
     devices_error: Optional[str] = None
     networks_error: Optional[str] = None
+    # Linux reads NPUs on their own, so they can fail apart from the GPUs.
+    npus_error: Optional[str] = None
 
 
 T = TypeVar("T")
@@ -661,9 +667,125 @@ def _read_sysfs_gpus(gpus: List[Tuple[Path, str]]) -> List[DeviceSample]:
     return devices
 
 
+# ── Linux: AMD NPUs through the amdxdna driver ───────────────────────────────
+
+# From the kernel's include/uapi/drm/amdxdna_accel.h.
+_DRM_COMMAND_BASE = 0x40
+_DRM_AMDXDNA_GET_INFO = 7
+_DRM_AMDXDNA_QUERY_SENSORS = 4
+_SENSOR_COLUMN_UTILIZATION = 1
+_GET_INFO = struct.Struct("<IIQ")  # param, buffer_size, buffer
+# label, input, max, average, highest, status, units, unitm, type, pad
+_SENSOR = struct.Struct("<64s4I64s16sbB6x")
+_MAX_SENSORS = 9  # total power, then at most 8 columns
+_IOCTL_GET_INFO = (
+    (3 << 30)  # read and write
+    | (_GET_INFO.size << 16)
+    | (ord("d") << 8)
+    | (_DRM_COMMAND_BASE + _DRM_AMDXDNA_GET_INFO)
+)
+_NO_USAGE = (
+    "its driver reports usage only on Linux 7.1 or later, with the AMD PMF "
+    "driver loaded"
+)
+
+
+def linux_npus(root: Path = Path("/")) -> List[Tuple[str, Path, Path]]:
+    """``(accel name, PCI device dir, /dev node)`` for each NPU on ``amdxdna``."""
+    from gaia.llm.npu_linux import bound_devices
+
+    return [
+        (name, dev, root / "dev" / "accel" / name) for name, dev in bound_devices(root)
+    ]
+
+
+def _open_npu(node: Path) -> int:
+    try:
+        return os.open(node, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+    except OSError as e:
+        raise ResourceProbeError(f"Can't open {node}: {e.strerror or e}") from e
+
+
+def amdxdna_busy_percent(fd: int) -> float:
+    """The NPU's busiest column, from the driver's sensor query."""
+    import fcntl  # POSIX only; the module still imports on Windows
+
+    buf = ctypes.create_string_buffer(_SENSOR.size * _MAX_SENSORS)
+    arg = bytearray(
+        _GET_INFO.pack(_DRM_AMDXDNA_QUERY_SENSORS, len(buf), ctypes.addressof(buf))
+    )
+    try:
+        fcntl.ioctl(fd, _IOCTL_GET_INFO, arg, True)
+    except OSError as e:
+        if e.errno in (errno.EOPNOTSUPP, errno.EINVAL, errno.ENOTTY):
+            raise ResourceProbeError(_NO_USAGE) from e
+        raise ResourceProbeError(
+            f"The NPU driver couldn't report usage: {e.strerror or e}"
+        ) from e
+    _, size, _ = _GET_INFO.unpack(arg)
+    columns = [
+        fields[1]
+        for off in range(0, min(size, len(buf)) - _SENSOR.size + 1, _SENSOR.size)
+        for fields in [_SENSOR.unpack_from(buf, off)]
+        if fields[8] == _SENSOR_COLUMN_UTILIZATION
+    ]
+    if not columns:
+        raise ResourceProbeError(_NO_USAGE)
+    return float(min(100, max(columns)))
+
+
+class AmdxdnaNpus:
+    """Each NPU's busiest column, read once a sample through its /dev node."""
+
+    def __init__(
+        self,
+        found: List[Tuple[str, Path, Path]],
+        open_node: Callable[[Path], int] = _open_npu,
+        busy: Callable[[int], float] = amdxdna_busy_percent,
+        close_fd: Callable[[int], None] = os.close,
+    ) -> None:
+        self._busy = busy
+        self._close_fd = close_fd
+        self._npus: List[Tuple[str, Path, int]] = []
+        try:
+            for name, dev, node in found:
+                fd = open_node(node)
+                self._npus.append((name, dev, fd))
+                # Once at start, even if asleep, so an unsupported driver says so now.
+                busy(fd)
+        except BaseException:
+            self.close()
+            raise
+
+    def sample(self) -> List[DeviceSample]:
+        out = []
+        for name, dev, fd in self._npus:
+            # The query wakes a sleeping NPU; asleep means idle.
+            percent = 0.0 if _runtime_suspended(dev) else self._busy(fd)
+            out.append(DeviceSample(f"npu_{name}", f"AMD NPU ({name})", "npu", percent))
+        return out
+
+    def close(self) -> None:
+        npus, self._npus = self._npus, []
+        for _, _, fd in npus:
+            self._close_fd(fd)
+
+
 class PosixProbe:
-    def __init__(self, drm_root: Path = _DRM, sys_net: Path = _SYS_NET) -> None:
+    def __init__(
+        self,
+        drm_root: Path = _DRM,
+        sys_net: Path = _SYS_NET,
+        npus: Optional[Callable[[], AmdxdnaNpus]] = None,
+    ) -> None:
         self._gpus: OptionalPart = OptionalPart("GPU", lambda: sysfs_gpus(drm_root))
+        if npus is None:
+            npus = (
+                (lambda: AmdxdnaNpus(linux_npus()))
+                if sys.platform.startswith("linux")
+                else (lambda: AmdxdnaNpus([]))
+            )
+        self._npus: OptionalPart = OptionalPart("NPU", npus, close=lambda n: n.close())
         self._net: OptionalPart = OptionalPart(
             "network", lambda: NetworkRates(lambda: posix_networks(sys_net))
         )
@@ -681,6 +803,7 @@ class PosixProbe:
                 logger.debug("CPU clock speed unavailable: %s", e)
         vm = psutil.virtual_memory()
         devices = self._gpus.read(_read_sysfs_gpus)
+        devices += self._npus.read(lambda npus: npus.sample())
         networks = self._net.read(lambda rates: rates.sample())
         return Sample(
             cpu_percent=psutil.cpu_percent(interval=None),
@@ -691,10 +814,11 @@ class PosixProbe:
             networks=networks,
             devices_error=self._gpus.error,
             networks_error=self._net.error,
+            npus_error=self._npus.error,
         )
 
     def close(self) -> None:
-        pass
+        self._npus.close()
 
 
 def default_probe():
@@ -864,6 +988,7 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
         "networks": networks,
         "devices_error": latest.devices_error,
         "networks_error": latest.networks_error,
+        "npus_error": latest.npus_error,
     }
 
 

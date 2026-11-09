@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import psutil
@@ -22,6 +25,12 @@ pytestmark = pytest.mark.allow_network  # TestClient only; nothing leaves the ma
 UI = {"X-Gaia-UI": "1"}
 GPU = "0x00000000_0x0000d938"
 NPU = "0x00000000_0x0000f994"
+
+
+@pytest.fixture(autouse=True)
+def no_real_npu(monkeypatch):
+    """Keep a PosixProbe off this machine's own NPU unless a test hands it one."""
+    monkeypatch.setattr(rm, "linux_npus", lambda root=Path("/"): [])
 
 
 def engine(pid: int, luid: str, eng: int, kind: str = "3d") -> str:
@@ -313,6 +322,184 @@ def test_an_optional_part_closes_what_it_opened_when_a_read_breaks():
     assert closed == ["state"] and part.error == "adapter vanished"
     part.close()
     assert closed == ["state"]  # closed once
+
+
+# ── Linux NPUs (amdxdna) ─────────────────────────────────────────────────────
+
+
+def sensor(kind: int, value: int, label: str = "") -> bytes:
+    return rm._SENSOR.pack(label.encode(), value, 0, 0, 0, b"", b"", 0, kind)
+
+
+class FakeFcntl:
+    """Answers DRM_IOCTL_AMDXDNA_GET_INFO the way the kernel does."""
+
+    def __init__(self, sensors=(), error=None):
+        self.sensors = b"".join(sensors)
+        self.error = error
+        self.calls = []
+
+    def ioctl(self, fd, request, arg, mutate):
+        param, size, address = rm._GET_INFO.unpack(arg)
+        self.calls.append((fd, request, param, size, mutate))
+        if self.error is not None:
+            raise OSError(self.error, "fake")
+        data = self.sensors[:size]
+        ctypes.memmove(address, data, len(data))
+        arg[:] = rm._GET_INFO.pack(param, len(data), address)
+        return 0
+
+
+def fake_fcntl(monkeypatch, **kwargs) -> FakeFcntl:
+    fake = FakeFcntl(**kwargs)
+    monkeypatch.setitem(sys.modules, "fcntl", fake)
+    return fake
+
+
+def test_npu_load_is_its_busiest_column(monkeypatch):
+    fake = fake_fcntl(
+        monkeypatch,
+        sensors=[
+            sensor(0, 1500, "Total Power"),  # mW, not a load
+            sensor(1, 20, "Column 0 Utilization"),
+            sensor(1, 65, "Column 1 Utilization"),
+            sensor(1, 0, "Column 2 Utilization"),
+        ],
+    )
+    assert rm.amdxdna_busy_percent(7) == 65.0
+    [(fd, request, param, size, mutate)] = fake.calls
+    # DRM_IOWR('d', 0x40 + DRM_AMDXDNA_GET_INFO, struct amdxdna_drm_get_info)
+    assert (fd, request, param, mutate) == (7, 0xC0106447, 4, True)
+    assert size == 9 * 168  # power plus 8 columns, each struct amdxdna_drm_query_sensor
+    assert rm._SENSOR.size == 168
+
+
+def test_npu_load_caps_at_100(monkeypatch):
+    fake_fcntl(monkeypatch, sensors=[sensor(0, 1), sensor(1, 250)])
+    assert rm.amdxdna_busy_percent(3) == 100.0
+
+
+@pytest.mark.parametrize("err", [errno.EOPNOTSUPP, errno.EINVAL, errno.ENOTTY])
+def test_a_kernel_without_npu_usage_says_which_kernel_has_it(monkeypatch, err):
+    fake_fcntl(monkeypatch, error=err)
+    with pytest.raises(rm.ResourceProbeError, match="Linux 7.1"):
+        rm.amdxdna_busy_percent(3)
+
+
+def test_a_driver_that_reports_only_power_says_it_has_no_usage(monkeypatch):
+    fake_fcntl(monkeypatch, sensors=[sensor(0, 900, "Total Power")])
+    with pytest.raises(rm.ResourceProbeError, match="Linux 7.1"):
+        rm.amdxdna_busy_percent(3)
+
+
+def test_another_driver_failure_names_the_cause(monkeypatch):
+    fake_fcntl(monkeypatch, error=errno.ENODEV)
+    with pytest.raises(rm.ResourceProbeError, match="couldn't report usage"):
+        rm.amdxdna_busy_percent(3)
+
+
+def test_npus_are_found_with_their_dev_nodes(monkeypatch, tmp_path):
+    monkeypatch.undo()  # the real linux_npus, over a fake driver list
+    from gaia.llm import npu_linux
+
+    dev = tmp_path / "sys/class/accel/accel0/device"
+    monkeypatch.setattr(npu_linux, "bound_devices", lambda root: [("accel0", dev)])
+    assert rm.linux_npus(tmp_path) == [
+        ("accel0", dev, tmp_path / "dev" / "accel" / "accel0")
+    ]
+
+
+def npus(tmp_path, readings, opened=None, closed=None):
+    dev = tmp_path / "accel0"
+    (dev / "power").mkdir(parents=True)
+    (dev / "power" / "runtime_status").write_text("active\n")
+    queried = []
+
+    def busy(fd):
+        queried.append(fd)
+        value = readings.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def open_node(node):
+        if opened is not None:
+            opened.append(node)
+        return 11
+
+    reader = rm.AmdxdnaNpus(
+        [("accel0", dev, tmp_path / "dev/accel/accel0")],
+        open_node=open_node,
+        busy=busy,
+        close_fd=(closed.append if closed is not None else lambda fd: None),
+    )
+    return reader, dev, queried
+
+
+def test_posix_probe_reads_the_npu_next_to_the_gpus(tmp_path):
+    reader, _, _ = npus(tmp_path, [0.0, 37.0])
+    probe = rm.PosixProbe(drm_root=tmp_path / "drm", npus=lambda: reader)
+    s = probe.sample()
+    assert [(d.key, d.name, d.kind, d.percent) for d in s.devices] == [
+        ("npu_accel0", "AMD NPU (accel0)", "npu", 37.0)
+    ]
+    assert s.npus_error is None
+    assert rm.to_payload([s], 1.0)["devices"][0]["kind"] == "npu"
+
+
+def test_a_sleeping_npu_reads_idle_without_waking_it(tmp_path):
+    reader, dev, queried = npus(tmp_path, [0.0])
+    (dev / "power" / "runtime_status").write_text("suspended\n")
+    [npu] = reader.sample()
+    assert npu.percent == 0.0
+    assert queried == [11]  # only the check at start
+
+
+def test_an_npu_that_cannot_report_usage_says_why_and_the_gpu_still_shows(tmp_path):
+    drm = tmp_path / "drm"
+    gpu = drm / "card1" / "device"
+    gpu.mkdir(parents=True)
+    (gpu / "gpu_busy_percent").write_text("42")
+    closed = []
+    unsupported = rm.ResourceProbeError(rm._NO_USAGE)
+
+    probe = rm.PosixProbe(
+        drm_root=drm,
+        npus=lambda: npus(tmp_path, [unsupported], closed=closed)[0],
+    )
+    s = probe.sample()
+    assert [d.kind for d in s.devices] == ["gpu"]
+    assert s.devices_error is None
+    assert "Linux 7.1" in s.npus_error
+    assert closed == [11]  # the device it opened is closed again
+    payload = rm.to_payload([s], 1.0)
+    assert "Linux 7.1" in payload["npus_error"]
+    resources_router.ResourceUsage(**payload)
+
+
+def test_an_npu_that_breaks_later_closes_and_says_why(tmp_path):
+    closed = []
+    reader, _, _ = npus(
+        tmp_path, [0.0, 5.0, rm.ResourceProbeError("boom")], closed=closed
+    )
+    probe = rm.PosixProbe(drm_root=tmp_path / "drm", npus=lambda: reader)
+    assert probe.sample().devices[0].percent == 5.0
+    s = probe.sample()
+    assert s.devices == [] and s.npus_error == "boom"
+    assert closed == [11]
+
+
+def test_an_npu_that_cannot_be_opened_says_so(tmp_path):
+    with pytest.raises(rm.ResourceProbeError, match="Can't open"):
+        rm._open_npu(tmp_path / "dev/accel/accel9")
+
+
+def test_closing_the_probe_closes_the_npu(tmp_path):
+    closed = []
+    reader, _, _ = npus(tmp_path, [0.0], closed=closed)
+    probe = rm.PosixProbe(drm_root=tmp_path / "drm", npus=lambda: reader)
+    probe.close()
+    assert closed == [11]
 
 
 # ── Route ────────────────────────────────────────────────────────────────────
