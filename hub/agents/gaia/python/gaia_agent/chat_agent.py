@@ -3103,6 +3103,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
                     result = subprocess.run(
                         ["wmctrl", "-l"],
+                        env=child_env(),
                         capture_output=True,
                         stdin=subprocess.DEVNULL,
                         text=True,
