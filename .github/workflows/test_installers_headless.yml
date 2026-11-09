@@ -15,7 +15,7 @@
 #                    was retired in Dec 2025)
 #   Ubuntu 22.04/24.04  the desktop app .deb and .AppImage; the terminal .deb;
 #                    install.sh; on 24.04 also a terminal .deb upgrade
-#   Fedora           the terminal .rpm, in a fedora:latest container
+#   Fedora           the terminal .rpm, in a fedora:44 container (#7010: 45 lacks libssl.so.3)
 # Debian bookworm keeps its install smoke in tui_installers.yml.
 #
 # "Healthy" means:
@@ -474,7 +474,7 @@ jobs:
               ;;
             tui-rpm)
               mkdir -p "${RUNNER_TEMP}/journey"
-              docker run -d --name gaia-fedora --network host -v "${RUNNER_TEMP}/journey:/work" fedora:latest sleep infinity
+              docker run -d --name gaia-fedora --network host -v "${RUNNER_TEMP}/journey:/work" fedora:44 sleep infinity
               docker exec gaia-fedora cat /etc/os-release | head -n 3
               ;;
           esac

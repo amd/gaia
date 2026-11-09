@@ -245,7 +245,7 @@ jobs:
           - {label: Windows, os: windows-latest, key: win32-x64, exe: gaia.exe}
           - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
           - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
-          - {label: Fedora, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:latest'}
+          - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
     steps:
       - name: Is this platform wanted
         id: want
