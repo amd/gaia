@@ -239,9 +239,8 @@ This mirrors the OpenClaw heartbeat economics: routing routine classification
 to local small models makes always-on operation sustainable. The 35B model
 only loads when there is real work to execute.
 
-Model selection is configured via `GAIA_AUTO_OBSERVE_MODEL` (default:
-`Qwen3-4B-GGUF`) and falls back to the agent's primary model if the
-lightweight model is unavailable.
+This split is not built yet: every tick runs on the session's own model, and
+nothing reads `GAIA_AUTO_OBSERVE_MODEL` (planned, default `Qwen3-4B-GGUF`).
 
 ### 5.2 `set_loop_state` Tool (replaces "respond with IDLE")
 
@@ -603,15 +602,15 @@ in history, preventing context window saturation from repeated ticks.
 
 | Limit | Default | Config key |
 |-------|---------|------------|
-| Max steps per autonomous tick | 20 | `GAIA_AUTO_MAX_STEPS` |
-| Max autonomous ticks per hour | 30 | `GAIA_AUTO_MAX_TICKS_PER_HOUR` |
-| Max agent-created goals per day | 10 | `GAIA_AUTO_MAX_GOALS_PER_DAY` |
+| Seconds between idle ticks | 60 | `GAIA_AGENT_TICK_INTERVAL` |
+| Max autonomous ticks per hour | 30 | `GAIA_AGENT_HOURLY_LIMIT` |
+| Max seconds a single tick may run | 300 | `GAIA_AGENT_TICK_TIMEOUT` |
 | Min schedule interval | 30s | hardcoded |
 | Max schedule lookahead | 86400s | hardcoded |
 
-When `max_steps` is reached mid-tick, the agent is forced to `IDLE` and a
-warning is added to the activity log: "Tick exceeded step budget — partially
-completed work may need review."
+A tick that runs past `GAIA_AGENT_TICK_TIMEOUT` is cancelled and the loop goes
+idle. A per-tick step budget and a daily cap on agent-created goals are not
+implemented.
 
 When the hourly rate limit is hit, all further ticks are suppressed and a
 notification is shown in the UI: "Autonomous loop rate-limited — check

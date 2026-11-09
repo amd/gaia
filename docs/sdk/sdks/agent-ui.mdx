@@ -91,7 +91,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.6-35B-A3B-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -153,7 +153,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3.5-35B-A3B-GGUF",
+    model="Qwen3.6-35B-A3B-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -465,7 +465,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "lemonade_running": true,
       "lemonade_error": null,
       "lemonade_probe": "ok",
-      "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+      "model_loaded": "Qwen3.6-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
@@ -592,7 +592,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -611,7 +611,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "status": "loading",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -623,7 +623,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "force": false,
       "load_after": false
     }
@@ -639,7 +639,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "status": "downloading",
-      "model": "Qwen3.5-35B-A3B-GGUF"
+      "model": "Qwen3.6-35B-A3B-GGUF"
     }
     ```
 
@@ -742,7 +742,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"],
       "folders": ["/home/me/projects/site"]

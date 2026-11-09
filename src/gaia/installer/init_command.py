@@ -3558,11 +3558,12 @@ class InitCommand:
                     "   [bold]Failed models may be corrupted. To fix:[/bold]"
                 )
                 self.console.print(
-                    "   [dim]Option 1 - Delete all models and re-download:[/dim]"
+                    "   [dim]Option 1 - Delete this profile's models and "
+                    "re-download:[/dim]"
                 )
-                self.console.print("     [cyan]gaia uninstall --models --yes[/cyan]")
                 self.console.print(
-                    f"     [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                    f"     [cyan]gaia init --profile {self.profile} "
+                    "--force-models --yes[/cyan]"
                 )
                 self.console.print()
                 self.console.print(

@@ -48,12 +48,6 @@ _TICK_INTERVAL = int(os.environ.get("GAIA_AGENT_TICK_INTERVAL", "60"))
 # Maximum autonomous LLM calls per hour
 _HOURLY_LIMIT = int(os.environ.get("GAIA_AGENT_HOURLY_LIMIT", "30"))
 
-# Maximum goals created by the agent per day
-_DAILY_GOAL_LIMIT = int(os.environ.get("GAIA_AGENT_DAILY_GOAL_LIMIT", "10"))
-
-# Lightweight model for observation/classification (cheap ticks)
-_OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
-
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
