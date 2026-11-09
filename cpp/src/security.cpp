@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <set>
+#include <sstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -235,6 +237,35 @@ void AllowedToolsStore::save() const {
     } else {
         std::cerr << "[gaia] warning: could not write allowed_tools store: " << filePath_ << "\n";
     }
+}
+
+std::string shellCommandScope(const std::string& command) {
+    const size_t start = command.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "exact:";
+    const std::string cmd = command.substr(start, command.find_last_not_of(" \t\r\n") - start + 1);
+    // Anything that runs a second thing is approved only as written.
+    for (const char* op : {";", "&", "|", "`", "$(", ">", "<", "\n"}) {
+        if (cmd.find(op) != std::string::npos) return "exact:" + cmd;
+    }
+    std::istringstream words(cmd);
+    std::string program, sub;
+    words >> program;
+    // `VAR=x cmd` or a path to the program: approve exactly.
+    if (program.find('=') != std::string::npos) return "exact:" + cmd;
+    static const std::set<std::string> withSubcommand = {
+        "git", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv", "cargo", "go", "docker",
+        "kubectl", "gh", "make", "dotnet", "brew", "apt", "apt-get", "winget", "python", "python3",
+        "node", "bash", "sh", "pwsh", "powershell"};
+    if (withSubcommand.count(program)) {
+        words >> sub;
+        // An interpreter's script or -c code is the real command.
+        if (program.rfind("python", 0) == 0 || program == "node" || program == "bash" ||
+            program == "sh" || program == "pwsh" || program == "powershell") {
+            return "exact:" + cmd;
+        }
+        return "cmd:" + program + (sub.empty() ? "" : " " + sub);
+    }
+    return "cmd:" + program;
 }
 
 } // namespace gaia

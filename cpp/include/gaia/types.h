@@ -285,6 +285,11 @@ struct ToolInfo {
     // MCP metadata (populated when tool comes from MCP server)
     std::optional<std::string> mcpServer;
     std::optional<std::string> mcpToolName;
+
+    /// What an "always allow" answer covers for one call. Unset = the whole
+    /// tool. A shell tool returns the program ("pytest"), so one approval never
+    /// becomes permission to run anything.
+    std::function<std::string(const json& args)> grantScope;
 };
 
 // ---- LLM Usage Statistics ----

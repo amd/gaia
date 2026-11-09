@@ -31,6 +31,12 @@ GAIA_API bool validatePath(const std::string& basePath, const std::string& reque
 /// Generalizes the ad-hoc checks in wifi_agent.cpp / test_tool_integration.cpp.
 GAIA_API bool isSafeShellArg(const std::string& arg);
 
+/// What an "always allow" for a shell command covers: the program ("pytest"),
+/// program + subcommand for tools whose subcommands differ in risk
+/// ("git status", "npm test"), or the exact command when it chains, pipes,
+/// substitutes or redirects — so approving one command never approves another.
+GAIA_API std::string shellCommandScope(const std::string& command);
+
 /// Create a terminal-based confirm callback. Prompts on stderr, reads stdin.
 /// Auto-installed by Agent for interactive (non-silent) agents.
 GAIA_API ToolConfirmCallback makeStdinConfirmCallback();

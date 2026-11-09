@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 #include <gaia/security.h>
+#include <gaia/tool_registry.h>
 
 #include <filesystem>
 #include <fstream>
@@ -178,4 +179,45 @@ TEST_F(AllowedToolsStoreTest, AllAllowed) {
 TEST(MakeStdinConfirmCallbackTest, ReturnsCallable) {
     gaia::ToolConfirmCallback cb = gaia::makeStdinConfirmCallback();
     EXPECT_TRUE(static_cast<bool>(cb));
+}
+
+// ---- shell grant scope ----
+
+TEST(ShellCommandScopeTest, ProgramOrSubcommandOrExact) {
+    EXPECT_EQ(shellCommandScope("pytest -q tests/"), "cmd:pytest");
+    EXPECT_EQ(shellCommandScope("  ls -la "), "cmd:ls");
+    EXPECT_EQ(shellCommandScope("git status"), "cmd:git status");
+    EXPECT_NE(shellCommandScope("git push --force"), shellCommandScope("git status"));
+    EXPECT_EQ(shellCommandScope("pytest && rm -rf ~"), "exact:pytest && rm -rf ~");
+    EXPECT_EQ(shellCommandScope("cat a | sh"), "exact:cat a | sh");
+    EXPECT_EQ(shellCommandScope("echo $(whoami)"), "exact:echo $(whoami)");
+    EXPECT_EQ(shellCommandScope("python3 -c 'import os'"), "exact:python3 -c 'import os'");
+    EXPECT_EQ(shellCommandScope("FOO=1 make"), "exact:FOO=1 make");
+}
+
+TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
+    const std::string dir = (std::filesystem::temp_directory_path() / "gaia-grant-scope-test").string();
+    std::filesystem::remove_all(dir);
+    auto store = std::make_shared<AllowedToolsStore>(dir);
+    ToolRegistry reg;
+    reg.setAllowedToolsStore(store);
+    ToolInfo sh;
+    sh.name = "sh";
+    sh.policy = ToolPolicy::CONFIRM;
+    sh.parameters = {{"command", ToolParamType::STRING, true, ""}};
+    sh.callback = [](const json&) { return json{{"status", "success"}}; };
+    sh.grantScope = [](const json& a) { return shellCommandScope(a.value("command", "")); };
+    reg.registerTool(sh);
+
+    int asked = 0;
+    reg.setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return asked == 1 ? ToolConfirmResult::ALWAYS_ALLOW : ToolConfirmResult::DENY;
+    });
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "pytest -q"}})["status"], "success");
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "pytest -x"}})["status"], "success");
+    EXPECT_EQ(asked, 1) << "the same program is approved";
+    EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "error");
+    EXPECT_EQ(asked, 2) << "a different program is asked about again";
+    std::filesystem::remove_all(dir);
 }

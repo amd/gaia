@@ -917,8 +917,16 @@ void Agent::registerBuiltinTools() {
 
 // ---- Tool Execution ----
 
+namespace {
+std::optional<std::string> toolFailure(const json& r);  // defined with the loop helpers
+}  // namespace
+
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
-    return tools_.executeTool(toolName, toolArgs);
+    json result = tools_.executeTool(toolName, toolArgs);
+    const std::string resolved = tools_.resolveName(toolName);
+    turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
+                              !toolFailure(result).has_value()});
+    return result;
 }
 
 // ---- MCP Integration ----
@@ -1404,6 +1412,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
+    turnToolCalls_.clear();
 
     // Reset cancel flag at the start of each query.
     cancelled_.store(false);
