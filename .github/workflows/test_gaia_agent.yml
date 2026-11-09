@@ -38,8 +38,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -104,8 +102,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.

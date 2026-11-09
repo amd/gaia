@@ -3,18 +3,6 @@
   "version": "1.0.0",
   "description": "GAIA Electron Applications",
   "private": true,
-  "scripts": {
-    "app:example:run:dev": "node src/gaia/apps/_shared/dev-server.js example",
-    "install:framework": "cd src/gaia/electron && npm install",
-    "install:apps": "npm run install:framework"
-  },
-  "workspaces": [
-    "src/gaia/electron",
-    "src/gaia/apps/*/webui"
-  ],
-  "devDependencies": {
-    "electron": "^45.0.0"
-  },
   "dependencies": {
     "@prisma/client": "^7.10.1",
     "prisma": "^7.10.1",
