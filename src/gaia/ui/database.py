@@ -317,6 +317,7 @@ class ChatDatabase:
         enable_wal(self._conn)
         self._schema_migration_active = False
         self._init_schema()
+        self._migrate_legacy_agent_mode()
         logger.info("Chat database initialized: %s", db_path)
 
     def _schema_is_current(self) -> bool:
@@ -420,6 +421,25 @@ class ChatDatabase:
                 self._conn.execute("BEGIN")
                 migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
+
+    def _migrate_legacy_agent_mode(self) -> None:
+        """Rewrite a stored agent_mode 'autonomous' to 'goal_driven', once.
+
+        'autonomous' never had its own behaviour (#2005) and is refused on
+        write, so 'goal_driven' is what such a database already ran as.
+        """
+        with self._transaction():
+            changed = self._conn.execute(
+                "UPDATE settings SET value = 'goal_driven' "
+                "WHERE key = 'agent_mode' AND value = 'autonomous'"
+            ).rowcount
+        if changed:
+            logger.warning(
+                "Migrated stored agent_mode 'autonomous' to 'goal_driven': "
+                "'autonomous' is not implemented "
+                "(https://github.com/amd/gaia/issues/2005) and always ran as "
+                "'goal_driven'."
+            )
 
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""

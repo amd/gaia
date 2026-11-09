@@ -18,6 +18,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     PROBE_TIMEOUT,
+    ContextReloadUnverifiedError,
     InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
@@ -325,6 +326,11 @@ class LemonadeManager:
     # /models just to re-validate context size — even for "cool" or "no" replies.
     _last_recheck_time: float = 0.0
     _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
+
+    # (model id, requested ctx) -> (reloads the server answered with a smaller
+    # window, the window it last reported). Bounds a reload that never takes.
+    _unverified_reloads: Dict[Tuple[str, int], Tuple[int, int]] = {}
+    _MAX_UNVERIFIED_RELOADS = 2
 
     # Device tiers (``amd_npu``/``amd_dgpu``/``cpu``/…) already validated OK on
     # this host. Hardware is static per process, so once a tier passes we never
@@ -975,7 +981,12 @@ class LemonadeManager:
                         # usable; propagate like the first-init path below.
                         raise
                     except Exception as e:
+                        # Nothing was verified: report not-ready, and re-initialize next call.
+                        cls._initialized = False
                         cls._log.warning(f"Failed to re-check Lemonade status: {e}")
+                        if not quiet:
+                            cls.print_server_error(min_context_size)
+                        return False
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
@@ -1637,6 +1648,20 @@ class LemonadeManager:
                 requested_ctx,
             )
 
+        reload_key = (model_id, requested_ctx)
+        attempts, last_reported = cls._unverified_reloads.get(reload_key, (0, 0))
+        if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+            raise ContextReloadUnverifiedError(
+                cls._unverified_reload_message(
+                    client.base_url,
+                    model_id,
+                    requested_ctx,
+                    last_reported,
+                    min_context_size,
+                    attempts,
+                )
+            )
+
         cls._log.info(
             f"Auto-reloading '{model_id}' with ctx_size={requested_ctx} "
             f"(was {cls._context_size})"
@@ -1682,8 +1707,10 @@ class LemonadeManager:
             if new_ceiling:
                 cls._context_ceiling = new_ceiling
                 cls._context_ceiling_model = model_id
+            cls._context_size = effective_ctx
             success = effective_ctx >= min_context_size
             if success:
+                cls._unverified_reloads.pop(reload_key, None)
                 cls._log.info(
                     f"Model reloaded successfully with ctx_size={effective_ctx}"
                 )
@@ -1705,25 +1732,23 @@ class LemonadeManager:
                         f"trained context of {new_ceiling})."
                     )
             else:
-                # No known ceiling explains the shortfall — the server did
-                # not report the window it loaded, not a real per-model cap. Unlike the known-ceiling branch above,
-                # ``_context_ceiling`` stays unset here, so nothing would
-                # stop `ensure_ready` retrying this reload every recheck
-                # interval forever. Preserve the pre-#2992 behaviour: assume
-                # success and cache ``min_context_size`` to break the loop.
-                cls._log.warning(
-                    "ctx_size after reload: reported=%d (need %d). "
-                    "Assuming reload succeeded to prevent reload loop.",
+                # No ceiling explains the shortfall, so nothing else stops the
+                # recheck reloading again; count it and stop at the bound.
+                attempts += 1
+                cls._unverified_reloads[reload_key] = (attempts, reported_ctx)
+                message = cls._unverified_reload_message(
+                    client.base_url,
+                    model_id,
+                    requested_ctx,
                     reported_ctx,
                     min_context_size,
+                    attempts,
                 )
-                effective_ctx = min_context_size
-            # Always update the cached context size to the value determined
-            # above (honest when a real ceiling was found; the legacy
-            # loop-breaking assumption otherwise).
-            cls._context_size = effective_ctx
+                if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+                    raise ContextReloadUnverifiedError(message)
+                cls._log.warning(message)
             return success
-        except LoadedModelMissingError:
+        except (LoadedModelMissingError, ContextReloadUnverifiedError):
             raise
         except Exception as e:
             cls._log.warning(f"Auto-reload failed: {e}")
@@ -1731,6 +1756,23 @@ class LemonadeManager:
         finally:
             # Re-acquire before returning to the `with cls._lock:` block.
             lock.acquire()
+
+    @staticmethod
+    def _unverified_reload_message(
+        base_url: str,
+        model_id: str,
+        requested_ctx: int,
+        reported_ctx: int,
+        min_context_size: int,
+        attempts: int,
+    ) -> str:
+        return (
+            f"Lemonade at {base_url} was asked to load {model_id} with "
+            f"ctx_size={requested_ctx}, but reports a {reported_ctx}-token "
+            f"window after {attempts} reload(s); GAIA needs {min_context_size}. "
+            "Free memory by closing other models or apps, or lower the context "
+            f"size in Settings > Model. {lemonade_log_hint(base_url)}"
+        )
 
     @classmethod
     def is_initialized(cls) -> bool:
@@ -1781,6 +1823,7 @@ class LemonadeManager:
             cls._context_ceiling = None
             cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
+            cls._unverified_reloads = {}
             cls._validated_min_devices = set()
             # Signal before dropping it: waiters hold their own reference, and
             # the preload that would have set it is gone.
