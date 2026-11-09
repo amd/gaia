@@ -37,6 +37,11 @@ class GAIA_API MediaTools {
 public:
     static void registerAll(ToolRegistry& registry, MediaToolsOptions options);
 
+    /// take_screenshot: capture the screen to a PNG with the OS's own tool
+    /// (PowerShell + System.Drawing, screencapture, grim / gnome-screenshot /
+    /// scrot / ImageMagick). CONFIRM: a screenshot can show anything.
+    static ToolInfo screenshotTool(std::function<std::string(const std::string&)> checkPath = {});
+
     /// Standard base64 decode; throws std::invalid_argument on bad input.
     static std::string base64Decode(const std::string& in);
 };

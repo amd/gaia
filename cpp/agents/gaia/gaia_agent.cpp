@@ -101,6 +101,12 @@ void GaiaAgent::registerTools() {
         }
         if (ws) m.checkPath = [ws](const std::string& p) { return ws->checkPath(p); };
         MediaTools::registerAll(toolRegistry(), std::move(m));
+        if (options_.screenshots) {
+            toolRegistry().registerTool(MediaTools::screenshotTool(
+                ws ? std::function<std::string(const std::string&)>(
+                         [ws](const std::string& p) { return ws->checkPath(p); })
+                   : std::function<std::string(const std::string&)>()));
+        }
     }
 }
 

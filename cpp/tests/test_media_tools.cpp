@@ -123,3 +123,11 @@ TEST(MediaToolsTest, Base64Decode) {
     EXPECT_EQ(MediaTools::base64Decode("aGVs\nbG8h"), "hello!");
     EXPECT_THROW(MediaTools::base64Decode("not*valid"), std::invalid_argument);
 }
+
+TEST(MediaToolsTest, ScreenshotIsConfirmGatedAndConfined) {
+    ToolInfo t = MediaTools::screenshotTool(
+        [](const std::string& p) { return p.rfind("/etc", 0) == 0 ? std::string("Refused") : ""; });
+    EXPECT_EQ(t.policy, ToolPolicy::CONFIRM);
+    EXPECT_EQ(t.callback(json{{"output_path", "/etc/shot.png"}})["status"], "error");
+    EXPECT_EQ(t.callback(json{{"output_path", "shot.jpg"}})["status"], "error");
+}

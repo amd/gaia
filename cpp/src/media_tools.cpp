@@ -5,11 +5,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ctime>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 
 #include "gaia/http_client.h"
+#include "gaia/process.h"
 
 namespace fs = std::filesystem;
 
@@ -76,6 +79,57 @@ std::string MediaTools::base64Decode(const std::string& in) {
         }
     }
     return out;
+}
+
+ToolInfo MediaTools::screenshotTool(std::function<std::string(const std::string&)> checkPath) {
+    ToolInfo t;
+    t.name = "take_screenshot";
+    t.description =
+        "Capture the whole screen to a PNG file. Use analyze_image on the file to read it.";
+    t.parameters = {{"output_path", ToolParamType::STRING, false,
+                     "Where to save the .png (default: screenshot-<time>.png here)."}};
+    t.policy = ToolPolicy::CONFIRM;
+    t.callback = [checkPath](const json& a) -> json {
+        std::string out = a.value("output_path", "");
+        if (out.empty()) out = "screenshot-" + std::to_string(std::time(nullptr)) + ".png";
+        if (checkPath) {
+            const std::string why = checkPath(out);
+            if (!why.empty()) return {{"status", "error"}, {"error", why}};
+        }
+        if (lowerExt(out) != ".png") return {{"status", "error"}, {"error", "output_path must end in .png"}};
+        const std::string abs = fs::absolute(out).string();
+        std::vector<std::string> attempts;
+#ifdef _WIN32
+        std::string ps = abs;
+        for (size_t i = 0; (i = ps.find('\'', i)) != std::string::npos; i += 2) ps.insert(i, "'");
+        attempts.push_back(
+            "powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+            "$b=[System.Windows.Forms.SystemInformation]::VirtualScreen; "
+            "$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; "
+            "$g=[System.Drawing.Graphics]::FromImage($bmp); "
+            "$g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); $bmp.Save('" + ps + "')\"");
+#elif defined(__APPLE__)
+        attempts.push_back("screencapture -x '" + abs + "'");
+#else
+        attempts = {"grim '" + abs + "'", "gnome-screenshot -f '" + abs + "'", "scrot -o '" + abs + "'",
+                    "import -window root '" + abs + "'"};
+#endif
+        std::string why;
+        for (const auto& cmd : attempts) {
+            const ProcessResult r = ProcessRunner::run(cmd, 30000);
+            std::error_code ec;
+            if (r.exitCode == 0 && fs::exists(abs, ec) && fs::file_size(abs, ec) > 0) {
+                return {{"status", "success"}, {"path", out}, {"bytes", fs::file_size(abs, ec)}};
+            }
+            if (r.exitCode != 127) why += (why.empty() ? "" : "; ") + cmd.substr(0, cmd.find(' ')) + ": " +
+                                          r.stderr_output.substr(0, 160);
+        }
+        return {{"status", "error"},
+                {"error", why.empty() ? "No screenshot tool is installed (grim, gnome-screenshot, scrot "
+                                        "or ImageMagick), or there is no display."
+                                      : "Screenshot failed: " + why}};
+    };
+    return t;
 }
 
 void MediaTools::registerAll(ToolRegistry& registry, MediaToolsOptions options) {

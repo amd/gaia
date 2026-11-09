@@ -93,6 +93,7 @@ struct Cli {
     bool noWeb = false;
     bool noSkills = false;
     bool noMemory = false;
+    bool screenshots = false;
     bool fullAccess = false;
     std::vector<std::string> allowDirs;
     bool debug = false;
@@ -137,6 +138,7 @@ void printUsage() {
         "  --no-web                  Leave out web_fetch\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
         "  --no-memory               Don't remember or recall facts across sessions\n"
+        "  --screenshots             Offer take_screenshot (off by default: privacy)\n"
         "  --allow-dir DIR           Also let the tools use DIR (repeatable). By default\n"
         "                            they are confined to the working directory\n"
         "  --full-access             Let the tools reach any path the user can\n"
@@ -210,6 +212,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--no-web") cli.noWeb = true;
         else if (a == "--no-skills") cli.noSkills = true;
         else if (a == "--no-memory") cli.noMemory = true;
+        else if (a == "--screenshots") cli.screenshots = true;
         else if (a == "--allow-dir") cli.allowDirs.push_back(need(i, a));
         else if (a == "--full-access") cli.fullAccess = true;
         else if (a == "--dangerously-skip-permissions") cli.skipPermissions = true;
@@ -387,6 +390,7 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.webTools = !cli.noWeb;
     o.skills = !cli.noSkills;
     o.memory = !cli.noMemory;
+    o.screenshots = cli.screenshots;
     o.fullAccess = cli.fullAccess;
     std::error_code ec;
     o.workspaceRoots.push_back(fs::current_path(ec).string());
