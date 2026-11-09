@@ -1853,7 +1853,13 @@ class RAGToolsMixin:
                     )
                     if initial_page is not None:
                         page_entries = split_entries_at_pages(
-                            [{"chunk_id": index, "content": chunk, "page": initial_page}]
+                            [
+                                {
+                                    "chunk_id": index,
+                                    "content": chunk,
+                                    "page": initial_page,
+                                }
+                            ]
                         )
                         matching_entries = [
                             entry
