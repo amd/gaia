@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Package gaia-cpp as a Lemonade agent-host release archive.
+"""Package gaiacpp as a Lemonade agent-host release archive.
 
 Lemonade installs an agent from a GitHub release asset pinned by SHA-256 in its
 ``agent_versions.json``: ``<id>-<os>-<arch>.tar.gz`` (``.zip`` on Windows) with
@@ -10,7 +10,7 @@ build tree and prints the checksum entry Lemonade pins::
     python cpp/packaging/package_lemonade.py --build-dir cpp/build \\
         --os linux --arch x64 --version v0.1.0 --out dist/lemonade
 
-Outputs ``dist/lemonade/gaia-cpp-linux-x64.tar.gz`` and merges its checksum into
+Outputs ``dist/lemonade/gaiacpp-linux-x64.tar.gz`` and merges its checksum into
 ``dist/lemonade/agent_versions.gaia.json``.
 """
 
@@ -26,7 +26,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-AGENT_ID = "gaia-cpp"
+AGENT_ID = "gaiacpp"
 REPO = "amd/gaia"
 OSES = ("linux", "darwin", "windows")
 ARCHES = ("x64", "arm64")
@@ -88,7 +88,7 @@ def main() -> int:
         "--build-dir",
         type=Path,
         required=True,
-        help="CMake build tree holding gaia-cpp",
+        help="CMake build tree holding gaiacpp",
     )
     ap.add_argument("--os", choices=OSES, required=True)
     ap.add_argument("--arch", choices=ARCHES, required=True)
@@ -102,7 +102,7 @@ def main() -> int:
     if binary is None:
         raise SystemExit(
             f"error: no {exe} under {args.build_dir}. Build it first: "
-            f"cmake --build {args.build_dir} --target gaia-cpp"
+            f"cmake --build {args.build_dir} --target gaiacpp"
         )
 
     archive = build_archive(binary, args.os, args.out / asset_name(args.os, args.arch))

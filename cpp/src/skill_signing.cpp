@@ -187,7 +187,7 @@ SkillSignature verifySkillBundle(const std::string& directory, const std::string
              "'; this build verifies ed25519 only.");
     }
     if (!rec.contains("signature_version") || rec["signature_version"] != kSignatureVersion) {
-        fail(sigPath.string() + " is not signature format v1; upgrade gaia-cpp to install it.");
+        fail(sigPath.string() + " is not signature format v1; upgrade gaiacpp to install it.");
     }
     if (rec.value("name", "") != name || rec.value("version", "") != version) {
         fail("Signature in " + sigPath.string() + " is for '" + rec.value("name", "") + "' " +
