@@ -19,7 +19,6 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 FILE_IO = "gaia.agents.tools.file_io_tools.FileIOToolsMixin"
 FILE_SEARCH = "gaia.agents.tools.file_tools.FileSearchToolsMixin"
-
 BROWSER = "gaia.agents.tools.browser_tools.BrowserToolsMixin"
 PERPLEXITY = "gaia_agent.chat_agent.ChatAgent._register_external_tools_conditional"
 
