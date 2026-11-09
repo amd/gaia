@@ -91,8 +91,13 @@ func TestReportedVRAMNeverReadsTheRegistry(t *testing.T) {
 }
 
 func TestAPoolUnder1GBNeverReadsAs0GB(t *testing.T) {
+	for gb, want := range map[float64]string{0.5: "0.5", 0: "0", 1: "1", 63.6: "64"} {
+		if got := formatGB(gb); got != want {
+			t.Errorf("formatGB(%v) = %q, want %q", gb, got, want)
+		}
+	}
 	c := Capacity{MemoryGB: 0.5, MemorySource: "AMD iGPU", DiskFreeGB: -1}
-	if _, why := c.Fit(20, 0); !strings.Contains(why, "this PC has 500 MB (AMD iGPU)") {
+	if _, why := c.Fit(20, 0); !strings.Contains(why, "this PC has 0.5 GB") {
 		t.Fatalf("reason %q", why)
 	}
 }

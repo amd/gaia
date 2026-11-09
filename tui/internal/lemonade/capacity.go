@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // Capacity is what this machine can hold, read from Lemonade's /system-info so
@@ -94,6 +92,16 @@ func physicalMemoryGB(raw string) float64 {
 // gaia.llm.model_fit._windows_shared_gb.
 func windowsSharedGB(physicalGB, carveOutGB float64) float64 {
 	return math.Max(0, physicalGB-carveOutGB) * fitRule.WindowsIGPUSharedRAMFraction
+}
+
+// formatGB mirrors gaia.llm.model_fit.format_gb: under 1 GB keeps a decimal so
+// 0.5 never reads as 0. Keep it apart from textutil.FormatGB, or the TUI and
+// Python print different "will not fit" text.
+func formatGB(gb float64) string {
+	if gb > 0 && gb < 1 {
+		return strconv.FormatFloat(gb, 'f', 1, 64)
+	}
+	return strconv.FormatFloat(gb, 'f', 0, 64)
 }
 
 type gpuEntry struct {
@@ -259,11 +267,11 @@ func RequiredMemoryGB(sizeGB, kvCacheGB float64) float64 {
 	return sizeGB*fitRule.MemoryOverheadFactor + fitRule.MemoryOverheadGB + kvCacheGB
 }
 
-// Fit reports whether a local model of sizeGB fits, and if not why. It follows
-// gaia.llm.model_fit.check_fit, with sizes in the TUI's one format.
+// Fit reports whether a local model of sizeGB fits, and if not why — in the
+// same words as gaia.llm.model_fit.check_fit.
 func (c Capacity) Fit(sizeGB, kvCacheGB float64) (bool, string) {
 	if need := RequiredMemoryGB(sizeGB, kvCacheGB); need > c.MemoryGB {
-		return false, fmt.Sprintf("needs ~%.0f GB of memory; this PC has %s (%s)", need, textutil.FormatGB(c.MemoryGB), c.MemorySource)
+		return false, fmt.Sprintf("needs ~%.0f GB of memory; this PC has %s GB (%s)", need, formatGB(c.MemoryGB), c.MemorySource)
 	}
 	if c.DiskFreeGB >= 0 && sizeGB > c.DiskFreeGB {
 		return false, fmt.Sprintf("needs %.0f GB of disk; %.0f GB free", sizeGB, c.DiskFreeGB)

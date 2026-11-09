@@ -14,7 +14,6 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	gaiaLemonade "github.com/amd/gaia/tui/internal/lemonade"
-	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -1555,7 +1554,18 @@ func firstSentence(s string) string {
 	if i := strings.Index(s, ". "); i >= 0 && i < limit {
 		return s[:i+1]
 	}
-	return textutil.Clip(s, limit)
+	return clip(s, limit)
+}
+
+// clip truncates to at most limit RUNES. Byte-slicing splits the multibyte
+// characters these messages are full of — `Settings → Connections`, em dashes —
+// into mojibake that no amount of trimming repairs.
+func clip(s string, limit int) string {
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return strings.TrimSpace(string(r[:limit])) + "…"
 }
 
 func containsString(list []string, want string) bool {

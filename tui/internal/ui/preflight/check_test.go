@@ -2321,6 +2321,7 @@ func TestTruncationNeverSplitsAMultibyteCharacter(t *testing.T) {
 	for name, got := range map[string]string{
 		"firstSentence": firstSentence(strings.ReplaceAll(long, ". ", " ")),
 		"detailSuffix":  detailSuffix(strings.ReplaceAll(long, ". ", " ")),
+		"clip":          clip(long, 7),
 	} {
 		if !utf8.ValidString(got) {
 			t.Errorf("%s produced invalid UTF-8: %q", name, got)
@@ -2328,6 +2329,10 @@ func TestTruncationNeverSplitsAMultibyteCharacter(t *testing.T) {
 		if strings.Contains(got, "�") {
 			t.Errorf("%s produced a replacement character: %q", name, got)
 		}
+	}
+	// And it still truncates: a cap that never fires is not a cap.
+	if got := clip(long, 7); len([]rune(got)) > 8 {
+		t.Errorf("clip(…, 7) returned %d runes: %q", len([]rune(got)), got)
 	}
 }
 

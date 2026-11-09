@@ -13,8 +13,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // SpeechModel is the Kokoro text-to-speech model Lemonade serves. Mirrors
@@ -185,16 +183,16 @@ func serverMessage(raw []byte) string {
 			Message string `json:"message"`
 		}
 		if json.Unmarshal(env.Error, &inner) == nil && inner.Message != "" {
-			return textutil.Clip(inner.Message, 500)
+			return clip(inner.Message, 500)
 		}
 		var s string
 		if json.Unmarshal(env.Error, &s) == nil && s != "" {
-			return textutil.Clip(s, 500)
+			return clip(s, 500)
 		}
 	}
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
 		return "(empty body)"
 	}
-	return textutil.Clip(text, 500)
+	return clip(text, 500)
 }
