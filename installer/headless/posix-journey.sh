@@ -369,6 +369,29 @@ real_engine() {
   "${gaia}" lemonade embedded stop || die "\`gaia lemonade embedded stop\` failed after a good start"
 }
 
+# The reporter of rc13's bug runs Fedora, where nothing else starts the
+# packaged gaia: install it with install.sh in the container, then start its
+# real Lemonade there, with the libraries a Fedora desktop has.
+fedora_engine() {
+  local tag rc=0
+  tag="$(rel "d['tag']")"
+  cp "${REPO}/installer/scripts/install.sh" "${WORK}/install.sh"
+  docker exec gaia-fedora dnf install -y --setopt=install_weak_deps=False \
+    tar gzip findutils which procps-ng libatomic vulkan-loader mesa-vulkan-drivers >/dev/null \
+    || die "could not prepare the Fedora container"
+  docker exec -e HOME=/root -e GAIA_RELEASE_TAG="${tag}" gaia-fedora sh /work/install.sh \
+    || die "install.sh failed in the Fedora container"
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded start --timeout 180 || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "--- lemond.log (last 60 lines) ---"
+    docker exec gaia-fedora tail -n 60 /root/.gaia/lemonade/lemond.log 2>/dev/null || echo "(no lemond.log)"
+    die "the packaged gaia could not start its real Lemonade on Fedora (exit ${rc})"
+  fi
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded status
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded stop \
+    || die "\`gaia lemonade embedded stop\` failed after a good start"
+}
+
 # ── install.sh ────────────────────────────────────────────────────────────────
 script_pins_release() { grep -q 'GAIA_RELEASE_TAG' "${REPO}/installer/scripts/install.sh"; }
 
@@ -513,6 +536,7 @@ engine)
   case "${KIND}" in
     agent-ui-deb|appimage) real_engine "$(backend_gaia)" ;;
     install-sh) real_engine "${GAIA_HOME}/bin/gaia" ;;
+    tui-rpm) fedora_engine ;;
     *) die "no packaged gaia to start the engine with for ${KIND}" ;;
   esac
   ;;
