@@ -422,12 +422,14 @@ def _read_xbel_hrefs(path: Path) -> List[str]:
     Raises:
         _UnsafeXmlError: the DOCTYPE declares entities or names an external DTD.
         expat.ExpatError: the file is not well-formed XML.
+        ValueError: the file declares a multi-byte encoding expat cannot read.
+        LookupError: the file declares an unknown encoding.
         OSError: the file cannot be read.
     """
     hrefs: List[str] = []
     depth = 0
 
-    def start_doctype(name, sysid, pubid, has_internal_subset):
+    def start_doctype(_name, sysid, pubid, has_internal_subset):
         if sysid or pubid or has_internal_subset:
             raise _UnsafeXmlError(
                 f"{path} has a DOCTYPE with declarations or an external DTD; "
@@ -3599,9 +3601,10 @@ class SystemDiscovery:
         facts: List[Dict] = []
         category_counts: Dict[str, tuple] = {}
 
+        # ValueError covers _UnsafeXmlError and expat's unsupported encodings.
         try:
             hrefs = _read_xbel_hrefs(xbel_path)
-        except (_UnsafeXmlError, expat.ExpatError, OSError) as e:
+        except (expat.ExpatError, LookupError, OSError, ValueError) as e:
             logger.warning("Skipping recent files in %s: %s", xbel_path, e)
             return facts
 

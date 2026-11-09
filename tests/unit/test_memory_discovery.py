@@ -1118,6 +1118,23 @@ class TestLinuxRecentXbel:
         assert isolated_disc._scan_linux_recent_files() == []
         assert any("recently-used.xbel" in m for m in self._warnings(caplog))
 
+    @pytest.mark.parametrize("encoding", ["shift_jis", "no-such-encoding"])
+    def test_unreadable_encoding_is_reported(
+        self, isolated_disc, tmp_path, caplog, encoding
+    ):
+        caplog.set_level(logging.WARNING, logger=DISCOVERY_LOGGER)
+        _write_xbel(
+            tmp_path,
+            f'<?xml version="1.0" encoding="{encoding}"?>\n'
+            + _XBEL_OPEN
+            + '  <bookmark href="file:///a.py"/>\n'
+            '  <bookmark href="file:///b.py"/>\n'
+            "</xbel>\n",
+        )
+
+        assert isolated_disc._scan_linux_recent_files() == []
+        assert any("recently-used.xbel" in m for m in self._warnings(caplog))
+
 
 # ---------------------------------------------------------------------------
 # Unsupported platform — reported by name, never silently empty (#1956 D1)
