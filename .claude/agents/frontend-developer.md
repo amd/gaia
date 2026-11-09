@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
-You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/webui/`). Older standalone apps live under `src/gaia/apps/{jira,llm,summarize,docker,example}/`.
+You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/webui/`). Standalone apps live under `src/gaia/apps/{llm,example}/`.
 
 ## Output style
 
@@ -14,7 +14,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 ## When to use
 
 - Editing the Agent UI (`src/gaia/apps/webui/`) — React/TypeScript/Vite/Electron
-- Working on standalone app UIs (Jira, LLM, Summarize, Docker, Example)
+- Working on standalone app UIs (LLM, Example)
 - Adding or modifying IPC calls between renderer and main process
 - Wiring a new frontend feature to a backend endpoint in `src/gaia/ui/`
 

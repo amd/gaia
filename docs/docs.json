@@ -126,7 +126,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }
@@ -442,7 +441,6 @@
               "plans/docker-containers",
               "plans/mcp-docs",
               "plans/desktop-installer",
-              "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
               "plans/release-train",

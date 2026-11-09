@@ -20,7 +20,7 @@ This plan closes the remaining gaps that live **on the GAIA side of that line**:
   magnitude depends on the render path (see note below) and is worst for
   native tool-calling models, but the *slope* is the real problem: every
   connected server taxes every turn forever. Measure before quoting a figure —
-  the existing `tool-loader.mdx` explicitly warns against fixed token estimates.
+  fixed token estimates go stale.
 
 > **Render-path note.** GAIA has two tool-rendering paths and they cost very
 > differently. Native tool-calling models get **full JSON schemas** per tool
