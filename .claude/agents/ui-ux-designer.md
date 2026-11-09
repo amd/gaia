@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Grep, Glob
 model: sonnet
 ---
 
-You design GAIA's human surfaces: the Agent UI (`src/gaia/apps/webui/`), standalone apps (LLM, Example), and the voice/talk UX.
+You design GAIA's human surfaces: the Agent UI (`src/gaia/apps/webui/`), the terminal UI, and the voice/talk UX.
 
 ## Output style
 

@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
-You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/webui/`). Standalone apps live under `src/gaia/apps/{llm,example}/`.
+You work on GAIA frontends. Your surface is the Agent UI (`src/gaia/apps/webui/`) and its Electron shell.
 
 ## Output style
 
