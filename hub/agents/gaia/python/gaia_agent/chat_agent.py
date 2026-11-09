@@ -330,7 +330,7 @@ def _python_script_run_context(
     """
     script = Path(script).resolve()
     # The frozen interpreter is this bundle relaunched, and needs its libraries.
-    env = child_env(same_bundle=True)
+    env = child_env()
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
     if project_dir is None:
@@ -2533,7 +2533,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = child_env(same_bundle=True)
+                env = child_env()
                 env["PYTHONIOENCODING"] = "utf-8"
                 if project:
                     existing = env.get("PYTHONPATH")

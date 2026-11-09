@@ -1,0 +1,15 @@
+# What a Fedora desktop has and lemond or its llama.cpp backend link.
+# One package per line; build_core.yml and posix-journey.sh both install these.
+tar
+gzip
+findutils
+which
+procps-ng
+libatomic
+openssl-libs
+libdrm
+libzstd
+zlib-ng-compat
+libstdc++
+libgomp
+vulkan-loader

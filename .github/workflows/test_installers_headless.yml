@@ -419,9 +419,9 @@ jobs:
           - {row: mac-arm64-install-sh, os: macos-latest, os_label: macOS arm64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
           - {row: mac-x64-install-sh, os: macos-15-intel, os_label: macOS x64, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
           - {row: ubuntu22-agent-ui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: agent-ui-deb, setup: true, title: Desktop app .deb, phases: download install launch health quit uninstall leftovers}
-          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, setup: true, title: Desktop app .deb, phases: download install launch health engine quit uninstall leftovers}
+          - {row: ubuntu24-agent-ui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: agent-ui-deb, setup: true, title: Desktop app .deb, phases: download install launch health quit engine uninstall leftovers}
           - {row: ubuntu22-appimage, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: appimage, setup: true, title: Desktop app .AppImage, phases: download install launch health quit uninstall leftovers}
-          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, setup: true, title: Desktop app .AppImage, phases: download install launch health engine quit uninstall leftovers}
+          - {row: ubuntu24-appimage, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: appimage, setup: true, title: Desktop app .AppImage, phases: download install launch health quit engine uninstall leftovers}
           - {row: ubuntu22-tui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb-upgrade, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb-upgrade, packages: linux, title: Terminal .deb upgrade from the previous stable release, phases: download install upgrade launch health uninstall leftovers}

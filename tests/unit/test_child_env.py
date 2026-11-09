@@ -322,6 +322,9 @@ def test_load_dotenv_is_only_called_from_gaia_env():
     )
 
 
+BUNDLE = "/home/u/.gaia/app-core/_internal"
+
+
 class TestFrozenLoaderPaths:
     """A frozen GAIA on Linux must not hand its bundled libraries to its children."""
 
@@ -329,6 +332,7 @@ class TestFrozenLoaderPaths:
     def frozen_linux(self, monkeypatch):
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "_MEIPASS", BUNDLE, raising=False)
 
     def test_restores_the_users_library_path(self, frozen_linux, monkeypatch):
         monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
@@ -346,13 +350,17 @@ class TestFrozenLoaderPaths:
         monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
         assert "LD_LIBRARY_PATH" not in gaia_env.child_env()
 
-    def test_a_relaunch_of_this_bundle_keeps_it(self, frozen_linux, monkeypatch):
-        monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+    def test_a_second_pass_keeps_the_users_path(self, frozen_linux, monkeypatch):
+        """The entry unfreezes os.environ at start; child_env runs it again."""
+        monkeypatch.setenv("LD_LIBRARY_PATH", f"{BUNDLE}:/opt/rocm/lib")
         monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
-        env = gaia_env.child_env(same_bundle=True)
-        assert env["LD_LIBRARY_PATH"] == "/bundle"
-        assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
-        assert env["LD_LIBRARY_PATH_ORIG"] == "/opt/rocm/lib"
+        gaia_env.unfreeze_loader_paths(os.environ)
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    def test_a_path_set_after_start_is_kept(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/rocm/lib")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
 
     def test_an_explicit_path_still_wins(self, frozen_linux, monkeypatch):
         monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
