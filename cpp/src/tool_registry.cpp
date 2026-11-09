@@ -239,8 +239,12 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
         }
     }
 
+    if (preCheck_) {
+        if (auto refused = preCheck_(*tool, effectiveArgs)) return *refused;
+    }
+
     // 3. CONFIRM check
-    if (tool->policy == ToolPolicy::CONFIRM) {
+    if (tool->policy == ToolPolicy::CONFIRM && !(tool->needsConfirm && !tool->needsConfirm(effectiveArgs))) {
         // Fast path: already permanently allowed
         const std::string grantKey =
             tool->grantScope ? resolvedName + ":" + tool->grantScope(effectiveArgs) : resolvedName;

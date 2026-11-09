@@ -29,6 +29,7 @@
 #include <gaia/session.h>
 
 #include "gaia_agent.h"
+#include "sidecar.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -46,6 +47,24 @@ namespace fs = std::filesystem;
 namespace {
 
 // This process's own peak resident memory in MB (children not included).
+// CPU seconds (user + system) this process used, children not included.
+double selfCpuSeconds() {
+#ifdef _WIN32
+    FILETIME c, e, k, u;
+    if (!GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) return -1;
+    auto secs = [](const FILETIME& f) {
+        return static_cast<double>((static_cast<unsigned long long>(f.dwHighDateTime) << 32) |
+                                   f.dwLowDateTime) / 1e7;
+    };
+    return secs(k) + secs(u);
+#else
+    struct rusage ru {};
+    if (getrusage(RUSAGE_SELF, &ru) != 0) return -1;
+    return static_cast<double>(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) +
+           static_cast<double>(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 1e6;
+#endif
+}
+
 double selfPeakRssMb() {
 #ifdef _WIN32
     PROCESS_MEMORY_COUNTERS pmc{};
@@ -472,7 +491,8 @@ int runPrint(const Cli& cli) {
                           {"tool_errors", result.value("tool_errors", 0)},
                           {"model", cfg.modelId},
                           {"duration_s", std::round(secs * 10) / 10},
-                          {"peak_rss_mb", std::round(selfPeakRssMb() * 10) / 10}};
+                          {"peak_rss_mb", std::round(selfPeakRssMb() * 10) / 10},
+                          {"cpu_s", std::round(selfCpuSeconds() * 100) / 100}};
         if (result.contains("usage")) out["usage"] = result["usage"];
         std::cout << out.dump(-1, ' ', false, gaia::json::error_handler_t::replace) << std::endl;
     } else {
@@ -642,6 +662,15 @@ int main(int argc, char** argv) {
         if (argc > 1 && std::string(argv[1]) == "skills") return runSkills(argc, argv);
         if (argc > 1 && std::string(argv[1]) == "models") return runModels(argc, argv);
         const Cli cli = parseArgs(argc, argv);
+        // The GAIA daemon starts its "gaia" sidecar as `<binary> --host H --port P`.
+        if (cli.mode == Cli::Mode::Interactive &&
+            (!gaia::getEnvVar("GAIA_GAIA_SIDECAR_TOKEN_FILE").empty() || !gaia::getEnvVar("GAIA_GAIA_SIDECAR_TOKEN").empty())) {
+            gaia::SidecarOptions so;
+            so.host = cli.host;
+            so.port = cli.port;
+            so.defaultModel = cli.model.empty() ? gaia::getEnvVar("GAIA_MODEL_ID") : cli.model;
+            return gaia::runSidecar(so);
+        }
         if (!cli.cwd.empty()) {
             std::error_code ec;
             fs::current_path(cli.cwd, ec);

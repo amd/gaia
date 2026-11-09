@@ -21,8 +21,15 @@
 
 namespace gaia {
 
+/// Runs before a tool asks for confirmation. A returned object is the call's
+/// result and the tool doesn't run (e.g. internet off for this chat).
+using ToolPreCheck = std::function<std::optional<json>(const ToolInfo& tool, const json& args)>;
+
 class GAIA_API ToolRegistry {
 public:
+    /// Install (or clear, with {}) the pre-confirmation check.
+    void setPreCheck(ToolPreCheck check) { preCheck_ = std::move(check); }
+
     /// Register a tool with the registry.
     /// @param info Complete tool information including callback.
     /// @throws std::runtime_error if a tool with the same name is already registered.
@@ -121,6 +128,7 @@ public:
     void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
 
 private:
+    ToolPreCheck preCheck_;
     std::map<std::string, ToolInfo> tools_;
     ToolConfirmCallback confirmCallback_;
     ToolPolicy defaultPolicy_ = ToolPolicy::ALLOW;

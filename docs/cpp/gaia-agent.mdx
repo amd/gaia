@@ -156,6 +156,24 @@ Each request carries its whole conversation, so the server keeps no state betwee
 
 The server binds `127.0.0.1` and refuses to bind any other address without a key. It sends no CORS headers and rejects requests that carry an `Origin` header unless you allow that origin with `--allow-origin`, and it rejects a `Host` header that isn't `localhost` or a loopback address. A web page in the user's browser therefore can't drive the agent. Tools run without confirmation in this mode: whoever starts the server and holds its key owns that decision.
 
+## Running as the GAIA agent in the Agent UI
+
+`gaiacpp` can stand in for the Python flagship behind the GAIA daemon, so the Agent UI chats with it unchanged. The daemon starts an installed agent binary as `<binary> --host 127.0.0.1 --port <P>` with its token in `GAIA_GAIA_SIDECAR_TOKEN_FILE`; when that variable (or `GAIA_GAIA_SIDECAR_TOKEN`) is set, `gaiacpp` serves the flagship's sidecar API, version 2.27:
+
+- Chat over Server-Sent Events: streamed text, tool activity, approvals with "always allow in this chat", Stop, and full access.
+- Per-chat folder scope (`allowed_paths`), working folder, attached documents, memory on, private or off, and internet off. Each can change between turns, and internet and memory also apply mid-turn.
+- Each chat's tools (`/sessions/{id}/tools`), its "always" answers (`/sessions/{id}/grants`), the skills list (`/skills`) and the memory list (`/memory`).
+
+A few things answer the way an older flagship would, and the UI copes with each:
+
+- A message sent mid-turn gets 409, so the UI sends it as the next message.
+- Undo reports "Undo may not work for this turn", because file changes aren't recorded yet.
+- The reply carries no context-window measurement.
+
+"Always allow" answers are kept per chat in memory. A shell command that only reads runs without asking: `ls`, `cat`, `grep`, or `find` without `-exec` or `-delete`, chained or piped, with output thrown away by `2>/dev/null`. Under cmd.exe only the built-ins `dir`, `type`, `cd` and `echo` qualify, because cmd runs a `find.bat` in the current folder before the real `find`. `git` always asks, because a repository's own config can make `git status` run a program. With the internet off, the chat refuses `web_fetch` to other hosts, every MCP tool, and shell commands that go online, before any approval card. On Windows the shell is Git Bash when Git for Windows is installed, found next to `git.exe` if it isn't on `PATH`, and `cmd.exe` otherwise; the WSL launcher (`System32\bash.exe`) is never used, because it can't see `C:\` paths. The system prompt names the shell in use.
+
+To try it, put `gaiacpp.exe` in `~/.gaia/agents/gaia/` with an `.installed` file naming it (`"artifact_kind": "binary"`, `"executable": "gaiacpp.exe"`, and its SHA-256). The Agent UI then relays to it whenever the Python `gaia_agent` package isn't importable in its environment.
+
 ## Lemonade integration
 
 Lemonade's agent host installs agents from a pinned GitHub release asset, configures them for the local server, and launches them (see Lemonade's `docs/guide/agents.md`). `gaiacpp` provides what that contract needs:
