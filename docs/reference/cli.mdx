@@ -2819,13 +2819,14 @@ Skills are discovered from these roots, highest precedence first:
 <Tabs>
   <Tab title="list">
     ```bash
-    gaia skill list [--json] [--root ROOT]
+    gaia skill list [--json] [--root ROOT] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
     | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-project` \| `claude-import` |
+    | `--agent-dir DIR` | Also discover the skills an agent package bundles in `DIR/skills/`, as root `agent-bundled`. Repeatable. Exits `2` if `DIR/skills/` does not exist |
 
     ```
     NAME                         VERSION    TIER          ROOT           TOOLS
@@ -2838,13 +2839,14 @@ Skills are discovered from these roots, highest precedence first:
 
   <Tab title="info">
     ```bash
-    gaia skill info <name> [--json] [--body]
+    gaia skill info <name> [--json] [--body] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON (including the full frontmatter) instead of text |
     | `--body` | Also print the Markdown instructions |
+    | `--agent-dir DIR` | Also look in the skills an agent package bundles in `DIR/skills/`. Repeatable |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
   </Tab>
