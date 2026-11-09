@@ -136,7 +136,7 @@ assigned a risk tier:
 |------|----------|---------|
 | **READ** | Auto-approve, no confirmation | `search_web`, `read_file` |
 | **WRITE** | Confirm-first popup in UI, y/n in CLI | `write_file`, `browser_click` |
-| **SHELL** | Confirmation-gated by default; "always" is scoped to the invocation | `run_shell_command`, `run_cli_command`, `wait_for_condition` |
+| **SHELL** | Confirmation-gated by default; "always" is scoped to the invocation | `run_shell_command`, `wait_for_condition` |
 | **DESTRUCTIVE** | Confirm-first with warning banner | `delete_file`, `git reset`, shell `rm` |
 | **DENIED** | Always blocked, cannot be overridden | `os.system`, `eval`, `exec`, `subprocess.Popen` (direct) |
 

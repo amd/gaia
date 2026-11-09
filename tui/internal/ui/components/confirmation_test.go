@@ -542,7 +542,7 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 		t.Errorf("shell warning must point at the command on screen: %q", shell)
 	}
 
-	if got := destructiveWarning("run_cli_command", false); got != shell {
+	if got := destructiveWarning("wait_for_condition", false); got != shell {
 		t.Errorf("both shell tools must share the wording, got %q", got)
 	}
 

@@ -41,7 +41,7 @@ RISK_NOTE_ARG = "_risk_note"
 #: pre-approves tools still asks about it, and never shows the marker itself.
 NEEDS_PERSON_ARG = "_needs_person"
 
-SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
     {

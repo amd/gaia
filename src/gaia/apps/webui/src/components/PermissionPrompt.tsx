@@ -30,7 +30,7 @@ function summarize(n: GaiaNotification): string {
 }
 
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
-const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'run_cli_command', 'wait_for_condition']);
+const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition']);
 
 /**
  * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`
