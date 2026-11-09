@@ -201,28 +201,28 @@ def _configured_deny() -> set:
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
 
 
-#: Library search paths a frozen (PyInstaller) GAIA points at its own bundle.
-_FROZEN_LOADER_VARS = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIBPATH")
-
-
-def _unfreeze_loader_paths(env: Dict[str, str]) -> None:
+def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
     """Give a child the library path the user had, not the frozen bundle's.
 
-    Otherwise a child such as lemond loads the bundle's older libstdc++ and
-    exits before it starts.
+    PyInstaller on Linux points ``LD_LIBRARY_PATH`` at the bundle and keeps the
+    user's value in ``LD_LIBRARY_PATH_ORIG``; a child that inherits the bundle
+    path (lemond, flm) loads its older libstdc++ and exits before it starts.
+    Changes and returns *env*; a no-op unless frozen on Linux.
     """
-    if not getattr(sys, "frozen", False):
-        return
-    for name in _FROZEN_LOADER_VARS:
-        original = env.pop(f"{name}_ORIG", None)
-        if original is not None:
-            env[name] = original
-        else:
-            env.pop(name, None)
+    if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
+        return env
+    original = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original is not None:
+        env["LD_LIBRARY_PATH"] = original
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
 
 
 def child_env(
-    extra: Optional[Mapping[str, str]] = None, deny: Iterable[str] = ()
+    extra: Optional[Mapping[str, str]] = None,
+    deny: Iterable[str] = (),
+    same_bundle: bool = False,
 ) -> Dict[str, str]:
     """A fresh environment for a child process GAIA spawns.
 
@@ -230,6 +230,10 @@ def child_env(
     name listed in ``GAIA_CHILD_ENV_DENY`` (comma or space separated) or in
     ``deny``, with ``extra`` overlaid last — a name the caller passes
     explicitly is always delivered. ``os.environ`` is never modified.
+
+    A frozen build hands the user's library path, not its bundle's (see
+    :func:`unfreeze_loader_paths`), unless *same_bundle*: a relaunch of
+    ``sys.executable`` that reuses this process's unpacked bundle needs it.
     """
     blocked = _configured_deny() | {name.upper() for name in deny}
     env = {
@@ -237,7 +241,8 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
-    _unfreeze_loader_paths(env)
+    if not same_bundle:
+        unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
     return env

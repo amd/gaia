@@ -431,19 +431,27 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
 
 #: Lines of lemond's own output quoted when it exits during start.
 _STARTUP_ERROR_LINES = 6
+_STARTUP_TAIL_BYTES = 256 * 1024
+#: lemond's own error levels, and the dynamic loader's refusals.
 _STARTUP_ERROR_RE = re.compile(
-    r"\[(?:error|critical|fatal)\]|error|failed|cannot|not found|denied|abort",
+    r"\[(?:error|critical|fatal)\]|error while loading shared libraries"
+    r"|version `[^']+' not found|cannot open shared object",
     re.IGNORECASE,
 )
+_STARTUP_WARNING_RE = re.compile(r"\b(?:error|failed|cannot|denied|abort)", re.I)
 
 
 def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
-    """What lemond wrote to *log_path* after *offset*, trimmed to its errors."""
+    """The end of what lemond wrote to *log_path* after *offset*, errors first."""
     with open(log_path, "rb") as fh:
-        fh.seek(offset)
-        text = fh.read(256 * 1024).decode("utf-8", errors="replace")
+        size = fh.seek(0, os.SEEK_END)
+        start = offset if offset <= size else 0
+        fh.seek(max(start, size - _STARTUP_TAIL_BYTES))
+        text = fh.read().decode("utf-8", errors="replace")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
+    if not errors:
+        errors = [line for line in lines if _STARTUP_WARNING_RE.search(line)]
     picked = (errors or lines)[-_STARTUP_ERROR_LINES:]
     from gaia.llm.failure_record import redact
 
@@ -2175,11 +2183,7 @@ class EmbeddedLemonade:
         except OSError as e:
             return f"{head} Its log {self.log_path} could not be read ({e})."
         if not said:
-            return (
-                f"{head} It wrote nothing to {self.log_path} before exiting, "
-                f"so it likely could not load at all: run {self.daemon_path} "
-                f"--version in a terminal to see the loader's error."
-            )
+            return f"{head} It wrote nothing before exiting. Full log: {self.log_path}"
         return f"{head} Lemonade said:\n{said}\nFull log: {self.log_path}"
 
     def _discard(self, process: subprocess.Popen) -> None:

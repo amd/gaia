@@ -679,7 +679,10 @@ class TestStartupExitMessage:
         )
         monkeypatch.setattr(embedded_mod, "_port_free", lambda port: True)
 
+        self.env = {}
+
         def fake_popen(argv, **kwargs):
+            self.env = kwargs["env"]
             kwargs["stdout"].write(output)
             kwargs["stdout"].flush()
             return SimpleNamespace(
@@ -704,10 +707,40 @@ class TestStartupExitMessage:
         assert "previous run" not in msg
         assert "exit code 1" in msg
 
-    def test_silent_exit_points_at_the_loader(self, manager, monkeypatch):
+    def test_silent_exit_names_the_log(self, manager, monkeypatch):
         self._exits_writing(manager, monkeypatch, b"")
-        with pytest.raises(EmbeddedLemonadeError, match="wrote nothing"):
+        with pytest.raises(EmbeddedLemonadeError, match="wrote nothing") as err:
             manager.start(port=50558)
+        assert str(manager.log_path) in str(err.value)
+
+    def test_quotes_the_loader_refusal_over_info_noise(self, manager, monkeypatch):
+        loader = (
+            b"/home/u/.gaia/lemonade/dist/2026.44.1/lemond: /home/u/.gaia/app-core/"
+            b"0.26.0rc13/_internal/libstdc++.so.6: version `GLIBCXX_3.4.32' not "
+            b"found (required by /home/u/.gaia/lemonade/dist/2026.44.1/lemond)\n"
+        )
+        noise = b"[Info] (ModelManager) 0 errors, model not found in cache\n" * 20
+        self._exits_writing(manager, monkeypatch, loader + noise)
+        with pytest.raises(EmbeddedLemonadeError) as err:
+            manager.start(port=50559)
+        assert "GLIBCXX_3.4.32' not found" in str(err.value)
+        assert "0 errors" not in str(err.value)
+
+    def test_a_frozen_linux_gaia_starts_lemond_without_its_bundle(
+        self, manager, monkeypatch
+    ):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(embedded_mod, "vulkan_workarounds", lambda: {})
+        import gaia.llm.npu_linux as npu_linux
+
+        monkeypatch.setattr(npu_linux, "raise_memlock_soft_limit", lambda: None)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        self._exits_writing(manager, monkeypatch, b"")
+        with pytest.raises(EmbeddedLemonadeError):
+            manager.start(port=50560)
+        assert "LD_LIBRARY_PATH" not in self.env
 
 
 class TestUnload:
