@@ -34,10 +34,22 @@ _EMOJI = re.compile(
     "|[\U0001f1e6-\U0001f1ff]{2})"
 )
 
-# What reads as an emoji in prose. Arrows and (c)/(tm) stay: "Settings -> X".
-_PROSE_PICTO = "[\u2600-\u27bf\U0001f000-\U0001faff]"
+# What renders as an emoji in prose: a character shown as emoji by default, or
+# any pictograph asking for it with VS16. Ticks, boxes, stars and arrows
+# (U+2713, U+2610, U+2605, U+279C) are text, so a checklist keeps its marks.
+_DEFAULT_EMOJI = (
+    "[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653"
+    "\u267f\u2693\u26a1\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea"
+    "\u26f2\u26f3\u26f5\u26fa\u26fd\u2705\u270a\u270b\u2728\u274c\u274e"
+    "\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55"
+    "\U0001f004\U0001f0cf\U0001f18e\U0001f191-\U0001f19a\U0001f201\U0001f21a"
+    "\U0001f22f\U0001f232-\U0001f236\U0001f238-\U0001f23a\U0001f250\U0001f251"
+    "\U0001f300-\U0001f64f\U0001f680-\U0001f6ff\U0001f7e0-\U0001f7eb"
+    "\U0001f900-\U0001faff]"
+)
+_PROSE_PICTO = f"(?:{_PICTO}\ufe0f|{_DEFAULT_EMOJI})"
 _PROSE_EMOJI = re.compile(
-    f"{_PROSE_PICTO}{_MOD}(?:\u200d{_PROSE_PICTO}{_MOD})*|[\U0001f1e6-\U0001f1ff]{{2}}"
+    f"{_PROSE_PICTO}{_MOD}(?:\u200d{_PICTO}{_MOD})*|[\U0001f1e6-\U0001f1ff]{{2}}"
 )
 _CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 _SPACE_BEFORE_PUNCT = re.compile(r"[ \t]+([.,!?;:])")
@@ -80,9 +92,10 @@ def take_reaction(answer: str) -> Tuple[Optional[str], str]:
             found.append(match.group(0).strip())
             return ""
 
-        # An emoji between a word and a capital was that sentence's full stop.
+        # An emoji between a word and a capital was that sentence's full stop;
+        # a one-letter word before it ("I <heart> Python") is the sentence's verb.
         segment = re.sub(
-            rf"(?<=\w)[ \t]*(?:{_PROSE_EMOJI.pattern})(?=[ \t]+[A-Z])",
+            rf"(?<=\w\w)[ \t]*(?:{_PROSE_EMOJI.pattern})(?=[ \t]+[A-Z])",
             lambda m: drop(m) + ".",
             segment,
         )

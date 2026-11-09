@@ -1364,3 +1364,32 @@ def test_an_emoji_in_the_reply_text_lands_on_the_users_message_instead():
     )
     assert ad.transport.reactions == [(msg.id, "🎉")]
     assert ad.transport.sent[-1]["text"] == "That's fantastic news. Enjoy it."
+
+
+def test_a_reaction_alone_that_discord_rejects_is_sent_as_text():
+    ad, clock = make()
+    ad.on_ready()
+    ad.handle_message(message(clock, "thanks!"))
+
+    def boom(*_args):
+        raise RuntimeError("Unknown Emoji")
+
+    ad.transport.react = boom
+    ad._on_agent_event(
+        {"type": "final", "answer": "[react: ❤️]"}, ad._agent().turns[-1]
+    )
+    assert ad.transport.sent[-1]["text"] == "❤️"
+
+
+def test_a_message_gaia_starts_keeps_its_emoji():
+    """A reminder has no user message to react to, so its emoji stay in the text."""
+    ad, clock = make()
+    ad.on_ready()
+    channel = message(clock, "hi").channel_id
+    ad._start_turn(channel, "", "remind me to stretch", None, heading="Reminder")
+    ad._on_agent_event(
+        {"type": "final", "answer": "Time to stretch \U0001f9d8\n[react: ✅]"},
+        ad._agent().turns[-1],
+    )
+    assert ad.transport.reactions == []
+    assert ad.transport.sent[-1]["text"] == "Reminder\nTime to stretch \U0001f9d8"

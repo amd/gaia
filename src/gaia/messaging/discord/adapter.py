@@ -52,7 +52,7 @@ from gaia.messaging.bridge import (
     resolve_agent_argv,
 )
 from gaia.messaging.discord import github_watch, state
-from gaia.messaging.expression import CHAT_STYLE_NOTE, take_reaction
+from gaia.messaging.expression import CHAT_STYLE_NOTE, split_reaction, take_reaction
 from gaia.security import is_scratch_path
 
 log = get_logger(__name__)
@@ -1571,14 +1571,21 @@ class DiscordAdapter:
                 return
             answer = kept
         if not failed:
-            emoji, answer = take_reaction(answer)
-            if emoji and target.message_id:
-                self._react(target.channel_id, target.message_id, emoji)
+            emoji, stripped = take_reaction(answer)
+            if (
+                emoji
+                and target.message_id
+                and self._react(target.channel_id, target.message_id, emoji)
+            ):
+                answer = stripped
                 if not answer.strip():
                     if target.reply_id:
                         self._delete(target.channel_id, target.reply_id)
                         target.reply_id = ""
                     return
+            else:
+                # No reaction landed, so the emoji stays in the text for the user to see.
+                answer = split_reaction(answer)[1] or emoji or ""
         if target.heading:
             answer = f"{target.heading}\n{answer}"
         for chunk in split_message(untable(answer) or "-# (no answer)"):
@@ -1604,13 +1611,15 @@ class DiscordAdapter:
         except Exception as e:  # noqa: BLE001 - an edit failure must not kill the turn
             log.warning("Could not edit Discord message %s: %s", message_id, e)
 
-    def _react(self, channel_id: str, message_id: str, emoji: str) -> None:
+    def _react(self, channel_id: str, message_id: str, emoji: str) -> bool:
         try:
             self.transport.react(channel_id, message_id, emoji)
+            return True
         except Exception as e:  # noqa: BLE001 - a lost reaction must not kill the turn
             log.warning(
                 "Could not react %s to Discord message %s: %s", emoji, message_id, e
             )
+            return False
 
     def _delete(self, channel_id: str, message_id: str) -> None:
         self._untrack(message_id)

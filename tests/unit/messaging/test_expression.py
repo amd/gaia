@@ -60,3 +60,25 @@ def test_arrows_and_code_are_left_alone():
 
     text = "Open Settings \u2192 Connectors and run `echo \U0001f389`."
     assert take_reaction(text) == (None, text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Tests: ✓ unit ✗ lint",
+        "☐ buy milk\n☑ call mom",
+        "Rated ★★★",
+        "Go to Settings ➜ Discord",
+        "⚠ This deletes the folder.",
+    ],
+)
+def test_text_symbols_are_not_emoji(text):
+    from gaia.messaging.expression import take_reaction
+
+    assert take_reaction(text) == (None, text)
+
+
+def test_a_one_letter_word_before_an_emoji_gets_no_full_stop():
+    from gaia.messaging.expression import take_reaction
+
+    assert take_reaction("I ❤️ Python")[1] == "I Python"
