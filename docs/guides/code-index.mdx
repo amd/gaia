@@ -42,7 +42,7 @@ uv pip install -e '.[rag]'
 Embeddings are generated locally by Lemonade. If you haven't installed it yet, `gaia init` installs the server and pulls the model — `gaia daemon` starts and supervises it from there.
 
 <Warning>
-**Requires Lemonade Server v10.9.0 or newer.** EmbeddingGemma does not load on older servers: the embeddings endpoint returns HTTP 422 (`Failed to load user.embeddinggemma-300m-GGUF with llama-server`), and indexing can stall for many minutes on a download that already finished. If you see either, upgrade Lemonade Server. `gaia init` names the version it found and the one the profile needs. The profiles that ship this embedder (`gaia`, `chat`, `rag`) enforce the same floor.
+**Requires Lemonade Server v2026.44.1 or newer**, the oldest version GAIA supports for everything, not just the code index. `gaia init` refuses an older server and names the version it found. Upgrade as described in the [install guide](/guides/install).
 </Warning>
 
 <Note>
