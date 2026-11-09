@@ -242,6 +242,7 @@ def apply_policy(value: str) -> Dict[str, Any]:
     write or get silently swallowed.
     """
     from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
 
     stored = set_policy(value)
     result: Dict[str, Any] = {
@@ -257,7 +258,7 @@ def apply_policy(value: str) -> Dict[str, Any]:
 
     try:
         result["cleared"] = clear_saved_cloud_models()
-    except GaiaConfigError as e:
+    except (GaiaConfigError, LemonadeClientError) as e:
         result["notices"].append(
             {
                 "code": "saved_models_not_checked",
@@ -309,9 +310,25 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
         GaiaConfigError: config.json exists but can't be read or written.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        is_cloud_model,
+        may_be_cloud_model,
+    )
 
     cfg = GaiaConfig.load()
+    # A CLI policy switch starts in a fresh process, before any model listing.
+    # Query Lemonade once for any ambiguous saved id, before writing cleanup.
+    # A failed query must be reported by apply_policy, not silently treated as local.
+    if any(
+        may_be_cloud_model((getattr(cfg, key) or "").strip())
+        and not is_cloud_model((getattr(cfg, key) or "").strip())
+        and not cloud_model_provider((getattr(cfg, key) or "").strip())
+        for key in SAVED_MODEL_KEYS
+    ):
+        LemonadeClient(verbose=False).list_models()
+
     cleared = []
     for key in SAVED_MODEL_KEYS:
         model = (getattr(cfg, key) or "").strip()

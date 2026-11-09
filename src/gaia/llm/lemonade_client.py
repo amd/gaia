@@ -546,11 +546,7 @@ def resolve_default_vision_model() -> Optional[str]:
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
     current = config.last_model or model
-    cloud = (
-        current.startswith("claude-")
-        or bool(cloud_model_provider(current))
-        or is_cloud_model(current)
-    )
+    cloud = current.startswith("claude-") or is_cloud_model_with_catalog(current)
     if not cloud and runs_on_npu(current):
         return None
     chosen = config.vision_model
@@ -3374,6 +3370,22 @@ def may_be_cloud_model(model_id: Optional[str]) -> bool:
     if not model_id or "." not in model_id:
         return False
     return not any(mr.model_id == model_id for mr in MODELS.values())
+
+
+def is_cloud_model_with_catalog(
+    model_id: Optional[str], base_url: Optional[str] = None
+) -> bool:
+    """Classify a model even before this process has read Lemonade's catalog.
+
+    Built-in, known-cloud and known-local ids incur no request. Ambiguous ids
+    read the catalog once and fail loudly if it is unavailable rather than
+    silently taking a gateway model down a local hardware path.
+    """
+    if cloud_model_provider(model_id) or is_cloud_model(model_id):
+        return True
+    if not may_be_cloud_model(model_id):
+        return False
+    return LemonadeClient(base_url=base_url, verbose=False)._is_cloud_model(model_id)
 
 
 def is_tool_calling_model(model_id: Optional[str]) -> bool:

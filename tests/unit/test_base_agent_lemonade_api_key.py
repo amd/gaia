@@ -193,28 +193,77 @@ def test_cloud_startup_checks_server_without_loading_local_chat(monkeypatch, mod
     local_init.assert_not_called()
 
 
-def test_catalog_discovered_cloud_agent_skips_local_preload(monkeypatch):
-    from gaia.agents.base.agent import Agent
-    from gaia.llm.lemonade_client import record_cloud_models
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_catalog_discovered_cloud_agent_skips_local_preload(monkeypatch, warm_cache):
+    from gaia.agents.base.agent import CLOUD_MAX_OUTPUT_TOKENS, Agent
+    from gaia.llm.lemonade_client import LemonadeClient, record_cloud_models
 
     class CloudAgent(Agent):
         def _register_tools(self):
             return None
 
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
     health = MagicMock(return_value={"status": "ok"})
     local_init = MagicMock()
-    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient.health_check", health)
+    listed = MagicMock()
+
+    def list_models(self):
+        listed()
+        record_cloud_models(catalog)
+        return catalog
+
+    eviction_cloud = []
+
+    def context_eviction(mode, model, *, cloud):
+        eviction_cloud.append(cloud)
+        return False
+
+    monkeypatch.setattr(
+        "gaia.agents.base.agent.resolve_context_eviction", context_eviction
+    )
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    monkeypatch.setattr(LemonadeClient, "health_check", health)
     monkeypatch.setattr(
         "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
     )
-    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    record_cloud_models(catalog if warm_cache else {"data": []})
     try:
         agent = CloudAgent(model_id="opencode.big-model", silent_mode=True)
         assert agent.model_id == "opencode.big-model"
+        assert agent.chat.config.max_tokens == CLOUD_MAX_OUTPUT_TOKENS
+        assert eviction_cloud == [True]
+        assert listed.call_count == (0 if warm_cache else 1)
         health.assert_called_once()
         local_init.assert_not_called()
     finally:
         record_cloud_models({"data": []})
+
+
+def test_cold_cloud_catalog_failure_never_falls_through_to_local_preload(monkeypatch):
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    preload = MagicMock()
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", preload
+    )
+
+    def unavailable(self):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(LemonadeClient, "list_models", unavailable)
+    record_cloud_models({"data": []})
+    with pytest.raises(LemonadeClientError, match="opencode.big-model"):
+        CloudAgent(model_id="opencode.big-model", silent_mode=True)
+    preload.assert_not_called()
 
 
 def test_local_agent_hands_its_model_to_ensure_ready(monkeypatch):

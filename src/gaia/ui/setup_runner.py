@@ -357,18 +357,21 @@ def _agent_turn_failure(model_id: str) -> str:
     """The Test step's sentence for a failed chat on *model_id*."""
     from gaia.llm.lemonade_client import (
         LemonadeClient,
-        cloud_model_provider,
-        is_cloud_model,
+        LemonadeClientError,
+        is_cloud_model_with_catalog,
     )
     from gaia.ui.routers.providers import display_name
     from gaia.ui.warmup import _device_for
 
     name = display_name(model_id)
-    if (
-        model_id.startswith("claude-")
-        or cloud_model_provider(model_id)
-        or is_cloud_model(model_id)
-    ):
+    try:
+        cloud = model_id.startswith("claude-") or is_cloud_model_with_catalog(model_id)
+    except LemonadeClientError as e:
+        return (
+            f"GAIA's test chat on {name} got no answer, and the model catalog "
+            f"could not be checked ({e}). Check Lemonade and retry setup."
+        )
+    if cloud:
         what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
     else:
         device = _device_for(LemonadeClient(verbose=False), model_id)

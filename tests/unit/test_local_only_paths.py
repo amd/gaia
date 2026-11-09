@@ -362,6 +362,73 @@ def test_switching_on_clears_runtime_discovered_cloud_defaults(local_only_on):
         record_cloud_models({"data": []})
 
 
+def test_cold_cli_policy_switch_clears_discovered_cloud_defaults(
+    local_only_on, monkeypatch
+):
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "default_model": "opencode.big-model",
+                "last_model": "opencode.big-model",
+                "last_provider": "local",
+            }
+        ),
+        encoding="utf-8",
+    )
+    listed = []
+
+    def list_models(self):
+        listed.append(True)
+        record_cloud_models(catalog)
+        return catalog
+
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    record_cloud_models({"data": []})  # new CLI process, not a warm UI cache
+    try:
+        result = local_only.apply_policy("local_ai_only")
+        assert result["cleared"] == [
+            ("default_model", "opencode.big-model"),
+            ("last_model", "opencode.big-model"),
+        ]
+        assert listed == [True]
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["default_model"] is None
+        assert saved["last_model"] is None
+        assert saved["last_provider"] is None
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_cold_policy_catalog_failure_is_a_visible_notice(local_only_on, monkeypatch):
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "opencode.big-model"}), encoding="utf-8"
+    )
+    record_cloud_models({"data": []})
+
+    def unavailable(self):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(LemonadeClient, "list_models", unavailable)
+    result = local_only.apply_policy("local_ai_only")
+    assert result["policy"] == local_only.NetworkPolicy.LOCAL_AI_ONLY
+    assert result["cleared"] == []
+    assert result["notices"][0]["code"] == "saved_models_not_checked"
+    assert "catalog unavailable" in result["warnings"][0]
+    assert (
+        json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))[
+            "default_model"
+        ]
+        == "opencode.big-model"
+    )
+
+
 def test_dotted_local_model_survives_cloud_cleanup(local_only_on):
     from gaia import config as config_mod
     from gaia.llm.lemonade_client import record_cloud_models

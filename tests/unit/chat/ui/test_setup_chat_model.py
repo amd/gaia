@@ -285,11 +285,23 @@ def test_discovered_cloud_setup_runs_final_agent_test(monkeypatch):
         record_cloud_models({"data": []})
 
 
-def test_discovered_cloud_chat_failure_never_claims_local_hardware(monkeypatch):
-    from gaia.llm.lemonade_client import record_cloud_models
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_discovered_cloud_chat_failure_never_claims_local_hardware(
+    monkeypatch, warm_cache
+):
+    from gaia.llm.lemonade_client import LemonadeClient, record_cloud_models
     from gaia.ui import warmup
 
-    record_cloud_models({"data": [{"id": "opencode.big-model", "recipe": "cloud"}]})
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    reads = []
+
+    def list_models(self):
+        reads.append(True)
+        record_cloud_models(catalog)
+        return catalog
+
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    record_cloud_models(catalog if warm_cache else {"data": []})
     monkeypatch.setattr(
         warmup, "_device_for", lambda *_a: pytest.fail("cloud needs no device")
     )
@@ -297,6 +309,7 @@ def test_discovered_cloud_chat_failure_never_claims_local_hardware(monkeypatch):
         message = sr._agent_turn_failure("opencode.big-model")
         assert "runs in the cloud" in message
         assert "loads on this PC" not in message
+        assert len(reads) == (0 if warm_cache else 1)
     finally:
         record_cloud_models({"data": []})
 
