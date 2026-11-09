@@ -101,6 +101,35 @@ test("with the .deb's launcher installed, the AppImage writes none over it", () 
   expect(fs.existsSync(entryPath())).toBe(false);
 });
 
+test("the AppImage's own bundled entry on XDG_DATA_DIRS doesn't count as an install", () => {
+  const appDir = path.join(home, "mount");
+  const bundled = path.join(appDir, "usr", "share", "applications");
+  fs.mkdirSync(bundled, { recursive: true });
+  fs.writeFileSync(path.join(bundled, pkg.desktopName), "[Desktop Entry]\n");
+  deps.env.APPDIR = appDir;
+  deps.env.XDG_DATA_DIRS = `${path.join(appDir, "usr", "share")}:${deps.env.XDG_DATA_DIRS}`;
+  expect(installAppImageLauncher(deps).status).toBe("written");
+});
+
+test("a release with a new icon replaces the old one", () => {
+  installAppImageLauncher(deps);
+  const { icon } = launcherPaths(deps.env, home);
+  fs.writeFileSync(icon, "last release's icon");
+  expect(installAppImageLauncher(deps).status).toBe("written");
+  expect(fs.readFileSync(icon).subarray(1, 4).toString()).toBe("PNG");
+});
+
+test("a newline in the AppImage path stays on one line of the entry", () => {
+  deps.env.APPIMAGE = `${home}/odd\nname.AppImage`;
+  installAppImageLauncher(deps);
+  const tryExec = lines().filter((line) => line.startsWith("TryExec="));
+  expect(tryExec).toHaveLength(1);
+  expect(tryExec[0].endsWith("odd\\nname.AppImage")).toBe(true);
+  expect(lines().find((line) => line.startsWith("Exec=")).endsWith('odd\\nname.AppImage"')).toBe(true);
+  expect(lines()).toContain("StartupWMClass=gaia-desktop");
+  expect(lines().every((line) => line === "" || line.startsWith("[") || line.includes("="))).toBe(true);
+});
+
 test.each([
   ["Windows", { platform: "win32" }],
   ["a Linux .deb install, which has no APPIMAGE", { env: {} }],

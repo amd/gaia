@@ -28,12 +28,18 @@ const OWNED = "X-GAIA-AppImage=true";
 function desktopExecArg(file) {
   // "%" starts a field code (%f, %u…) anywhere in Exec=, so it is doubled.
   const quoted = `"${file.replace(/%/g, "%%").replace(/["`$\\]/g, (c) => `\\${c}`)}"`;
-  return quoted.replace(/\\/g, "\\\\");
+  return quoted.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
 }
 
-/** A path as a plain string value (Icon=, TryExec=), where only "\" is special. */
+/** A path as a plain string value (Icon=, TryExec=): "\" and a newline are escaped. */
 function desktopString(file) {
-  return file.replace(/\\/g, "\\\\");
+  return file.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
+}
+
+/** Whether `dir` is `root` or inside it. */
+function isInside(dir, root) {
+  const rel = path.relative(path.resolve(root), path.resolve(dir));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
 function launcherPaths(env, home) {
@@ -78,7 +84,10 @@ function installAppImageLauncher({
   const appImage = env.APPIMAGE;
   if (platform !== "linux" || !appImage) return { status: "not-appimage" };
 
-  const systemDirs = (env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":").filter(Boolean);
+  // An AppImage's own mount can be on XDG_DATA_DIRS; its bundled entry isn't an install.
+  const systemDirs = (env.XDG_DATA_DIRS || "/usr/local/share:/usr/share")
+    .split(":")
+    .filter((dir) => dir && !(env.APPDIR && isInside(dir, env.APPDIR)));
   const packaged = systemDirs.find((dir) => fs.existsSync(path.join(dir, "applications", DESKTOP_FILE)));
   if (packaged) return { status: "package-installed", entry: path.join(packaged, "applications", DESKTOP_FILE) };
 
@@ -87,9 +96,11 @@ function installAppImageLauncher({
   try {
     const current = fs.existsSync(entry) ? fs.readFileSync(entry, "utf8") : null;
     if (current !== null && !current.split("\n").includes(OWNED)) return { status: "kept-existing", entry };
-    if (current === wanted && fs.existsSync(icon)) return { status: "current", entry };
+    const image = fs.readFileSync(iconSource);
+    const iconCurrent = fs.existsSync(icon) && fs.readFileSync(icon).equals(image);
+    if (current === wanted && iconCurrent) return { status: "current", entry };
     fs.mkdirSync(path.dirname(icon), { recursive: true });
-    fs.writeFileSync(icon, fs.readFileSync(iconSource));
+    fs.writeFileSync(icon, image);
     fs.mkdirSync(path.dirname(entry), { recursive: true });
     fs.writeFileSync(entry, wanted, "utf8");
   } catch (err) {
