@@ -15,6 +15,7 @@
 #include <gaia/agent.h>
 #include <gaia/document_index.h>
 #include <gaia/lemonade_client.h>
+#include <gaia/memory_store.h>
 #include <gaia/skill_library.h>
 
 namespace gaia {
@@ -30,6 +31,8 @@ public:
         bool fullAccess = false;
         bool documents = true;       // index_document / query_documents
         std::string embeddingModel;  // empty = keyword-only retrieval
+        bool memory = true;          // remember / recall across sessions
+        std::string memoryPath;      // empty = MemoryStore::defaultPath()
     };
 
     DocumentIndex* documents() { return docs_.get(); }
@@ -57,6 +60,7 @@ private:
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;
+    std::unique_ptr<MemoryStore> memory_;
 };
 
 } // namespace gaia
