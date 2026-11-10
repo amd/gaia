@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """A "change nothing else" edit that also removed a line is called out."""
 
+import pytest
+
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.unasked_edits import (
     limits_edit,
@@ -111,3 +113,75 @@ def test_a_line_a_later_edit_puts_back_is_not_reported():
         {"status": "success"},
     )
     assert agent._turn_unasked_removals == []
+
+
+# An in-place edit the request asked for is not a removal, even though no word
+# of the old line appears in the request.
+IN_PLACE_EDITS = [
+    (
+        "Fix the typo in the first line of story.txt. Change nothing else.",
+        "Teh quick brown fox jumps over the lazy dog.",
+        "The quick brown fox jumps over the lazy dog.",
+    ),
+    (
+        "Capitalize the heading in notes.md. Change nothing else.",
+        "# shopping plan",
+        "# Shopping Plan",
+    ),
+    (
+        "Capitalize the heading in notes.md. Change nothing else.",
+        "# intro",
+        "# INTRO",
+    ),
+    (
+        "Update the date to 2026-11-10 in report.md. Change nothing else.",
+        "Due: 2025-03-14",
+        "Due: 2026-11-10",
+    ),
+    (
+        "Fix the grammar in the intro of essay.txt. Change nothing else.",
+        "Me and him goes to the store every days.",
+        "He and I go to the store every day.",
+    ),
+    (
+        "Translate the greeting in page.txt into French. Change nothing else.",
+        "Hello, welcome to our shop!",
+        "Bonjour, bienvenue dans notre boutique !",
+    ),
+]
+
+
+@pytest.mark.parametrize("request_text,old,new", IN_PLACE_EDITS)
+def test_an_edit_asked_for_in_place_is_not_called_a_removal(request_text, old, new):
+    agent = _agent(request_text)
+    agent._note_edit_removals(
+        {"file_path": "C:/x/f.txt", "old_content": old, "new_content": new},
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == []
+
+
+def test_the_gemma_replacement_is_still_called_out_next_to_in_place_edits():
+    agent = _agent(REQUEST)
+    agent._note_edit_removals(
+        {
+            "file_path": "C:/x/todo.txt",
+            "old_content": "- milk\n- bread\n- eggs",
+            "new_content": "- oat milk\n- bread\n- apples",
+        },
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == [("todo.txt", "- eggs")]
+
+
+def test_a_deleted_line_with_a_near_twin_left_behind_is_still_caught():
+    agent = _agent(REQUEST)
+    agent._note_edit_removals(
+        {
+            "file_path": "C:/x/todo.txt",
+            "old_content": "- egg box 1\n- egg box 2\n- milk",
+            "new_content": "- egg box 2\n- oat milk",
+        },
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == [("todo.txt", "- egg box 1")]

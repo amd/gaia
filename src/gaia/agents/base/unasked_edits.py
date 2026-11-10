@@ -7,8 +7,9 @@ instead, then report that it appended. The edit's own arguments show what
 went, so the answer can say so whatever the model claims.
 """
 
+import difflib
 import re
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Sequence, Set
 
 #: Requests that limit an edit to what they name.
 _KEEP_REST_RE = re.compile(
@@ -19,6 +20,8 @@ _KEEP_REST_RE = re.compile(
     re.IGNORECASE,
 )
 _WORD_RE = re.compile(r"[A-Za-z0-9]{3,}")
+#: How alike a removed line and an added one must be to count as one line edited.
+_SAME_LINE_RATIO = 0.75
 #: Words too common to show that a request named a line.
 _COMMON = frozenset(
     "the and for with that this from into then than are was were but not all "
@@ -53,6 +56,47 @@ def unasked(lines: Iterable[str], request: str) -> List[str]:
         line
         for line in lines
         if _distinctive(line) and not any(w in asked for w in _distinctive(line))
+    ]
+
+
+def edited_in_place(old_content: str, new_content: str, request: str) -> Set[str]:
+    """Removed lines the edit rewrote rather than dropped.
+
+    A line counts as rewritten when an added line closely matches it ("Teh" to
+    "The"), or when the line that replaced it keeps one of its words ("Due:"
+    with a new date) or is text the request never spelled out (a translation).
+    A line swapped wholesale for text the request asked to add is the line
+    lost, not rewritten.
+    """
+    old_lines = [line.strip() for line in old_content.splitlines() if line.strip()]
+    new_lines = [line.strip() for line in new_content.splitlines() if line.strip()]
+    before = set(old_lines)
+    added = [line.lower() for line in new_lines if line not in before]
+    asked = set(_distinctive(request or ""))
+    rewritten = set()
+    for line in old_lines:
+        if difflib.get_close_matches(line.lower(), added, n=1, cutoff=_SAME_LINE_RATIO):
+            rewritten.add(line)
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "replace":
+            continue
+        for line, replacement in zip(old_lines[i1:i2], new_lines[j1:j2]):
+            words = _distinctive(replacement)
+            if set(words) & set(_distinctive(line)):
+                rewritten.add(line)
+            elif words and not any(w in asked for w in words):
+                rewritten.add(line)
+    return rewritten
+
+
+def unasked_removals(old_content: str, new_content: str, request: str) -> List[str]:
+    """Lines the edit dropped that a limited *request* never asked about."""
+    rewritten = edited_in_place(old_content, new_content, request)
+    return [
+        line
+        for line in unasked(removed_lines(old_content, new_content), request)
+        if line not in rewritten
     ]
 
 

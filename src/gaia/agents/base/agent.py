@@ -164,8 +164,7 @@ from gaia.agents.base.turn_scope import (
 from gaia.agents.base.unasked_edits import (
     limits_edit,
     removal_note,
-    removed_lines,
-    unasked,
+    unasked_removals,
 )
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -7592,7 +7591,7 @@ Do NOT wrap conversational replies in JSON.
             for path, line in removals
             if path != name or line not in restored
         ]
-        for line in unasked(removed_lines(old, new), str(request)):
+        for line in unasked_removals(old, new, str(request)):
             if (name, line) not in removals:
                 removals.append((name, line))
 
