@@ -22,7 +22,6 @@ FRAMEWORK_PATHS: Set[str] = {
     # (covered below); editable hub checkouts show as hub/agents/<id>/python/.
     "hub/agents/",
     "gaia_agent/",
-    "gaia_agent_chat",
     "site-packages/",
 }
 

@@ -1165,7 +1165,7 @@ class TestTranscriptionStatus:
 def _repo_profiles():
     """Load this checkout's chat profiles by path.
 
-    ``import gaia_agent_chat`` can resolve to a different checkout when the hub
+    ``import gaia_agent`` can resolve to a different checkout when the hub
     packages are editable-installed elsewhere, which would silently test the
     wrong source.
     """
