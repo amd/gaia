@@ -86,6 +86,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const { probeTrayHost } = require("./services/tray-host.cjs");
+const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -1229,6 +1230,15 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  // Before the window: the desktop ties a window to its launcher when it appears.
+  if (app.isPackaged) {
+    try {
+      const launcher = installAppImageLauncher();
+      if (launcher.status === "written") console.log(`[main] Wrote the AppImage launcher ${launcher.entry}`);
+    } catch (err) {
+      console.error(`[main] ${err.message}`);
+    }
+  }
   createWindow();
   initializeServices();
   engineInstall = createEngineInstall({

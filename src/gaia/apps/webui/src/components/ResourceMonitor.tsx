@@ -176,6 +176,7 @@ export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
         });
     }
     if (usage.devices_error) tiles.push(unavailable(t, 'gpu', t('resources.gpu'), usage.devices_error));
+    if (usage.npus_error) tiles.push(unavailable(t, 'npu', t('resources.npu'), usage.npus_error));
     const networks = usage.networks ?? [];
     for (const net of networks) {
         // One unit for both, the larger one's, as Task Manager shows "S: 0 R: 8.0 Kbps".

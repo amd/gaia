@@ -442,15 +442,6 @@ func dedupeNonEmpty(vals ...string) []string {
 	return out
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 // ---------------------------------------------------------------------------
 // diff
 // ---------------------------------------------------------------------------
