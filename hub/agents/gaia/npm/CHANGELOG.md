@@ -36,6 +36,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **The agent leaves a locked file alone.** It no longer edits or unlocks a
+  file another program, the OS or you have locked; it says how to release the
+  lock and asks first, on every model and in any folder.
 - **`/index` reads a file outside the working folder, and `/resume` counts
   only what loaded** (#6978). `/index <file>` grants the file it names before
   indexing it, so a PDF elsewhere on disk indexes instead of being refused.
