@@ -505,6 +505,44 @@ def test_handler_and_translation_carry_audio_path(gaia_dir):
     assert relayed["data"]["audio_path"] == wav
 
 
+def test_a_relayed_flagship_media_result_still_draws_the_inline_card(gaia_dir):
+    """The terminal's ``media`` card must not displace the Agent UI's own card."""
+    from gaia.ui.sidecar.profiles import profile_for
+    from gaia.ui.sidecar.relay import _dispatch_one
+    from gaia.ui.sse_handler import SSEOutputHandler
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    wav = str(_wav(media_dir("audio") / "music_5.wav"))
+    sidecar = SSEOutputHandler()
+    sidecar._last_tool_name = "generate_music"
+    sidecar.pretty_print_json({"status": "success", "audio_path": wav}, "Result")
+    result = next(
+        e
+        for e in iter(sidecar.event_queue.get_nowait, None)
+        if e.get("type") == "tool_result"
+    )
+    translator = CanonicalTranslator(
+        run_id="r", agent_id="gaia", render_tool_map={"generate_music": "media"}
+    )
+    translator.translate({"type": "tool_start", "tool": "generate_music"})
+    canonical = next(
+        e for e in translator.translate(result) if e["type"] == "tool_result"
+    )
+    assert canonical["render"] == "media"
+
+    ui = SSEOutputHandler()
+    _dispatch_one(ui, canonical, profile_for("gaia"))
+    relayed = next(
+        e
+        for e in iter(ui.event_queue.get_nowait, None)
+        if e.get("type") == "tool_result"
+    )
+    assert "render" not in relayed
+    card = media_card(relayed, {"prompt": "rain"})
+    assert card["render"] == "audio"
+    assert card["data"]["src"] == "/api/media/audio/music_5.wav"
+
+
 # ── The chat stream: the card is streamed, persisted and reloaded ────────────
 
 

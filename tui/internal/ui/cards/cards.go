@@ -44,6 +44,8 @@ func Render(renderKey string, data json.RawMessage, width int) string {
 		return renderImage(data, width)
 	case "audio":
 		return renderAudio(data, width)
+	case "media":
+		return renderMedia(data, width)
 	case "diff":
 		return renderDiff(data, width)
 	default:

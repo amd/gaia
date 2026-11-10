@@ -340,6 +340,55 @@ class TestRunInit(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+class TestInitProfilePersistence(unittest.TestCase):
+    """`gaia init` exits non-zero when it can't save the profile (#3954)."""
+
+    def _run(self, update):
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(
+            profile="minimal", yes=True, skip_models=True, skip_webui_build=True
+        )
+        with (
+            patch.object(InitCommand, "_print_header"),
+            patch.object(InitCommand, "_print"),
+            patch.object(InitCommand, "_print_step"),
+            patch.object(InitCommand, "_choose_lemonade", return_value=True),
+            patch.object(InitCommand, "_ensure_lemonade_ready", return_value=True),
+            patch.object(InitCommand, "_ensure_llamacpp_backend", return_value=True),
+            patch.object(InitCommand, "_verify_setup", return_value=True),
+            patch.object(
+                InitCommand, "_print_completion", return_value=True
+            ) as completion,
+            patch.object(InitCommand, "_print_error") as print_error,
+            # Never touch the real ~/.gaia/config.json during a test.
+            patch("gaia.config.GaiaConfig.update", update),
+        ):
+            rc = cmd.run()
+        return rc, print_error, completion
+
+    def test_saved_profile_exits_zero(self):
+        update = MagicMock()
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 0)
+        update.assert_called_once()
+        print_error.assert_not_called()
+        completion.assert_called_once()
+
+    def test_unsaved_profile_exits_one_and_says_why(self):
+        update = MagicMock(side_effect=OSError("disk full"))
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 1)
+        print_error.assert_called_once()
+        message = print_error.call_args.args[0]
+        self.assertIn("Failed to save profile 'minimal'", message)
+        self.assertIn("disk full", message)
+        self.assertIn("gaia config set profile minimal", message)
+        completion.assert_not_called()
+
+
 class TestInitProfiles(unittest.TestCase):
     """Test init profile definitions."""
 
