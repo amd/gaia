@@ -94,3 +94,73 @@ func strconvQuote(path string) string {
 	}
 	return string(encoded)
 }
+
+func TestDeletedMediaFileIsRefusedWithoutACrash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gone.wav")
+	if err := os.WriteFile(path, []byte("wav"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestChat(t)
+	m.messages = []Message{{
+		Role:   RoleCard,
+		Render: "media",
+		Data:   json.RawMessage(`{"kind":"media","path":` + strconvQuote(path) + `,"media_type":"audio"}`),
+	}}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.latestMediaCard(); ok {
+		t.Fatal("latestMediaCard accepted a deleted file")
+	}
+	for _, action := range []string{"open", "reveal"} {
+		msg, ok := m.mediaActionCmd(action)().(mediaActionResultMsg)
+		if !ok || msg.err == nil {
+			t.Fatalf("%s on a deleted file = %+v, want a reported error", action, msg)
+		}
+	}
+	_ = m.statusHints()
+}
+
+func TestRemoteAndDevicePathsAreRefused(t *testing.T) {
+	for _, p := range []string{
+		`\host\share\a.png`,
+		`//host/share/a.png`,
+		`\?\UNC\host\share\a.png`,
+		`\.\C:\a.png`,
+		`\??\C:\a.png`,
+		"C:\a\x00.png",
+	} {
+		if !isRemoteOrDevicePath(p) {
+			t.Errorf("isRemoteOrDevicePath(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{`C:\Users\me\a.png`, "/home/me/a.png", "/tmp/a b.png"} {
+		if isRemoteOrDevicePath(p) {
+			t.Errorf("isRemoteOrDevicePath(%q) = true, want false", p)
+		}
+	}
+}
+
+func TestMediaArgvNeverUsesAShell(t *testing.T) {
+	path := `/tmp/a b; rm -rf ~ $(x) & "q".png`
+	shells := map[string]bool{"sh": true, "bash": true, "cmd": true, "cmd.exe": true, "powershell": true, "pwsh": true}
+	for _, goos := range []string{"windows", "darwin", "linux"} {
+		for _, action := range []string{"open", "reveal"} {
+			argv := mediaArgv(goos, action, path)
+			if shells[argv[0]] {
+				t.Fatalf("%s/%s runs a shell: %q", goos, action, argv)
+			}
+			last := argv[len(argv)-1]
+			want := path
+			switch {
+			case action == "reveal" && goos == "windows":
+				want = "/select," + path
+			case action == "reveal" && goos == "linux":
+				want = filepath.Dir(path)
+			}
+			if last != want {
+				t.Fatalf("%s/%s argv = %q, want the path as one final argument %q", goos, action, argv, want)
+			}
+		}
+	}
+}

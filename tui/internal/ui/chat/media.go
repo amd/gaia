@@ -38,6 +38,16 @@ func isAllowedMediaPath(path string) bool {
 	return ok
 }
 
+// isRemoteOrDevicePath is judged on the string alone: stat-ing or opening a
+// UNC path reaches out to the share.
+func isRemoteOrDevicePath(path string) bool {
+	if strings.ContainsRune(path, 0) {
+		return true
+	}
+	p := strings.ReplaceAll(path, "/", `\`)
+	return strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `\??\`)
+}
+
 func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
@@ -48,7 +58,11 @@ func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 		if err := json.Unmarshal(msg.Data, &card); err != nil {
 			continue
 		}
-		path := filepath.Clean(strings.TrimSpace(card.Path))
+		raw := strings.TrimSpace(card.Path)
+		if isRemoteOrDevicePath(raw) {
+			continue
+		}
+		path := filepath.Clean(raw)
 		if path == "." || !filepath.IsAbs(path) || !isAllowedMediaPath(path) {
 			continue
 		}
@@ -81,23 +95,29 @@ func remoteSession() bool {
 		strings.TrimSpace(os.Getenv("SSH_TTY")) != ""
 }
 
+// mediaArgv hands the file to the OS viewer as one argv element, never through
+// a shell, so a path cannot become a command.
+func mediaArgv(goos, action, path string) []string {
+	switch {
+	case action == "reveal" && goos == "darwin":
+		return []string{"open", "-R", path}
+	case action == "reveal" && goos == "windows":
+		return []string{"explorer", "/select," + path}
+	case action == "reveal":
+		return []string{"xdg-open", filepath.Dir(path)}
+	case goos == "darwin":
+		return []string{"open", path}
+	case goos == "windows":
+		return []string{"rundll32", "url.dll,FileProtocolHandler", path}
+	default:
+		return []string{"xdg-open", path}
+	}
+}
+
 func mediaAction(path, action string) tea.Cmd {
 	return func() tea.Msg {
-		var cmd *exec.Cmd
-		switch {
-		case action == "reveal" && runtime.GOOS == "darwin":
-			cmd = exec.Command("open", "-R", path)
-		case action == "reveal" && runtime.GOOS == "windows":
-			cmd = exec.Command("explorer", "/select,"+path)
-		case action == "reveal":
-			cmd = exec.Command("xdg-open", filepath.Dir(path))
-		case runtime.GOOS == "darwin":
-			cmd = exec.Command("open", path)
-		case runtime.GOOS == "windows":
-			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
-		default:
-			cmd = exec.Command("xdg-open", path)
-		}
+		argv := mediaArgv(runtime.GOOS, action, path)
+		cmd := exec.Command(argv[0], argv[1:]...)
 		if err := cmd.Start(); err != nil {
 			return mediaActionResultMsg{path: path, action: action, err: err}
 		}

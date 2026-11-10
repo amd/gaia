@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
@@ -47,6 +48,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.generated_media import is_remote_or_device_path
 from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
@@ -1206,6 +1208,9 @@ class SSEOutputHandler(OutputHandler):
         )
         if path_key is None:
             return None
+        # Judged on the string first: stat-ing a UNC path reaches out to the share.
+        if is_remote_or_device_path(envelope[path_key]):
+            return None
         path = Path(envelope[path_key]).expanduser()
         if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
             return None
@@ -1215,12 +1220,17 @@ class SSEOutputHandler(OutputHandler):
             return None
         if not path.is_file():
             return None
-        media_type = "image" if path_key == "image_path" else "audio"
+        image = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        media_type = "image" if image else "audio"
         payload: Dict[str, Any] = {
             "kind": "media",
             "path": str(path),
             "media_type": media_type,
             "size_bytes": stat.st_size,
+            # A relayed turn reaches the Agent UI as this payload alone; its
+            # inline image/audio card and Outputs read the tool's own keys.
+            "status": "success",
+            path_key: str(path),
         }
         for key in (
             "model",
