@@ -16,7 +16,7 @@ import (
 // its mutually-exclusive options with a description of what each one DOES, and
 // an always-available free-text escape.
 //
-// It is deliberately more than a Yes/No box (ConfirmModel): "Gmail or Outlook?"
+// It is deliberately more than a Yes/No box: "Gmail or Outlook?"
 // and "use the default scopes, or pick them?" cannot be expressed as a binary,
 // and a label alone ("Reconnect") does not tell the user what they are agreeing
 // to. This is also the primitive an approval should eventually use — an

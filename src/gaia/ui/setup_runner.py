@@ -355,12 +355,23 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
 
 def _agent_turn_failure(model_id: str) -> str:
     """The Test step's sentence for a failed chat on *model_id*."""
-    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        is_cloud_model_with_catalog,
+    )
     from gaia.ui.routers.providers import display_name
     from gaia.ui.warmup import _device_for
 
     name = display_name(model_id)
-    if model_id.startswith("claude-") or cloud_model_provider(model_id):
+    try:
+        cloud = model_id.startswith("claude-") or is_cloud_model_with_catalog(model_id)
+    except LemonadeClientError as e:
+        return (
+            f"GAIA's test chat on {name} got no answer, and the model catalog "
+            f"could not be checked ({e}). Check Lemonade and retry setup."
+        )
+    if cloud:
         what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
     else:
         device = _device_for(LemonadeClient(verbose=False), model_id)
@@ -848,6 +859,9 @@ class SetupRun:
     extra_models: List[str] = field(default_factory=list)
     #: A model's download failed in this run: its row already says why.
     model_failed: bool = False
+    #: The only unresolved failure is a model test, so a later successful retest
+    #: may finish setup. Any other failed stage keeps the run failed.
+    failed_by_tests: bool = False
     #: The model the app's first chat after this run opens on; see :func:`agent_ui_chat_model`.
     chat_model_for: Optional[Callable[["SetupRun"], str]] = None
     #: Each piece besides the models, by id: ``active``, ``done``, ``failed``.
@@ -967,6 +981,9 @@ class SetupRunner:
         self._log_model: Optional[str] = None
         #: The last download that failed, which the "where to look" hint belongs to.
         self._last_failed: Optional[str] = None
+        #: Consecutive timeout failures per model. Two unanswered tests offer
+        #: the user a fresh download instead of looping forever on Retry.
+        self._test_failures: Dict[str, int] = {}
 
     def _logs(self, shown: Optional[int]) -> Dict[str, List[str]]:
         """Each stage's log, its last *shown* lines. Caller holds the lock."""
@@ -1110,6 +1127,7 @@ class SetupRunner:
                 ) from e
             self._run = run
             self._models = {}
+            self._test_failures = {}
             self._log_model = self._last_failed = None
             run.note(f"$ {command}")
             proc = self._proc
@@ -1232,6 +1250,14 @@ class SetupRunner:
         ).start()
         return self.status() or {"state": "idle"}
 
+    def _test_failure_kind(self, model_id: str, kind: Optional[str]) -> Optional[str]:
+        """Count stuck tests once, so setup and Retry use the same escalation."""
+        if kind != "stuck":
+            return kind
+        attempts = self._test_failures.get(model_id, 0) + 1
+        self._test_failures[model_id] = attempts
+        return "broken" if attempts >= 2 else kind
+
     def _retest_one(self, client, model_id: str, stop: threading.Event) -> None:
         from gaia.installer.init_command import LOAD_CHECK_JOB, retest_model
 
@@ -1251,6 +1277,7 @@ class SetupRunner:
                 f"GAIA couldn't test {model_id} again ({error}). Its server log "
                 "has the details; press Retry to test it again."
             )
+        verify_run = None
         with self._lock:
             self._pulls.pop(model_id, None)
             entry = self._models.setdefault(model_id, ModelProgress(id=model_id))
@@ -1262,12 +1289,17 @@ class SetupRunner:
                 if self._run is not None and entry.test_job != LOAD_CHECK_JOB:
                     self._record_test(self._run, {**row, "state": "skipped"})
                 return
+            reported_kind = kind
             if passed:
                 entry.state, entry.error, entry.error_kind = "ready", None, None
+                self._test_failures.pop(model_id, None)
                 entry.add_log("Test passed")
             else:
+                reported_kind = self._test_failure_kind(model_id, kind)
                 entry.state = "failed"
-                entry.error_kind, entry.error = _test_failure(model_id, kind, error)
+                entry.error_kind, entry.error = _test_failure(
+                    model_id, reported_kind, error
+                )
                 entry.error = crashed or entry.error
                 said = (
                     "Failed to load"
@@ -1282,10 +1314,28 @@ class SetupRunner:
                         **row,
                         "state": "passed" if passed else "failed",
                         "error": None if passed else error,
-                        "kind": None if passed else kind,
+                        "kind": None if passed else reported_kind,
                         "seconds": round(time.monotonic() - started, 1),
                     },
                 )
+            # A passing retest only makes the prior failure eligible for the
+            # normal load and real-agent verification; it does not prove setup.
+            if passed and self._run is not None and self._run.state == "failed":
+                tests_failed = any(
+                    test.get("state") == "failed" for test in self._run.tests.values()
+                )
+                models_failed = any(
+                    model.state == "failed" for model in self._models.values()
+                )
+                if self._run.failed_by_tests and not tests_failed and not models_failed:
+                    verify_run = self._run
+                    verify_run.state = "verifying"
+                    verify_run.phase = PHASE_FINISH
+                    verify_run.text = "Checking that the models load"
+                    verify_run.error = None
+                    verify_run.note("Rechecking setup after a successful retest")
+        if verify_run is not None:
+            self._verify(verify_run)
 
     def _pull_one(
         self, client, model_id: str, keep_trying: bool, stop: threading.Event
@@ -1392,7 +1442,15 @@ class SetupRunner:
                 return
             if kind == "test":
                 if self._run is not None:
-                    self._record_test(self._run, event)
+                    test_event = dict(event)
+                    subject = test_event.get("subject")
+                    if test_event.get("state") == "failed" and subject:
+                        test_event["kind"] = self._test_failure_kind(
+                            subject, test_event.get("kind")
+                        )
+                    elif test_event.get("state") == "passed" and subject:
+                        self._test_failures.pop(subject, None)
+                    self._record_test(self._run, test_event)
                 return
             model_id = event.get("model")
             if not model_id:
@@ -1567,9 +1625,10 @@ class SetupRunner:
             recording = threading.Thread(
                 target=self._record_failure, args=(run, cause), daemon=True
             )
+            # Started under the lock, so report() never joins an unstarted thread.
             with self._lock:
                 self._recording = recording
-            recording.start()
+                recording.start()
 
     def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
         record_id = _record_setup_failure(run, cause)
@@ -1614,8 +1673,36 @@ class SetupRunner:
                 return
             if code != 0:
                 run.state = "failed"
-                # Downloaded but never checked: not shown as ready.
-                self._settle_models(None, {}, run_failed=True)
+                failed_tests = {
+                    test["subject"]: test
+                    for test in run.tests.values()
+                    if test.get("state") == "failed" and test.get("subject")
+                }
+                # A model-test-only failure can become ready after its last
+                # failed row passes. Download/component failures and every
+                # other exit still require a full setup retry.
+                run.failed_by_tests = (
+                    bool(failed_tests)
+                    and not run.model_failed
+                    and not any(state == "failed" for state in run.components.values())
+                )
+                failed_models: Dict[str, str] = {}
+                failed_kinds: Dict[str, str] = {}
+                for model_id, test in failed_tests.items():
+                    if model_id not in self._models:
+                        continue
+                    kind = test.get("kind")
+                    if kind == "stuck" and self._test_failures.get(model_id, 0) >= 2:
+                        kind = "broken"
+                    failed_kinds[model_id], failed_models[model_id] = _test_failure(
+                        model_id, kind, test.get("error")
+                    )
+                    self._models[model_id].test_job = test.get("job")
+                # Downloaded but untested models stay unchecked; failed tests
+                # remain retryable so a successful retest can re-verify setup.
+                self._settle_models(
+                    None, failed_models, run_failed=True, kinds=failed_kinds
+                )
                 self._end_rows(run)
                 if problem is not None:
                     # The raw exception stays in the log, behind "Details".
@@ -1726,6 +1813,9 @@ class SetupRunner:
             ready = bool(status.get("ready"))
             if not ready:
                 run.state = "failed"
+                run.failed_by_tests = bool(tested_failed) and not (
+                    status.get("reasons") or failed
+                )
                 run.error = "; ".join(status.get("reasons") or []) or (
                     "Setup finished but GAIA is still not ready."
                 )
@@ -1745,7 +1835,7 @@ class SetupRunner:
             if run.state == "cancelled":
                 return
             if problem:
-                run.state, run.error = "failed", problem
+                run.state, run.error, run.failed_by_tests = "failed", problem, False
             else:
                 run.state, run.text = "ready", "GAIA is ready"
                 mark_initialized()
@@ -1754,7 +1844,10 @@ class SetupRunner:
     def _test_agent(self, run: SetupRun) -> Optional[str]:
         """One real turn through the agent, on the model chat will open on:
         every model loading doesn't prove GAIA answers on that one."""
-        from gaia.llm.lemonade_client import cloud_model_provider
+        from gaia.llm.lemonade_client import (
+            LemonadeClientError,
+            is_cloud_model_with_catalog,
+        )
 
         started = time.monotonic()
         from gaia.config import GaiaConfigError
@@ -1768,7 +1861,15 @@ class SetupRunner:
             model, unknown = "", str(e)
         else:
             unknown = None
-        cloud = model.startswith("claude-") or bool(cloud_model_provider(model))
+        try:
+            cloud = model.startswith("claude-") or is_cloud_model_with_catalog(model)
+        except LemonadeClientError as e:
+            cloud = False
+            if unknown is None:
+                unknown = (
+                    f"GAIA could not classify the chat model {model!r} because "
+                    f"the Lemonade catalog was unavailable: {e}"
+                )
         problem = unknown
         if problem is None and run.skip_chat_model and not cloud:
             # A cloud setup chats on the cloud model connecting saved.

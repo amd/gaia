@@ -10,7 +10,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python:$REPO/hub/agents/chat/python"
+export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python"
 export PATH="$REPO/scripts/dev/bin:$PATH"
 
 BIN="$REPO/tui/bin/gaia-tui"

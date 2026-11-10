@@ -12,7 +12,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import EXACT_TEXT_ARG, RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import (
     PATH_TOOLS,
     GrantScope,
@@ -25,6 +25,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.env import child_env
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,22 @@ def terminal_is_interactive() -> bool:
     return True
 
 
+def someone_can_answer(console: Any) -> bool:
+    """Whether a person can answer a prompt on *console* right now.
+
+    Never on a background run or an unattended sidecar query; always on a
+    console that waits for an explicit decision; on a terminal console, only
+    when the terminal is interactive. Every other console denies.
+    """
+    if getattr(console, "background_mode", False) is True:
+        return False
+    if getattr(console, "nobody_answers", False) is True:
+        return False
+    if getattr(console, "blocking_confirmation", False):
+        return True
+    return isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
+
+
 def _shorten(value: str) -> str:
     """Head+tail shortening, so the end of a command/path stays visible."""
     if len(value) <= MAX_CONFIRMATION_VALUE_CHARS:
@@ -260,6 +277,8 @@ def format_confirmation_args(tool_args: Any) -> str:
         return "(no arguments)"
     if not isinstance(tool_args, dict):
         return _shorten(str(tool_args))
+    if isinstance(tool_args.get(EXACT_TEXT_ARG), str):
+        return tool_args[EXACT_TEXT_ARG]
     # A one-time call is approved on its exact text, so that is never cut.
     verbatim = {"command"} if tool_args.get(RISK_NOTE_ARG) else set()
     shortened = {
@@ -367,6 +386,7 @@ class OutputHandler(ABC):
     """
 
     _last_denial: Optional[Denial] = None
+    _answered_prompt: Optional[str] = None
     """The most recent denial (#2210).
 
     Bound to the tool so a handler that denies without recording a reason can
@@ -528,6 +548,18 @@ class OutputHandler(ABC):
         record on that same event. A separate hook rather than another
         ``print_final_answer`` parameter, which every override would have to
         take.
+        """
+        ...
+
+    def print_skill_use(  # pylint: disable=unused-argument
+        self, name: str, loaded: List[str], how: str
+    ):
+        """A turn is running on skill *name*. Optional — no-op.
+
+        *loaded* is every skill now loaded in this chat, in load order. *how*
+        is ``"model"`` when the model called ``load_skill``, ``"auto"`` when
+        GAIA loaded it because the model called one of its ``loads_with``
+        tools, and ``"loaded"`` when it was already loaded.
         """
         ...
 
@@ -694,6 +726,19 @@ class OutputHandler(ABC):
             value = factory()
             setattr(self, attribute, value)
         return value
+
+    def note_prompt_answered(self, tool_name: str) -> None:
+        """Record that a person saw this tool's prompt and answered it."""
+        self._answered_prompt = tool_name
+
+    def take_prompt_answered(self, tool_name: str) -> bool:
+        """True once if a person answered a prompt for *tool_name*.
+
+        False for anything approved or denied without a prompt: a grant,
+        "accept edits", auto-approval, a timeout, or a console that never asks.
+        """
+        answered, self._answered_prompt = self._answered_prompt, None
+        return answered == tool_name
 
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""
@@ -868,7 +913,8 @@ class ProgressIndicator:
                 self.rich_spinner.text = timer_text
                 self.live.update(self.rich_spinner)
                 time.sleep(1.0)  # Update every 1 second
-            except Exception:
+            except Exception as e:
+                logger.debug("Progress timer stopped: %s", e)
                 break
 
     def stop(self):
@@ -882,8 +928,8 @@ class ProgressIndicator:
         if RICH_AVAILABLE and hasattr(self, "_update_timer_thread"):
             try:
                 self._update_timer_thread.join(timeout=0.5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Progress timer thread join failed: %s", e)
 
         if RICH_AVAILABLE and self.live:
             self.live.stop()
@@ -923,6 +969,7 @@ class TerminalConfirmationMixin:
         stdout, CI, a subprocess host) there is nobody to ask, so the call is
         denied with an actionable message instead of silently approved (#2210).
         """
+        self._answered_prompt = None
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
@@ -971,6 +1018,7 @@ class TerminalConfirmationMixin:
             return self.deny_tool_execution(
                 tool_name, unaskable_denial_message(tool_name)
             )
+        self.note_prompt_answered(tool_name)
 
         if scope is not None and answer in ("a", "always"):
             self.grant_call_for_session(tool_name, tool_args)
@@ -1132,7 +1180,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     return obj.item()
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
-            except Exception:
+            except ImportError:
                 pass
 
             for caster in (float, int, str):
@@ -1618,7 +1666,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 lines.append("".join(line_parts) + "\x1b[0m")
 
             return "\n".join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug("Half-block render of %s failed: %s", image_path, e)
             return ""
 
     def print_image(
@@ -1693,7 +1742,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                             self.console.print(
                                 Panel(info, border_style="cyan"), justify="center"
                             )
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Image metadata read of %s failed: %s", path, e)
                         self.console.print(
                             f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
                         )
@@ -1710,7 +1760,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -1729,7 +1784,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass
 
@@ -1977,8 +2037,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 self.file_preview_live = None
                 # Small delay to ensure clean transition
                 time.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
 
@@ -2547,8 +2607,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         if self.file_preview_live is not None:
             try:
                 self.file_preview_live.stop()
-            except Exception:
-                pass  # Ignore errors if already stopped
+            except Exception as e:
+                logger.debug("Stopping previous file preview failed: %s", e)
             finally:
                 self.file_preview_live = None
                 # Small delay to ensure display cleanup
@@ -2609,10 +2669,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     # Just update, don't force refresh
                     self.file_preview_live.update(preview)
                     self._last_preview_update_time = current_time
-                except Exception:
-                    # If update fails, continue accumulating content
-                    # (silently ignore preview update failures)
-                    pass
+                except Exception as e:
+                    logger.debug("File preview update failed: %s", e)
         else:
             # For non-rich mode, print new content directly
             print(content_chunk, end="", flush=True)
@@ -2624,8 +2682,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             if self.file_preview_live:
                 try:
                     self.file_preview_live.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Stopping file preview failed: %s", e)
                 finally:
                     self.file_preview_live = None
 

@@ -231,10 +231,10 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     value={newCategory}
                     onChange={e => setNewCategory(e.target.value)}
                 >
-                    <option value="fact">{t('mem.about.group.about')}</option>
-                    <option value="preference">{t('mem.about.kind.preference')}</option>
-                    <option value="reminder">{t('mem.about.kind.reminder')}</option>
-                    <option value="note">{t('mem.about.kind.note')}</option>
+                    <option value="fact">{t.bare('mem.about.group.about')}</option>
+                    <option value="preference">{t.bare('mem.about.kind.preference')}</option>
+                    <option value="reminder">{t.bare('mem.about.kind.reminder')}</option>
+                    <option value="note">{t.bare('mem.about.kind.note')}</option>
                 </select>
                 <button className="btn-primary" type="submit" disabled={!newText.trim() || busyId === 'new'}>
                     <Plus size={14} /> {t('mem.about.add')}

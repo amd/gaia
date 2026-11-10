@@ -446,6 +446,13 @@ def test_npu_profile_ignores_a_downloaded_gpu_last_model(lemonade, home, monkeyp
     assert choice.model_id == NPU_DEFAULT_MODEL_NAME
     assert choice.user_set is False
 
+    # The guard drops only GPU models, not every saved one.
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+
 
 def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
     """`gaia init` must agree with the check and not pull the hardware default."""
