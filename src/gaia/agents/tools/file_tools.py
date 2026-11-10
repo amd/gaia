@@ -318,10 +318,14 @@ _ORDINAL_QUARTERS = {
     "fourth": 4,
     "4th": 4,
 }
+_QUARTER_NUM = r"(?:Q|Qtr\.?|Quarter)\s*(?P<q>[1-4])"
+_YEAR4 = r"(?P<year>\d{4})"
 _QUARTER_PATTERNS = (
-    (re.compile(r"^(?P<year>\d{4})\s*-?\s*Q(?P<q>[1-4])$", re.I), False),
-    (re.compile(r"^Q(?P<q>[1-4])\s*-?\s*(?P<year>\d{4})$", re.I), False),
-    (re.compile(r"^Q(?P<q>[1-4])\s*['’](?P<year>\d{2})$", re.I), True),
+    (re.compile(rf"^{_YEAR4}\s*[-/]?\s*{_QUARTER_NUM}$", re.I), False),
+    (re.compile(rf"^{_QUARTER_NUM}\s*[-/,]?\s*{_YEAR4}$", re.I), False),
+    (re.compile(rf"^{_QUARTER_NUM}\s*['’](?P<year>\d{{2}})$", re.I), True),
+    (re.compile(rf"^(?P<q>[1-4])Q\s*[-/]?\s*{_YEAR4}$", re.I), False),
+    (re.compile(r"^(?P<q>[1-4])Q\s*['’]?(?P<year>\d{2})$", re.I), True),
 )
 _ORDINAL_QUARTER_RE = re.compile(
     r"^(?P<ord>first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter\s+"
@@ -329,7 +333,8 @@ _ORDINAL_QUARTER_RE = re.compile(
     re.I,
 )
 _RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
-_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b", re.I)
+# Quarter-looking text the patterns above can't read; dateutil would misplace it.
+_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b|\b[1-4]Q|\bqtrs?\b|\bquarter", re.I)
 
 
 def _parse_date_value(value: str):
@@ -364,29 +369,41 @@ def _parse_date_value(value: str):
     return None
 
 
-def _cell_month_span(value):
-    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None.
+def _read_cell_date(value):
+    """Read a data cell as (("YYYY-MM", "YYYY-MM"), day), or None.
 
-    A quarter, year or month cell ('2025-Q1', '2025') spans its whole period;
-    any other date dateutil can read spans its one month. A quarter without a
-    year ('Q1') is None: dateutil would read it as the 1st of this month.
+    The span is inclusive: a quarter, year or month cell ('2025-Q1', '2025')
+    spans its whole period; any other date dateutil can read spans its one
+    month. ``day`` is the datetime when the cell names a day, else None.
+    Quarter-looking text no pattern reads ('Q1', 'Q3 FY25') is None:
+    dateutil would file it under a made-up month.
     """
     if isinstance(value, datetime):
         ym = value.strftime("%Y-%m")
-        return ym, ym
+        return (ym, ym), value
     text = str(value).strip()
     span = _parse_date_value(text)
     if span is not None:
-        return span
+        try:
+            return span, datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return span, None
     if _QUARTER_TOKEN_RE.search(text):
         return None
     from dateutil import parser as date_parser
 
     try:
-        ym = date_parser.parse(text, fuzzy=True).strftime("%Y-%m")
+        dt = date_parser.parse(text, fuzzy=True)
     except (ValueError, TypeError, OverflowError):
         return None
-    return ym, ym
+    ym = dt.strftime("%Y-%m")
+    return (ym, ym), dt
+
+
+def _cell_month_span(value):
+    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None."""
+    cell = _read_cell_date(value)
+    return None if cell is None else cell[0]
 
 
 def parse_date_range(date_range: str):
@@ -407,29 +424,22 @@ def parse_date_range(date_range: str):
 
 
 def _cell_period(value):
-    """The breakdown period a data cell falls in, or None if it can't be placed.
+    """The breakdown period of a data cell, or None if it can't be placed.
 
-    Returns ("YYYY-MM", datetime) for a date, or ("YYYY-Qn", None) for a
-    quarter. dateutil reads 'Q3 2025' as March and "Q1'25" as this year, so
-    quarters are matched first and any other Q1-Q4 text is unplaceable.
+    ("month", "YYYY-MM", day-or-None) for a month or date, and
+    ("quarter", "YYYY-Qn", None) for a calendar quarter. A year cell spans
+    no single month or quarter, so it is None too.
     """
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m"), value
-    text = str(value).strip()
-    span = _parse_date_value(text)
-    if span is not None:
-        start_month, end_month = int(span[0][5:]), int(span[1][5:])
-        if span[0][:4] == span[1][:4] and end_month - start_month == 2:
-            return f"{span[0][:4]}-Q{end_month // 3}", None
-    if re.search(r"\bQ[1-4]\b", text, re.I):
+    cell = _read_cell_date(value)
+    if cell is None:
         return None
-    from dateutil import parser as date_parser
-
-    try:
-        dt = date_parser.parse(text, fuzzy=True)
-    except (ValueError, TypeError, OverflowError):
-        return None
-    return dt.strftime("%Y-%m"), dt
+    (first, last), day = cell
+    if first == last:
+        return "month", first, day
+    year, start, end = first[:4], int(first[5:]), int(last[5:])
+    if last[:4] == year and start % 3 == 1 and end == start + 2:
+        return "quarter", f"{year}-Q{end // 3}", None
+    return None
 
 
 class FileSearchToolsMixin:
@@ -3076,8 +3086,8 @@ class FileSearchToolsMixin:
                                 if period is None:
                                     unplaced += 1
                                     continue
-                                key, dt = period
-                                if dt is None:
+                                kind, key, _day = period
+                                if kind == "quarter":
                                     totals, spent, income = (
                                         quarterly_totals,
                                         quarterly_spending,
@@ -3195,14 +3205,15 @@ class FileSearchToolsMixin:
                             if period is None:
                                 trend_unplaced += 1
                                 continue
-                            key, dt = period
-                            if dt is None:
+                            kind, key, day = period
+                            if kind == "quarter":
                                 quarterly_data.setdefault(key, []).append(amount_val)
                                 continue
                             monthly_data.setdefault(key, []).append(amount_val)
-                            weekly_data.setdefault(dt.strftime("%Y-W%W"), []).append(
-                                amount_val
-                            )
+                            if day is not None:
+                                weekly_data.setdefault(
+                                    day.strftime("%Y-W%W"), []
+                                ).append(amount_val)
 
                         if monthly_data:
                             monthly_summary = []
