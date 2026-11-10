@@ -118,7 +118,6 @@ def initialize_lemonade_for_agent(
     quiet: bool = False,
     skip_if_external: bool = False,
     use_claude: bool = False,
-    use_chatgpt: bool = False,
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
@@ -135,7 +134,6 @@ def initialize_lemonade_for_agent(
         quiet: Suppress output (only errors)
         skip_if_external: If True, skip initialization when using Claude
         use_claude: Whether Claude API is being used
-        use_chatgpt: Removed option; True raises migration guidance
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
@@ -166,11 +164,6 @@ def initialize_lemonade_for_agent(
     if base_url is None:
         host = host if host is not None else env_host
         port = port if port is not None else env_port
-
-    if use_chatgpt:
-        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-        raise ValueError(REMOVED_PROVIDER_MESSAGE)
 
     # Skip initialization if using external API
     if skip_if_external and use_claude:
@@ -537,13 +530,11 @@ async def async_main(action, **kwargs):
     if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
         agent_profile = action_to_agent[action]
         use_claude = kwargs.get("use_claude", False)
-        use_chatgpt = kwargs.get("use_chatgpt", False)
 
         success, detected_base_url = initialize_lemonade_for_agent(
             agent=agent_profile,
             skip_if_external=True,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
             model=kwargs.get("model"),
         )
@@ -663,7 +654,6 @@ async def async_main(action, **kwargs):
             # Create configuration with CLI values
             config = GaiaAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
-                use_chatgpt=kwargs.get("use_chatgpt", False),
                 claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
                 base_url=kwargs.get(
                     "base_url",
@@ -772,7 +762,6 @@ async def async_main(action, **kwargs):
             model=kwargs.get("model") or DEFAULT_MODEL_NAME,
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
-            use_chatgpt=kwargs.get("use_chatgpt", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
             base_url=lemonade_base_url,
             # RAG configuration
@@ -4689,7 +4678,7 @@ def main():
     if getattr(args, "use_chatgpt", False):
         from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
-        parser.error(REMOVED_PROVIDER_MESSAGE)
+        parser.error(f"--use-chatgpt was removed. {REMOVED_PROVIDER_MESSAGE}")
 
     print_only = {
         "--model": args.print_model is not None,
@@ -6288,7 +6277,6 @@ def _gaia_chat_relay(kwargs: dict) -> int:
             ("--index", "index"),
             ("--watch", "watch"),
             ("--use-claude", "use_claude"),
-            ("--use-chatgpt", "use_chatgpt"),
             ("--list-tools", "list_tools"),
         )
         if kwargs.get(key)

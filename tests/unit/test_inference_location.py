@@ -53,7 +53,6 @@ BACKENDS = [
         "claude",
         True,
     ),
-    ("openai", {"model": "gpt-4o", "use_openai": True}, "openai", True),
 ]
 
 
@@ -158,7 +157,6 @@ def _agent(model: str, use_claude: bool = False, llm_client=None) -> ChatAgent:
         agent.library_documents = []
         chat_config = MagicMock()
         chat_config.use_claude = use_claude
-        chat_config.use_chatgpt = False
         agent.chat = MagicMock()
         agent.chat.config = chat_config
         agent.chat.effective_model = model
@@ -221,21 +219,6 @@ def test_the_prompt_composes_before_the_chat_client_exists():
         agent._use_claude = False
 
     assert "WHERE THIS SESSION IS PROCESSED" in agent._get_system_prompt()
-
-
-def test_an_openai_session_is_not_described_as_local_before_the_client_exists():
-    """The prompt can be composed during MCP registration, before AgentSDK."""
-    cfg = ChatAgentConfig(rag_documents=[], streaming=False, silent_mode=True)
-    cfg.use_chatgpt = True
-    cfg.model_id = "gpt-4o"
-    with patch("gaia.agents.base.agent.Agent.__init__", return_value=None):
-        agent = ChatAgent.__new__(ChatAgent)
-        agent.config = cfg
-        agent.rag = type("R", (), {"indexed_files": set()})()
-        agent.library_documents = []
-
-    assert agent._inference_location().provider == "openai"
-    assert "a personal AI running locally" not in agent._get_system_prompt()
 
 
 def test_a_claude_session_names_the_claude_model_before_the_client_exists():
