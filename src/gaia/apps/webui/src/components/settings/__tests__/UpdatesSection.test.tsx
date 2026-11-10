@@ -53,14 +53,28 @@ describe('UpdatesSection', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
-    it('says it could not read the update status instead of claiming up to date', async () => {
-        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+    it('says it could not read the update status, in plain words, instead of claiming up to date', async () => {
+        bridge.getStatus.mockRejectedValueOnce(
+            new Error("Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'"),
+        );
         render(<UpdatesSection />);
-        await screen.findByText(
-            /couldn't read the update status \(no handler registered\)\. press check for updates to try again, or restart gaia\./i,
+        const line = await screen.findByText(
+            /couldn't read the update status\. press try again, or restart gaia if it keeps happening\./i,
             { selector: '[role="status"]' },
         );
+        expect(line.textContent).not.toMatch(/handler|gaia-updater|remote method|unknown/i);
         expect(screen.queryByText(/up to date/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
+        expect(screen.queryByRole('button', { name: /check for updates/i })).not.toBeInTheDocument();
+    });
+
+    it('reads the status again on Try again', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+        await screen.findByText(/gaia is up to date/i, { selector: '[role="status"]' });
+        expect(bridge.getStatus).toHaveBeenCalledTimes(2);
         expect(screen.getByRole('button', { name: /check for updates/i })).toBeEnabled();
     });
 
@@ -73,13 +87,10 @@ describe('UpdatesSection', () => {
         expect(screen.queryByText(/couldn't read the update status/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
     });
 
-    it('says the update status could not be read in Arabic, reason kept whole', () => {
-        const line = describeUpdateStatus(
-            { ...INITIAL_STATE, readError: 'No handler registered' },
-            translator('ar'),
-        );
+    it('says the update status could not be read in Arabic', () => {
+        const line = describeUpdateStatus({ ...INITIAL_STATE, readFailed: true }, translator('ar'));
         expect(line).toContain('تعذّرت قراءة حالة التحديث');
-        expect(line).toContain('\u2068No handler registered\u2069');
+        expect(line).toContain('«إعادة المحاولة»');
         expect(line).not.toContain('محدّث');
     });
 

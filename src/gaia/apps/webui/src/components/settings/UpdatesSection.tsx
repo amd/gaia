@@ -21,7 +21,7 @@ export function isReleaseCandidate(version: string | null): boolean {
 /** One line saying where updates stand. */
 export function describeUpdateStatus(s: UpdateState, t: Translate): string {
     const version = s.version ?? '';
-    if (s.readError) return t('update.status.readFailed', { reason: s.readError });
+    if (s.readFailed) return t('update.status.readFailed');
     switch (s.status) {
         case 'checking':
             return t('update.status.checking');
@@ -76,9 +76,12 @@ export function UpdatesSection() {
     const disabled = update.status === 'disabled';
     const working = busy || update.status === 'checking' || update.status === 'downloading';
 
-    const line = `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
+    // An unread status has no version to report, so the line skips "Running GAIA unknown".
+    const line = update.readFailed
+        ? describeUpdateStatus(update, t)
+        : `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
     const needsYou = ['available', 'downloaded', 'error'].includes(update.status)
-        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!update.readError || !!error;
+        || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!update.readFailed || !!error;
 
     return (
         <SettingsDisclosure title={t('update.settings.title')} titleId="updates-label" hint={line} forceOpen={needsYou}>
@@ -168,14 +171,32 @@ export function UpdatesSection() {
                             {t('update.settings.restart')}
                         </button>
                     )}
-                    <button
-                        type="button"
-                        className="btn-secondary"
-                        disabled={working || disabled}
-                        onClick={() => void run('update.action.check', (b) => b.check())}
-                    >
-                        {t('update.settings.check')}
-                    </button>
+                    {update.readFailed ? (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={busy}
+                            onClick={async () => {
+                                setBusy(true);
+                                try {
+                                    await update.reload();
+                                } finally {
+                                    setBusy(false);
+                                }
+                            }}
+                        >
+                            {t('update.settings.retryRead')}
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={working || disabled}
+                            onClick={() => void run('update.action.check', (b) => b.check())}
+                        >
+                            {t('update.settings.check')}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="btn-secondary"

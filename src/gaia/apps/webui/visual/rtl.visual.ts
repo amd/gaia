@@ -1389,6 +1389,8 @@ for (const locale of ['ar', 'en']) {
         await expect(updates).toHaveAttribute('open', '');
         await expect(updates).toContainText(locale === 'ar' ? 'تعذّرت قراءة حالة التحديث' : "Couldn't read the update status");
         await expect(updates).not.toContainText(/up to date|محدّث/);
+        await expect(updates).not.toContainText(/handler|gaia-updater/i);
+        await expect(updates.getByRole('button', { name: locale === 'ar' ? 'إعادة المحاولة' : 'Try again' })).toBeVisible();
         await updates.scrollIntoViewIfNeeded();
         await shot(page, `updates-${locale}-unreadable`);
         expect(await audit(page)).toEqual([]);
