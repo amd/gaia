@@ -1475,14 +1475,14 @@ class RAGToolsMixin:
                                 "error": (
                                     f"File '{file_path}' not found in indexed documents "
                                     f"and does not exist on disk. "
-                                    f"Use search_files to find it first."
+                                    f"Use search_file to find it first."
                                 ),
                             }
                         # After auto-indexing, verify we have a match
                         if not matching_files:
                             return {
                                 "status": "error",
-                                "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                                "error": f"File '{file_path}' not found in indexed documents. Use search_file to find it first.",
                             }
                     if auto_indexed:
                         logger.info(
