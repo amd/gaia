@@ -126,7 +126,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }

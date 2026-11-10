@@ -44,8 +44,6 @@ on:
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'
-      - 'tests/unit/agents/conftest.py'
-      - 'tests/unit/chat/ui/conftest.py'
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
@@ -110,8 +108,6 @@ on:
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'
-      - 'tests/unit/agents/conftest.py'
-      - 'tests/unit/chat/ui/conftest.py'
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'

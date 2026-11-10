@@ -1867,7 +1867,7 @@ const messages: Messages = {
     'settings.desktop.menuBar': 'شريط القوائم',
     'settings.desktop.keepRunning': 'مواصلة التشغيل عند إغلاق النافذة',
     'settings.desktop.keepRunningHint': 'يبقى GAIA في {tray} مع تحميل نموذجك. للخروج استخدم قائمة {tray}.',
-    'settings.desktop.keepRunningNoTray': 'يؤدي إغلاق النافذة إلى تصغير GAIA مع إبقاء نموذجك محمّلًا. انقر GAIA في شريط التطبيقات لإظهاره، وللخروج انقر عليه بزر الفأرة الأيمن واختر «إنهاء».',
+    'settings.desktop.keepRunningNoTray': 'يؤدي إغلاق النافذة إلى تصغير GAIA مع إبقاء نموذجك محمّلًا. انقر GAIA في شريط التطبيقات أو في عرض «الأنشطة» لإظهاره، وللخروج انقر عليه بزر الفأرة الأيمن واختر «إنهاء».',
     'settings.desktop.startOnLogin': 'تشغيل GAIA عند تسجيل الدخول',
     'settings.desktop.startOnLoginHint': 'تبدأ أول محادثة في يومك دون انتظار فتح GAIA.',
     'settings.desktop.startMinimized': 'البدء في {tray}',
