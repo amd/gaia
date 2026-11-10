@@ -44,7 +44,12 @@ from gaia.mcp.ports import (
     TUI_MCP_PORT,
 )
 from gaia.perf_analysis import run_perf_visualization
-from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.ports import (
+    is_killable_process,
+    is_lemonade_process,
+    listeners_on_port,
+    terminate_pid,
+)
 from gaia.print_mode import READ_STDIN
 from gaia.tls import use_os_trust_store
 from gaia.version import version
@@ -6564,7 +6569,6 @@ def kill_lemonade() -> int:
 
     from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
-    from gaia.llm.lemonade_supervisor import _is_loopback
 
     if configured_lemonade_url() is None:
         manager = EmbeddedLemonade()
@@ -6584,24 +6588,53 @@ def kill_lemonade() -> int:
 
     url = resolve_lemonade_base_url()
     target = urlparse(url)
-    if not _is_loopback(target.hostname or ""):
+    if not _names_this_machine(target.hostname or ""):
         print(
-            f"❌ GAIA uses the Lemonade Server at {url}, which runs on another "
-            "machine, so `gaia kill` can't stop it. Stop it on that machine."
+            f"❌ GAIA uses the Lemonade Server at {url}, and {target.hostname} "
+            "isn't this machine, so `gaia kill` can't stop it. Stop it on the "
+            "machine that runs it."
         )
         return 1
     result = kill_process_by_port(
-        target.port or (443 if target.scheme == "https" else 80)
+        target.port or (443 if target.scheme == "https" else 80),
+        lemonade_only=True,
     )
     print(f"{'✅' if result['success'] else '❌'} {result['message']}")
     return 0 if result["success"] else 1
 
 
-def kill_process_by_port(port):
+def _names_this_machine(host: str) -> bool:
+    """Whether *host* in a server URL is this machine."""
+    import ipaddress
+    import socket
+
+    host = (host or "").strip().strip("[]").lower()
+    if host in ("", "localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+        if address.is_loopback or address.is_unspecified:
+            return True
+    except ValueError:
+        pass
+    own_names = {socket.gethostname().lower(), socket.getfqdn().lower()}
+    if host in own_names:
+        return True
+    try:
+        own_addresses = socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError as e:
+        get_logger(__name__).debug("Could not list this machine's addresses: %s", e)
+        return False
+    return host in own_addresses
+
+
+def kill_process_by_port(port, lemonade_only=False):
     """Kill the GAIA/Lemonade process listening on ``port``.
 
     Targeting rules live in :mod:`gaia.ports` so every "stop what's on this
-    port" path in GAIA shares one implementation.
+    port" path in GAIA shares one implementation. With *lemonade_only*, only a
+    process positively identified as a Lemonade Server is killed: the port came
+    from configuration, so a Python or Node listener there is the user's own.
     """
     try:
         port = int(port)
@@ -6629,8 +6662,9 @@ def kill_process_by_port(port):
     killed = []
     refused = []
     failed = []
+    may_kill = is_lemonade_process if lemonade_only else is_killable_process
     for pid, name in listeners:
-        if not is_killable_process(name):
+        if not may_kill(name):
             refused.append(f"{pid} ({name or 'unknown process'})")
             continue
         try:
@@ -6644,7 +6678,15 @@ def kill_process_by_port(port):
         messages.append(
             f"Killed process(es) {', '.join(killed)} listening on port {port}."
         )
-    if refused:
+    if refused and lemonade_only:
+        messages.append(
+            f"Refusing to kill {', '.join(refused)} on port {port}: it isn't a "
+            "Lemonade Server, so it may be your own program. If it is the "
+            "server GAIA uses, stop it with the tool that started it, or end "
+            "that PID yourself (Task Manager on Windows, `kill <pid>` "
+            "elsewhere)."
+        )
+    elif refused:
         messages.append(
             f"Refusing to kill {', '.join(refused)} on port {port}: not a "
             "GAIA or Lemonade process. Stop it with its own tooling, or "

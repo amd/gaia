@@ -68,7 +68,8 @@ def kill_env(monkeypatch):
         )
         monkeypatch.setattr("gaia.llm.lemonade_embedded.EmbeddedLemonade", lambda: own)
 
-        def kill_port(port):
+        def kill_port(port, lemonade_only=False):
+            assert lemonade_only, "a configured port was hunted by interpreter name"
             killed_ports.append(port)
             return port_result or {
                 "success": True,
@@ -158,3 +159,119 @@ def test_a_process_that_cannot_be_stopped_is_an_error(kill_env):
     result = kill_env(configured="http://localhost:9000", port_result=refused)
 
     assert result.code == 1
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "[::]", "[::1]", "127.0.0.2"])
+def test_an_address_that_means_this_machine_is_stopped_here(kill_env, host):
+    result = kill_env(configured=f"http://{host}:8123/api/v1")
+
+    assert result.code == 0
+    assert result.ports == [8123]
+
+
+def test_this_machines_own_hostname_is_stopped_here(kill_env):
+    import socket
+
+    result = kill_env(configured=f"http://{socket.gethostname()}:8123/api/v1")
+
+    assert result.code == 0
+    assert result.ports == [8123]
+
+
+def test_another_machine_is_not_called_this_one(kill_env, capsys):
+    result = kill_env(configured="http://lemonade-box.example.invalid:13305/api/v1")
+
+    assert result.code == 1
+    assert result.ports == []
+    assert "isn't this machine" in capsys.readouterr().out
+
+
+@pytest.fixture
+def port_listing(monkeypatch):
+    """The real kill_process_by_port over a mocked listing; nothing is killed."""
+    terminated = []
+
+    def run(listeners):
+        monkeypatch.setattr("gaia.cli.listeners_on_port", lambda port: listeners)
+        monkeypatch.setattr("gaia.cli.terminate_pid", terminated.append)
+        return terminated
+
+    return run
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "python.exe",
+        "python3",
+        "pythonw.exe",
+        "node",
+        "node.exe",
+        "electron",
+        "gaia.exe",
+        "",
+        "nginx",
+    ],
+)
+def test_a_listener_that_is_not_lemonade_is_refused(port_listing, name):
+    from gaia.cli import kill_process_by_port
+
+    terminated = port_listing([(4321, name)])
+
+    result = kill_process_by_port(8000, lemonade_only=True)
+
+    assert terminated == []
+    assert result["success"] is False
+    assert "4321" in result["message"]
+    assert "isn't a Lemonade Server" in result["message"]
+    assert "lemonade-server" not in result["message"]
+
+
+@pytest.mark.parametrize(
+    "name", ["lemonadeserver.exe", "lemond", "lemond.exe", "llama-server.exe"]
+)
+def test_a_lemonade_listener_is_stopped(port_listing, name):
+    from gaia.cli import kill_process_by_port
+
+    terminated = port_listing([(4321, name)])
+
+    result = kill_process_by_port(8000, lemonade_only=True)
+
+    assert terminated == [4321]
+    assert result["success"] is True
+
+
+def test_a_lemonade_listener_beside_a_foreign_one_spares_the_foreign_one(
+    port_listing,
+):
+    from gaia.cli import kill_process_by_port
+
+    terminated = port_listing([(1, "lemond"), (2, "python.exe")])
+
+    result = kill_process_by_port(8000, lemonade_only=True)
+
+    assert terminated == [1]
+    assert result["success"] is False
+
+
+def test_gaia_kill_lemonade_spares_a_dev_server_on_the_configured_port(
+    port_listing, monkeypatch, capsys
+):
+    terminated = port_listing([(4321, "python.exe")])
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.configured_lemonade_url",
+        lambda: "http://localhost:8000/api/v1",
+    )
+    monkeypatch.setattr(
+        "gaia.cli.resolve_lemonade_base_url",
+        lambda base_url=None: "http://localhost:8000/api/v1",
+    )
+    monkeypatch.setattr(sys, "argv", ["gaia", "kill", "--lemonade"])
+    from gaia.cli import main
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+
+    assert exit_info.value.code == 1
+    assert terminated == []
+    assert "4321 (python.exe)" in capsys.readouterr().out
