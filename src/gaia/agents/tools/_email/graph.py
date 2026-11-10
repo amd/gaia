@@ -43,8 +43,11 @@ GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 # scanning.
 _LIST_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
-    "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview"
+    "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview,hasAttachments"
 )
+# Attachment metadata rides on the same request. The inner $select is what
+# keeps `contentBytes` (the file itself) off the wire.
+_ATTACHMENT_EXPAND = "attachments($select=name,contentType,size,isInline)"
 # Graph only needs the header collection when reading a full conversation;
 # keeping it off list/search calls avoids asking those endpoints for data the
 # caller does not use.
@@ -113,6 +116,19 @@ def _address_list(entities: Optional[Iterable[Dict[str, Any]]]) -> str:
     return ", ".join(p for p in (_address(e) for e in (entities or [])) if p)
 
 
+def _attachments(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Name, type and size of each real attachment; inline images excluded."""
+    return [
+        {
+            "name": att.get("name") or "",
+            "mime_type": (att.get("contentType") or "").lower(),
+            "size": int(att.get("size") or 0),
+        }
+        for att in msg.get("attachments") or []
+        if not att.get("isInline")
+    ]
+
+
 def message_summary(
     msg: Dict[str, Any], *, include_body: bool = False
 ) -> Dict[str, Any]:
@@ -127,6 +143,7 @@ def message_summary(
         for header in msg.get("internetMessageHeaders") or []
         if header.get("name")
     }
+    attachments = _attachments(msg)
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("conversationId") or msg.get("id"),
@@ -139,6 +156,9 @@ def message_summary(
         "flagged": flag in ("flagged", "complete"),
         "categories": list(msg.get("categories") or []),
         "preview": (msg.get("bodyPreview") or "").strip(),
+        # Graph's hasAttachments already ignores inline images.
+        "has_attachments": bool(attachments) or bool(msg.get("hasAttachments")),
+        "attachments": attachments,
         # Provider-neutral metadata consumed by the waiting-on-you detector.
         "auto_submitted": headers.get("auto-submitted", ""),
         "x_autoreply": headers.get("x-autoreply", ""),
@@ -306,6 +326,7 @@ class OutlookReadBackend:
         params: Dict[str, Any] = {
             "$top": self._clamp(limit),
             "$select": _LIST_SELECT,
+            "$expand": _ATTACHMENT_EXPAND,
             "$orderby": "receivedDateTime desc",
         }
         if unread_only:
@@ -331,6 +352,7 @@ class OutlookReadBackend:
         params = {
             "$top": self._clamp(limit),
             "$select": _LIST_SELECT,
+            "$expand": _ATTACHMENT_EXPAND,
             "$search": f'"{query}"',
         }
         data = self._get("/me/messages", params=params)
@@ -348,7 +370,9 @@ class OutlookReadBackend:
             )
         # Quoted whole: a base64 id's `/` is data, never a path separator.
         path = f"/me/messages/{quote(message_id, safe='')}"
-        data = self._get(path, params={"$select": _FULL_SELECT})
+        data = self._get(
+            path, params={"$select": _FULL_SELECT, "$expand": _ATTACHMENT_EXPAND}
+        )
         return message_summary(data, include_body=True)
 
     def list_thread_ids(self, folder: str, *, limit: int = 50) -> Dict[str, Any]:
@@ -402,6 +426,7 @@ class OutlookReadBackend:
             params={
                 "$filter": f"conversationId eq '{thread_id}'",
                 "$select": _FULL_SELECT,
+                "$expand": _ATTACHMENT_EXPAND,
                 "$top": _THREAD_TOP,
             },
         )
