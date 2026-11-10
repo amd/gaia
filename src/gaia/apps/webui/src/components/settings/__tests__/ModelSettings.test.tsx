@@ -64,6 +64,17 @@ describe('ModelSettings provider keys', () => {
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('keeps cloud providers visible but blocked under Local only', async () => {
+        withProviders(fireworks({ blocked: true, blocked_reason: 'run a command instead' }));
+        render(<ModelSettings />);
+
+        const tab = await screen.findByRole('radio', { name: /Fireworks AI/ });
+        expect(tab).toBeDisabled();
+        expect(tab).toHaveAttribute('title', 'Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(mockedApi.listProviderModels).toHaveBeenCalledWith('local');
+        expect(mockedApi.listProviderModels).not.toHaveBeenCalledWith('fireworks');
+    });
+
     it('says when the models shown are known ones, because the list is down', async () => {
         withProviders(fireworks({ models_discovered: true, key_source: 'stored', known_models: true }));
         const card = await openFireworks();

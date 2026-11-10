@@ -47,10 +47,22 @@ DEFERRED: dict[str, str] = {
         "Runs later through a delivery channel; its store, runner, CLI and policy "
         "are unit-tested."
     ),
+    "calculators": (
+        "The card does the math in the client; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
+    "calendar": (
+        "Requires a Google or Outlook calendar connection; the eval mailbox "
+        "fixture has no calendar, and every change needs a person to approve."
+    ),
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
+    "guides": (
+        "The answer is a card the client draws; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
     "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
     "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",
     "music-gen": (
@@ -58,6 +70,10 @@ DEFERRED: dict[str, str] = {
         "the separate live Lemonade integration test covers the API path."
     ),
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
+    "send-email": (
+        "Every send needs a person to approve the exact message; the email eval "
+        "lane's fixture mailbox covers its tools once a scenario drives them."
+    ),
     "recommendations": "Subjective output; no stable rubric yet.",
     "research-report": "Requires live web search; non-deterministic ground truth.",
     "rss-digest": "Requires live feeds; non-deterministic ground truth.",

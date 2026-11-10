@@ -184,6 +184,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
@@ -543,7 +546,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/system/resources">
-    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead.
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead. On Linux an AMD NPU is read through its `amdxdna` driver, which reports usage on Linux 7.1 and later with the AMD PMF driver loaded; an NPU that can't be read is reported in `npus_error`.
 
     On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
 
@@ -600,7 +603,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
-    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to the window a chat on that model asks for: its `MODELS` entry sized to this PC's memory, or `GAIA_CTX_SIZE` when set. The response reports the size used. |
     | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
@@ -633,7 +636,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
-    | `load_after` | boolean | No | Load the model after the download completes. Skipped while a chat is answering. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes, at the same window `load-model` defaults to. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
@@ -1005,6 +1008,40 @@ Deleting a chat deletes its copies.
     Set `retention_days` (1–365) and `max_mb` (10–100000), then remove history
     past the new limits. Turns older than the time limit go first, then the
     oldest until the total fits. The size limit never removes the newest turn.
+  </Accordion>
+
+  <Accordion title="GET /api/speech/settings">
+    The read-aloud voice, speed and auto-read choice, with every voice offered:
+    `{"voice": "af_bella", "speed": 100, "auto": false, "min_speed": 50,
+    "max_speed": 200, "voices": [{"id": "af_bella", "name": "Bella",
+    "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
+    `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
+    `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
+    the TUI reads too.
+  </Accordion>
+
+  <Accordion title="PUT /api/speech/settings">
+    Save any of `voice` (a Kokoro voice id), `speed` (50–200) and `auto`; the
+    others keep their value. **422** names an unknown voice or a speed out of
+    range, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="GET /api/speech/model">
+    Whether Lemonade has the `kokoro-v1` voice model on disk:
+    `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
+    its first read so it can say the model is downloading. **503** when
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+  </Accordion>
+
+  <Accordion title="POST /api/speech">
+    Speak `text` (1–1000 characters) through Lemonade's `kokoro-v1` model and
+    return a 16-bit mono `audio/wav`, in the saved voice and speed unless the
+    body names `voice` or `speed`. Downloads the model on first use, which the
+    app announces after `GET /api/speech/model`. **422** for
+    empty or over-long text or a bad voice or speed, **503** when Lemonade is
+    unreachable, **502** when Lemonade can't make the speech; each `detail`
+    says why. The app splits a long reply into pieces and plays them back to
+    back.
   </Accordion>
 </AccordionGroup>
 
@@ -1791,7 +1828,9 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. A file that can't be read is a **422** whose
+    enqueues it for indexing. Content already in the library returns the
+    existing document; if that document's stored file is gone, the new copy
+    takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do.
@@ -2191,9 +2230,9 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
-    Store approved discovery findings from the onboarding wizard. Items are
-    validated as knowledge creates, so a disallowed category 422s the whole
-    batch before anything is written.
+    Store the discovery findings a user approved in the memory dashboard's
+    discovery review. Items are validated as knowledge creates, so a disallowed
+    category 422s the whole batch before anything is written.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-inference">
@@ -2286,7 +2325,10 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/test">
-    Run the connector's health check.
+    Run the connector's health check and return `{"ok": bool, "detail": str}`.
+    An OAuth connector refreshes its token. An `mcp_server` connector starts
+    the server once and reports whether it started; a server that only checks
+    its key on a tool call still passes with a bad key.
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">
@@ -2459,7 +2501,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   <Accordion title="POST /api/schedules">
     Create a scheduled task from a name, interval, and prompt. An optional
     `timezone` (IANA name, e.g. `America/Los_Angeles`) sets the zone its times
-    are in; it defaults to the server PC's zone. An unknown zone returns 400.
+    are in; it defaults to the server PC's zone. An unknown zone returns 400,
+    and so does a name that contains `/`.
   </Accordion>
 
   <Accordion title="POST /api/schedules/parse">

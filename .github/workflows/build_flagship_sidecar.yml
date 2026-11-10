@@ -40,7 +40,6 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'hub/agents/gaia/python/pyproject.toml'
-      - 'hub/agents/chat/python/pyproject.toml'
       - 'hub/agents/gaia/python/packaging/**'
       - '.github/workflows/build_flagship_sidecar.yml'
   schedule:

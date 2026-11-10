@@ -31,8 +31,8 @@ import json as _json
 import os
 from typing import Any, Callable, Dict, Iterator, Optional
 
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
 

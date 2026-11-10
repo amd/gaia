@@ -84,7 +84,7 @@ net-new agent instrumentation.
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
 | `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
-| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Email agent, contract ≥ 2.16; flagship (`gaia`), contract ≥ 2.18** — an older peer 422s the unknown field (see §7). Controls whether this turn may read or write memory. `private` and `off` suppress all reads and writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
 | `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
 | `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
@@ -378,7 +378,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers eight
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -390,6 +390,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
 | `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The bundled `guides` skill's `guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`, `guides/show_checklist` and `guides/show_itinerary` emit it |
+| `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The bundled `calculators` skill's `calculators/show_tip_calculator` and `calculators/show_loan_calculator` emit it |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -825,6 +827,8 @@ turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`), and the TUI draws both: every line of a
+guide, and a calculator's results computed from its starting numbers.

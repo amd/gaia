@@ -494,3 +494,111 @@ def test_an_id_of_a_privileged_row_is_still_refused(store):
 
     assert result["status"] == "error"
     assert store.get_item(kid) is not None
+
+
+MANGO = "Allergic to mango"
+
+
+def _save_copy(host: _Host, content: str, *, context: str) -> str:
+    """A second row with the same words, kept apart from the first by context."""
+    kid = host._memory_store.store(category="fact", content=content, context=context)
+    assert host._embed_and_index(kid, content, "test memory")
+    return kid
+
+
+def test_an_invented_id_is_read_as_the_users_words(store):
+    """rc16: forget(knowledge_id="allergy:mango") left the allergy stored."""
+    host = _Host(store)
+    mango, tea = host.save(MANGO), host.save(TEA)
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="allergy:mango")
+
+    assert result["status"] == "removed"
+    assert result["knowledge_id"] == mango
+    assert store.get_item(mango) is None
+    assert store.get_item(tea) is not None
+
+
+@pytest.mark.parametrize(
+    "words", ["allergy:mango", "allergic to mango", "mango allergies"]
+)
+def test_copies_of_one_memory_are_all_erased(store, words):
+    """rc16 stored "Allergic to mango" twice; forgetting it must take both."""
+    host = _Host(store)
+    first = host.save(MANGO)
+    second = _save_copy(host, MANGO, context="personal")
+    tea = host.save(TEA)
+
+    with _tools(host) as tools:
+        result = host._execute_tool("forget", {"knowledge_id": words})
+
+    assert result["status"] == "removed"
+    assert set(result["knowledge_ids"]) == {first, second}
+    assert result["erased"] == MANGO
+    assert "2" in result["message"]
+    assert store.get_item(first) is None
+    assert store.get_item(second) is None
+    assert store.get_item(tea) is not None
+    assert host._turn_forgot is True
+
+
+def test_a_stem_alone_still_names_no_memory(store):
+    """allergy meets allergic, but a cut-off word is not a word."""
+    result, ids, kept = _forget(store, [MANGO, TEA], "allerg mang")
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+def test_an_ambiguous_result_lists_ids_and_contents_in_the_message(store):
+    """A small model reads the message, so the candidates are spelled out there."""
+    host = _Host(store)
+    mine, partners = host.save(SHELLFISH), host.save(PARTNER_SHELLFISH)
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="allergic to shellfish")
+
+    assert result["status"] == "error"
+    for kid, content in ((mine, SHELLFISH), (partners, PARTNER_SHELLFISH)):
+        assert kid in result["message"]
+        assert content in result["message"]
+    assert "forget(knowledge_id=" in result["message"]
+    assert store.get_item(mine) is not None
+    assert store.get_item(partners) is not None
+
+
+@pytest.mark.parametrize(
+    "words, content",
+    [
+        ("cookies", "User likes to cook pasta"),
+        ("party", "User is part of the chess club"),
+        ("history", "User studies historic buildings"),
+        ("academy", "User is an academic"),
+        ("economy", "User is an economic advisor"),
+        ("technology", "User likes technological gadgets"),
+        ("historic", "User studies history"),
+    ],
+)
+def test_a_word_is_kin_only_to_a_word_that_also_lost_an_ending(store, words, content):
+    """ "cookies" cut to "cook" is not the verb "cook"."""
+    result, ids, kept = _forget(store, [content, TEA], words)
+
+    assert result["status"] == "error"
+    assert kept == ids
+
+
+@pytest.mark.parametrize(
+    "words, content",
+    [
+        ("diabetic", "User has diabetes"),
+        ("diabetes", "User is diabetic"),
+        ("asthma", "User is asthmatic"),
+        ("pharmacies", "User works at a pharmacy"),
+    ],
+)
+def test_a_listed_adjective_or_a_plural_names_its_noun(store, words, content):
+    result, ids, kept = _forget(store, [content, TEA], words)
+
+    assert result["status"] == "removed"
+    assert kept == ids[1:]

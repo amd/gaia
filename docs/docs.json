@@ -128,7 +128,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }
@@ -467,6 +466,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.26.0",
               "releases/v0.25.4",
               "releases/v0.25.3",
               "releases/v0.25.2",
@@ -533,7 +533,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.4 \u00b7 Lemonade 2026.44.1",
+        "label": "v0.26.0 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

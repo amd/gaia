@@ -81,6 +81,8 @@ const SentinelName = ".installed"
 
 // ArtifactKindBinary is the sentinel's artifact_kind for a frozen executable.
 // It mirrors installer.ARTIFACT_KIND_BINARY and identifies daemon sidecars.
+// tests/unit/test_hub_install_sidecar_contract.py pins both against the real
+// installer's sentinel.
 const ArtifactKindBinary = "binary"
 
 // InstallRoot is the directory the daemon installs hub agents into. It mirrors
@@ -412,10 +414,6 @@ type InstalledRecord struct {
 // disappear from the hub, which looks identical to "never installed".
 func (c *Catalog) Warnings() []string {
 	return append([]string(nil), c.warnings...)
-}
-
-func (c *Catalog) warn(format string, args ...any) {
-	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
 // LocalInstalls reads the ~/.gaia/agents/*/.installed sentinels — the local
