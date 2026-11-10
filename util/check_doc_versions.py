@@ -79,9 +79,6 @@ BARE_VERSION_PIN_FILES = {
 EXCLUDE_PATTERNS = [
     "docs/releases/*",  # Release notes are historical, versions are intentional
     "docs/plans/*",  # Planning docs may reference old versions
-    # Design specs record what was verified against a version at the time.
-    # Bumping the number there turns a true record into a false one.
-    "docs/superpowers/specs/*",
 ]
 
 
