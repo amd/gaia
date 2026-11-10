@@ -271,6 +271,20 @@ func noFitAsk(need, have float64) string {
 	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
+// npuBlockedLine is the warning under a model the NPU can't run yet. The
+// server's sentence says which case it is — no NPU, or one not set up — and
+// both block; the frame says "on this PC" because it covers either.
+func npuBlockedLine(reason *string) string {
+	if reason == nil {
+		return "This model can't be used on this PC."
+	}
+	return "This model can't be used on this PC: it " + *reason + "."
+}
+
+// npuBlockedPurpose is the job caption for a model the NPU can't run yet: it
+// must not read as a working chat option.
+const npuBlockedPurpose = "Requires a Ryzen AI NPU that is ready on this PC."
+
 // purposeLine says what a model is for in the job it is listed under.
 func purposeLine(e rowEntry, job string) string {
 	switch {
@@ -280,6 +294,8 @@ func purposeLine(e rowEntry, job string) string {
 		return "Lets GAIA search your files and remember things."
 	case job == jobVision:
 		return "Reads images and screenshots."
+	case e.npuBlocked():
+		return npuBlockedPurpose
 	case e.npu:
 		return "Answers your chats. Runs on the NPU."
 	case e.readsImages:
