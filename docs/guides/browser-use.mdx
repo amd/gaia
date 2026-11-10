@@ -79,7 +79,9 @@ yourself. A click on a control that can't be undone (Delete, Place order,
 Create account) asks every time, on this PC too, and so does pressing Enter or
 Space, or typing and pressing Enter, on a page that shows one. `browser-pane/browser_batch` stops before
 any step that would ask, so you approve that step on its own, and at any step
-that opens a box on the page. `browser_login` is not used there: you sign in
+that opens a box on the page. Running a script in the page
+(`browser-pane/browser_eval`) and starting a dev server ask you even under Full
+access, and are refused when nobody can answer, such as in a background goal. `browser_login` is not used there: you sign in
 yourself in the pane, and GAIA never types into a password field.
 
 When a page opens a box (`alert`, `confirm`, `prompt`, or "leave this page?"),

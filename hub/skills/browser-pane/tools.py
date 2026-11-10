@@ -12,6 +12,11 @@ decides when a call asks: reading a site not yet approved, pressing a control
 that may not be undoable, starting a dev server. ``browser_eval`` asks on every
 call, which its manifest marks ``requires_confirmation``.
 
+Pre-approval (Full access, ``GAIA_AUTO_APPROVE_TOOLS``) does not answer
+``browser_eval`` or starting a dev server: both run code on this computer. Where
+a person can be asked, the call is marked so they are; where nobody can, such
+as a background goal, it is refused.
+
 A :class:`_PanePreflight` runs before any prompt. It refuses on an agent whose
 gate would not ask before a pane call, in a chat with no pane, and for a script
 ``browser_eval`` would refuse anyway, so nobody approves a call that cannot run.
@@ -22,6 +27,8 @@ A skill tool has no ``self``. Each call reaches the agent running it through
 
 from typing import Any, Dict, List, Optional
 
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+from gaia.agents.base.person_approval import a_person_can_answer, preapproved
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.browser.dev_servers import MAX_READY_TIMEOUT_S
@@ -43,6 +50,18 @@ _NOT_GATED_MESSAGE = (
     "in the browser pane, and these tools need it to. Use the GAIA agent, and "
     "tell the user nothing was done in the pane."
 )
+
+
+_NOBODY_TO_ASK_MESSAGE = (
+    "Not run: {what} needs a person's approval, and this run approves tools "
+    "automatically with nobody to ask. Ask the user to request it in a chat where "
+    "they can approve it, and tell the user it did not run."
+)
+
+_NEEDS_PERSON_WHAT = {
+    "browser_eval": "running a script in the page",
+    "dev_server": "starting a dev server",
+}
 
 
 def _browser() -> BrowserUseToolsMixin:
@@ -73,7 +92,29 @@ class _PanePreflight:
         refused = agent.pane_tool_refusal(self._tool_name, args)
         if refused:
             return {"status": "error", "error": refused}
+        console = getattr(agent, "console", None)
+        if (
+            preapproved(console)
+            and not a_person_can_answer(console)
+            and agent.pane_call_needs_person(self._tool_name, args)
+        ):
+            what = _NEEDS_PERSON_WHAT[self._tool_name]
+            return {
+                "status": "error",
+                "error": _NOBODY_TO_ASK_MESSAGE.format(what=what),
+            }
         return None
+
+    def prompt_args_of(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Marks a call only a person may approve, so pre-approval does not answer it."""
+        if self._tool_name not in _NEEDS_PERSON_WHAT:
+            return {}
+        if self._tool_name == "dev_server" and args.get("action") != "start":
+            return {}
+        agent = _browser()
+        if not preapproved(getattr(agent, "console", None)):
+            return {}
+        return {NEEDS_PERSON_ARG: True}
 
 
 def _run(tool_name: str, **kwargs: Any) -> Any:

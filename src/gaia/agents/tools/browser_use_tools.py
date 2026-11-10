@@ -1345,9 +1345,9 @@ class BrowserUseToolsMixin:
                 **self._dev_server_tools(_fail, _seen),
             }
 
-    def run_pane_tool(self, name: str, **kwargs: Any) -> Any:
+    def run_pane_tool(self, tool_name: str, /, **kwargs: Any) -> Any:
         """Run one browser-pane skill tool's body; the skill checked the pane first."""
-        body = (self._pane_tool_bodies or {}).get(name)
+        body = (self._pane_tool_bodies or {}).get(tool_name)
         return PANE_SKILL_UNAVAILABLE if body is None else body(**kwargs)
 
     def pane_tool_refusal(self, name: str, args: Dict[str, Any]) -> Optional[str]:
@@ -1373,6 +1373,24 @@ class BrowserUseToolsMixin:
                 "Read it with browser_snapshot instead."
             )
         return None
+
+    def pane_call_needs_person(self, name: str, args: Dict[str, Any]) -> bool:
+        """Whether a person must approve this call even when tools are pre-approved.
+
+        A script in the page and a new dev server run code on this computer, so
+        Full access does not answer them. Reusing a running server asks nobody.
+        """
+        name = pane_tool_name(name)
+        if name == "browser_eval":
+            return True
+        if name != DEV_SERVER_TOOL or not isinstance(args, dict):
+            return False
+        if args.get("action") != "start":
+            return False
+        self._dev_server_prompt(args)
+        pending = self._dev_pending
+        # None: the tool body reports why the start can't run.
+        return pending is not None and not pending[2]
 
     def _pane_tools(self, fail, answer, seen) -> Dict[str, Callable[..., Any]]:
         """The bodies of the tools only the browser pane can serve."""

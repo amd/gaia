@@ -154,7 +154,9 @@ Reading a site the user has not approved asks first, localhost included, except
 this chat's own dev servers. Pressing a control whose label may not be undoable
 ("Delete", "Place order") asks every time. `browser-pane/browser_eval` asks
 every time and shows the whole script. Starting a dev server asks, showing the
-exact command, folder and port.
+exact command, folder and port. Full access does not answer those two: a person
+still approves them, and where nobody can, such as a background goal, they are
+refused.
 
 ## Procedure
 

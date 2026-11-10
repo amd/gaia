@@ -919,6 +919,94 @@ def test_a_script_browser_eval_would_refuse_never_reaches_a_prompt(
     assert "script" not in bridge.ops()
 
 
+def _full_access(handler, watching):
+    handler.auto_approve_gated_tools = True
+    handler.full_access = True
+    handler.answers_confirmations = watching
+
+
+@pytest.mark.allow_network
+def test_full_access_still_asks_a_watching_person_before_browser_eval(pane, tmp_path):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=True)
+    bridge.serve(5000)
+    _load_pane_skill(agent, tmp_path)
+    result, [prompt] = _drive(
+        agent, handler, "browser-pane/browser_eval", {"expression": "document.title"}
+    )
+    assert "document.title" in prompt["args"][RISK_NOTE_ARG]
+    assert result["status"] == "denied"
+    assert "script" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_full_access_with_nobody_to_ask_refuses_browser_eval(pane, tmp_path):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    bridge.serve(5000)
+    _load_pane_skill(agent, tmp_path)
+    result, prompts = _drive(
+        agent, handler, "browser-pane/browser_eval", {"expression": "document.title"}
+    )
+    assert prompts == []
+    assert "needs a person's approval" in result["error"]
+    assert "script" not in bridge.ops()
+
+
+def _static_site(agent, tmp_path):
+    agent._dev_allowed = lambda folder: True
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<h1>hi</h1>")
+    return {"action": "start", "project": str(site)}
+
+
+@pytest.mark.allow_network
+def test_full_access_still_asks_a_watching_person_before_a_dev_server(pane, tmp_path):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=True)
+    _load_pane_skill(agent, tmp_path)
+    result, [prompt] = _drive(
+        agent, handler, "browser-pane/dev_server", _static_site(agent, tmp_path)
+    )
+    assert result["status"] == "denied"
+    assert not [r for r in bridge.requests if r["body"].get("op") == "start"]
+
+
+@pytest.mark.allow_network
+def test_full_access_with_nobody_to_ask_refuses_a_new_dev_server(pane, tmp_path):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    _load_pane_skill(agent, tmp_path)
+    result, prompts = _drive(
+        agent, handler, "browser-pane/dev_server", _static_site(agent, tmp_path)
+    )
+    assert prompts == []
+    assert "starting a dev server needs a person's approval" in result["error"]
+    assert not [r for r in bridge.requests if r["body"].get("op") == "start"]
+
+
+def test_dev_server_passes_a_server_name_through_to_its_body(pane):
+    agent, _handler, _bridge = pane
+    seen = {}
+    agent._pane_tool_bodies = {"dev_server": lambda **kw: seen.update(kw) or "ok"}
+    assert agent.run_pane_tool("dev_server", action="logs", name="web") == "ok"
+    assert seen == {"action": "logs", "name": "web"}
+
+
+def test_a_running_dev_server_is_reused_with_nobody_to_ask(pane, monkeypatch):
+    agent, _handler, _bridge = pane
+    args = {"action": "start", "project": "."}
+
+    def _running(tool_args):
+        agent._dev_pending = (None, None, True)
+
+    monkeypatch.setattr(agent, "_dev_server_prompt", _running)
+    assert agent.pane_call_needs_person("browser-pane/dev_server", args) is False
+    assert agent.pane_call_needs_person("dev_server", {"action": "list"}) is False
+    assert agent.pane_call_needs_person("browser-pane/browser_eval", {}) is True
+
+
 def test_the_pane_skill_refuses_in_a_chat_with_no_pane(tmp_path, monkeypatch):
     """Outside GAIA desktop the skill still loads, and every tool refuses unasked."""
     from gaia.agents.base import tools as tools_mod

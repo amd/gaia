@@ -306,3 +306,35 @@ describe("the name a picked element is given", () => {
     expect(nameOf(input("text", "Ada Lovelace"))).toBe("Ada Lovelace");
   });
 });
+
+describe("the HTML a picked element sends", () => {
+  // dropSecrets as picker-world.js defines it, run against plain objects.
+  const source = fs.readFileSync(path.join(PANE, "picker-world.js"), "utf8");
+  const body = source.match(/ {2}function dropSecrets\(copy\) \{[\s\S]*?\r?\n {2}\}\r?\n/)[0];
+  const dropSecrets = new Function(`${body}\nreturn dropSecrets;`)();
+  const node = (tagName, attrs, children = []) => ({
+    tagName,
+    attrs: { ...attrs },
+    getAttribute(name) {
+      return name in this.attrs ? this.attrs[name] : null;
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
+    },
+    querySelectorAll: () => children,
+  });
+
+  test("a picked password field loses its value attribute", () => {
+    const field = node("INPUT", { type: "Password", value: "hunter2", name: "pw" });
+    dropSecrets(field);
+    expect(field.attrs).toEqual({ type: "Password", name: "pw" });
+  });
+
+  test("a picked form loses its password fields' values and keeps the others", () => {
+    const pw = node("INPUT", { type: "password", value: "hunter2" });
+    const user = node("INPUT", { type: "text", value: "ada" });
+    dropSecrets(node("FORM", {}, [user, pw]));
+    expect(pw.attrs).toEqual({ type: "password" });
+    expect(user.attrs).toEqual({ type: "text", value: "ada" });
+  });
+});

@@ -148,9 +148,18 @@
     return parts.join(" > ");
   }
 
+  /** Clears the value attribute of every password field in a copied element, itself included. */
+  function dropSecrets(copy) {
+    const secret = (n) => n.tagName.toLowerCase() === "input" && String(n.getAttribute("type") || "").toLowerCase() === "password";
+    for (const n of [copy, ...copy.querySelectorAll("input")]) {
+      if (secret(n)) n.removeAttribute("value");
+    }
+  }
+
   /** outerHTML with descendants past depth 2 folded to a comment and the pick stamps left out. */
   function htmlOf(el) {
     const copy = el.cloneNode(true);
+    dropSecrets(copy);
     const fold = (node, depth) => {
       for (const child of [...node.children]) {
         child.removeAttribute(pickAttr);

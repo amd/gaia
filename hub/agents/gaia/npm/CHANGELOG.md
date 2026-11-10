@@ -60,7 +60,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   desktop with the pane, and its tools join the list only once it loads, so the
   registered tool count stays 105. `browser-pane/browser_eval` asks every time
   and shows the whole script; the others ask before a site not yet approved, a
-  control that may not be undoable, or starting a server.
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,

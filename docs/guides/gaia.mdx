@@ -250,7 +250,7 @@ The mechanism, storage location, and how to disable it are covered in the [Memor
 
 **One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 790 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
 
-**The rest are built in and load on demand.** The agent bundles the 22 [starter skills](/guides/starter-skills) from `hub/skills/`, plus `document-extract` (lists every item in a long document or transcript) and `gaia-harness-engineering` (helps a developer report a GAIA problem). Ask for one by name, or let the agent load it when the task matches. Skills from the hub that GAIA does not ship install with `gaia skill install`.
+**The rest are built in and load on demand.** The agent bundles the 23 [starter skills](/guides/starter-skills) from `hub/skills/`, plus `document-extract` (lists every item in a long document or transcript) and `gaia-harness-engineering` (helps a developer report a GAIA problem). Ask for one by name, or let the agent load it when the task matches. Skills from the hub that GAIA does not ship install with `gaia skill install`.
 
 **No skill *set* loads by default, and none is declared.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
 
