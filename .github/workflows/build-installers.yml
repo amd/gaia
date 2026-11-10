@@ -79,6 +79,12 @@ on:
         required: false
         type: boolean
         default: false
+      # A release candidate's pre-release does not exist while it builds.
+      flagship:
+        description: 'artifact: an RC core''s real-engine check installs the gaia-agent-<platform> builds this run froze (see build_core.yml). Empty reads the published pre-release.'
+        required: false
+        type: string
+        default: ''
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -125,6 +131,9 @@ on:
       - '.github/workflows/build_core.yml'
       - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
       - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'util/flagship_rc_assets.py'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'conftest.py'
       - 'tests/conftest.py'
@@ -168,6 +177,7 @@ jobs:
       tag: ${{ inputs.tag }}
       ref: ${{ inputs.ref }}
       artifact_prefix: ${{ inputs.artifact_prefix }}
+      flagship: ${{ inputs.flagship }}
 
   build:
     name: Build ${{ matrix.platform }} installer
