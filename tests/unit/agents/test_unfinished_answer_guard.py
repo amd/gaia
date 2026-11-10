@@ -41,11 +41,6 @@ FAILED_RUN_ENDINGS = [
         id="row3-now-i-need-to",
     ),
     pytest.param(
-        "Starting with the Central region report now: `central_q2_2026.md`.",
-        "narration",
-        id="issue-starting-with-now",
-    ),
-    pytest.param(
         "Starting next month, rent rises.",
         None,
         id="starting-next-month-is-not-a-plan",
@@ -70,21 +65,6 @@ FAILED_RUN_ENDINGS = [
         "Let me start with the Central report.",
         "narration",
         id="let-me-start",
-    ),
-    pytest.param(
-        "I'm starting with the West region report now.",
-        "narration",
-        id="im-starting-with-now",
-    ),
-    pytest.param(
-        "I’m starting by reading the first report now.",
-        "narration",
-        id="im-starting-curly-apostrophe",
-    ),
-    pytest.param(
-        "Starting with the first file now...",
-        "narration",
-        id="starting-with-now-ellipsis",
     ),
     pytest.param(
         "`duplicate` is on #5. Second write:",
@@ -153,6 +133,22 @@ FAILED_RUN_ENDINGS = [
 @pytest.mark.parametrize("answer,expected", FAILED_RUN_ENDINGS)
 def test_failed_run_endings_are_caught(answer, expected):
     assert _unfinished_answer_kind(answer) == expected
+
+
+# Unfinished, but a phrase pattern can't tell them from finished answers such
+# as "I'm starting on Monday, so my availability changes now." (#5303).
+KNOWN_MISSES = [
+    "Starting with the Central region report now: `central_q2_2026.md`.",
+    "Starting by listing everything in the target directory now.",
+    "I'm starting with the West region report now.",
+    "Starting with the first file now...",
+]
+
+
+@pytest.mark.xfail(strict=True, reason="needs a check that reads intent (#5303)")
+@pytest.mark.parametrize("answer", KNOWN_MISSES)
+def test_known_unfinished_endings_a_pattern_cannot_catch(answer):
+    assert _unfinished_answer_kind(answer) == "narration"
 
 
 def test_long_plan_is_not_exempted_by_length():
@@ -366,6 +362,14 @@ FINISHED_CORPUS = [
     "Starting with Python 3.12, f-strings support nested quotes, so your "
     "snippet is valid now.",
     "The fix is in. Starting now, failed uploads retry three times.",
+    # Re-prompted by earlier drafts of this guard.
+    "I'll start on the follow-up report whenever you're ready.",
+    "I'm starting on the 3rd, as you asked.",
+    "I'm starting on Monday, so my availability changes now.",
+    "> I'll start with a story…",
+    "Starting with Python 3.12 now: f-strings can nest quotes.",
+    "That's all for now...",
+    "It should work now...",
 ]
 
 
@@ -477,10 +481,10 @@ def test_completed_answer_is_not_reprompted(agent):
     assert _final_text(result) == "Done. Let me know if you want changes."
 
 
-def test_starting_now_ending_is_reprompted_then_answer_accepted(agent):
+def test_bare_step_heading_ending_is_reprompted_then_answer_accepted(agent):
     sent = _stub_chat(
         agent,
-        "Starting with the Central region report now: `central_q2_2026.md`.",
+        "The totals need every report.\n\n### Execution Step 1/3",
         "Total revenue is $41.2M; Central and West missed target.",
     )
 

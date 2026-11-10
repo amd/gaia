@@ -1435,11 +1435,8 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
-    # Bare "Starting with X now." is often a fact ("Starting with iOS 17 apps
-    # get widgets now."), so only first person, "now:" or "now..." count.
-    r"|(?:i'm|i am|i'll|i will) start(?:ing)?\s+(?:with|by|on|now)\b[^:]*$"
-    r"|starting now(?:[.!:]|\.\.\.|…)?$"
-    r"|starting\s+(?:with|by|on)\b[^,;:]*?\bnow(?::|\.\.\.|…)"
+    # Only a bare "Starting now."; "Starting with X ... now" is often a fact.
+    r"|starting now(?:[.!]|\.\.\.|…)?$"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
