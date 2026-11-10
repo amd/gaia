@@ -2135,6 +2135,9 @@ class RAGToolsMixin:
                             f". The document library was full, so it removed {names}; "
                             "questions about it will find nothing until it is indexed again"
                         )
+                    unread = result.get("unread_images_note")
+                    if unread:
+                        msg += f". {unread} Tell the user."
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -2152,6 +2155,11 @@ class RAGToolsMixin:
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
                         **({"evicted": evicted} if evicted else {}),
+                        **(
+                            {"unread_image_pages": result["unread_image_pages"]}
+                            if unread
+                            else {}
+                        ),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":

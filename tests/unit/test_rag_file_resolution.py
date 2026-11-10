@@ -307,3 +307,38 @@ class TestIndexDocumentEviction:
 
         assert str(keep) in host.indexed_files
         assert str(old) not in host.indexed_files
+
+
+class TestIndexDocumentUnreadImages:
+    """The agent hears when a document's images were not read (#4799)."""
+
+    def _index(self, tmp_path, extra):
+        doc = tmp_path / "q3.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        host = _make_host(_fake_rag(set()))
+        host.indexed_files = set()
+        host.current_session = None
+        host.rebuild_system_prompt = MagicMock()
+
+        def index_file(_rag, path, **_kwargs):
+            return {"success": True, "file_name": doc.name, **extra}, None
+
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            return _tool("index_document")(file_path=str(doc))
+
+    def test_the_reply_says_which_images_went_unread(self, tmp_path):
+        note = "Text in images on 2 page(s) was not read because the vision model (v) was not available."
+        result = self._index(
+            tmp_path, {"unread_image_pages": 2, "unread_images_note": note}
+        )
+
+        assert result["status"] == "success"
+        assert result["unread_image_pages"] == 2
+        assert note in result["message"]
+        assert "Tell the user" in result["message"]
+
+    def test_a_fully_read_document_says_nothing_about_images(self, tmp_path):
+        result = self._index(tmp_path, {})
+
+        assert "unread_image_pages" not in result
+        assert "images" not in result["message"]

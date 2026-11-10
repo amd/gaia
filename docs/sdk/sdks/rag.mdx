@@ -328,7 +328,7 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings. A PDF or PowerPoint indexed while the vision model was unavailable records how many pages had images it couldn't read, and the index result says so (`unread_image_pages`, `unread_images_note`). Once the vision model answers, the next index of that file re-extracts it, so those images are read without clearing the cache.
 </Note>
 
 ### Indexing JSON records
