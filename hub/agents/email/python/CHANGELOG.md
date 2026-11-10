@@ -28,6 +28,13 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A batch archive, label, star or mark that went through is no longer
+  reported as failed (#6994).** When the change landed in Gmail or Outlook but
+  its undo record could not be saved, the message was listed under `failed`, so
+  the agent could retry it or tell the user nothing changed. It is now listed
+  under `succeeded` with `action_id: null` and an `undo_error`, and the batch
+  result adds `not_undoable_count` and a summary saying it can't be undone.
+
 - **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
   `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
   documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
