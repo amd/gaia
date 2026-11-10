@@ -486,6 +486,10 @@ approval, and keeps the result off every stable channel:
   and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
+  `GAIA_RC_FLAGSHIP_URL` points a candidate core at another copy of those
+  assets (a `file://` directory works); the release pipeline uses it so the
+  frozen core's real-engine check installs the flagship from the same run,
+  before the pre-release exists.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
