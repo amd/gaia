@@ -18,7 +18,7 @@ raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-m
 **Module:** `gaia_agent.chat_agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
-> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. `gaia_agent_chat` still imports for one release as a deprecated re-export. New work should target the flagship.
+> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. The `gaia_agent_chat` re-export shim was removed in v0.26.0; import from `gaia_agent.chat_agent`. New work should target the flagship.
 </Note>
 
 ---

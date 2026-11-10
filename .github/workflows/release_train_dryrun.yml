@@ -297,11 +297,11 @@ jobs:
   # checkout on this commit.
   ui-rc:
     name: Agent UI installers (rc)
-    needs: plan
+    needs: [plan, sidecar]
     if: >-
       !cancelled() &&
       needs.plan.result == 'success' &&
-      needs.plan.outputs.build == 'true'
+      needs.sidecar.result == 'success'
     permissions:
       contents: write
       id-token: write
@@ -311,6 +311,7 @@ jobs:
       ref: ${{ github.sha }}
       artifact_prefix: rc-
       publish_to_release: false
+      flagship: artifact
 
   ui-final:
     name: Agent UI installers (final)

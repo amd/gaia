@@ -12,24 +12,20 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://localhost:8765/jira",
+        "url": "http://localhost:8765/chat",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
             {
               "name": "query",
-              "value": "show my assigned issues"
-            },
-            {
-              "name": "operation",
-              "value": "query"
+              "value": "List three risks to check before releasing a new software version."
             }
           ]
         },
         "options": {}
       },
-      "id": "jira-query-node",
-      "name": "Query Jira Issues",
+      "id": "chat-node",
+      "name": "Chat with GAIA",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [450, 200]
@@ -43,7 +39,7 @@
           "parameters": [
             {
               "name": "query",
-              "value": "Summarize the following Jira issues: {{ $json.result }}"
+              "value": "Summarize the following in one sentence: {{ $json.result }}"
             }
           ]
         },
@@ -82,10 +78,10 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"n8n-{{ $workflow.id }}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"gaia.jira\",\n    \"arguments\": {\n      \"query\": \"create issue: Test from n8n\",\n      \"operation\": \"create\"\n    }\n  }\n}"
+        "jsonBody": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"n8n-{{ $workflow.id }}\",\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"gaia.query\",\n    \"arguments\": {\n      \"query\": \"Write a one-line greeting for a workflow test.\"\n    }\n  }\n}"
       },
-      "id": "jsonrpc-create-issue",
-      "name": "Create Issue via JSON-RPC",
+      "id": "jsonrpc-query-node",
+      "name": "Query GAIA via JSON-RPC",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [650, 400]
@@ -96,7 +92,7 @@
       "main": [
         [
           {
-            "node": "jira-query-node",
+            "node": "chat-node",
             "type": "main",
             "index": 0
           },
@@ -108,7 +104,7 @@
         ]
       ]
     },
-    "jira-query-node": {
+    "chat-node": {
       "main": [
         [
           {
@@ -123,7 +119,7 @@
       "main": [
         [
           {
-            "node": "jsonrpc-create-issue",
+            "node": "jsonrpc-query-node",
             "type": "main",
             "index": 0
           }
