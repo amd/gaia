@@ -7911,7 +7911,8 @@ Do NOT wrap conversational replies in JSON.
                 # What a preflight prepared for this prompt must not outlive a no.
                 forget = getattr(preflight, "forget", None)
                 if callable(forget):
-                    forget(tool_args)
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:

@@ -160,7 +160,8 @@ share one scope list in the catalog spec) and are listed at
 | `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
 
 The flagship [`gaia` agent](/guides/gaia) uses `Mail.ReadWrite` and `Mail.Send`
-for mail, and `Calendars.ReadWrite` for its calendar tools, which read your calendar and, once
+for mail (`Mail.Send` for its bundled `send-email` skill, which asks before
+anything is sent), and `Calendars.ReadWrite` for its calendar tools, which read your calendar and, once
 you approve each change, create, change or cancel events. A connection made before
 the calendar tools keeps reading mail; a calendar request names the command that
 adds the scope.

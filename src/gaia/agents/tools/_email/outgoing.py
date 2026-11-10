@@ -244,8 +244,8 @@ def reply_message(
         cc = _without(source.cc, own_address, *(r.address for r in to))
     if not (to or cc):
         raise ValueError(
-            f"Message {source.id!r} names nobody to reply to. Use send_now with "
-            "the address you want."
+            f"Message {source.id!r} names nobody to reply to. Use "
+            "send-email/send_now with the address you want."
         )
     chain = " ".join(
         part for part in (source.references, source.internet_message_id) if part

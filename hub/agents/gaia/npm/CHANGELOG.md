@@ -10,14 +10,19 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Added
 
-- **The agent can draft, reply, forward and send mail.** Eight tools join the
-  flagship, for Gmail and Outlook: `list_drafts`, `create_draft`, `update_draft`,
-  `discard_draft`, `send_draft`, `send_now`, `reply_to_message` and
-  `forward_message`, taking the agent from 105 tools to 113. Each send shows the
+- **The agent can draft, reply, forward and send mail.** A new bundled skill,
+  `send-email`, works on Gmail and Outlook through the mailbox the reading tools
+  use. The agent loads it when asked to send, reply to, forward or draft an
+  email, and its eight tools (`send-email/list_drafts`, `send-email/create_draft`,
+  `send-email/update_draft`, `send-email/discard_draft`, `send-email/send_draft`,
+  `send-email/send_now`, `send-email/reply_to_message`,
+  `send-email/forward_message`) join the tool list only then, so the registered
+  tool count stays 105 and a turn that only reads mail doesn't carry them. Gemma 4
+  E4B can't load it, as it isn't offered email. Each send shows the
   account it goes out from, then the recipients, subject and body exactly as
   they will go out, and needs a yes. If the connected mailbox changes while the
-  prompt waits, nothing is sent. A
-  decline or timeout sends nothing, and a failed send is reported, never retried:
+  prompt waits, nothing is sent. A decline or timeout sends nothing, and a
+  failed send is reported, never retried:
   `sent: false` means it didn't go, and `sent: "unknown"` means it may have, so
   check Sent. A forward carries text only, and names the attachments it leaves out.
   In the terminal, a long email must be scrolled to its end before `y` works.
@@ -83,7 +88,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `calendar`, lists events, checks free time, and creates, changes or cancels
   events. The agent loads it when a request is about the calendar, and its five
   tools (`calendar/list_calendar_events`, `calendar/create_calendar_event`, …)
-  join the tool list only then, so they add nothing to the registered tool count. Every
+  join the tool list only then, so the registered tool count stays 105. Every
   write asks a person first, even under full access, and a run with nobody to
   ask refuses it. The prompt shows the
   event's title, start, who gets notified and what changes; a call that misstates

@@ -248,8 +248,9 @@ already declares in its own code, so there's no list to type out or keep
 in sync:
 
 **Flagship `gaia` agent — two Gmail scopes and one calendar scope:**
-`gmail.readonly` to read and search, `gmail.compose` to draft and send, with
-a confirmation before anything is sent, and `calendar.events` so it can read
+`gmail.readonly` to read and search, `gmail.compose` to draft and send
+through its bundled `send-email` skill, with a confirmation before anything is
+sent, and `calendar.events` so it can read
 your calendar and, once you approve each change, create, change or cancel
 events. It never asks for `gmail.modify`:
 

@@ -6,13 +6,13 @@ icon: "envelope"
 
 # Email
 
-The flagship [`gaia` agent](/guides/gaia) reads and writes your mailbox, Gmail or Outlook, through **sixteen tools**, and every inference over an email body runs locally on your machine via Lemonade. Mail you read stays on your device, and mail you send leaves only after you approve it.
+The flagship [`gaia` agent](/guides/gaia) reads your mailbox, Gmail or Outlook, through **eight reading tools**, and drafts and sends mail through the bundled **`send-email` skill**. Every inference over an email body runs locally on your machine via Lemonade. Mail you read stays on your device, and mail you send leaves only after you approve it.
 
-It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. It saves drafts, replies, forwards and sends, and every send asks you first. It does not archive, label or delete messages yet. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the remaining verbs is [Email triage as a skill](/plans/email-triage-skill).
+It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. Asked to send, reply, forward or draft, it loads the `send-email` skill, which saves drafts, replies, forwards and sends, and every send asks you first. It does not archive, label or delete messages yet. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the remaining verbs is [Email triage as a skill](/plans/email-triage-skill).
 
 ## Action surface
 
-These sixteen tools are the whole surface.
+The reading tools are always there. The drafting and sending tools ship in the `send-email` skill and join the tool list, as `send-email/<tool>`, only once the agent loads it, so a turn that only reads mail doesn't carry them.
 
 | Tool | What you'd ask for |
 |---|---|
@@ -24,14 +24,14 @@ These sixteen tools are the whole surface.
 | `get_thread` | *"Catch me up on the thread with Dana"* — every message in one conversation, oldest first, with bodies. Long bodies are clipped so the whole thread fits; no message is ever dropped. |
 | `list_waiting_on_you` | *"What's waiting on me?"* — inbox threads where someone asked you directly for a reply, a decision, or a meeting time, and you were already in that conversation. Oldest first, with how many days each has waited. |
 | `list_connected_mailboxes` | *"Which account are you reading?"* — each mailbox's connection state and which one the other tools use. Reads local connector state only, so it works with the internet off. |
-| `list_drafts` | *"What have I got in drafts?"* — saved drafts with the ids the other draft tools take. |
-| `create_draft` | *"Draft a reply to Dana"* — saves a new draft, a reply draft, or a forward draft. Nothing leaves the mailbox, so it doesn't ask. |
-| `update_draft` | *"Make that shorter"* — changes the fields you name and keeps the rest. Asks first, showing the new text and what it replaces, because the draft may be one you wrote. Refuses a Gmail draft with attachments, since the edit would drop them. |
-| `discard_draft` | *"Throw that draft away"* — asks first, because a discarded draft can't be recovered. |
-| `send_draft` | *"Send it"* — asks first, showing the saved draft as it will go out. Refuses if the draft changed after you approved it. |
-| `send_now` | *"Email Sam that I'm running late"* — composes and sends in one step. Asks first. |
-| `reply_to_message` | *"Tell her yes"* — replies in the conversation, to the sender or to everyone. Asks first. |
-| `forward_message` | *"Send that to Kit"* — forwards the message's text with an optional note. Attachments stay behind, and the prompt names each one left out. Asks first. |
+| `send-email/list_drafts` | *"What have I got in drafts?"* — saved drafts with the ids the other draft tools take. |
+| `send-email/create_draft` | *"Draft a reply to Dana"* — saves a new draft, a reply draft, or a forward draft. Nothing leaves the mailbox, so it doesn't ask. |
+| `send-email/update_draft` | *"Make that shorter"* — changes the fields you name and keeps the rest. Asks first, showing the new text and what it replaces, because the draft may be one you wrote. Refuses a Gmail draft with attachments, since the edit would drop them. |
+| `send-email/discard_draft` | *"Throw that draft away"* — asks first, because a discarded draft can't be recovered. |
+| `send-email/send_draft` | *"Send it"* — asks first, showing the saved draft as it will go out. Refuses if the draft changed after you approved it. |
+| `send-email/send_now` | *"Email Sam that I'm running late"* — composes and sends in one step. Asks first. |
+| `send-email/reply_to_message` | *"Tell her yes"* — replies in the conversation, to the sender or to everyone. Asks first. |
+| `send-email/forward_message` | *"Send that to Kit"* — forwards the message's text with an optional note. Attachments stay behind, and the prompt names each one left out. Asks first. |
 
 `list_waiting_on_you` is narrow on purpose: newsletters, cold outreach, and automated senders never qualify, and neither does a sender you told to stop writing. A first message from someone you have never replied to won't appear either — the full triage pass still catches those. It scans the 50 most recent inbox messages by default (up to 100 on Gmail, 200 on Outlook), and says when older mail was not checked.
 

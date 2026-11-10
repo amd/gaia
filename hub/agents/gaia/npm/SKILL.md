@@ -385,28 +385,33 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Nineteen of the agent's 113 tools change something and need explicit approval
+Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
-offered the scratchpad, email, calendar, image-generation or skill-hub tools, so
-`install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+offered the scratchpad, email, send-email, calendar, image-generation or skill-hub
+tools, so `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds nine of its own
+account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it; **`send_now`**,
-**`send_draft`**, **`reply_to_message`** and **`forward_message`**, because mail
-leaves the mailbox, and **`discard_draft`** and **`update_draft`**, because a
+content under `~/.gaia/skills` and removing one deletes it.
+The bundled `send-email` skill's eight tools join the list when the skill loads,
+and its manifest marks six `requires_confirmation`: **`send-email/send_now`**,
+**`send-email/send_draft`**, **`send-email/reply_to_message`** and
+**`send-email/forward_message`**, because mail leaves the mailbox, and
+**`send-email/discard_draft`** and **`send-email/update_draft`**, because a
 deleted or overwritten draft can't be recovered and may be one the user wrote.
-The four sending tools are refused, with nothing sent, wherever no person can
-answer the prompt, including a pre-approved run. A failed send returns
-`sent: false` when it definitely didn't go, and `sent: "unknown"` when it may have
-(a dropped connection or a provider server error): tell the user to check Sent and
-don't call again unless they ask. `forward_message` carries text only, and reports
-the files it left out in `attachments_left_out`.
+`send-email/create_draft` and `send-email/list_drafts` don't ask. The prompt
+carries the sending account and the exact message. The four sending tools are
+refused, with nothing sent, wherever no person can answer the prompt, including a
+pre-approved run. A failed send returns `sent: false` when it definitely didn't
+go, and `sent: "unknown"` when it may have (a dropped connection or a provider
+server error): tell the user to check Sent and don't call again unless they ask.
+`send-email/forward_message` carries text only, and reports the files it left out
+in `attachments_left_out`.
 The bundled `calendar` skill's tools join the list when the skill loads, and its
 **`calendar/create_calendar_event`**, **`calendar/update_calendar_event`** and
 **`calendar/cancel_calendar_event`** ask as well (its manifest marks them

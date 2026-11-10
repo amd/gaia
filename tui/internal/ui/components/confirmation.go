@@ -118,6 +118,13 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"permanent_delete":            RiskDestructive,
 	"discard_draft":               RiskDestructive,
 	"quarantine_phishing_message": RiskDestructive,
+	// The flagship's send-email skill, under its namespaced names.
+	"send-email/send_now":         RiskWrite,
+	"send-email/send_draft":       RiskWrite,
+	"send-email/forward_message":  RiskWrite,
+	"send-email/reply_to_message": RiskWrite,
+	"send-email/update_draft":     RiskWrite,
+	"send-email/discard_draft":    RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
 	"run_cli_command":     RiskDestructive,
@@ -172,6 +179,13 @@ var actionTitles = map[string]string{
 	"forward_message":      "Forward this email?",
 	"discard_draft":        "Delete this draft?",
 	"update_draft":         "Change this draft?",
+
+	"send-email/send_now":         "Send this email?",
+	"send-email/send_draft":       "Send this email?",
+	"send-email/reply_to_message": "Send this reply?",
+	"send-email/forward_message":  "Forward this email?",
+	"send-email/discard_draft":    "Delete this draft?",
+	"send-email/update_draft":     "Change this draft?",
 }
 
 // approveLabels names what y grants for a prompt whose yes outlasts the call.
@@ -359,14 +373,21 @@ type ConfirmationDecidedMsg struct {
 
 // wholeTextActions are the prompts whose text IS the decision: an email is
 // approved as it will go out, so it can never be approved partly unseen. Mirrors
-// EXACT_SUMMARY_TOOLS in PermissionPrompt.tsx.
+// EXACT_SUMMARY_TOOLS in PermissionPrompt.tsx. The flagship runs them from its
+// send-email skill, so they arrive namespaced.
 var wholeTextActions = map[string]bool{
-	"send_now":         true,
-	"send_draft":       true,
-	"reply_to_message": true,
-	"forward_message":  true,
-	"discard_draft":    true,
-	"update_draft":     true,
+	"send_now":                    true,
+	"send_draft":                  true,
+	"reply_to_message":            true,
+	"forward_message":             true,
+	"discard_draft":               true,
+	"update_draft":                true,
+	"send-email/send_now":         true,
+	"send-email/send_draft":       true,
+	"send-email/reply_to_message": true,
+	"send-email/forward_message":  true,
+	"send-email/discard_draft":    true,
+	"send-email/update_draft":     true,
 }
 
 // ConfirmationModel renders a needs_confirmation pause: the gated action, its

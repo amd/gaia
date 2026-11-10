@@ -67,7 +67,7 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
-from gaia.agents.tools.email_tools import EMAIL_CONFIRMATION_TOOLS, EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.config import GaiaConfig
@@ -399,12 +399,12 @@ class GaiaAgent(
     # into the system prompt — never without the human seeing the request.
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
-    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = (
-        frozenset({"install_skill", "capture_skill", "remove_skill"})
-        | EMAIL_CONFIRMATION_TOOLS
+    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
+        {"install_skill", "capture_skill", "remove_skill"}
     )
-    # The calendar skill ships in this agent's bundled skills.
+    # The calendar and send-email skills ship in this agent's bundled skills.
     BUNDLES_CALENDAR_SKILL: ClassVar[bool] = True
+    BUNDLES_SEND_EMAIL_SKILL: ClassVar[bool] = True
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         if config is not None and kwargs:

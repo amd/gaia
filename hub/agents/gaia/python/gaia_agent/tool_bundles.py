@@ -558,29 +558,6 @@ FULL_BUNDLES = [
             "reply, and say which mailbox account is connected."
         ),
     ),
-    # Two bundles because of the per-bundle cap. Draft-then-send is one flow, so
-    # send_draft rides with the drafts; the rest send with no draft step.
-    ToolBundle(
-        name="email_drafts",
-        members=frozenset(
-            {
-                "list_drafts",
-                "create_draft",
-                "update_draft",
-                "discard_draft",
-                "send_draft",
-            }
-        ),
-        description=(
-            "Write an email for later: save, change, list, throw away or send a "
-            "draft, including a draft reply or forward."
-        ),
-    ),
-    ToolBundle(
-        name="email_send",
-        members=frozenset({"send_now", "reply_to_message", "forward_message"}),
-        description="Send an email now, reply to a message, or forward one.",
-    ),
     # The description carries the file extensions deliberately: a real turn
     # says "summarize this meeting: <path>.mp4" and never says "transcribe",
     # so an extension-shaped query needs something to score against. Without
@@ -680,14 +657,6 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "get_thread",
         "list_connected_mailboxes",
         "list_waiting_on_you",
-        "list_drafts",
-        "create_draft",
-        "update_draft",
-        "discard_draft",
-        "send_draft",
-        "send_now",
-        "reply_to_message",
-        "forward_message",
         "generate_image",
         "list_sd_models",
         "get_generation_history",

@@ -874,3 +874,32 @@ func TestWindowFitsEverySize(t *testing.T) {
 		}
 	}
 }
+
+func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
+	for _, action := range []string{
+		"send-email/send_now",
+		"send-email/send_draft",
+		"send-email/reply_to_message",
+		"send-email/forward_message",
+		"send-email/discard_draft",
+		"send-email/update_draft",
+	} {
+		if ActionTitle(action) == "Allow "+action+"?" {
+			t.Errorf("%s has no plain-language title", action)
+		}
+		if _, ok := confirmationRiskTiers[action]; !ok {
+			t.Errorf("%s has no risk tier", action)
+		}
+		m := NewConfirmationModel("r", action, longMail(40), "").WithLiveChannel("c", "")
+		m.SetMaxRows(10)
+		if m = pressKey(m, "y"); !m.Pending() {
+			t.Fatalf("%s: y approved a mail whose end was never on screen", action)
+		}
+		for guard := 0; m.unread() && guard < 100; guard++ {
+			m = pressKey(m, "pgdown")
+		}
+		if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+			t.Fatalf("%s: state = %v after reading it all, want Approved", action, m.State())
+		}
+	}
+}

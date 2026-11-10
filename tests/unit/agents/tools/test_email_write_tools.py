@@ -1,16 +1,19 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Drafting and sending from the flagship: every path through the gate.
+"""Drafting and sending through the ``send-email`` skill, every path through the gate.
 
-Calls go through the real ``Agent._execute_tool`` and real ``httpx`` clients over
-a ``MockTransport``, so these assert the request a provider would receive, not
-that a stub was called.
+The tools ship in ``hub/skills/send-email`` and register as ``send-email/<tool>``
+when the skill loads. Tests name them bare; the test agents run them under their
+namespaced name. Calls go through the real ``Agent._execute_tool`` and real
+``httpx`` clients over a ``MockTransport``, so these assert the request a
+provider would receive, not that a stub was called.
 """
 
 import base64
 import email
 import email.policy
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,7 +23,8 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.call_risk import EXACT_TEXT_ARG, NEEDS_PERSON_ARG
 from gaia.agents.base.console import AgentConsole, format_confirmation_args
-from gaia.agents.base.model_features import COMPACT, withheld_tools
+from gaia.agents.base.model_features import COMPACT, FULL, withheld_tools
+from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools._email import fixture
@@ -40,17 +44,59 @@ from gaia.agents.tools._email.scopes import (
     SCOPE_MAIL_READWRITE,
     SCOPE_MAIL_SEND,
 )
-from gaia.agents.tools.email_tools import (
-    EMAIL_AGENT_ID,
-    EMAIL_CONFIRMATION_TOOLS,
-    SEND_TOOLS,
-    EmailToolsMixin,
-)
+from gaia.agents.tools.email_tools import EMAIL_AGENT_ID, EmailToolsMixin
+from gaia.skills import parse_skill_file
+from gaia.skills.loader import register_skill_tools
+from gaia.skills.manager import SkillManager
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import PROMPT_ONLY_ARGS, CanonicalTranslator
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 MBOX = REPO_ROOT / "tests" / "fixtures" / "gaia" / "email" / "eval_inbox.mbox"
+SKILL_DIR = REPO_ROOT / "hub" / "skills" / "send-email"
+
+SEND_TOOLS = {"send_draft", "send_now", "reply_to_message", "forward_message"}
+EMAIL_CONFIRMATION_TOOLS = SEND_TOOLS | {"discard_draft", "update_draft"}
+SKILL_TOOLS = EMAIL_CONFIRMATION_TOOLS | {"create_draft", "list_drafts"}
+
+
+def _ns(tool):
+    return f"send-email/{tool}" if tool in SKILL_TOOLS else tool
+
+
+def _skill_module():
+    """The skill's ``tools.py`` as the loader imports it, without its tools."""
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        register_skill_tools(parse_skill_file(SKILL_DIR))
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    return sys.modules["gaia_skill_send_email_tools"]
+
+
+def _skill_manager():
+    return SkillManager(
+        agent_skill_dirs=[SKILL_DIR.parent],
+        user_skills_root=SKILL_DIR.parent / ".no-user-skills",
+        include_claude_roots=False,
+    )
+
+
+class _SkillLoaded:
+    """Loads the send-email skill, and runs a bare tool name as its namespaced one."""
+
+    def _load_send_email(self):
+        self.load_skill("send-email", manager=_skill_manager())
+
+    def _execute_tool(self, tool_name, tool_args, *args, **kwargs):
+        return super()._execute_tool(_ns(tool_name), tool_args, *args, **kwargs)
+
+    def call_unbound(self, tool, **args):
+        """The tool's function, called inside its skill scope but past the gate."""
+        name = _ns(tool)
+        with self._skill_tool_scope(name):
+            return self._tools_registry[name]["function"](**args)
 
 
 def _b64(text: str) -> str:
@@ -139,11 +185,16 @@ class _Asked(AgentConsole):
         return self.timed_out
 
 
-class _MailAgent(Agent, EmailToolsMixin):
-    """The gate as the flagship has it, with no static declaration to lean on."""
+class _MailAgent(_SkillLoaded, Agent, EmailToolsMixin):
+    """The reading tools plus the send-email skill, and no gate list: the skill's
+    manifest is what makes its writes ask."""
 
     transport = None
     provider_class = GmailWriteBackend
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._load_send_email()
 
     def _get_system_prompt(self):
         return "mail"
@@ -323,7 +374,7 @@ def test_relayed_prompt_summary_is_the_exact_text():
     relayed = translator.translate(
         {
             "type": "permission_request",
-            "tool": "send_now",
+            "tool": "send-email/send_now",
             "args": {EXACT_TEXT_ARG: text},
             "confirm_id": "c1",
         }
@@ -336,23 +387,116 @@ def test_relayed_prompt_summary_is_the_exact_text():
 
 
 def test_every_send_asks_and_offers_no_always():
-    assert SEND_TOOLS == {
-        "send_draft",
-        "send_now",
-        "reply_to_message",
-        "forward_message",
-    }
-    assert "discard_draft" in EMAIL_CONFIRMATION_TOOLS
+    module = _skill_module()
+    assert module.SEND_TOOLS == SEND_TOOLS
+    assert module.CONFIRMATION_TOOLS == EMAIL_CONFIRMATION_TOOLS
     for name in EMAIL_CONFIRMATION_TOOLS:
-        assert grant_scope(name, {EXACT_TEXT_ARG: "x"}) is None
+        assert grant_scope(_ns(name), {EXACT_TEXT_ARG: "x"}) is None
 
 
-def test_flagship_declares_the_gate():
-    pytest.importorskip("gaia_agent")
-    from gaia_agent.agent import GaiaAgent
+def test_the_manifest_gates_every_write_but_a_new_draft():
+    skill = parse_skill_file(SKILL_DIR)
+    assert {t.name for t in skill.gaia.tools} == SKILL_TOOLS
+    asks = {t.name for t in skill.gaia.tools if t.requires_confirmation}
+    assert asks == EMAIL_CONFIRMATION_TOOLS
 
-    assert EMAIL_CONFIRMATION_TOOLS <= GaiaAgent.confirmation_required_tools()
-    assert "create_draft" not in GaiaAgent.confirmation_required_tools()
+
+def test_an_agent_without_a_gate_list_still_asks(mailbox, agent_for):
+    agent = agent_for(_Asked(), _Gmail())
+    assert not EMAIL_CONFIRMATION_TOOLS & agent.confirmation_required_tools()
+    for name in EMAIL_CONFIRMATION_TOOLS:
+        assert agent._tool_requires_confirmation(_ns(name), {})
+    for name in ("create_draft", "list_drafts"):
+        assert not agent._tool_requires_confirmation(_ns(name), {})
+
+
+@pytest.mark.parametrize(
+    "tool,args",
+    [
+        ("send_now", SEND_NOW),
+        ("reply_to_message", {"message_id": "msg1", "body": "Yes"}),
+        ("forward_message", {"message_id": "msg1", "to": "x@example.com"}),
+        ("send_draft", {"draft_id": "d1"}),
+        ("discard_draft", {"draft_id": "d1"}),
+        ("update_draft", {"draft_id": "d1", "body": "New"}),
+    ],
+)
+def test_an_agent_that_would_not_ask_is_refused(mailbox, tool, args):
+    """The skill fails closed on a host that opened its own gate."""
+
+    class _NeverAsks(_MailAgent):
+        def _tool_requires_confirmation(self, tool_name, tool_args=None):
+            return False
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _NeverAsks(silent_mode=True, skip_lemonade=True)
+        gmail = _Gmail()
+        agent.console = _Asked()
+        agent.transport = gmail
+        result = agent._execute_tool(tool, args)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    assert "always needs one" in result["error"]
+    assert agent.console.shown == [] and gmail.calls == []
+    assert agent._email_prepared == {}
+
+
+def test_a_host_without_a_mailbox_is_refused_before_asking(mailbox):
+    """A host with no mailbox tools gets a refusal, never a half-built message."""
+
+    class _NoMailbox(_SkillLoaded, Agent):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._load_send_email()
+
+        def _get_system_prompt(self):
+            return "x"
+
+        def _register_tools(self):
+            self._snapshot_tools()
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _NoMailbox(silent_mode=True, skip_lemonade=True)
+        agent.console = _Asked()
+        result = agent._execute_tool("send_now", SEND_NOW)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    assert "no mailbox connection" in result["error"]
+    assert agent.console.shown == []
+
+
+def test_the_reading_mixin_registers_no_write_tools(mailbox):
+    """Only the skill brings them; the core registry stays read-only."""
+
+    class _ReadOnly(Agent, EmailToolsMixin):
+        def _get_system_prompt(self):
+            return "mail"
+
+        def _register_tools(self):
+            self.register_email_tools()
+            self._snapshot_tools()
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _ReadOnly(silent_mode=True, skip_lemonade=True)
+        names = set(agent._tools_registry)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    assert "read_email" in names
+    assert not names & SKILL_TOOLS
+    assert not any(n.startswith("send-email/") for n in names)
+
+
+def test_every_skill_tool_is_online_only():
+    assert {_ns(t) for t in SKILL_TOOLS} <= ONLINE_SERVICE_TOOLS
 
 
 @pytest.mark.parametrize(
@@ -379,7 +523,7 @@ def test_decline_sends_nothing(mailbox, agent_for, tool, args, path):
     result = agent_for(console, gmail)._execute_tool(tool, args)
 
     assert result["status"] == "denied"
-    assert console.shown[0][0] == tool
+    assert console.shown[0][0] == _ns(tool)
     assert gmail.calls == []
 
 
@@ -431,8 +575,9 @@ def test_dropped_connection_says_the_outcome_is_unknown(mailbox, agent_for):
 def test_a_direct_call_that_skipped_the_gate_sends_nothing(mailbox, agent_for):
     gmail = _Gmail()
     agent = agent_for(_Asked(), gmail)
-    out = json.loads(agent._tools_registry["send_now"]["function"](**SEND_NOW))
+    out = json.loads(agent.call_unbound("send_now", **SEND_NOW))
     assert out["success"] is False
+    assert "without going through its confirmation" in out["error"]
     assert gmail.calls == []
 
 
@@ -520,6 +665,24 @@ def test_full_access_with_nobody_watching_refuses(mailbox, agent_for):
     handler.auto_approve_gated_tools = True
     gmail = _Gmail()
     result = agent_for(handler, gmail)._execute_tool("send_now", SEND_NOW)
+    assert "Not sent" in result["error"]
+    assert gmail.calls == []
+
+
+@pytest.mark.parametrize(
+    "tool,args", [("send_now", SEND_NOW), ("send_draft", {"draft_id": "d1"})]
+)
+def test_the_api_server_refuses_to_send(mailbox, agent_for, tool, args):
+    """The OpenAI-compatible API has nobody to ask, so mail never goes out there."""
+    from gaia.api.sse_handler import SSEOutputHandler as ApiHandler
+
+    gmail = _Gmail()
+    result = agent_for(ApiHandler(), gmail)._execute_tool(tool, args)
+    assert result["status"] == "denied"
+    assert gmail.calls == []
+
+    with patch("gaia.agents.base.console.auto_approve_env_enabled", return_value=True):
+        result = agent_for(ApiHandler(), gmail)._execute_tool(tool, args)
     assert "Not sent" in result["error"]
     assert gmail.calls == []
 
@@ -918,9 +1081,20 @@ def test_comma_inside_a_quoted_name_stays_one_recipient():
 
 
 def test_compact_models_get_no_write_tools():
-    withheld = withheld_tools(COMPACT)
-    assert EMAIL_CONFIRMATION_TOOLS <= withheld
-    assert {"create_draft", "update_draft", "list_drafts"} <= withheld
+    named = {_ns(t) for t in SKILL_TOOLS}
+    assert named <= withheld_tools(COMPACT)
+    assert not named & withheld_tools(FULL)
+
+
+def test_a_compact_model_cannot_load_the_skill(mailbox, agent_for):
+    from gaia.skills.errors import SkillUnavailableError
+
+    agent = agent_for(_Asked(), _Gmail())
+    assert agent.unload_skill("send-email")
+    agent.model_features = COMPACT
+    with pytest.raises(SkillUnavailableError, match="larger model"):
+        agent._load_send_email()
+    assert not any(n.startswith("send-email/") for n in agent._tools_registry)
 
 
 # --- the offline fixture mailbox ------------------------------------------
@@ -943,7 +1117,11 @@ def fixture_agent(monkeypatch, agent_for):
     fixture.set_attached(True)
 
 
-class _FixtureMailAgent(Agent, EmailToolsMixin):
+class _FixtureMailAgent(_SkillLoaded, Agent, EmailToolsMixin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._load_send_email()
+
     def _get_system_prompt(self):
         return "mail"
 
@@ -1437,7 +1615,7 @@ def test_declined_message_cannot_be_sent_afterwards_by_a_direct_call(
     agent = agent_for(_Asked(answer=False, timed_out=timed_out), gmail)
     agent._execute_tool("send_now", SEND_NOW)
     assert agent._email_prepared == {}
-    out = json.loads(agent._tools_registry["send_now"]["function"](**SEND_NOW))
+    out = json.loads(agent.call_unbound("send_now", **SEND_NOW))
     assert out["success"] is False
     assert gmail.calls == []
 

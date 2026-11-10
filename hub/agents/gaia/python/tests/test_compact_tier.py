@@ -20,7 +20,13 @@ from gaia.llm.lemonade_client import (
 from gaia.skills.errors import SkillUnavailableError
 
 # Each needs a tool from one compact-withheld feature; calendar provides them.
-SKILLS_ON_WITHHELD_TOOLS = ("calendar", "data-explore", "image-gen", "inbox-triage")
+SKILLS_ON_WITHHELD_TOOLS = (
+    "calendar",
+    "data-explore",
+    "image-gen",
+    "inbox-triage",
+    "send-email",
+)
 
 
 def _core_withheld():
@@ -65,7 +71,9 @@ def test_gemma_loses_exactly_the_compact_features_tools(gemma, full_tools):
     assert withheld <= full_tools, sorted(withheld - full_tools)
     assert full_tools - set(gemma._tools_registry) == withheld
     skill_tools = withheld_tools(COMPACT) - withheld
-    assert skill_tools and all(t.startswith("calendar/") for t in skill_tools)
+    assert skill_tools and all(
+        t.split("/")[0] in {"calendar", "send-email"} for t in skill_tools
+    )
 
 
 def test_gemma_keeps_installed_skills_and_documents(gemma):
