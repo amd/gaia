@@ -116,10 +116,6 @@ const (
 // marks it unfit with the "npu" code and no memory numbers, as memory_fit does.
 func flmBlocked() setupapi.Plan { return flmBlockedWith(notReadyReason) }
 
-// flmNoNpu is that model on a PC with no NPU at all: also blocked, but the
-// remedy is hardware, not a setting the user can change.
-func flmNoNpu() setupapi.Plan { return flmBlockedWith(noNpuReason) }
-
 func flmBlockedWith(reason string) setupapi.Plan {
 	p := small16()
 	e := f.Entry(flm, chat, 2.1, true, false, false, f.Bool(false), 0, 0)
