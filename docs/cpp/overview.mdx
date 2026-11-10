@@ -249,7 +249,10 @@ config.debug = true;
 |-------|------|---------|-------------|
 | `baseUrl` | `std::string` | `"http://localhost:13305/api/v1"` | LLM server endpoint ([Lemonade Server](https://lemonade-server.ai) recommended; other OpenAI-compatible servers untested) |
 | `modelId` | `std::string` | `"Qwen3-4B-GGUF"` | Model identifier sent to the server |
-| `maxSteps` | `int` | `20` | Maximum agent loop iterations per query |
+| `maxSteps` | `int` | `50` | Maximum agent loop iterations per query. The model is told when few remain, and at the limit one tool-free call asks for a summary |
+| `maxTokens` | `int` | `4096` | Maximum tokens in one model reply |
+| `llmRetries` | `int` | `3` | Retries, with backoff, after a connection error or HTTP 408, 409, 425, 429 or 5xx |
+| `maxToolResultChars` | `int` | `16000` | Tool output kept in the conversation; the rest is read with `read_tool_output` |
 | `maxPlanIterations` | `int` | `3` | Maximum plan/replan cycles before forcing completion |
 | `maxConsecutiveRepeats` | `int` | `4` | Consecutive identical responses before loop-detection triggers |
 | `maxHistoryMessages` | `int` | `40` | Max messages kept between queries (0 = unlimited) |
