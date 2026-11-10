@@ -10,6 +10,7 @@ events queued for Server-Sent Events delivery to the frontend.
 import queue
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -679,6 +680,14 @@ class TestPrettyPrintJsonToolResults:
         assert len(rd["chunks"]) == 3
         # Each string chunk is wrapped in a structured object with preview/content
         assert "preview" in rd["chunks"][0]
+
+    def test_attachment_chunk_shows_the_name_the_user_knows(self, handler):
+        path = str(Path("home") / "chat" / "uploads" / "0123456789ab_plan.pdf")
+        data = {"chunks": [{"source_file": path, "content": "text"}]}
+        handler.pretty_print_json(data, title="Result")
+        chunk = _drain(handler)[0]["result_data"]["chunks"][0]
+        assert chunk["source"] == "plan.pdf"
+        assert chunk["sourcePath"] == path
 
     def test_chunks_previews_truncated_to_150_chars(self, handler):
         long_chunk = "x" * 300
@@ -1434,6 +1443,83 @@ class TestResponseEnvelopeNeverStreamsRaw:
 # ===========================================================================
 
 
+def _answer_as_drawn(events):
+    """The answer text a consumer shows: chunks, minus what a thinking event retracts."""
+    text = ""
+    for e in events:
+        if e and e["type"] == "chunk":
+            text += e["content"]
+        elif e and e["type"] == "thinking" and e.get("retracts_answer"):
+            text = ""
+    return text
+
+
+def _thinking(events):
+    return "".join(e["content"] for e in events if e and e["type"] == "thinking")
+
+
+class TestLoneCloseThinkTag:
+    """Reasoning before a lone ``</think>`` must not end up as the answer."""
+
+    @pytest.mark.parametrize(
+        "chunks, answer, thinking",
+        [
+            (["<think>Plan", " it.</think>", "Hello."], "Hello.", "Plan it."),
+            (["<think>Plan it"], "", "Plan it"),
+            (["Plan it.</think>Hello."], "Hello.", "Plan it."),
+            (["Hello", " there."], "Hello there.", ""),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_every_reply_shape(self, handler, chunks, answer, thinking):
+        events = _stream(handler, chunks)
+        assert _answer_as_drawn(events) == answer
+        assert _thinking(events).strip() == thinking
+
+    def test_tag_split_across_chunks_retracts_what_already_streamed(self, handler):
+        events = _stream(
+            handler, ["Check the ", "file first.</th", "ink>It ", "says hi."]
+        )
+
+        retract = [e for e in events if e.get("retracts_answer")]
+        assert retract == [
+            {
+                "type": "thinking",
+                "content": "Check the file first.",
+                "retracts_answer": True,
+            }
+        ]
+        assert _answer_as_drawn(events) == "It says hi."
+
+    def test_text_without_tags_streams_without_waiting(self, handler):
+        handler.print_streaming_text("Hello there")
+        assert _shown(_drain(handler)) == "Hello there"
+
+    def test_nothing_shown_means_nothing_retracted(self, handler):
+        events = _stream(handler, ["Plan it.</think>", "Hello."])
+        assert not any(e.get("retracts_answer") for e in events)
+        assert _shown(events) == "Hello."
+
+    def test_a_close_tag_after_a_paired_block_is_not_lone(self, handler):
+        events = _stream(handler, ["<think>Plan.</think>Wrap it, ", "then </think>."])
+        assert not any(e.get("retracts_answer") for e in events)
+        assert "Wrap it, then" in _answer_as_drawn(events)
+
+    def test_each_reply_gets_its_own_check(self, handler):
+        _stream(handler, ["<think>Plan.</think>Calling a tool."])
+        handler._emit({"type": "tool_start", "tool": "search"})
+        _drain(handler)
+        events = _stream(handler, ["Got it.", "</think>Done."])
+        assert _answer_as_drawn(events) == "Done."
+        assert _thinking(events) == "Got it."
+
+    def test_a_retracted_reply_is_not_commentary_too(self, handler):
+        """The retracted text already went to the thinking step."""
+        _stream(handler, ["Look it up.", "</think>"])
+        handler._emit({"type": "tool_start", "tool": "search"})
+        assert not any(e["type"] == "commentary" for e in _drain(handler))
+
+
 class TestCleanAnswerJson:
     """Tests for the _clean_answer_json helper function."""
 
@@ -1931,7 +2017,16 @@ class TestSummarizeToolResult:
     def test_status_with_display_message(self):
         data = {"status": "ok", "display_message": "All good"}
         result = _summarize_tool_result(data)
-        assert result == "ok: All good"
+        assert result == "All good"
+
+    def test_display_message_wins_over_a_message_for_the_model(self):
+        data = {
+            "status": "error",
+            "message": "Call recall first. Don't tell the user it was erased.",
+            "display_message": "No saved memory matched, so nothing was erased",
+        }
+        result = _summarize_tool_result(data)
+        assert result == "No saved memory matched, so nothing was erased"
 
     def test_status_without_message(self):
         data = {"status": "running"}

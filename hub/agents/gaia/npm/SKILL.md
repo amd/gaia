@@ -29,7 +29,7 @@ Two ways in:
 ## 1. Install
 
 ```bash
-npx @amd-gaia/gaia          # no install step; fetches what it needs on first run
+npx @amd-gaia/gaia          # no npm install step; needs the gaia Python CLI (see §5)
 npm install @amd-gaia/gaia  # when you want the programmatic exports
 ```
 
@@ -93,10 +93,10 @@ env var, or option that relaxes it.
 - Bytes are hashed **in memory and compared before anything is written** to the
   cache path. A mismatch raises `IntegrityError` naming expected vs actual and
   leaves nothing on disk.
-- A **placeholder hash blocks the fetch before any network call** — between
-  releases every `sha256` in the lock is `PENDING-replace-with-real-sha256`, and
-  a value that is all zeros or contains `PENDING` (case-insensitive) is treated
-  as a placeholder. You get a `PlatformError`, not a download.
+- A **placeholder hash blocks the fetch before any network call** — a value
+  that is all zeros or contains `PENDING` (case-insensitive) is treated as a
+  placeholder. A published package always carries real hashes, so you only meet
+  this with a hand-edited lock. You get a `PlatformError`, not a download.
 - A cache hit **re-hashes the on-disk file**. A cached binary whose bytes drifted
   is re-downloaded, not reused.
 
@@ -127,16 +127,23 @@ platform and the supported set. It is not silently skipped, and the TUI is never
 launched with no agent behind it. `npx @amd-gaia/gaia version` prints the matrix
 for the version you have.
 
-## 5. Prerequisite — a local Lemonade server
+## 5. Prerequisites — the `gaia` CLI and a local Lemonade server
+
+The terminal UI starts the GAIA daemon from the **Python `gaia` CLI**, which this
+package does not install. It must be on `PATH` and be **0.26.0 or newer**: without
+it the daemon never comes up, and an older one starts but cannot run this agent
+(see [Gotchas](#gotchas--read-before-debugging)). Install it with
+`curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
+`irm https://amd-gaia.ai/install.ps1 | iex`).
 
 The agent thinks with a model hosted by **Lemonade Server**, which this package
 does not install. Required before any query succeeds:
 
-1. Lemonade **10.2.0 or newer**, running. GAIA's daemon starts and supervises
-   one, so `gaia daemon start` is normally all that is needed (`gaia init`
-   also installs and starts it on first run). Qwen3.8 Flash Next needs
-   **v2026.39.1 or newer**, the version `gaia init` installs; older servers
-   cannot load it.
+1. Lemonade **2026.44.1 or newer**, running. GAIA's daemon starts and
+   supervises one, so `gaia daemon start` is normally all that is needed
+   (`gaia init` also installs and starts it on first run). GAIA upgrades its
+   own Lemonade when it starts it; a Lemonade you run yourself is refused below
+   that version, and the `hint` says so.
 2. The machine's default chat model downloaded — run `gaia init`. It picks
    `Qwen3.6-35B-A3B-GGUF` where a GPU holds it (~27 GB for models,
    weights plus context cache — a 64 GB+ Strix Halo or a 32 GB GPU) and
@@ -165,7 +172,7 @@ alone:
 {
   "ready": false,
   "lemonade": { "reachable": false, "base_url": "…", "version": null,
-                "min_version": "10.2.0", "compatible": null },
+                "min_version": "2026.44.1", "compatible": null },
   "model":    { "id": "Gemma-4-E4B-it-GGUF", "present": false,
                 "loadable": null, "ctx_size": null },
   // The manual fallback ("Otherwise: …") is resolved for the host's Lemonade
@@ -275,11 +282,11 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `changes_turn_id` | no | Contract ≥ 2.19. Needs `session_id`. The agent copies each file before changing it, under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`, so the turn can be reviewed and undone; the copies are complete before the terminal event. Format: 14 digits of local time, `-`, 8 hex digits (`YYYYmmddHHMMSS-xxxxxxxx`); anything else is a **422**. Omit it to copy nothing. |
 | `surface` | no | Contract ≥ 2.20. `"agent_ui"`, `"tui"` or `"cli"` — the front-end the turn comes from. With `"agent_ui"` the agent points recurring requests at the Agent UI's **Scheduled tasks** page. It also picks where a model-provider error tells the user to fix it; omitted (a headless caller), that is the model server the GAIA host uses (`LEMONADE_BASE_URL`). Read when a session is built. |
 | `turns` | no | Contract ≥ 2.25. Earlier turns as the model saw them, oldest first: each is that turn's `final.model_messages`, or a `{user, assistant}` text pair for a turn without one. Send it instead of `context` (then `[]`, or the request is a **422**) so the agent sees its own earlier tool calls and their results; send `[]` on the first turn. It keeps the newest whole turns that fit its window. Sent, even as `[]`, it makes `final` carry `model_messages`; `[]` also clears a retained session's history. |
-| `reasoning` | no | Contract ≥ 2.22. `true` streams the model's reasoning as `reasoning` events (`{ delta }`), apart from `status` lines and the answer's `token`s. Join the deltas as they come: each keeps its own spacing. Omit it and reasoning folds into `status` lines as before. |
+| `reasoning` | no | Contract ≥ 2.22. `true` streams the model's reasoning as `reasoning` events (`{ delta }`), apart from `status` lines and the answer's `token`s. Join the deltas as they come: each keeps its own spacing. A model whose template opens the reasoning block streams it as `token`s first; drop them when the `reasoning` event carries `retracts_answer: true`. Omit it and reasoning folds into `status` lines as before. |
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
-| `max_steps` | no | ≥ 1. |
+| `max_steps` | no | ≥ 1. Defaults to **150** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -334,14 +341,14 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars?, queue? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck |
+| `status` | `{ type, message, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{ type, delta }` — answer text to append |
-| `reasoning` | `{ type, delta }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer |
+| `reasoning` | `{ type, delta, retracts_answer? }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning: drop it from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`) |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage?, failed?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
+| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:
@@ -378,23 +385,23 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Twelve of the agent's 101 tools mutate the machine and need explicit approval
+Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, image-generation or skill-hub tools, so
-`install_skill` and `remove_skill` never reach it.) Nine sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+`install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
-a PowerShell child on Windows to draw the notification, and **`install_cli`** /
+a PowerShell child on Windows to draw the notification, **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account — and the flagship adds three of its own
+account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
 content under `~/.gaia/skills` and removing one deletes it. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
-indexing, querying, web fetching, memory, and the read-only `check_cli_setup`
+indexing, querying, web fetching, the other memory tools, and the read-only `check_cli_setup`
 — runs without asking. A write or edit inside the agent's own scratch
 folder (`gaia-scratch-…` under the system temp folder) runs without asking too,
 so running a script from it asks every time and carries no `always_scope`. So does a shell command run there or naming a path there, and a script handed a scratch path as an argument.
@@ -684,12 +691,18 @@ There is no silent null.
 - **A terminal `error` whose `detail` starts "Local Lemonade Server is not
   reachable"** means Lemonade isn't running or isn't reachable — not a bug in
   this package. Start it, or set `LEMONADE_BASE_URL`.
+- **`final.answer` can end with "I haven't confirmed this works — …".** The
+  agent adds that one line when a check failed or was blocked, or a change was
+  never checked. Show it to the user; do not read it as an error, and do not
+  strip it from the `context` you replay. A turn that was confirmed, or needed no
+  check, has no such line.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
-  network call.** Between releases that is the *expected* state — it is not a
-  broken install, and there is no override.
+  network call.** Neither a published package nor the lock on `main` carries
+  one, so it means the lock was edited by hand — it is not a broken download,
+  and there is no override.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
 - **A `401` from `/v1/gaia/*` is the caller-auth token, not a bug.** The sidecar
@@ -707,7 +720,7 @@ There is no silent null.
   temp dir) is dropped, and a **shared** bin directory is moved to the end
   instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
   it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
-  comes up. It must also be **0.25.4+**: an older core's daemon starts fine but
+  comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
@@ -738,7 +751,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.3"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -757,7 +770,10 @@ that and nothing else (§6).
 **A 503 from `/query` itself is a different condition**: every retained
 session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
 loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
-finish (or close an idle session) and retry the same `/query`.
+finish (or close an idle session) and retry the same `/query`. A 503 whose
+`detail` says the model server or GAIA's AI engine couldn't start is not
+a busy slot: show the user that `detail`, which names the fix, instead of
+retrying.
 
 **Three more refusals are yours to avoid**, each naming its fix in `detail`
 (SPEC §5.2 has the reasoning):

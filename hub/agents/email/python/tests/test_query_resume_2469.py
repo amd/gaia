@@ -195,7 +195,12 @@ def test_label_is_accepted_as_the_answer(live_server, monkeypatch):
         events = _stream_events(
             client,
             live_server.base,
-            {"query": "Set up.", "run_id": run_id, "context": [], "can_answer_questions": True},
+            {
+                "query": "Set up.",
+                "run_id": run_id,
+                "context": [],
+                "can_answer_questions": True,
+            },
             answer,
         )
 
@@ -214,7 +219,12 @@ def test_unanswered_question_fails_loudly_instead_of_hanging(live_server, monkey
         events = _stream_events(
             client,
             live_server.base,
-            {"query": "Set up.", "run_id": run_id, "context": [], "can_answer_questions": True},
+            {
+                "query": "Set up.",
+                "run_id": run_id,
+                "context": [],
+                "can_answer_questions": True,
+            },
             lambda e: None,
         )
     elapsed = time.monotonic() - started
@@ -266,7 +276,12 @@ def test_stale_request_id_is_rejected(live_server, monkeypatch):
         events = _stream_events(
             client,
             live_server.base,
-            {"query": "Set up.", "run_id": run_id, "context": [], "can_answer_questions": True},
+            {
+                "query": "Set up.",
+                "run_id": run_id,
+                "context": [],
+                "can_answer_questions": True,
+            },
             answer,
         )
 
@@ -274,7 +289,9 @@ def test_stale_request_id_is_rejected(live_server, monkeypatch):
     assert fake.answer == "google"
 
 
-def test_a_caller_that_cannot_answer_gets_an_error_not_a_pause(live_server, monkeypatch):
+def test_a_caller_that_cannot_answer_gets_an_error_not_a_pause(
+    live_server, monkeypatch
+):
     """The default is "I can't answer", and it must fail fast, not park.
 
     This is the regression guard for the one-shot / CLI surfaces: they cannot
@@ -319,7 +336,12 @@ def test_stream_heartbeats_while_a_question_is_pending(live_server, monkeypatch)
         with client.stream(
             "POST",
             f"{live_server.base}/v1/email/query",
-            json={"query": "Set up.", "run_id": run_id, "context": [], "can_answer_questions": True},
+            json={
+                "query": "Set up.",
+                "run_id": run_id,
+                "context": [],
+                "can_answer_questions": True,
+            },
         ) as resp:
             for raw in resp.iter_lines():
                 if raw.startswith(":"):

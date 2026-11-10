@@ -21,7 +21,6 @@ from gaia.llm.model_fit import (
     ModelFitError,
     capacity_from_system_info,
     check_fit,
-    check_server_supports,
     pick_default_model,
 )
 
@@ -343,7 +342,7 @@ class TestTuiDrift:
             assert entry.get("vision", False) == mr.vision
             assert entry.get("reasoning", False) == mr.reasoning
             assert entry["size_gb"] == mr.size_gb
-            assert entry.get("min_lemonade_version") == mr.min_lemonade_version
+            assert "min_lemonade_version" not in entry
 
     def test_both_defaults_are_recommended(self, doc):
         local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
@@ -351,7 +350,7 @@ class TestTuiDrift:
         assert lc.LARGE_DEFAULT_MODEL_NAME in local
 
     def test_fit_inputs_match_the_python_registry(self, doc):
-        """The TUI's fit and version checks must judge a model as Python does."""
+        """The TUI's fit check must judge a model as Python does."""
         for entry in doc["models"]:
             mr = lc.find_model_requirement(entry.get("register_as") or entry["id"])
             if mr is not None:
@@ -362,9 +361,6 @@ class TestTuiDrift:
                     assert entry["min_ctx_size"] == mr.min_ctx_size, entry["id"]
                 size = mr.size_gb
                 assert entry.get("size_gb") == size, entry["id"]
-                assert (
-                    entry.get("min_lemonade_version") == mr.min_lemonade_version
-                ), entry["id"]
 
     def test_the_default_leads_the_local_list(self, doc):
         local = [m["id"] for m in doc["models"] if m["provider"] == "local"]
@@ -663,52 +659,6 @@ class TestRealLemonadeReports:
         model_id, skipped, capacity = lc.recommend_default_chat_model(FakeClient())
         assert model_id == lc.DEFAULT_MODEL_NAME and capacity is None
         assert "not its memory" in skipped[0][1]
-
-
-class TestLemonadeVersionGate:
-    """The default (Qwen3.6 35B A3B) is a Lemonade built-in first listed in
-    v11.7.0; an older server cannot pull it by name. Qwen3.8 Flash (the
-    switchable alternative, not auto-selected) needs llama.cpp's qwen4exp,
-    first bundled in v2026.39.1; verified via its ModelRequirement directly
-    rather than through the ladder it is not part of.
-    """
-
-    def _client(self, info, version):
-        class FakeClient:
-            def get_system_info(self, timeout=None):
-                return info
-
-            def health_check(self):
-                return {"version": version} if version else {}
-
-        return FakeClient()
-
-    @pytest.mark.parametrize(
-        "version", ["2026.39.1", "2026.40.0~3.abc1234", "11.9.0", "11.7.0"]
-    )
-    def test_a_big_pc_gets_the_default_on_a_lemonade_that_lists_it(self, version):
-        model_id, _, _ = lc.recommend_default_chat_model(
-            self._client(STRIX_HALO_128, version)
-        )
-        assert model_id == lc.LARGE_DEFAULT_MODEL_NAME
-
-    @pytest.mark.parametrize("version", ["11.6.0", None])
-    def test_an_older_or_unknown_lemonade_keeps_gemma_and_says_upgrade(self, version):
-        model_id, skipped, _ = lc.recommend_default_chat_model(
-            self._client(STRIX_HALO_128, version)
-        )
-        assert model_id == lc.DEFAULT_MODEL_NAME
-        assert "force-reinstall" in dict(skipped)[lc.LARGE_DEFAULT_MODEL_NAME]
-
-    def test_a_pc_too_small_is_told_it_is_too_small_not_to_upgrade(self):
-        _, skipped, _ = lc.recommend_default_chat_model(self._client(MAC_M4, "11.9.0"))
-        assert "memory" in skipped[0][1] and "force-reinstall" not in skipped[0][1]
-
-    def test_the_multimodal_alternative_still_needs_the_version_floor(self):
-        verdict = check_server_supports(FLASH.min_lemonade_version, "11.9.0")
-        assert not verdict.fits and "force-reinstall" in verdict.reason
-        verdict = check_server_supports(FLASH.min_lemonade_version, "2026.39.1")
-        assert verdict.fits
 
 
 def test_flash_size_counts_the_vision_projector_lemonade_downloads():

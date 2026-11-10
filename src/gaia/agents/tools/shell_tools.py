@@ -440,6 +440,20 @@ TIER_REFUSE = "refuse"
 # other than what it reads as — and for destructive or never-grantable targets.
 TIER_CONFIRM_ONCE = "confirm_once"
 
+#: Closes the hint of a command refused on its text. The agent relays tool
+#: text, so it must rule out an approval that is never coming.
+NOT_APPROVABLE = (
+    "Nothing ran, and no approval can change that: GAIA will not run this "
+    "command as written, so never ask the user to approve it."
+)
+
+#: The hint for an action GAIA is not permitted to take at all.
+REFUSED_HINT = (
+    "Tell the user GAIA is not permitted to do this, and give them the exact "
+    "command so they can run it themselves if they want to. Do not reach the "
+    "same result another way."
+)
+
 #: The risk notes a CONFIRM_ONCE prompt carries, chosen by what tripped it.
 NOTE_UNINSPECTABLE = (
     "Can run any code with your permissions — GAIA can't inspect this command."
@@ -611,6 +625,16 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
+    """*error* with :data:`NOT_APPROVABLE` closing its hint, when no prompt may run it."""
+    if _reaches_the_prompt(error):
+        return error
+    hint = str(error.get("hint") or "").strip()
+    if NOT_APPROVABLE in hint:
+        return error
+    return {**error, "hint": f"{hint} {NOT_APPROVABLE}".strip()}
 
 
 def _reaches_the_prompt(error: Optional[Dict[str, Any]]) -> bool:
@@ -2812,6 +2836,34 @@ def _pin_windows_tools(shell_text: str, segments: list) -> str:
     return "|".join(pinned)
 
 
+#: Where the cmd.exe launcher below hands the command to its inner cmd.exe.
+_CMD_TEXT_ENV = "GAIA_SHELL_COMMAND"
+
+#: subprocess.CREATE_NO_WINDOW, which only exists on Windows builds of Python.
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _cmd_exe_launch(text: str, env: Dict[str, str]) -> Tuple[str, Dict[str, Any]]:
+    """The command line and Popen kwargs that run *text* through cmd.exe in UTF-8.
+
+    cmd.exe writes its built-ins' output in the console code page, so ``dir``
+    turns every non-ASCII file name into ``?`` before any byte reaches us.
+    ``chcp`` only takes effect for a cmd.exe started after it, so an inner one
+    runs *text*; it reads *text* through delayed expansion, which the outer
+    cmd.exe performs after parsing, so it never acts on the operators in it.
+    The child gets its own hidden console so ``chcp`` cannot change the user's.
+    """
+    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    command_line = (
+        f'"{comspec}" /v:on /c "chcp 65001>nul && "{comspec}" /c !{_CMD_TEXT_ENV}!"'
+    )
+    return command_line, {
+        # Quoted the way shell=True quotes it, so cmd.exe strips the same quotes.
+        "env": {**env, _CMD_TEXT_ENV: f'"{text}"'},
+        "creationflags": _CREATE_NO_WINDOW,
+    }
+
+
 def _run_step(
     step: _Step,
     cwd: str,
@@ -2913,8 +2965,16 @@ def _run_step(
     # re-enters communicate() with NO timeout, so a surviving grandchild holding
     # the pipes hangs the call for as long as it lives. terminate_process_tree
     # below kills the whole tree first, so the deadline means what it says.
+    popen_args: Any = exec_cmd
+    launch: Dict[str, Any] = {
+        "env": _segment_env(step.envs[0] if step.envs else {}),
+        "shell": use_shell,
+    }
+    if use_shell and os.name == "nt":
+        popen_args, cmd_launch = _cmd_exe_launch(exec_cmd, launch["env"])
+        launch.update(cmd_launch, shell=False)
     process = subprocess.Popen(  # pylint: disable=consider-using-with
-        exec_cmd,
+        popen_args,
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=_captured_stderr(mode, subprocess.PIPE),
@@ -2938,12 +2998,11 @@ def _run_step(
         stdin=subprocess.DEVNULL,
         encoding="utf-8",
         errors="replace",
-        env=_segment_env(step.envs[0] if step.envs else {}),
         # POSIX: its own session, so the kill reaches every descendant — and
         # never the agent's own process group. Windows gets that reach from
         # taskkill /T instead.
         start_new_session=os.name != "nt",
-        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
+        **launch,  # nosec B602 - shell only for a whitelist-validated step, which needs cmd.exe built-ins/pipes
     )
     try:
         stdout, stderr, cancelled = (waiter or _wait_plain)(process, timeout)
@@ -3072,7 +3131,7 @@ class ShellToolsMixin:
         """
         error, steps = self._shell_command_refusal(command)
         if error is not None:
-            error = {**error, **NOT_EXECUTED}
+            error = {**_not_approvable(error), **NOT_EXECUTED}
         return error, steps
 
     def _shell_command_refusal(self, command: str) -> tuple:
@@ -4340,24 +4399,15 @@ class ShellToolsMixin:
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
-                # may still approve it once, unless it destroys work.
+                # may still approve it once, unless it destroys or ends work.
                 logger.debug("%r is outside the %s policy", command, binary)
                 refusal = {
                     "status": "error",
                     "error": granted_decision.message,
                     "has_errors": True,
                 }
-                if _destroys(policy_parts):
-                    return {
-                        **refusal,
-                        "tier": TIER_REFUSE,
-                        "hint": (
-                            "GAIA will not run this, even with the user's "
-                            "approval: it deletes or discards work. Tell the "
-                            "user the exact command so they can run it "
-                            "themselves if they want to."
-                        ),
-                    }
+                if _destroys(policy_parts) or granted_decision.never_offered:
+                    return {**refusal, "tier": TIER_REFUSE, "hint": REFUSED_HINT}
                 return _confirm_once(refusal, _policy_note(policy, policy_parts))
             else:
                 # Only the missing grant is in the way, and a grant is only
@@ -4717,17 +4767,21 @@ class ShellToolsMixin:
                 "cwd": cwd,
             }
         start_time = time.monotonic()
+        popen_args: Any = command
+        launch: Dict[str, Any] = {"env": _segment_env({}), "shell": True}
+        if os.name == "nt":
+            popen_args, cmd_launch = _cmd_exe_launch(command, launch["env"])
+            launch.update(cmd_launch, shell=False)
         process = subprocess.Popen(  # pylint: disable=consider-using-with
-            command,
+            popen_args,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             encoding="utf-8",
             errors="replace",
-            env=_segment_env({}),
             start_new_session=os.name != "nt",
-            shell=True,  # nosec B602 - the user approved this exact string
+            **launch,  # nosec B602 - the user approved this exact string
         )
         self._record_command_execution()
         try:

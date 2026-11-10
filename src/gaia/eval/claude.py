@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import base64
-import json
 import logging
 import os
 from pathlib import Path
@@ -18,7 +17,8 @@ except ImportError:
     BeautifulSoup = None
 
 
-from gaia.env import credential, load_env
+from gaia.env import load_env
+from gaia.eval.claude_credential import announce, api_key_credential
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, MODEL_PRICING
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
@@ -98,10 +98,10 @@ class ClaudeClient:
         if model is None:
             model = DEFAULT_CLAUDE_MODEL
         self.log = self.__class__.log  # Use the class-level logger for instances
-        self.api_key = credential("ANTHROPIC_API_KEY")
-        if not self.api_key:
+        found = api_key_credential()
+        if found is None:
             error_msg = (
-                "ANTHROPIC_API_KEY not found in environment.\n\n"
+                "ANTHROPIC_API_KEY is not set in the environment or a .env file.\n\n"
                 "ClaudeClient calls the Messages API and needs a console API key:\n"
                 "  export ANTHROPIC_API_KEY=sk-ant-...\n"
                 "To use a Claude Code subscription instead, build the client with\n"
@@ -111,6 +111,8 @@ class ClaudeClient:
             )
             self.log.error(error_msg)
             raise ValueError(error_msg)
+        announce(found)
+        self.api_key = found.api_key
         # Initialize Anthropic client with retry support
         # The SDK handles exponential backoff automatically
         assert_provider_permitted("Anthropic Claude")
@@ -572,48 +574,3 @@ class ClaudeClient:
         except Exception as e:
             self.log.error(f"Error counting tokens: {e}")
             raise
-
-
-# Example usage
-if __name__ == "__main__":
-    client = ClaudeClient()
-
-    # Test file analysis with Blender introduction document
-    file_path = "./data/html/blender/introduction.html"
-    prompt = (
-        "Given this document, generate a set of short queries a user "
-        "may ask about the document and produce a set of ground truth "
-        "answers to be used in validating a RAG system. Include a "
-        "summary of the document in the queries. Return a json "
-        "formatted list of query-response pairs formatted as follows:"
-        "{'source': 'path/to/document', 'summary': 'summarized document', "
-        "'qa_pairs': [{'query': 'query1', 'response': 'response1'}, "
-        "{'query': 'query2', 'response': 'response2'}, ...]}"
-    )
-
-    analysis = client.analyze_file(
-        file_path, prompt, save_text=True, output_dir="./output/claude"
-    )
-    print(client.count_file_tokens(file_path, prompt))
-
-    # Prepare enhanced output with metadata
-    from datetime import datetime
-
-    output_data = {
-        "metadata": {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "model": client.model,
-            "source_file": file_path,
-            "prompt": prompt,
-            "token_count": client.count_file_tokens(file_path, prompt),
-        },
-        "analysis": json.loads(analysis),  # Parse JSON string into dictionary
-    }
-
-    # Save analysis to JSON file
-    output_dir = "./output/claude"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = f"{output_dir}/{Path(file_path).stem}.out.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=2)
-    print(f"Analysis saved to: {output_path}")

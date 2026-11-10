@@ -1,18 +1,20 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
 
@@ -82,7 +84,7 @@ function formatTimestamp(isoString: string, t: Translate): string {
         if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
 
         // Older than a week: show date + time
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString(dateLocale(t), {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -94,11 +96,11 @@ function formatTimestamp(isoString: string, t: Translate): string {
 }
 
 /** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string): string {
+function formatFullTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(undefined, {
+        return date.toLocaleString(dateLocale(t), {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -126,6 +128,7 @@ export function DocumentLibrary() {
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -315,6 +318,7 @@ export function DocumentLibrary() {
         uploader: () => Promise<Document>,
         onFolder?: () => Promise<void>,
     ) => {
+        if (!(await ensureModel('embedding'))) return;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         const unsupportedMessage = ext && !isExtensionSupported(ext)
             ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
@@ -516,7 +520,7 @@ export function DocumentLibrary() {
         const status = doc.indexing_status || 'complete';
         const startTime = indexingStartTimes.current.get(doc.id);
         const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at, t) : '';
-        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at) : '';
+        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at, t) : '';
 
         switch (status) {
             case 'indexing':
@@ -632,8 +636,8 @@ export function DocumentLibrary() {
                                     value={target}
                                     onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
                                 >
-                                    <option value="chat">{t('docs.thisChat', { chat: targetChatName })}</option>
-                                    <option value="next">{t('docs.nextChat')}</option>
+                                    <option value="chat">{t.bare('docs.thisChat', { chat: targetChatName })}</option>
+                                    <option value="next">{t.bare('docs.nextChat')}</option>
                                 </select>
                             </label>
                         ) : (

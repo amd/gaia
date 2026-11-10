@@ -114,6 +114,22 @@ describe('ModelSettings local models', () => {
         expect(await within(card).findByLabelText('Context size')).toHaveValue('auto');
     });
 
+    it('says when the model in use is one this PC cannot run yet', async () => {
+        useModelStore.setState({ active: { ...ACTIVE, model: 'gemma4-it-e2b-FLM', display_name: 'Gemma 4 E2B' } });
+        await renderLocal();
+        const card = screen.getByRole('region', { name: 'Model in use' });
+        expect(within(card).getByRole('alert')).toHaveTextContent('it can’t run on this PC yet');
+        const section = screen.getByText('Not available on this PC').closest('details') as HTMLElement;
+        expect(within(section).getByText('In use · can’t run yet')).toBeInTheDocument();
+        expect(within(section).queryByText('In use')).not.toBeInTheDocument();
+    });
+
+    it('does not warn about a model in use that runs', async () => {
+        await renderLocal();
+        const card = screen.getByRole('region', { name: 'Model in use' });
+        expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('switches model from the top of the page, among models ready to use', async () => {
         mockedApi.selectModel.mockResolvedValue({ ...ACTIVE, model: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B' });
         await renderLocal();

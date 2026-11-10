@@ -43,6 +43,7 @@ _INTERNAL_SECRET_NAMES = frozenset(
         "GAIA_MODEL_BROKER_TOKEN",
         "GAIA_MODEL_BROKER_TOKEN_FILE",
         "GAIA_HOST_CUSTODY_SECRET",
+        "GAIA_HOST_KEYCHAIN_SECRET_FILE",
         "GAIA_ENGINEERING_TOKEN",
     }
 )
@@ -161,6 +162,34 @@ def working_dir_credential_file(name: str) -> Optional[str]:
     return _working_dir_credential_files.get(name)
 
 
+def working_dir_credential(name: str) -> Optional[str]:
+    """*name* as a working-directory ``.env`` supplied it, else None."""
+    return _working_dir_credentials.get(name)
+
+
+def dotenv_credential_file(name: str, value: Optional[str] = None) -> Optional[str]:
+    """The ``.env`` file that supplied *value* for *name*, or None if the shell did.
+
+    *value* defaults to ``os.environ[name]``. Checks the working-directory file
+    (never merged into ``os.environ``) and the one at GAIA's install, which
+    :func:`load_env` merges in.
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    if value is None:
+        value = os.environ.get(name)
+    if not value:
+        return _working_dir_credential_files.get(name)
+    if gaia.pre_dotenv_env(name) == value:
+        return None
+    if _working_dir_credentials.get(name) == value:
+        return _working_dir_credential_files.get(name)
+    install = _install_tree_dotenv()
+    if install is not None and dotenv.dotenv_values(install).get(name) == value:
+        return str(install)
+    return None
+
+
 def is_internal_secret(name: str) -> bool:
     """True for environment variables that carry GAIA's own credentials."""
     upper = name.upper()
@@ -172,8 +201,30 @@ def _configured_deny() -> set:
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
 
 
+def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
+    """Give a child the library path the user had, not the frozen bundle's.
+
+    PyInstaller on Linux points ``LD_LIBRARY_PATH`` at the bundle and keeps the
+    user's value in ``LD_LIBRARY_PATH_ORIG``; a child that inherits the bundle
+    path (lemond, flm) loads its older libstdc++ and exits before it starts.
+    Changes and returns *env*; a no-op unless frozen on Linux.
+    """
+    if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
+        return env
+    original = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original is not None:
+        env["LD_LIBRARY_PATH"] = original
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    # A `gaia` the child runs must set up its own bundle, not reuse ours.
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def child_env(
-    extra: Optional[Mapping[str, str]] = None, deny: Iterable[str] = ()
+    extra: Optional[Mapping[str, str]] = None,
+    deny: Iterable[str] = (),
+    same_bundle: bool = False,
 ) -> Dict[str, str]:
     """A fresh environment for a child process GAIA spawns.
 
@@ -181,6 +232,10 @@ def child_env(
     name listed in ``GAIA_CHILD_ENV_DENY`` (comma or space separated) or in
     ``deny``, with ``extra`` overlaid last — a name the caller passes
     explicitly is always delivered. ``os.environ`` is never modified.
+
+    A frozen build hands the user's library path, not its bundle's (see
+    :func:`unfreeze_loader_paths`), unless *same_bundle*: a relaunch of
+    ``sys.executable`` that reuses this process's unpacked bundle needs it.
     """
     blocked = _configured_deny() | {name.upper() for name in deny}
     env = {
@@ -188,6 +243,8 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
+    if not same_bundle:
+        unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
     return env

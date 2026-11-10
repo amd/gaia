@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.1.1**. Companion to [`README.md`](./README.md), which is the
+Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,16 +32,16 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.1",
+  "agentVersion": "0.3.5",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
+      "componentVersion": "0.3.5",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
-      "componentVersion": "0.23.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "componentVersion": "0.25.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.25.0",
       "platforms": { "<platformKey>": { /* entry */ } }
     }
   }
@@ -147,13 +147,16 @@ without an agent behind it.
 
 ### 2.5 Placeholder hashes
 
-Between releases every `sha256` is `PENDING-replace-with-real-sha256`. The release
-pipeline regenerates the file with real hashes: for the sidecar, computed from the
-artifacts it just published; for the TUI, computed from the `terminal-hub`
-artifacts it downloaded and cross-checked against that lane's own recorded hashes
+The committed lock carries real hashes, never placeholders: the desktop-installer
+build verifies the sidecar it bundles against it, and a placeholder there fails
+that build on every platform (#3932). The release pipeline regenerates the file
+with real hashes: for the sidecar, computed from the artifacts it just published;
+for the TUI, computed from the `terminal-hub` artifacts it downloaded and
+cross-checked against that lane's own recorded hashes
 (`agents/terminal-hub/manifest.json`, which the hub computes server-side at publish
 time). Both are then re-fetched from the public origin and re-hashed before the
-release is allowed to ship.
+release is allowed to ship, and the release then opens a PR that commits the same
+file to `main`.
 
 `isPlaceholderSha()` treats a value as a placeholder when it is all zeros or
 contains `PENDING` (case-insensitive). A placeholder **blocks the fetch before any
@@ -297,6 +300,10 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
 `changes_turn_id`, `surface`) is optional.
 
+`max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
+is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+`GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
+
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
@@ -318,8 +325,9 @@ caller computed it, so the agent works in the folders the caller's UI shows. A
 new session is built with exactly that scope; a retained session gains any
 entry it lacks and drops none until the session ends — neither what the user
 granted mid-chat nor an entry the caller has since stopped sending. `GAIA_ALLOWED_PATHS`
-still narrows it. In the normal permission mode, a path outside the supplied
-scope is asked about before it is granted. If the session has full access
+still narrows it, and a bad entry stops the sidecar at startup (§5.4). In the
+normal permission mode, a path outside the supplied scope is asked about before
+it is granted. If the session has full access
 (enabled through the session bypass route) and the caller can answer for the
 session, that path is granted without a separate path prompt; this is the same
 full-access behavior as in-process. Full access does not override
@@ -411,8 +419,23 @@ replays as text only. Pre-2.25 binaries `422` `turns`.
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
 show it apart from `status` lines and from the answer's `token`s. Each delta
-keeps its own spacing: join them as they arrive. Without the field, reasoning
-folds into `status` lines as before. Pre-2.22 binaries `422` it.
+keeps its own spacing: join them as they arrive. A model whose chat template
+opens the reasoning block sends only its closing `</think>`, so its reasoning
+streams as `token`s until that tag arrives; the `reasoning` event that follows
+carries `"retracts_answer": true`, and the client drops the `token` text since
+the last `tool_call` from the answer. Without the field, reasoning folds into
+`status` lines as before. Pre-2.22 binaries `422` it.
+
+A reply can also be taken back without `reasoning`. When GAIA's model server
+stops part-way through a reply (or the connection drops), the step is sent
+again, and a `status` with `"phase": "answer_restart"` and
+`"retracts_answer": true` comes first: the client drops the `token` text
+since the last `tool_call` and shows the status `message` in its place. While
+the daemon restarts the server, `status` lines carry `"phase":
+"model_restart"`. If it is not back within the retries, `final` carries
+`failure: "model_server_down"`. A tool's own model calls report the same
+restart, and `extract_document_items` sends `"phase": "reading"` before each
+page's call ("Reading page 4 of 12…").
 
 ```json
 {
@@ -491,6 +514,30 @@ call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
 
+A `final` with `failed: true` ends a turn a model call broke; its `answer` says
+what was and wasn't done. When the cause is one a front-end can fix, `failure`
+names it. `"model_server_down"` means the local model server took no
+connection. Cloud models go through that server too, so the provider was never
+reached; the turn fails at once instead of retrying, and its `answer` names the
+server, not the provider. Offer to start the server. Older binaries never send
+`failure`, so read it only when present.
+
+#### The "not confirmed" note on `final.answer`
+
+When the turn's own tool log shows work that is not confirmed, the agent loop
+ends the answer with one plain-English line, for example
+`I haven't confirmed this works — the tests didn't pass.` It appears when a
+check failed, a check was blocked before it could run, a file was changed and
+nothing checked it afterwards, or the answer claims something the tool record
+does not support. It is capped at 200 characters and added at most once per
+turn. A turn where every check passed, or nothing needed checking, carries
+nothing. It is part of `final.answer` and of the streamed text, so it is also
+what you store and replay in the next turn's `context`. A client that wants the
+answer without it can drop the line that starts `I haven't confirmed this works`
+(the older label `Verification:` is dropped the same way). The agent applies
+`strip_verification_scope` from `gaia.agents.base.verification` to its own
+history.
+
 ### 5.2 `session_id` and agent retention
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
@@ -544,7 +591,11 @@ only a cancelled turn that outlasts the wait still gets `409`. A
 `/query` that needs a **new** session while every retained slot is busy and
 none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or
-close an idle session) and retry. A
+close an idle session) and retry. A `/query` that fails before its run starts
+because the model server is unavailable (for example GAIA's own server can't
+start) also gets `503`, with `detail` worded for the request's `surface`:
+what failed and the fix, never the raw connection error. When that fix is to
+repair GAIA's setup, retrying the same request fails the same way. A
 `session_id` can also be evicted from the retention table under an idle
 timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
 (**100**) — the two knobs that decide when the `503` above can happen at all
@@ -636,6 +687,18 @@ the `.env` at or above GAIA's install (the repo's `.env`) in full, as before;
 the packaged binary has no install `.env`.
 `GAIA_NO_DOTENV=1` in the sidecar's launch environment stops it loading `.env`
 files; a `.env` file cannot set that switch itself.
+
+**`GAIA_ALLOWED_PATHS` confines a run to the folders you name.** Set it in the
+environment the sidecar starts in — absolute folders joined with `;` on
+Windows and `:` elsewhere. The scope becomes the overlap with the agent's own scope;
+an entry outside it is ignored with a warning and never widens it. Out-of-scope
+paths are refused without a prompt in every mode, including full access. The
+scratch directory stays writable. An empty, relative or missing entry stops
+the sidecar at startup, before it binds a port. It confines the agent's tools
+— every file tool, search, index and shell path check — not code they run: a
+`run_python` script or shell command can still read anything the OS user can,
+so isolating a run from files it must not see needs a separate OS user,
+container or VM.
 
 ### 5.5 Other transports
 

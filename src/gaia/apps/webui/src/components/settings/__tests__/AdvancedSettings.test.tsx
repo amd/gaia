@@ -9,9 +9,14 @@ import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
+const modelActions = vi.hoisted(() => ({
+    downloadError: null as string | null,
+    downloadModel: vi.fn(),
+}));
 vi.mock('../../../hooks/useModelActions', () => ({
     useModelActions: () => ({
-        isLoadingModel: false, isDownloadingModel: false, loadModel: vi.fn(), downloadModel: vi.fn(),
+        isLoadingModel: false, isDownloadingModel: false, downloadError: modelActions.downloadError,
+        loadModel: vi.fn(), downloadModel: modelActions.downloadModel,
     }),
 }));
 
@@ -34,6 +39,8 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    modelActions.downloadError = null;
+    modelActions.downloadModel.mockReset();
     useChatStore.getState().setSystemStatus(null);
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
     mockedApi.getLemonadeTarget.mockResolvedValue({
@@ -93,6 +100,63 @@ describe('AdvancedSettings', () => {
         expect(screen.getByText('Device')).toBeInTheDocument();
         // Context size lives in Settings › Model, sized to what fits (#5213).
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
+    });
+
+    it('shows why Force Re-download could not start', async () => {
+        modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        await screen.findByText('Force Re-download');
+
+        expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
+    });
+
+    it('Force Re-download keeps the model in use, and loads the repaired one when none is', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        const { unmount } = render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
+        unmount();
+
+        modelActions.downloadModel.mockReset();
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: null,
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
+    });
+
+    it('shows why Download could not start, once', async () => {
+        modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: null, model_downloaded: false,
+            default_model_name: 'user.x', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        const download = await screen.findByText('Download');
+        fireEvent.click(download);
+
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(false, undefined, true);
+        expect(screen.getAllByText(/Cannot download 'user.x'/)).toHaveLength(1);
+    });
+
+    it('shows no download error when there is none', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: null, model_downloaded: false,
+            default_model_name: 'user.x', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        await screen.findByText('Download');
+
+        expect(screen.queryByText(/Cannot download/)).not.toBeInTheDocument();
     });
 
     it('offers setup, not waiting, when no model server is installed', async () => {

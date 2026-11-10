@@ -313,8 +313,8 @@ jobs:
         timeout-minutes: 30
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blank when the OAuth token is present: `--bare` (added only with a
-          # key) restricts auth to the key and would ignore the token.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"

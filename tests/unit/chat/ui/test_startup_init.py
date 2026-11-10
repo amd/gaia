@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
+from gaia.version import LEMONADE_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +176,7 @@ def test_boot_check_never_loads_a_model(app, selected):
     client.base_url = "http://localhost:13305/api/v1"
     client.get_model_max_context_window.return_value = None
     client.get_status.return_value = LemonadeStatus(
-        running=True, context_size=0, loaded_models=[]
+        version=LEMONADE_VERSION, running=True, context_size=0, loaded_models=[]
     )
 
     LemonadeManager.reset()
@@ -285,3 +286,25 @@ def test_boot_preload_never_waits_on_the_broker_for_a_cloud_model(app):
     assert job.status == JobStatus.DONE
     assert leases == []
     lemonade.load_model.assert_not_called()
+
+
+def test_startup_does_not_wait_on_saved_sign_in_check(monkeypatch):
+    """A keychain read stuck on a macOS prompt must not stop the server answering."""
+    import threading
+
+    import gaia.connectors.api as connectors_api
+
+    answered = threading.Event()
+    gave_up = threading.Event()
+
+    def _stuck_on_keychain_prompt():
+        if not answered.wait(timeout=10):
+            gave_up.set()
+
+    monkeypatch.setattr(connectors_api, "tripwire_check", _stuck_on_keychain_prompt)
+
+    with TestClient(create_app(db_path=":memory:")) as c:
+        assert c.get("/api/health").status_code == 200
+        answered.set()
+
+    assert not gave_up.is_set()

@@ -93,6 +93,23 @@ def _make_host(rag):
 
 
 class TestQuerySpecificFile:
+    def test_an_attachment_is_cited_by_the_name_the_user_knows(self, tmp_path):
+        uploads = tmp_path / "chat" / "uploads"
+        uploads.mkdir(parents=True)
+        copy = uploads / "0123456789ab_kestrel-plan.txt"
+        copy.write_text("chunk text", encoding="utf-8")
+        rag = _fake_rag({str(copy)})
+        _make_host(rag)
+
+        result = _tool("query_specific_file")(file_path=str(copy), query="plan")
+
+        assert result["status"] == "success", result
+        assert "'According to kestrel-plan.txt:'" in result["instruction"]
+        assert "0123456789ab" not in result["instruction"]
+        assert result["message"].endswith("in kestrel-plan.txt")
+        # The path stays exact, so the file can still be opened.
+        assert result["file"] == str(copy)
+
     def test_exact_basename_queries_that_file_not_the_substring_match(self):
         rag = _fake_rag({Q3, REPORT})
         _make_host(rag)

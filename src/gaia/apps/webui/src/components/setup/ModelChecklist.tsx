@@ -46,10 +46,13 @@ function fitLine(e: SetupCatalogEntry, t: Say): string | null {
     return t('setup.models.fit.ok', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) });
 }
 
+/** Why a model doesn't fit: its real reason, never "too big" for one no backend here runs. */
 export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
+    if (e.fit_code === 'npu') return t('setup.models.warn.npu');
+    if (e.fit_code === 'backend') return t('setup.models.warn.backend');
     return e.need_gb != null && e.capacity_gb != null
         ? t('setup.models.warn.tooBig', { need: formatFitGb(e.need_gb), have: formatFitGb(e.capacity_gb) })
-        : t('setup.models.warn.tooBigNoNumbers', { reason: e.fit_reason ?? '' });
+        : t('setup.models.warn.tooBigNoNumbers');
 }
 
 /** The caveat under an unticked model that turns a feature off. In Settings an
@@ -319,7 +322,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
                         disabled={disabled || candidates.length === 0}
                         onChange={(ev) => onDefaultChat(ev.target.value)}
                     >
-                        {candidates.length === 0 && <option value="">{t('setup.models.noChat')}</option>}
+                        {candidates.length === 0 && <option value="">{t.bare('setup.models.noChat')}</option>}
                         {candidates.map((e) => (
                             <option key={e.id} value={e.id}>
                                 {e.name}{isNpu(e) ? ` (${t('setup.models.npu')})` : ''}

@@ -32,7 +32,7 @@ export function useChatExport(sessionId: string, title: string | undefined) {
             log.chat.error('Export failed', err);
             setExportError(err instanceof api.ApiError
                 ? `Couldn't export this chat: GAIA's backend returned an error (HTTP ${err.httpStatus}). Try Export again; if it keeps failing, check the backend log.`
-                : "Couldn't export this chat because GAIA's backend isn't reachable. Check that GAIA is running, then try Export again.");
+                : "Couldn't export this chat because GAIA's backend isn't reachable. Try Export again once GAIA is answering.");
         }
     }, [sessionId, title]);
 

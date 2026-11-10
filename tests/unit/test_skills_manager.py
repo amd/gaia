@@ -400,6 +400,25 @@ def test_a_skill_tool_may_shadow_an_existing_registry_name(roots):
     assert _TOOL_REGISTRY["web-search/search_web"]["skill"] == "web-search"
 
 
+def test_a_skill_tool_may_shadow_a_tool_of_the_agent_build_under_way(roots):
+    """A skill loaded while an agent registers its tools is not a name collision."""
+    from gaia.agents.base.tools import tool, tool_build
+
+    copy_fixture("web-search", roots["user"])
+    skill = make_manager(roots).load("web-search")
+    with tool_build():
+
+        @tool
+        def search_web(query: str) -> dict:
+            """The framework's search."""
+            return {}
+
+        registered = register_skill_tools(skill)
+
+    assert set(registered) == {"web-search/search_web"}
+    assert _TOOL_REGISTRY["search_web"]["function"] is search_web
+
+
 def test_unregister_removes_only_that_skills_tools(roots):
     copy_fixture("web-search", roots["user"])
     skill = make_manager(roots).load("web-search")
@@ -587,6 +606,7 @@ class _StubAgent:
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     get_skills_system_prompt = Agent.get_skills_system_prompt
 
     def __init__(self):

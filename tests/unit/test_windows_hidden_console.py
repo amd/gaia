@@ -170,7 +170,7 @@ def test_setup_run_gets_a_hidden_console(on_windows, spawned):
     from gaia.ui.setup_runner import SetupError, SetupRunner
 
     with pytest.raises(SetupError):
-        SetupRunner().start(skip_chat_model=True)
+        SetupRunner().start(skip_chat_model=True, chat_model_for=lambda run: "")
     _assert_hidden(spawned[0], group=False)
 
 

@@ -9,6 +9,7 @@ belongs to the latest version), and a newer one carries it per version.
 """
 
 import hashlib
+import sys
 
 import pytest
 
@@ -301,3 +302,14 @@ def test_merge_offers_the_latest_to_a_current_core():
     assert row["status"] == catalog.STATUS_UPDATE_AVAILABLE
     assert row["installable_version"] == "0.3.0"
     assert row["requires_gaia_version"] is None
+
+
+def test_the_frozen_app_is_told_to_update_gaia_not_to_pip_install(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(CoreTooOldError) as exc:
+        installer._resolve_version(  # noqa: SLF001
+            RECORDED, "0.3.0", core_version="0.24.1"
+        )
+    message = str(exc.value)
+    assert "update GAIA" in message
+    assert "pip" not in message

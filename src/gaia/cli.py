@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
+from typing import Optional
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
@@ -199,7 +201,7 @@ def initialize_lemonade_for_agent(
                 quiet=quiet, host=host, port=port, model=model
             )
     except LemonadeClientError as e:
-        print(f"❌ Error: {e}", file=sys.stderr)
+        print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
         return False, None
 
     if not success:
@@ -233,23 +235,48 @@ def _lemonade_answers(base_url: str | None = None) -> bool:
     return _probe(client)
 
 
-def _cli_error_text(e: BaseException) -> str:
-    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms."""
+def _cli_wording(e: BaseException) -> str:
+    """*e*'s message with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(str(e), "cli")
+
+
+def _cli_error_text(
+    e: BaseException, local: bool = True, base_url: Optional[str] = None
+) -> str:
+    """An LLM failure as the CLI shows it: the typed remedy, in CLI terms.
+
+    A failed call to Lemonade (*local*, at *base_url* or the configured one)
+    also saves a fault record, which the text names.
+    """
+    from gaia.llm.failure_record import (
+        is_model_call_failure,
+        record_local_failure,
+        record_note,
+    )
     from gaia.llm.providers.lemonade import classify_lemonade_exception
     from gaia.llm.surface_hints import surface_wording
 
     raw = surface_wording(str(e), "cli")
     classified = classify_lemonade_exception(e)
+    note = ""
+    if local and (classified or is_model_call_failure(e)):
+        note = record_note(record_local_failure(e, where="cli", base_url=base_url))
+    note = f"\n   {note}" if note else ""
     if not classified:
-        return f"❌ Error: {raw}"
+        return f"❌ Error: {raw}{note}"
     message = surface_wording(classified.user_message, "cli")
     # An auth error's remedy is the raw text itself; don't print it twice.
     detail = "" if raw.endswith(message) else f"\n   Details: {raw}"
-    return f"❌ Error: {message}{detail}"
+    return f"❌ Error: {message}{detail}{note}"
 
 
 class GaiaCliClient:
     log = get_logger(__name__)
+    # Where a failure record looks: Lemonade, unless this client talks to Claude.
+    calls_lemonade = True
+    lemonade_url: Optional[str] = None
 
     def __init__(
         self,
@@ -269,6 +296,8 @@ class GaiaCliClient:
         self.max_tokens = max_tokens
         self.cli_mode = True  # Set this to True for CLI mode
         self.show_stats = show_stats
+        self.calls_lemonade = not use_claude
+        self.lemonade_url = base_url
 
         if use_claude:
             # Like `gaia chat`: --model is the local model, --claude-model the Claude one.
@@ -297,7 +326,7 @@ class GaiaCliClient:
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
-            error_message = _cli_error_text(e)
+            error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
             yield error_message
@@ -363,8 +392,23 @@ class GaiaCliClient:
             # A backend string like "Max length reached!" tells the user
             # nothing — hand back the typed remediation when we recognise it.
             self.log.error(f"Error in chat: {str(e)}")
-            print(_cli_error_text(e))
+            print(_cli_error_text(e, self.calls_lemonade, self.lemonade_url))
             sys.exit(1)
+
+
+def _probe_error_is_unreachable(err: LemonadeClientError) -> bool:
+    """True when a device probe failed only because Lemonade isn't reachable
+    yet (connection refused / timeout), not because the server errored."""
+    import requests
+
+    # Prefer the requests exception in the cause chain over message matching.
+    cause = err.__cause__ or err.__context__
+    if isinstance(
+        cause, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
+    ):
+        return True
+    # Fallback for wrappers that don't preserve __cause__.
+    return str(err).startswith("Request failed:") and "with status" not in str(err)
 
 
 def resolve_effective_device(
@@ -451,6 +495,39 @@ async def async_main(action, **kwargs):
         "stats": "minimal",
     }
 
+    # `gaia prompt --device npu` must run the NPU twin, not the GPU default
+    # (#3827): map an explicit --device to its device config's model the same
+    # way `gaia chat` does. An explicit --device fails loudly when the
+    # hardware isn't available, per the NPU guide's fallback behaviour; an
+    # explicit --model always wins.
+    if (
+        action == "prompt"
+        and kwargs.get("device") is not None
+        and kwargs.get("model") is None
+    ):
+        from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+        try:
+            _prompt_devices = (
+                LemonadeClient(verbose=False).get_system_info().get("devices", {})
+            )
+            kwargs["device"] = resolve_effective_device(
+                kwargs["device"], True, _prompt_devices
+            )
+        except LemonadeClientError as _prompt_probe_err:
+            # Only an unreachable server skips the check; init below surfaces
+            # it. Any other server error is real and must not be hidden.
+            if not _probe_error_is_unreachable(_prompt_probe_err):
+                raise
+            log.debug(
+                "Device probe skipped (Lemonade not reachable yet): %s",
+                _prompt_probe_err,
+            )
+        for _dc in DEFAULT_DEVICE_CONFIGS:
+            if _dc.device == kwargs["device"]:
+                kwargs["model"] = _dc.model
+                break
+
     # Initialize Lemonade with agent-specific profile
     lemonade_base_url = kwargs.get("base_url")  # May be None if not specified
     if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
@@ -497,19 +574,14 @@ async def async_main(action, **kwargs):
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
-        # `gaia chat` runs the flagship; it ships as the gaia-agent-gaia wheel.
+        # `gaia chat` runs the flagship in this process from the gaia-agent-gaia
+        # package, or, where the agent ships as its own binary (as the apps
+        # ship it), on that binary through the daemon, as the Agent UI does.
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent.interactive import interactive_mode
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The GAIA agent is not installed",
-                    "gaia-agent-gaia",
-                    next_step="Then re-run `gaia chat`.",
-                )
-            ) from e
+        except ImportError:
+            return _gaia_chat_relay(kwargs)
 
         try:
             # Use silent mode when debug is off to hide intermediate processing
@@ -552,32 +624,9 @@ async def async_main(action, **kwargs):
                         effective_device, device_was_explicit, _devices
                     )
                 except LemonadeClientError as _probe_err:
-                    # Only treat "server not reachable yet" (connection refused /
-                    # timeout) as a soft pass. A reachable but broken server
-                    # (HTTP 4xx/5xx, 401 auth) must NOT silently let an explicit
-                    # --device proceed; surface it so the user sees the real
-                    # failure. The agent runtime re-validates the device
-                    # regardless (LemonadeManager.ensure_ready).
-                    #
-                    # Prefer the original requests exception preserved in the
-                    # cause chain over message-string matching — the client
-                    # wraps RequestException without an HTTP status, but the
-                    # exact wrapper text can change independently of this guard.
-                    import requests
-
-                    _cause = _probe_err.__cause__ or _probe_err.__context__
-                    _unreachable = isinstance(
-                        _cause,
-                        (
-                            requests.exceptions.ConnectionError,
-                            requests.exceptions.Timeout,
-                        ),
-                    ) or (
-                        # Fallback for wrappers that don't preserve __cause__.
-                        str(_probe_err).startswith("Request failed:")
-                        and "with status" not in str(_probe_err)
-                    )
-                    if not _unreachable:
+                    # A reachable but broken server (4xx/5xx, 401) must not let
+                    # an explicit --device through unchecked.
+                    if not _probe_error_is_unreachable(_probe_err):
                         raise
                     log.debug(
                         "Device probe: Lemonade not reachable yet (%s)", _probe_err
@@ -891,6 +940,24 @@ def _ensure_webui_built(log=None):
     )
 
 
+def _enable_backend_fault_log(log):
+    """Point fatal-crash stacks at the fault log; the backend still runs without it."""
+    from gaia.ui.fault_log import enable_fault_log
+
+    try:
+        fault_log = enable_fault_log()
+    except OSError as e:
+        log.warning(
+            f"Backend fault log unavailable, so a hard crash leaves no stack: {e}"
+        )
+        return
+    # The desktop app logs the launcher's pid; the parent here ties the two together.
+    log.info(
+        f"Agent UI backend pid {os.getpid()} (parent {os.getppid()}); "
+        f"a hard crash writes its stack to {fault_log}"
+    )
+
+
 def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist=None):
     """Launch the Agent UI server (FastAPI + uvicorn).
 
@@ -925,7 +992,9 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
         print()
         import uvicorn
 
+        # create_app() refuses an unsafe GAIA_HOME, so nothing is written there first.
         app = create_app(webui_dist=webui_dist)
+        _enable_backend_fault_log(log)
         if not base_url and not lemonade_is_remote():
             # First run is set up in the app; the daemon owns the model server.
             start_model_server_owner()
@@ -936,6 +1005,16 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             log_level="debug" if debug else "info",
             access_log=debug,
         )
+        log.warning(
+            "Agent UI server stopped: uvicorn returned after a shutdown signal "
+            "(Ctrl+C or Ctrl+Break reached this process)"
+        )
+    except KeyboardInterrupt:
+        log.warning("Agent UI server interrupted by KeyboardInterrupt")
+        raise
+    except SystemExit as e:
+        log.error(f"Agent UI server exiting with code {e.code}", exc_info=True)
+        raise
     except UnsafeGaiaHomeError as e:
         # The user's misconfiguration to fix: print the remedy, not a traceback.
         # 64 is EX_USAGE, matching gaia uninstall's exit code for the same fault.
@@ -965,7 +1044,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             print(f"Error: {e}")
         sys.exit(1)
     except Exception as e:
-        log.error(f"Error starting Agent UI: {e}")
+        log.exception(f"Agent UI server failed: {e}")
         print(f"Error: {e}")
         sys.exit(1)
 
@@ -991,15 +1070,9 @@ def _launch_interactive_cli(log=None):
         try:
             from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
             from gaia_agent.interactive import interactive_mode
-        except ImportError as e:
-            raise RuntimeError(
-                agent_import_error_message(
-                    e,
-                    "The GAIA agent is not installed",
-                    "gaia-agent-gaia",
-                    next_step="Then re-run `gaia chat`.",
-                )
-            ) from e
+        except ImportError:
+            # The agent ships as its own binary: chat with it through the daemon.
+            sys.exit(_gaia_chat_relay({}))
 
         config = GaiaAgentConfig(
             base_url=base_url or resolve_lemonade_base_url(),
@@ -2102,6 +2175,7 @@ Use `gaia download --agent talk` to download the local Kokoro TTS model.
     yt_parser.add_argument(
         "--download-transcript",
         metavar="URL",
+        required=True,
         help="Download transcript from a YouTube URL",
     )
     yt_parser.add_argument(
@@ -2514,7 +2588,7 @@ Examples:
 
 A TUI must already be running with --control-port; this drives THAT session so
 the run is visible on screen. The judge uses your Claude Code login (the
-`claude` CLI), or ANTHROPIC_API_KEY when it is set.
+`claude` CLI) first, then ANTHROPIC_API_KEY.
 """,
     )
     sessions_eval_parser.add_argument(
@@ -2593,7 +2667,7 @@ Examples (code search):
 
 rag: `pr` is offline and deterministic: retrieval only, over documents committed
 in the gaia repository, plus the hard cases that need no LLM. `full` downloads
-FinanceBench, public AMD documents, XQuAD and Wikipedia distractors (pinned,
+public AMD documents, an arXiv paper, XQuAD and Wikipedia distractors (pinned,
 sha256-checked, cached in ~/.gaia/cache/eval-retrieval), generates answers, and
 runs the scale tiers. The labels and the `pr` documents are read from a gaia
 checkout: the current directory, or --repo-root. Needs a running Lemonade.
@@ -2653,7 +2727,7 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
     rag_retrieval_group.add_argument(
         "--datasets",
         default=None,
-        help="Comma-separated subset: repo_docs, technical_docs, financebench, xquad",
+        help="Comma-separated subset: repo_docs, technical_docs, xquad",
     )
     rag_retrieval_group.add_argument(
         "--retrieval-only",
@@ -2693,12 +2767,6 @@ embeddings and no LLM, against a `git grep` baseline. Needs Lemonade and git.
         type=int,
         default=None,
         help="Questions per XQuAD language (default: 40)",
-    )
-    rag_retrieval_group.add_argument(
-        "--financebench-docs",
-        type=int,
-        default=None,
-        help="Keep only the questions over the first N FinanceBench filings",
     )
     rag_retrieval_group.add_argument(
         "--no-vlm",
@@ -3061,45 +3129,6 @@ afterwards (or `swebench <run_dir>` does, later).
     )
     tasks_controls_parser.add_argument(
         "--out", default=None, help="Also write the controls and their verdicts here"
-    )
-
-    # Add new subparser for generating summary reports from evaluation directories
-    report_parser = subparsers.add_parser(
-        "report",
-        help="Generate summary report from evaluation results directory",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate report from evaluation directory
-  gaia report -d ./output/eval
-
-  # Generate report with custom output filename
-  gaia report -d ./output/eval -o Model_Comparison_Report.md
-
-  # Generate report and display summary only
-  gaia report -d ./output/eval --summary-only
-        """,
-    )
-
-    report_parser.add_argument(
-        "-d",
-        "--eval-dir",
-        type=str,
-        default="./output/evaluations",
-        help="Directory containing .eval.json files to analyze (default: ./output/evaluations)",
-    )
-    report_parser.add_argument(
-        "-o",
-        "--output-file",
-        type=str,
-        default="LLM_Evaluation_Report.md",
-        help="Output filename for the markdown report (default: LLM_Evaluation_Report.md)",
-    )
-    report_parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Only display summary to console, don't save report file",
     )
 
     perf_vis_parser = subparsers.add_parser(
@@ -3830,8 +3859,8 @@ Examples:
     gateway_auth_parser.add_argument(
         "--no-remember",
         action="store_true",
-        help="Do not keep the token in the OS credential store; you will be "
-        "asked again after every Lemonade restart",
+        help="Do not keep the token in the OS credential store, and delete an "
+        "older stored one; you will be asked again after every Lemonade restart",
     )
     gateway_logout_parser = gateway_subparsers.add_parser(
         "logout", help="Clear the session token held by Lemonade"
@@ -3919,9 +3948,24 @@ Examples:
         help="Skip model downloads (only set up Lemonade Server)",
     )
     init_parser.add_argument(
+        "--server-only",
+        action="store_true",
+        help="Start the model server and stop, fetching nothing else",
+    )
+    init_parser.add_argument(
+        "--agent-only",
+        action="store_true",
+        help="Only install or update the GAIA agent; no Lemonade or model steps",
+    )
+    init_parser.add_argument(
         "--skip-webui-build",
         action="store_true",
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
+    )
+    init_parser.add_argument(
+        "--skip-pip-extras",
+        action="store_true",
+        help="Install no Python packages (the desktop app ships its own)",
     )
     init_parser.add_argument(
         "--force-reinstall",
@@ -4054,29 +4098,6 @@ Examples:
         "minutes before failing.",
     )
 
-    # Install command (install specific components)
-    install_parser = subparsers.add_parser(
-        "install",
-        help="Install GAIA components",
-        parents=[parent_parser],
-    )
-    install_parser.add_argument(
-        "--lemonade",
-        action="store_true",
-        help="Install Lemonade Server",
-    )
-    install_parser.add_argument(
-        "--yes",
-        "-y",
-        action="store_true",
-        help="Skip confirmation prompts",
-    )
-    install_parser.add_argument(
-        "--silent",
-        action="store_true",
-        help="Silent installation (no UI, no desktop shortcuts)",
-    )
-
     # Uninstall command: tiered cleanup of the Python-side GAIA install.
     # The actual flag set + handler live in gaia.installer.uninstall_command
     # so every desktop installer (NSIS, DMG, DEB, AppImage) can delegate to
@@ -4140,7 +4161,6 @@ _RETRIEVAL_ONLY_FLAGS = {
         "no_hard_cases",
         "xquad_languages",
         "xquad_per_language",
-        "financebench_docs",
         "no_vlm",
         "offline",
         "fetch_only",
@@ -4226,11 +4246,14 @@ def _handle_eval_retrieval(args):
         run_hard_cases=not args.no_hard_cases,
         xquad_languages=_split(args.xquad_languages),
         xquad_per_language=args.xquad_per_language,
-        financebench_docs=args.financebench_docs,
         offline=args.offline,
         keep_work=args.keep_work,
         vlm=False if args.no_vlm else None,
     )
+    try:
+        runner.check_datasets(opts.datasets or suite.datasets)
+    except ValueError as e:
+        sys.exit(f"gaia eval retrieval: {e}")
     with exclusive_eval(f"gaia eval retrieval --suite {args.suite}"):
         results = runner.run(opts)
     print()
@@ -5019,8 +5042,8 @@ def main():
 
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
-    # An explicit `chat --device` requests a device-specific model, so it keeps
-    # precedence over the config default there.
+    # An explicit `chat --device` / `prompt --device` requests a device-specific
+    # model, so it keeps precedence over the config default there.
     if (
         args.action in ("prompt", "chat", "llm")
         and getattr(args, "model", None) is None
@@ -5035,13 +5058,13 @@ def main():
         # builtin_default=None: leave args.model unset when no config default so
         # each command keeps applying its own built-in default downstream.
         # A non-flagship agent keeps its own model default, as in the Agent UI.
-        if not (
-            args.action == "chat"
-            and (
-                getattr(args, "device", None)
-                or getattr(args, "agent", None) not in (None, "gaia")
-            )
-        ):
+        _device_picks_model = args.action in ("chat", "prompt") and getattr(
+            args, "device", None
+        )
+        _agent_keeps_own = args.action == "chat" and getattr(
+            args, "agent", None
+        ) not in (None, "gaia")
+        if not (_device_picks_model or _agent_keeps_own):
             resolved = _cfg.resolve_model(args.model, None)
             if resolved:
                 args.model = resolved
@@ -5499,7 +5522,7 @@ Let me know your answer!
                 # Check if Lemonade server is running
                 if not check_lemonade_health(args.host, port):
                     LemonadeManager.print_server_error()
-                    return
+                    sys.exit(1)
 
                 model_ids = client.get_required_models("all")
                 if not model_ids:
@@ -5605,7 +5628,7 @@ Let me know your answer!
             # Check if Lemonade server is running
             if not check_lemonade_health(args.host, port):
                 LemonadeManager.print_server_error()
-                return
+                sys.exit(1)
 
             agent_name = args.agent.lower()
             model_ids = client.get_required_models(agent_name)
@@ -6362,6 +6385,19 @@ Let me know your answer!
         # --minimal flag overrides --profile
         profile = "minimal" if args.minimal else args.profile
 
+        if args.agent_only:
+            if profile != "gaia" or args.check:
+                print(
+                    "Error: --agent-only updates the GAIA agent; it does not "
+                    "combine with --profile, --minimal or --check.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            from gaia.installer.init_command import run_agent_refresh
+
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            sys.exit(run_agent_refresh())
+
         # MCP profile has its own init flow (no Lemonade/models)
         if profile == "mcp":
             from gaia.installer.mcp_init import run_mcp_init
@@ -6436,6 +6472,8 @@ Let me know your answer!
                 sys.exit(exit_code)
             if status.ready:
                 print(f"READY: profile '{profile}' is already set up")
+                for warning in status.warnings:
+                    print(f"  ! {warning}")
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")
@@ -6458,6 +6496,7 @@ Let me know your answer!
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
+            skip_pip_extras=getattr(args, "skip_pip_extras", False),
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
@@ -6465,84 +6504,9 @@ Let me know your answer!
             allow_low_disk=args.allow_low_disk,
             keep_trying=args.keep_trying,
             extra_models=args.download_model,
+            server_only=getattr(args, "server_only", False),
         )
         sys.exit(exit_code)
-
-    # Handle install command
-    if args.action == "install":
-        if args.lemonade:
-            from gaia.installer.lemonade_installer import (
-                LemonadeInstaller,
-                discard_download,
-                discard_kept_installers,
-            )
-            from gaia.version import LEMONADE_VERSION
-
-            installer = LemonadeInstaller()
-
-            # Check if already installed
-            info = installer.check_installation()
-            if info.installed and info.version:
-                # Use needs_install (returns True if current < target)
-                if not installer.needs_install(info):
-                    print(
-                        f"✅ Lemonade Server v{info.version} is already installed"
-                        f" (>= v{LEMONADE_VERSION})"
-                    )
-                    sys.exit(0)
-                else:
-                    print(f"Lemonade Server v{info.version} is installed")
-                    print(f"GAIA expects v{LEMONADE_VERSION}+")
-                    print("")
-                    print("To update, run:")
-                    print("  gaia uninstall --purge --purge-lemonade")
-                    print("  gaia install --lemonade")
-                    sys.exit(1)
-
-            # Confirm installation
-            if not args.yes:
-                response = input(f"Install Lemonade v{LEMONADE_VERSION}? [Y/n]: ")
-                if response.lower() == "n":
-                    print("Installation cancelled")
-                    sys.exit(0)
-
-            # Download and install
-            try:
-                if installer.system == "linux":
-                    print("Adding Lemonade PPA and installing lemonade-server...")
-                    installer_path = None
-                else:
-                    print("Downloading Lemonade Server...")
-                    download_started = time.time()
-                    installer_path = installer.download_installer()
-                    print("Installing...")
-                result = installer.install(installer_path, silent=args.silent)
-                # A failed install keeps the file: its retry hint names it.
-                if installer_path is not None and result.success:
-                    discard_download(installer_path)
-                    discard_kept_installers(installer_path.parent, download_started)
-                elif installer_path is not None:
-                    print(f"   The downloaded installer is kept at {installer_path}")
-
-                if result.success:
-                    # Verify installation
-                    verify_info = installer.check_installation()
-                    if verify_info.installed:
-                        print(f"✅ Installed Lemonade Server v{verify_info.version}")
-                    else:
-                        print(f"✅ Installed Lemonade Server v{result.version}")
-                    if result.restart_required:
-                        print(f"⚠️  {result.message}")
-                    sys.exit(0)
-                else:
-                    print(f"❌ Installation failed: {result.error}")
-                    sys.exit(1)
-            except Exception as e:
-                print(f"❌ Installation failed: {e}")
-                sys.exit(1)
-        else:
-            print("Specify what to install: --lemonade")
-            sys.exit(1)
 
     # Handle uninstall command — delegates to the shared implementation in
     # gaia.installer.uninstall_command so every desktop installer platform
@@ -6552,10 +6516,9 @@ Let me know your answer!
 
         sys.exit(_run_uninstall(args))
 
-    # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
-    parser.print_help()
-    return
+    parser.print_help(sys.stderr)
+    sys.exit(1)
 
 
 def kill_stray_daemons() -> int:
@@ -6797,6 +6760,71 @@ def handle_email_command(args):
         log.error("email thin client failed: %s", e)
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _gaia_chat_relay(kwargs: dict) -> int:
+    """`gaia chat` on the GAIA agent's own binary, through the daemon relay.
+
+    One `--query`, or a REPL whose turns share one sidecar session, so the
+    conversation carries over. Options that configure an in-process agent
+    (documents to index, watched folders, other providers) are refused.
+    """
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+    from gaia.daemon.errors import DaemonError
+
+    unsupported = [
+        flag
+        for flag, key in (
+            ("--index", "index"),
+            ("--watch", "watch"),
+            ("--use-claude", "use_claude"),
+            ("--use-chatgpt", "use_chatgpt"),
+            ("--list-tools", "list_tools"),
+        )
+        if kwargs.get(key)
+    ]
+    if unsupported:
+        print(
+            f"❌ {', '.join(unsupported)} needs the GAIA agent in this process, "
+            "and here it runs as its own program through GAIA's background "
+            "service. Run without it, or from a GAIA install that includes the "
+            "agent package (https://amd-gaia.ai/docs/reference/dev).",
+            file=sys.stderr,
+        )
+        return 1
+
+    cwd = os.getcwd()
+    turn = dict(
+        model=kwargs.get("model"),
+        max_steps=kwargs.get("max_steps"),
+        verbose=bool(kwargs.get("debug")),
+        trace=bool(kwargs.get("trace")),
+        working_directory=cwd,
+        allowed_paths=[cwd, *(kwargs.get("allowed_paths") or [])],
+    )
+    try:
+        query = kwargs.get("query")
+        if query:
+            renderer = ConsoleRenderer(verbose=turn["verbose"])
+            return run_query("gaia", query, renderer=renderer, **turn).exit_code
+        session_id = str(uuid.uuid4())
+        print("GAIA — enter a message, or '/quit' to exit.\n")
+        while True:
+            try:
+                message = input("you> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 0
+            if not message:
+                continue
+            if message in ("/quit", "/exit", "/q"):
+                return 0
+            renderer = ConsoleRenderer(verbose=turn["verbose"])
+            run_query("gaia", message, session_id=session_id, renderer=renderer, **turn)
+    except DaemonError as e:
+        get_logger(__name__).error("gaia chat relay failed: %s", e)
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
 
 
 def _email_interactive(*, model, verbose: bool, trace: bool = False) -> int:
@@ -7293,48 +7321,38 @@ def handle_config_command(args):
 
 def _handle_network_policy(action, value) -> None:
     """``gaia config get|set network_policy``: lives in policy.json, not config.json."""
-    from gaia.config import GaiaConfigError
     from gaia.llm import local_only
 
     if action == "get":
         print(local_only.effective_policy().value)
         return
     try:
-        stored = local_only.set_policy(value)
+        result = local_only.apply_policy(value)
     except (ValueError, OSError) as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
+    stored = result["policy"]
     print(f"✅ Set network_policy = {stored.value}")
     print(f"   Saved to {local_only.policy_path()}")
     if stored is not local_only.NetworkPolicy.LOCAL_AI_ONLY:
         return
     print("   No GAIA AI request will reach a cloud model.")
-    try:
-        cleared = local_only.clear_saved_cloud_models()
-    except GaiaConfigError as e:
-        print(f"⚠️  Saved models were not checked: {e}", file=sys.stderr)
-        return
-    if cleared:
+    for key, model in result["cleared"]:
+        print(f"   Cleared {key} (was {model}): it is a cloud model.")
+    if result["cleared"]:
         from gaia.llm.lemonade_client import resolve_default_chat_model
 
-        for key, model in cleared:
-            print(f"   Cleared {key} (was {model}): it is a cloud model.")
         print(f"   GAIA now uses {resolve_default_chat_model()} by default.")
-    from gaia.llm.cloud_keys import CloudKeyError, drop_runtime_keys
-
-    try:
-        dropped = drop_runtime_keys()
-    except CloudKeyError as e:
+    if result["users_url"]:
         print(
-            f"⚠️  Lemonade still holds any cloud key GAIA gave it ({e}). GAIA "
-            "won't use it; restart Lemonade to drop it.",
-            file=sys.stderr,
+            f"   Left your Lemonade Server at {result['users_url']} as is: any cloud "
+            "keys it holds stay there, and GAIA won't send it cloud requests."
         )
-        return
-    # Names come from a fixed table, never from the key-handling call.
     for provider, name in (("fireworks", "Fireworks AI"), ("amd", "AMD LLM Gateway")):
-        if provider in dropped:
+        if provider in result["dropped"]:
             print(f"   Removed the {name} key from the running Lemonade Server.")
+    for warning in result["warnings"]:
+        print(f"⚠️  {warning}", file=sys.stderr)
 
 
 #: Keys that pick which Lemonade GAIA uses; setting one probes and switches.
@@ -7430,7 +7448,7 @@ def _warn_if_default_model_unavailable(model_id: str) -> None:
     try:
         failure = GatewayState.load().unavailable(model_id)
     except GatewayError as e:
-        print(f"⚠️  {e}", file=sys.stderr)
+        print(f"⚠️  {_cli_wording(e)}", file=sys.stderr)
         return
     if failure:
         print(
@@ -7495,6 +7513,40 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
     return getpass.getpass(prompt)
 
 
+def _claude_route_sends_another_token(token):
+    """True, with the reason printed, when Claude models would send another token.
+
+    Claude models read GAIA's token, not Lemonade's, so a token in GAIA's
+    environment or a failed store leaves them on a different key. Having none
+    at all (``--no-remember``) is only a warning: the other models still work.
+    """
+    from gaia.llm.gateway import (
+        GatewayError,
+        describe_token_source,
+        resolve_gateway_token_with_source,
+    )
+
+    try:
+        claude_token, source = resolve_gateway_token_with_source()
+    except GatewayError as e:
+        print(
+            f"⚠️  Claude gateway models (amd.Claude-*) send the token from GAIA, "
+            f"not Lemonade, and GAIA has none: {_cli_wording(e)}",
+            file=sys.stderr,
+        )
+        return False
+    if claude_token != token.strip():
+        print(
+            f"❌ Claude gateway models (amd.Claude-*) will still send "
+            f"{describe_token_source(source)}, which is a different token.\n"
+            f"   Update or unset it so every gateway model uses the one you "
+            f"just gave.",
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def _test_gateway_claude(model, source, prompt):
     """``gaia gateway test`` for a Claude model, on the route agents use for it.
 
@@ -7508,7 +7560,7 @@ def _test_gateway_claude(model, source, prompt):
         client = create_client("lemonade", model=model)
         content = client.chat([{"role": "user", "content": prompt}], max_tokens=256)
     except (GatewayError, RuntimeError, ImportError) as e:
-        print(f"❌ Testing {model} failed: {e}", file=sys.stderr)
+        print(f"❌ Testing {model} failed: {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     print(content)
     usage = client.get_last_usage() or {}
@@ -7531,12 +7583,14 @@ def handle_gateway_command(args):
     from gaia.llm.gateway import (
         DEFAULT_GATEWAY_BASE_URL,
         GATEWAY_ENV_VAR,
+        STORED_TOKEN_SOURCE,
         GatewayError,
         GatewayManager,
         GatewayState,
         describe_unavailable,
         forget_token,
         gateway_claude_upstream_id,
+        lemonade_token_with_source,
         recall_token,
         remember_token,
     )
@@ -7619,6 +7673,7 @@ def handle_gateway_command(args):
             auth = result.get("auth_state") or {}
             restored = False
             remembered = None
+            restored_from = None
             # The stored token was issued for the previously registered URL and
             # is not bound to it, so a new URL must drop it: every later
             # ensure_authenticated() would otherwise hand it to the new gateway.
@@ -7632,6 +7687,11 @@ def handle_gateway_command(args):
                 if remembered:
                     # A fresh install must also restore a token saved by `gateway auth`.
                     restored = manager.ensure_authenticated(recall=lambda: remembered)
+                    found = lemonade_token_with_source(
+                        recall=lambda: remembered, warn=False
+                    )
+                    restored_from = found[1] if found else None
+                    del found
                     if restored:
                         status = manager.status()
                         needs_token = not (status.env_var_set or status.runtime_key_set)
@@ -7639,9 +7699,21 @@ def handle_gateway_command(args):
             print(
                 f"✅ Registered. Models discovered: {result.get('models_discovered', 0)}"
             )
-            if restored:
+            from_env = restored_from not in (None, STORED_TOKEN_SOURCE)
+            if restored and from_env:
+                print(
+                    f"   Restored the gateway token from {restored_from} in "
+                    "GAIA's environment."
+                )
+            elif restored:
                 print(
                     "   Restored the remembered gateway token from the OS credential store."
+                )
+            elif remembered and from_env:
+                print(
+                    f"\n  The gateway token in {restored_from} (GAIA's environment) "
+                    "was not accepted — set it to a current token, or unset it and "
+                    "run `gaia gateway auth` with one."
                 )
             elif remembered:
                 print(
@@ -7705,6 +7777,12 @@ def handle_gateway_command(args):
                     )
             else:
                 print(f"✅ Token accepted. Models discovered: {discovered}")
+                stored = recall_token()
+                if stored and stored != token_for_store.strip() and forget_token():
+                    print(
+                        "   Deleted the older token remembered in your OS "
+                        "credential store, so Claude models can't keep using it."
+                    )
             chosen = manager.ensure_active_model()
             if chosen:
                 from gaia.config import GaiaConfig
@@ -7720,6 +7798,8 @@ def handle_gateway_command(args):
                     f"Lemonade restarts.\n   Set {GATEWAY_ENV_VAR} in "
                     f"Lemonade's environment to persist it."
                 )
+            if _claude_route_sends_another_token(token_for_store):
+                sys.exit(1)
             return
 
         if action == "logout":
@@ -7863,12 +7943,12 @@ def handle_gateway_command(args):
             return
 
     except GatewayError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except LemonadeClientError as e:
         # `models` and `test` go through LemonadeClient, which raises its own
         # type. Letting it escape printed a traceback instead of the message.
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     except ConnectorsError as e:
         # The credential store raises this for an unusable backend, and `logout
@@ -8365,6 +8445,11 @@ def _bootstrap_infer():
     reading it.
     """
     from gaia.agents.base.discovery import SystemDiscovery
+    from gaia.agents.base.inferred_insights import (
+        DEFAULT_CONFIDENCE,
+        normalize_confidence,
+        parse_inferred_insights,
+    )
     from gaia.agents.base.memory_store import MemoryStore
 
     print("\n=== GAIA Memory — AI Profile Inference ===")
@@ -8525,39 +8610,36 @@ def _bootstrap_infer():
         if hasattr(raw_response, "__iter__") and not isinstance(raw_response, str):
             raw_response = "".join(raw_response)
     except Exception as e:
-        print(f"\n\n  ❌ LLM call failed: {e}")
-        print(
+        print()
+        raise RuntimeError(
+            f"LLM call failed: {e}\n"
             f"  Make sure Lemonade Server is running. {describe_start_hint().instruction}"
-        )
-        return
+        ) from e
 
     print(" done.")
 
     # --- Parse JSON array from response ---
-    insights: list[dict] = []
     try:
-        # Strip markdown fences if LLM wrapped output
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            cleaned = "\n".join(cleaned.split("\n")[1:])
-            if cleaned.endswith("```"):
-                cleaned = cleaned[: cleaned.rfind("```")]
+        insights, incomplete = parse_inferred_insights(raw_response)
+    except ValueError as e:
+        # The reply stays out of the terminal and the log (which `gaia
+        # diagnostics` bundles): it can echo the scanned system data back.
+        logging.getLogger("gaia.cli").debug(
+            "Unparseable inference reply (%s, %s chars)",
+            type(raw_response).__name__,
+            len(raw_response) if isinstance(raw_response, str) else "n/a",
+        )
+        print()
+        raise RuntimeError(
+            f"Could not read any insights from the LLM: {e}. Nothing was "
+            "stored. Re-run `gaia memory bootstrap --infer` to try again."
+        ) from e
 
-        insights = json.loads(cleaned.strip())
-        if not isinstance(insights, list):
-            raise ValueError("Expected a JSON array")
-        # Validate each item
-        insights = [
-            i
-            for i in insights
-            if isinstance(i, dict)
-            and isinstance(i.get("content"), str)
-            and i["content"].strip()
-        ]
-    except Exception as e:
-        print(f"\n  ❌ Failed to parse LLM response: {e}")
-        print(f"  Raw response:\n{raw_response[:500]}")
-        return
+    if incomplete:
+        print(
+            f"\n  ⚠️  The LLM's reply was incomplete or malformed; keeping the "
+            f"{len(insights)} insight(s) that parsed."
+        )
 
     if not insights:
         print("\n  No insights generated.")
@@ -8586,9 +8668,16 @@ def _bootstrap_infer():
     try:
         for i, insight in enumerate(insights, 1):
             content = insight["content"].strip()[:200]
-            confidence = float(insight.get("confidence", 0.7))
+            raw_confidence = insight.get("confidence", DEFAULT_CONFIDENCE)
+            confidence = normalize_confidence(raw_confidence)
+            if confidence is None:
+                print(
+                    f"  ({i}/{len(insights)}) Skipped: confidence "
+                    f"{raw_confidence!r} is not a number or low/medium/high: {content}"
+                )
+                skipped += 1
+                continue
             domain = insight.get("domain", "general")
-            confidence = max(0.0, min(1.0, confidence))
 
             print(f"  ({i}/{len(insights)}) [{confidence:.0%}] {content}")
             try:
@@ -9110,7 +9199,10 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
-    - ``~/.gaia/electron-install-state.json``
+    - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
+    - the last few model-failure records (``failures/GF-*.json``), each
+      written redacted at the moment a model call failed (omitted with
+      ``--no-logs``: they hold a Lemonade log tail)
     - OS version (``uname``/``lsb_release`` on Linux, ``sw_vers`` on macOS,
       ``ver`` on Windows)
     - ``env`` entries matching ``gaia|lemonade|xdg|wayland|display`` (case-insensitive)
@@ -9146,9 +9238,16 @@ def handle_diagnostics_command(args):
         sys.exit(1)
 
     log_files = _diag_log_files(gaia_dir)
+    from gaia.home import gaia_home
+
     state_files = [
         gaia_dir / "electron-install-state.json",
+        # First-run setup's record: its run, plan and every stage's log.
+        gaia_home() / "setup-report.json",
     ]
+    from gaia.llm.failure_record import recent_records
+
+    failure_records = recent_records()
 
     # System info snapshot
     sysinfo_parts = _diag_os_info(sys.platform)
@@ -9196,9 +9295,12 @@ def handle_diagnostics_command(args):
                         filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
                     )
 
-            # Log files gated by --no-logs. Rotated backups (gaia.log.1, ...)
-            # ride along; a log from before the size cap keeps only its tail.
+            # Log files gated by --no-logs, and failure records with them since
+            # each holds a log tail. Rotated backups (gaia.log.1, ...) ride
+            # along; a log from before the size cap keeps only its tail.
             if not args.no_logs:
+                for entry in failure_records:
+                    tar.add(str(entry), arcname=f"failures/{entry.name}")
                 family = (
                     (arcdir, f) for base, arcdir in log_files for f in log_family(base)
                 )
@@ -9329,7 +9431,7 @@ def handle_agent_list(_args):
         ):
             print(
                 f"A version marked 'needs GAIA' installs after upgrading the core: "
-                f"{catalog.CORE_UPGRADE_COMMAND}"
+                f"{catalog.core_upgrade_hint()}"
             )
 
 
@@ -9889,9 +9991,46 @@ def _handle_daemon_stop(exit_on_lemonade_error: bool = True):
         else:
             print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
             terminate_instance(inst)
+            if not client.wait_until_gone(inst, timeout=5.0):
+                print(
+                    f"❌ GAIA daemon pid {inst.pid} is still running after it was "
+                    "terminated. End that process (Task Manager on Windows, "
+                    f"`kill -9 {inst.pid}` elsewhere), then run `gaia daemon stop` "
+                    "again."
+                )
+                sys.exit(1)
             remove_instance(only_pid=inst.pid)
             print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+    # A daemon that was killed, or whose shutdown hung, can leave its agents running.
+    if not _reap_orphaned_sidecars():
+        sys.exit(1)
     _stop_gaia_lemonade_left_running(exit_on_error=exit_on_lemonade_error)
+
+
+def _reap_orphaned_sidecars() -> bool:
+    """Kill agent sidecars the stopped daemon left running.
+
+    Returns False, after saying which, when one is still running.
+    """
+    from gaia.daemon.sidecars import ledger
+
+    killed, survivors = ledger.reap_after_stop()
+    for pid in killed:
+        if pid not in survivors:
+            print(f"✅ Stopped an agent the daemon left running (pid {pid})")
+    if survivors:
+        pids = ", ".join(str(pid) for pid in survivors)
+        print(
+            f"❌ GAIA agent process(es) {pids} are still running after the "
+            "daemon stopped. End them (Task Manager on Windows, `kill -9` "
+            "elsewhere), then run `gaia daemon stop` again."
+        )
+        return False
+    return True
+
+
+# `gaia daemon stop` exit code: the daemon and its agents stopped, GAIA's Lemonade Server did not.
+DAEMON_STOP_LEMONADE_EXIT = 3
 
 
 def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
@@ -9903,8 +10042,9 @@ def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
     never touched.
 
     Args:
-        exit_on_error: Exit 1 when it will not stop. ``restart`` passes False:
-            the error is printed, and the new daemon still starts.
+        exit_on_error: Exit ``DAEMON_STOP_LEMONADE_EXIT`` when it will not
+            stop. ``restart`` passes False: the error is printed, and the new
+            daemon still starts.
     """
     from gaia.llm.lemonade_client import configured_lemonade_url
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
@@ -9914,9 +10054,9 @@ def _stop_gaia_lemonade_left_running(exit_on_error: bool = True):
     try:
         stopped = EmbeddedLemonade().stop()
     except EmbeddedLemonadeError as e:
-        print(f"❌ {e}")
+        print(f"❌ GAIA's Lemonade Server did not stop: {e}")
         if exit_on_error:
-            sys.exit(1)
+            sys.exit(DAEMON_STOP_LEMONADE_EXIT)
         return
     if stopped:
         print("✅ GAIA's Lemonade Server stopped")
@@ -10127,7 +10267,7 @@ def _handle_hub_list(args):
             f"{state:<12} {_fmt_size(a.get('download_size_bytes')):<8} "
             f"{a.get('name') or ''}"
         )
-    from gaia.hub.catalog import CORE_UPGRADE_COMMAND
+    from gaia.hub.catalog import core_upgrade_hint
 
     for a in agents:
         if a.get("core_gate_error"):
@@ -10138,7 +10278,7 @@ def _handle_hub_list(args):
                 f"\n{a.get('id')} {a.get('latest_version')} needs GAIA "
                 f"{a['requires_gaia_version']} or newer"
                 + (f"; this core installs {usable}" if usable else "")
-                + f". Upgrade: {CORE_UPGRADE_COMMAND}"
+                + f". Upgrade: {core_upgrade_hint()}"
             )
     hidden = body.get("unsupervised_filtered") or []
     if hidden:
@@ -10376,6 +10516,12 @@ def handle_lemonade_choice_command(args):
             else:
                 print("GAIA uses its own Lemonade Server")
                 print("   to use one you run: gaia lemonade connect <url>")
+            if info["env_url_ignored"]:
+                print(
+                    f"   LEMONADE_BASE_URL={info['env_url_ignored']} is ignored: "
+                    "GAIA's own was chosen over it in the app. A different value "
+                    "applies again."
+                )
             return
 
         if action == "detect":
@@ -11298,7 +11444,7 @@ def handle_mcp_list(args):
         print(
             '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
         )
-        print("See https://amd-gaia.ai/docs/guides/mcp/client for details.")
+        print("See https://amd-gaia.ai/docs/sdk/sdks/mcp for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

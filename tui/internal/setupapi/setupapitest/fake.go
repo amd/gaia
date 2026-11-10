@@ -34,9 +34,10 @@ type Fake struct {
 	// CancelLater leaves rows as they are on Cancel, the way a pull that stops
 	// at its next chunk still reports "downloading" for a moment.
 	CancelLater bool
-	// RunErr and DownloadErr refuse to start.
+	// RunErr and DownloadErr refuse to start; VisionErr refuses a vision choice.
 	RunErr      error
 	DownloadErr error
+	VisionErr   error
 
 	Calls []string
 }
@@ -111,6 +112,21 @@ func (f *Fake) ChooseChat(_ context.Context, id string, ack bool) (setupapi.Plan
 	return f.P, nil, nil
 }
 
+func (f *Fake) ChooseVision(_ context.Context, id *string) (setupapi.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id == nil {
+		f.record("vision none")
+	} else {
+		f.record("vision %s", *id)
+	}
+	if f.VisionErr != nil {
+		return f.P, f.VisionErr
+	}
+	f.P.VisionModel = id
+	return f.P, nil
+}
+
 func (f *Fake) Skip(_ context.Context, id string, skipped bool) (setupapi.Plan, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -157,7 +173,11 @@ func (f *Fake) Remove(_ context.Context, id string) (setupapi.Plan, error) {
 func (f *Fake) Run(_ context.Context, req setupapi.RunRequest) (*setupapi.Ack, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("run cloud=%v ack=%v keep=%v", req.SkipChatModel, req.AcknowledgeLowDisk, req.KeepTrying)
+	if len(req.ExtraModels) > 0 {
+		f.record("run cloud=%v ack=%v keep=%v extras=%s", req.SkipChatModel, req.AcknowledgeLowDisk, req.KeepTrying, strings.Join(req.ExtraModels, ","))
+	} else {
+		f.record("run cloud=%v ack=%v keep=%v", req.SkipChatModel, req.AcknowledgeLowDisk, req.KeepTrying)
+	}
 	if f.LowDisk != nil && !req.AcknowledgeLowDisk {
 		a := *f.LowDisk
 		return &a, nil
@@ -165,7 +185,8 @@ func (f *Fake) Run(_ context.Context, req setupapi.RunRequest) (*setupapi.Ack, e
 	if f.RunErr != nil {
 		return nil, f.RunErr
 	}
-	f.S.State = setupapi.RunRunning
+	// Like the backend: a new run starts with nothing tested.
+	f.S.State, f.S.Tests, f.S.Components, f.S.Error, f.S.ModelFailed = setupapi.RunRunning, nil, nil, nil, false
 	return nil, nil
 }
 
@@ -178,6 +199,7 @@ func (f *Fake) Status(context.Context) (setupapi.Status, error) {
 	}
 	s := f.S
 	s.Models = append([]setupapi.ModelProgress(nil), f.S.Models...)
+	s.Tests = append([]setupapi.TestRow(nil), f.S.Tests...)
 	return s, nil
 }
 
@@ -277,6 +299,36 @@ func (f *Fake) Progress(p setupapi.ModelProgress) {
 	f.upsert(p)
 }
 
+// SetTest adds a Test row, or replaces the one for the same job and subject.
+func (f *Fake) SetTest(row setupapi.TestRow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.S.Tests {
+		if r.Job == row.Job && sameSubject(r.Subject, row.Subject) {
+			f.S.Tests[i] = row
+			return
+		}
+	}
+	f.S.Tests = append(f.S.Tests, row)
+}
+
+func sameSubject(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// SetComponent sets one component's run state.
+func (f *Fake) SetComponent(id, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.S.Components == nil {
+		f.S.Components = map[string]string{}
+	}
+	f.S.Components[id] = state
+}
+
 // SetRunState sets the run's state.
 func (f *Fake) SetRunState(state string) {
 	f.mu.Lock()
@@ -300,7 +352,7 @@ func Entry(id string, roles []string, size float64, downloaded, planned, recomme
 		ID: id, Name: strings.TrimSuffix(strings.TrimPrefix(id, "user."), "-GGUF"), Roles: roles, SizeGB: &left, FullSizeGB: &full,
 		Downloaded: &d, InLemonade: true, Recommended: recommended,
 		Planned: planned, Selected: planned, ChatChoice: !hasRole(roles, setupapi.RoleEmbedding),
-		Fits: fits,
+		GaiaModel: true, Fits: fits,
 	}
 	if fits != nil {
 		e.NeedGB, e.CapacityGB = &need, &have
@@ -316,6 +368,9 @@ func hasRole(roles []string, r string) bool {
 	}
 	return false
 }
+
+// Str is a pointer to s.
+func Str(s string) *string { return &s }
 
 // Bool is a pointer to b.
 func Bool(b bool) *bool { return &b }

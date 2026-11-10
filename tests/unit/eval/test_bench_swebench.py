@@ -1026,7 +1026,7 @@ def test_a_regrade_never_passes_a_contaminated_task(
 
 
 def test_the_judge_grades_a_swebench_attempt_against_the_gold_patch(
-    pilot, fake_launch, tmp_path, monkeypatch
+    pilot, fake_launch, tmp_path, monkeypatch, claude_login
 ):
     fake_launch.act = lambda workdir: (
         (workdir / "sessions.py").write_text("x\n") or "done"
