@@ -62,7 +62,7 @@ def agent(bridge):
 
 
 def batch(agent, steps):
-    return agent._tool_overrides["browser_batch"]["function"](steps=steps)
+    return agent._pane_tool_bodies["browser_batch"](steps=steps)
 
 
 def acts(bridge):

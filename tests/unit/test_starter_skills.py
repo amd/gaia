@@ -52,6 +52,7 @@ PROVENANCE_SOURCE = "starter-pack"
 STARTER_PACK = frozenset(
     {
         "analyze-recording",
+        "browser-pane",
         "calculators",
         "calendar",
         "check-in",

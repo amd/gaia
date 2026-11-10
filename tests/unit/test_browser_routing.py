@@ -159,7 +159,9 @@ def test_the_route_is_decided_once_per_agent(bridge, discovery_file, no_playwrig
 
 
 def _tool(agent, name):
-    return agent._tool_overrides[name]["function"]
+    """A registered tool, or a browser-pane skill tool's body."""
+    entry = agent._tool_overrides.get(name)
+    return entry["function"] if entry else agent._pane_tool_bodies[name]
 
 
 def test_the_pane_alone_registers_the_tools_on_this_agent_only(
@@ -172,13 +174,18 @@ def test_the_pane_alone_registers_the_tools_on_this_agent_only(
     assert {
         "browser_open",
         "browser_snapshot",
+    } <= set(agent._tool_overrides)
+    # The pane-only tools ship in the browser-pane skill, never pre-registered.
+    assert {
         "browser_screenshot",
         "browser_logs",
         "browser_press",
         "browser_viewport",
         "browser_tabs",
         "browser_batch",
-    } <= set(agent._tool_overrides)
+        "dev_server",
+    } <= set(agent._pane_tool_bodies)
+    assert not set(agent._pane_tool_bodies) & set(agent._tool_overrides)
     # Another chat's agent, built in the same process, must not inherit them.
     assert set(tools_mod._TOOL_REGISTRY) == before
 
@@ -197,6 +204,7 @@ def test_pane_only_tools_need_the_chat_attached(
         "browser_batch",
     ):
         assert name not in agent._tool_overrides
+    assert not agent._pane_tool_bodies
     assert "browser_open" in tools_mod._TOOL_REGISTRY
 
 

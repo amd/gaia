@@ -124,7 +124,7 @@ class _Host(ShellToolsMixin):
     """A shell host; ``offered`` stands in for a chat open in GAIA desktop."""
 
     def __init__(self, offered: bool):
-        self._tools_registry = {"dev_server": object()} if offered else {}
+        self._browser_pane_attached = offered
 
 
 @pytest.fixture
@@ -154,7 +154,7 @@ def test_run_shell_command_refuses_a_server_and_names_dev_server(no_process, tmp
     assert no_process == []
     folder = str(tmp_path.resolve())
     assert f'dev_server(action="start", project="{folder}")' in result["error"]
-    assert 'load_tools("dev_server")' in result["error"]
+    assert 'load_skill("browser-pane")' in result["error"]
 
 
 def test_the_refusal_comes_before_the_approval_prompt(tmp_path):
@@ -244,8 +244,8 @@ def test_execute_python_file_reads_the_script_and_refuses_a_server(
 ):
     root, tools, agent = python_tools
     monkeypatch.chdir(root)
-    # As in GAIA desktop, where the pane registers dev_server on the agent.
-    monkeypatch.setitem(agent._tools_registry, "dev_server", {})
+    # As in GAIA desktop, where the chat can load the browser-pane skill.
+    monkeypatch.setattr(agent, "_browser_pane_attached", True, raising=False)
     site = root / "site"
     site.mkdir(exist_ok=True)
     script = site / "temp_server.py"

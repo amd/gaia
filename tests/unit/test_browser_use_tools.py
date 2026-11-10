@@ -553,9 +553,11 @@ def test_an_unknown_ref_falls_through_to_session_rules():
 import queue as _queue  # noqa: E402
 import threading as _threading  # noqa: E402
 import time as _time  # noqa: E402
+from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 from gaia.agents.base.agent import Agent  # noqa: E402
+from gaia.agents.base.call_risk import RISK_NOTE_ARG  # noqa: E402
 from gaia.agents.base.tool_grants import SITE_ARG, grant_scope  # noqa: E402
 from gaia.browser import driver as _browser_driver  # noqa: E402
 from gaia.browser._pane_bridge import DISCOVERY_ENV  # noqa: E402
@@ -599,6 +601,23 @@ def pane(tmp_path, monkeypatch):
     bridge.close()
     tools_mod._TOOL_REGISTRY.clear()
     tools_mod._TOOL_REGISTRY.update(saved)
+
+
+_SKILLS_ROOT = Path(__file__).resolve().parents[2] / "hub" / "skills"
+
+
+def _load_pane_skill(agent, tmp_path):
+    """Load the bundled browser-pane skill, as load_skill("browser-pane") does."""
+    from gaia.skills.manager import SkillManager
+
+    return agent.load_skill(
+        "browser-pane",
+        manager=SkillManager(
+            agent_skill_dirs=[str(_SKILLS_ROOT)],
+            user_skills_root=tmp_path / "user-skills",
+            include_claude_roots=False,
+        ),
+    )
 
 
 def _drive(agent, handler, tool_name, args, answer=(False, False)):
@@ -756,7 +775,11 @@ def test_headless_browsing_offers_no_site_grant():
 def test_the_internet_switch_still_covers_the_new_tools():
     from gaia.agents.base.offline import offline_refusal
 
-    for name in ("browser_screenshot", "browser_logs"):
+    for name in (
+        "browser-pane/browser_screenshot",
+        "browser-pane/browser_logs",
+        "browser-pane/browser_eval",
+    ):
         assert offline_refusal(name, {})["error_type"] == "internet_off"
     assert offline_refusal("browser_open", {"url": "http://localhost:5173/"}) is None
 
@@ -773,10 +796,176 @@ def test_the_agent_can_look_at_its_own_screenshot_without_asking(
     bridge.serve(5000)
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia"))
     agent.path_validator = PathValidator(allowed_paths=[str(tmp_path / "work")])
-    result, prompts = _drive(agent, handler, "browser_screenshot", {})
+    _load_pane_skill(agent, tmp_path)
+    result, prompts = _drive(agent, handler, "browser-pane/browser_screenshot", {})
     assert prompts == [] and result["status"] == "success"
     shot = result["image_path"]
     assert agent.path_validator.validate_read(shot, prompt_user=False)[0]
     neighbour = Path(shot).with_name("someone_else.png")
     neighbour.write_bytes(b"x")
     assert not agent.path_validator.validate_read(str(neighbour), prompt_user=False)[0]
+
+
+# ------------------------------------------------------- the browser-pane skill
+
+
+def test_the_pane_tools_join_the_list_only_when_the_skill_loads(pane, tmp_path):
+    agent, _handler, _bridge = pane
+    pane_names = {
+        "browser_screenshot",
+        "browser_logs",
+        "browser_press",
+        "browser_viewport",
+        "browser_tabs",
+        "browser_dialog",
+        "browser_eval",
+        "browser_batch",
+        "dev_server",
+    }
+    assert not pane_names & {n.rpartition("/")[2] for n in agent._tools_registry}
+    _load_pane_skill(agent, tmp_path)
+    assert {f"browser-pane/{n}" for n in pane_names} <= set(agent._tools_registry)
+    assert agent._tools_registry["browser-pane/browser_eval"]["requires_confirmation"]
+
+
+@pytest.mark.allow_network
+def test_a_pane_skill_tool_asks_before_reading_an_unapproved_site(pane, tmp_path):
+    agent, handler, bridge = pane
+    _load_pane_skill(agent, tmp_path)
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    result, [prompt] = _drive(agent, handler, "browser-pane/browser_screenshot", {})
+    assert prompt["args"][SITE_ARG] == "https://example.com"
+    assert prompt["always_scope"] == "pages on example.com"
+    assert result["status"] == "denied"
+    assert "screenshot" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_always_on_a_site_covers_the_pane_skill_tools_too(pane, tmp_path):
+    agent, handler, bridge = pane
+    _load_pane_skill(agent, tmp_path)
+    _drive(
+        agent,
+        handler,
+        "browser_open",
+        {"url": "https://example.com/"},
+        answer=(True, True),
+    )
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    result, prompts = _drive(agent, handler, "browser-pane/browser_logs", {})
+    assert prompts == []
+    assert result.startswith("(in the browser pane)")
+
+
+@pytest.mark.allow_network
+def test_a_key_that_may_press_an_irreversible_control_asks(pane, tmp_path):
+    agent, handler, bridge = pane
+    bridge.serve(5000)
+    _load_pane_skill(agent, tmp_path)
+    _drive(agent, handler, "browser_snapshot", {})
+    bridge.labels['[data-gaia-ref="g1e2"]'] = "Delete account"
+    result, [prompt] = _drive(
+        agent, handler, "browser-pane/browser_press", {"key": "Enter", "ref": "g1e2"}
+    )
+    assert "Delete account" in prompt["args"][RISK_NOTE_ARG]
+    assert result["status"] == "denied"
+    assert "act" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_browser_eval_asks_every_time_and_shows_the_whole_script(pane, tmp_path):
+    agent, handler, bridge = pane
+    bridge.serve(5000)
+    bridge.replies["script"] = _bridge_fixture("script_ok.json")
+    _load_pane_skill(agent, tmp_path)
+    args = {"expression": "localStorage.getItem('cart')"}
+    for _ in range(2):
+        result, [prompt] = _drive(
+            agent, handler, "browser-pane/browser_eval", args, answer=(True, True)
+        )
+        assert "localStorage.getItem('cart')" in prompt["args"][RISK_NOTE_ARG]
+        assert "c-4821" in result
+
+
+@pytest.mark.allow_network
+def test_browser_eval_off_this_computer_is_refused_before_anyone_is_asked(
+    pane, tmp_path
+):
+    agent, handler, bridge = pane
+    _load_pane_skill(agent, tmp_path)
+    bridge.replies["origin"] = _bridge_fixture("origin_remote.json")
+    result, prompts = _drive(
+        agent, handler, "browser-pane/browser_eval", {"expression": "document.title"}
+    )
+    assert prompts == []
+    assert "only on the user's own app" in result["error"]
+    assert "script" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+@pytest.mark.parametrize(
+    "expression, says", [("   ", "give a JavaScript"), ("x" * 501, "at most 500")]
+)
+def test_a_script_browser_eval_would_refuse_never_reaches_a_prompt(
+    pane, tmp_path, expression, says
+):
+    agent, handler, bridge = pane
+    _load_pane_skill(agent, tmp_path)
+    result, prompts = _drive(
+        agent, handler, "browser-pane/browser_eval", {"expression": expression}
+    )
+    assert prompts == []
+    assert says in result["error"]
+    assert "script" not in bridge.ops()
+
+
+def test_the_pane_skill_refuses_in_a_chat_with_no_pane(tmp_path, monkeypatch):
+    """Outside GAIA desktop the skill still loads, and every tool refuses unasked."""
+    from gaia.agents.base import tools as tools_mod
+
+    saved = dict(tools_mod._TOOL_REGISTRY)
+    monkeypatch.setenv(DISCOVERY_ENV, str(tmp_path / "no-desktop.json"))
+    handler = SSEOutputHandler()
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            _PaneProbe._console_override = handler
+            agent = _PaneProbe(silent_mode=True, skip_lemonade=True)
+        _load_pane_skill(agent, tmp_path)
+        for name, args in (
+            ("browser-pane/browser_screenshot", {}),
+            ("browser-pane/browser_eval", {"expression": "1"}),
+            ("browser-pane/dev_server", {"action": "start", "project": "."}),
+        ):
+            result, prompts = _drive(agent, handler, name, args)
+            assert prompts == []
+            assert "only in a chat open in GAIA desktop" in result["error"]
+    finally:
+        tools_mod._TOOL_REGISTRY.clear()
+        tools_mod._TOOL_REGISTRY.update(saved)
+
+
+def test_the_pane_skill_refuses_on_an_agent_that_would_not_ask(tmp_path):
+    """Fail closed: an agent whose gate lacks the browser hook never drives the pane."""
+    import importlib.util
+
+    from gaia.skills.context import bind
+
+    spec = importlib.util.spec_from_file_location(
+        "browser_pane_skill_tools", _SKILLS_ROOT / "browser-pane" / "tools.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class _Ungated(BrowserUseToolsMixin):
+        @classmethod
+        def confirmation_hooks(cls):
+            return ()
+
+        def _tool_requires_confirmation(self, _name, _args=None):
+            return False
+
+    skill = SimpleNamespace(name="browser-pane")
+    with bind(_Ungated(), skill):
+        refusal = module._PanePreflight("browser_press")({"key": "Enter"})
+    assert refusal["status"] == "error"
+    assert "does not ask the user" in refusal["error"]

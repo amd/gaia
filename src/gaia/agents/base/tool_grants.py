@@ -267,6 +267,19 @@ SITE_ARG = "_site"
 #: The tool that starts a project's dev server from ``.gaia/launch.json``.
 DEV_SERVER_TOOL = "dev_server"
 
+#: The bundled skill whose tools drive GAIA desktop's browser pane.
+BROWSER_PANE_SKILL = "browser-pane"
+
+
+def pane_tool_name(tool_name: str) -> str:
+    """A browser-pane skill tool's own name (``browser-pane/x`` -> ``x``).
+
+    Only that skill's prefix is stripped: another skill's ``browser_x`` is not
+    a pane tool and never gets a pane grant.
+    """
+    return tool_name.removeprefix(f"{BROWSER_PANE_SKILL}/")
+
+
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
@@ -316,6 +329,7 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
         return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
     if tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
+    tool_name = pane_tool_name(tool_name)
     if tool_name.startswith("browser_") and args.get(SITE_ARG):
         return _site_scope(str(args[SITE_ARG]))
     if tool_name == DEV_SERVER_TOOL:
@@ -740,6 +754,8 @@ def _dev_server_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
         label=f"{command} in {where}",
         subject=command,
     )
+
+
 def _folder_grant_is_safe(target: str, parent: str) -> bool:
     """True when a grant on *parent* may cover writes to *target* unasked.
 
@@ -783,6 +799,7 @@ def _named_scope(
 
 
 __all__ = [
+    "BROWSER_PANE_SKILL",
     "DEV_SERVER_TOOL",
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
@@ -795,5 +812,6 @@ __all__ = [
     "grant_scope",
     "launch_digest",
     "is_inside_folder",
+    "pane_tool_name",
     "path_argument",
 ]

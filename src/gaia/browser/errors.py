@@ -217,16 +217,16 @@ def describe_dialog(dialog: dict) -> str:
     message = str(dialog.get("message") or "").strip()
     quoted = f" {page_words(message)}" if message else ""
     if kind == "alert":
-        return f"The page shows a notice{quoted}. Close it with browser_dialog(accept=True)."
+        return f"The page shows a notice{quoted}. Close it with browser-pane/browser_dialog(accept=True)."
     if kind == "beforeunload":
         return (
             "The page asks before leaving it: changes there may not be saved. "
-            "Leave with browser_dialog(accept=True), or stay with "
-            "browser_dialog(accept=False)."
+            "Leave with browser-pane/browser_dialog(accept=True), or stay with "
+            "browser-pane/browser_dialog(accept=False)."
         )
     return (
-        f"The page asks{quoted}. Press OK with browser_dialog(accept=True), or "
-        "Cancel with browser_dialog(accept=False)."
+        f"The page asks{quoted}. Press OK with browser-pane/browser_dialog(accept=True), or "
+        "Cancel with browser-pane/browser_dialog(accept=False)."
     )
 
 

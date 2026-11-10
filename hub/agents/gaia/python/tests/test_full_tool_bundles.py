@@ -57,8 +57,8 @@ def flagship_registry():
     is then faked so ``register_memory_tools`` runs — the same pinning
     ``test_gaia_agent.py`` uses, for the same reason: an environment-dependent
     count made the drift guard pass locally and fail in CI. The chat is
-    pinned open in GAIA desktop's browser pane for the same reason: that is
-    the one state where every browser tool registers, Playwright or not.
+    pinned open in GAIA desktop's browser pane for the same reason: there the
+    browser tools register, Playwright or not.
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")

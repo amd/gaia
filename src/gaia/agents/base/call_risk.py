@@ -60,7 +60,9 @@ _FILE_WRITE_TOOLS = frozenset(
     }
 )
 
-_CODE_TOOLS = frozenset({"run_python", "execute_python_file", "dev_server"})
+_CODE_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "browser-pane/dev_server"}
+)
 
 _READ_PROGRAMS = frozenset(
     {

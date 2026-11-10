@@ -61,8 +61,8 @@ def _isolated_registry():
 def tool_surfaces():
     """``(core, full)`` tool names — memory off, then memory on.
 
-    Both are pinned open in GAIA desktop's browser pane, the one state where
-    every browser tool registers, so the count doesn't depend on the machine.
+    Both are pinned open in GAIA desktop's browser pane, where the browser
+    tools register Playwright or not, so the count doesn't depend on the machine.
     """
     with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_MEMORY_DISABLED", "1")

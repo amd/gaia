@@ -192,6 +192,41 @@ def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
         assert flagship.unload_skill("send-email")
 
 
+def test_the_browser_pane_skill_is_gated_on_the_flagship(tmp_path):
+    """Its tools stay off the list until it loads; browser_eval then asks every
+    time, and the others ask through the browser gate, by site and control."""
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True)
+            )
+            agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+        before = set(agent._tools_registry)
+        assert not any(n.startswith("browser-pane/") for n in before)
+        assert "browser-pane" in agent.skill_manager.discover()
+
+        agent.load_skill(
+            "browser-pane", manager=_bundled_only(agent.SKILL_DIRS, tmp_path)
+        )
+        added = set(agent._tools_registry) - before
+        assert len(added) == 9 and all(n.startswith("browser-pane/") for n in added)
+        assert agent._tools_registry["browser-pane/browser_eval"][
+            "requires_confirmation"
+        ]
+        assert "browser_call_needs_confirmation" in agent.confirmation_hooks()
+        assert agent.unload_skill("browser-pane")
+        assert set(agent._tools_registry) == before
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
     """A skill's scripts/ file is on disk at <skill directory>/scripts/<file>.
 

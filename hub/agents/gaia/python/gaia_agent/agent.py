@@ -66,6 +66,7 @@ from gaia.agents.base.skill_loader import (
     SkillLoader,
     dynamic_skills_env_override,
 )
+from gaia.agents.base.tool_grants import BROWSER_PANE_SKILL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -437,16 +438,18 @@ class GaiaAgent(
 
     @property
     def skill_manager(self):
-        """Exclude the developer skill before metadata discovery in normal mode."""
+        """Exclude the developer skill before metadata discovery in normal mode,
+        and the browser-pane skill in a chat with no pane to drive."""
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
+            excluded = () if self.config.developer_mode else (ENGINEERING_SKILL,)
+            if not self._browser_pane_attached:
+                excluded += (BROWSER_PANE_SKILL,)
             # The project's .claude/skills join the catalogue, as in Claude Code.
             self._skill_manager = SkillManager(
                 agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
-                excluded_names=(
-                    () if self.config.developer_mode else (ENGINEERING_SKILL,)
-                ),
+                excluded_names=excluded,
                 project_dir=self._project_map_root(),
             )
         return self._skill_manager

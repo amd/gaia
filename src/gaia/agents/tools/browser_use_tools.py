@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import RISK_NOTE_ARG
-from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, SITE_ARG
+from gaia.agents.base.tool_grants import (
+    BROWSER_PANE_SKILL,
+    DEV_SERVER_TOOL,
+    SITE_ARG,
+    pane_tool_name,
+)
 from gaia.browser.errors import BrowserError, PageDialogOpen, PaneSignInByHand
 from gaia.browser.snapshot import is_pick_ref
 from gaia.browser.untrusted import fence, page_words, site_words
@@ -158,7 +163,17 @@ _BATCH_STEPS = (
     "browser_screenshot",
 )
 _BATCH_ACTS = frozenset({"browser_click", "browser_type", "browser_press"})
+#: Batch steps that are browser-pane skill tools when called on their own.
+_PANE_SKILL_STEPS = frozenset({"browser_press", "browser_screenshot"})
 MAX_BATCH_STEPS = 10
+
+#: What a browser-pane skill tool says in a chat with no pane to drive.
+PANE_SKILL_UNAVAILABLE = (
+    "Error: not run. The browser-pane tools work only in a chat open in GAIA "
+    "desktop with the browser pane beside it, and this chat has none. Use "
+    "browser_open and browser_snapshot, or ask the user to open this chat in "
+    "GAIA desktop."
+)
 
 
 class _Refused(Exception):
@@ -203,6 +218,10 @@ class BrowserUseToolsMixin:
     _dialog_memo: Optional[Tuple[Tuple[Any, str, str], Optional[dict]]] = None
     #: (id(args), spec, already running) of the dev server the prompt showed.
     _dev_pending: Optional[Tuple[Tuple[Any, str, str], "DevServerSpec", bool]] = None
+    #: This chat is the one open in GAIA desktop's window, as of startup.
+    _browser_pane_attached: bool = False
+    #: Tool name -> body for the browser-pane skill; empty without a pane.
+    _pane_tool_bodies: Optional[Dict[str, Callable[..., Any]]] = None
 
     # ------------------------------------------------------------------ internals
 
@@ -423,6 +442,7 @@ class BrowserUseToolsMixin:
         """
         parent = getattr(super(), "confirmation_args_for_call", None)
         shown = parent(tool_name, tool_args) if callable(parent) else tool_args
+        tool_name = pane_tool_name(tool_name)
         if tool_name == DEV_SERVER_TOOL:
             return self._dev_server_prompt(tool_args) or shown
         if tool_name not in _PANE_SITE_TOOLS or not isinstance(tool_args, dict):
@@ -762,6 +782,7 @@ class BrowserUseToolsMixin:
         Named as a hook rather than an override because ``Agent`` precedes the
         tool mixins in the MRO — see ``Agent.CONFIRMATION_HOOKS``.
         """
+        tool_name = pane_tool_name(tool_name)
         if tool_name == DEV_SERVER_TOOL:
             pending = self._dev_pending
             # Starting a server asks, unless that exact one already runs.
@@ -1034,8 +1055,8 @@ class BrowserUseToolsMixin:
         They register when Playwright is installed, or when this chat is open
         in GAIA desktop, whose browser pane needs no Playwright. With neither,
         nothing registers and the log names both remedies. Tools only the pane
-        can serve register on this agent alone, never in the shared registry,
-        so a chat outside the desktop app is never offered them.
+        can serve come with the bundled browser-pane skill; this keeps their
+        bodies, for a chat open in the pane only.
         """
         from gaia.agents.base.tools import tool
         from gaia.browser import driver as browser_driver
@@ -1313,12 +1334,46 @@ class BrowserUseToolsMixin:
                 )
             return "\n".join(lines)
 
+        # The pane-only tools ship in the browser-pane skill, so they cost no
+        # prompt until it loads; the skill's tools call these bodies.
+        self._browser_pane_attached = attached
         if attached:
-            self._register_pane_tools(tool, here, _fail, _answer, _seen)
-            self._register_dev_server_tool(tool, here, _fail, _seen)
+            self._pane_tool_bodies = {
+                **self._pane_tools(_fail, _answer, _seen),
+                **self._dev_server_tools(_fail, _seen),
+            }
 
-    def _register_pane_tools(self, tool, registry, fail, answer, seen) -> None:
-        """Tools only the browser pane can serve, on this agent alone."""
+    def run_pane_tool(self, name: str, **kwargs: Any) -> Any:
+        """Run one browser-pane skill tool's body; the skill checked the pane first."""
+        body = (self._pane_tool_bodies or {}).get(name)
+        return PANE_SKILL_UNAVAILABLE if body is None else body(**kwargs)
+
+    def pane_tool_refusal(self, name: str, args: Dict[str, Any]) -> Optional[str]:
+        """Why a browser-pane skill call can't run, before anyone is asked, or None."""
+        if not self._pane_tool_bodies or name not in self._pane_tool_bodies:
+            return PANE_SKILL_UNAVAILABLE
+        if name != "browser_eval":
+            return None
+        refused = _script_error(str(args.get("expression") or ""))
+        if refused:
+            return refused
+        from gaia.browser._pane_bridge import is_loopback_origin
+
+        try:
+            pane = self._pane()
+            page = pane.page_origins()[0] if pane is not None else ""
+        except BrowserError as e:
+            return str(e)
+        if not is_loopback_origin(page):
+            return (
+                "Error: not run. browser_eval runs only on the user's own app on "
+                f"this computer (localhost), and this page is on {page or 'no site'}. "
+                "Read it with browser_snapshot instead."
+            )
+        return None
+
+    def _pane_tools(self, fail, answer, seen) -> Dict[str, Callable[..., Any]]:
+        """The bodies of the tools only the browser pane can serve."""
         from gaia.browser.pane_driver import VIEWPORT_PRESETS
         from gaia.browser.snapshot import render
 
@@ -1340,46 +1395,19 @@ class BrowserUseToolsMixin:
                 "next_step": "To see what it shows, call analyze_image with this image_path.",
             }
 
-        @tool(atomic=True, registry=registry)
         def browser_screenshot(ref: str = "") -> dict:
-            """Take a picture of the page open in the browser pane.
-
-            Use to check how a page looks: layout, colors, images. To read
-            its text or find its buttons, use browser_snapshot instead.
-
-            Returns image_path. To see what the picture shows, call
-            analyze_image with that image_path.
-
-            Args:
-                ref: Element ref from browser_snapshot (e.g. 'g2e5') to picture
-                     only that element. Leave empty for the whole visible page.
-            """
             try:
                 return _picture(ref)
             except Exception as e:  # noqa: BLE001 — returned to the model
                 logger.error("browser_screenshot(%s) failed: %s", ref, e)
                 return {"status": "error", "error": fail(e)}
 
-        @tool(atomic=True, registry=registry)
         def browser_logs(
             kind: str = "console",
             errors_only: bool = False,
             contains: str = "",
             new_only: bool = False,
         ) -> str:
-            """Read the browser pane page's console messages or network requests.
-
-            Use to find out why a page misbehaves: script errors, failed
-            requests, bad status codes.
-
-            Args:
-                kind: 'console' for messages and script errors, or 'network'
-                      for requests and their status codes
-                errors_only: Only errors: console errors, failed requests,
-                             and responses with status 400 or higher
-                contains: Only lines containing this text (case-insensitive)
-                new_only: Only what arrived since your last browser_logs call
-            """
             if kind not in ("console", "network"):
                 return "Error: kind must be 'console' or 'network'."
             try:
@@ -1407,36 +1435,12 @@ class BrowserUseToolsMixin:
             seen(snap)
             return f"{driver.where}\nPressed {key}{on}.\n\n" + render(snap)
 
-        @tool(atomic=True, registry=registry)
         def browser_press(key: str, ref: str = "") -> str:
-            """Press one key on the page in the browser pane.
-
-            Use Escape to close a dialog or menu, Enter to submit, Tab to go
-            to the next field, PageDown or End to scroll down.
-
-            Args:
-                key: One of Enter, Escape, Tab, Backspace, Space, PageDown,
-                     PageUp, Home, End, ArrowUp, ArrowDown, ArrowLeft, ArrowRight
-                ref: Element ref to press the key on (e.g. 'g2e5'). Leave
-                     empty for whatever has focus.
-            """
             return answer("browser_press", _press, key, ref)
 
-        @tool(atomic=True, registry=registry)
         def browser_viewport(
             preset: str = "", width: int = 0, height: int = 0, color_scheme: str = ""
         ) -> str:
-            """Show the browser pane's page at a phone, tablet or desktop size, or in dark mode.
-
-            Use to check how a page looks on other screens. If the user chose
-            a size in the pane's Responsive menu, theirs stays.
-
-            Args:
-                preset: 'mobile', 'tablet', 'desktop', or 'fill' to fit the pane again
-                width: Exact width in pixels instead of a preset (give height too)
-                height: Exact height in pixels instead of a preset
-                color_scheme: 'dark' or 'light'. Leave empty for the system setting.
-            """
             if preset and preset not in (*VIEWPORT_PRESETS, "fill"):
                 return "Error: preset must be 'mobile', 'tablet', 'desktop' or 'fill'."
             if color_scheme not in ("", "dark", "light"):
@@ -1459,17 +1463,7 @@ class BrowserUseToolsMixin:
 
             return answer("browser_viewport", _set)
 
-        @tool(atomic=True, registry=registry)
         def browser_tabs(switch_to: str = "") -> str:
-            """List the tabs open in the browser pane, or switch to one.
-
-            The browser tools read and act in the tab that is showing.
-
-            Args:
-                switch_to: A tab id from the list (e.g. 'tab-2') to show that
-                           tab. Leave empty to only list them.
-            """
-
             def _list() -> str:
                 driver = mixin._ensure_driver()
                 res = driver.select_tab(switch_to) if switch_to else driver.tabs()
@@ -1491,16 +1485,7 @@ class BrowserUseToolsMixin:
             seen(snap)
             return "\n".join(lines) + "\n\n" + render(snap)
 
-        @tool(atomic=True, registry=registry)
         def browser_dialog(accept: bool = True) -> str:
-            """Answer the box a page in the browser pane is showing (alert, confirm, or "leave this page?").
-
-            While a box is open the page is frozen and other browser tools say
-            so. Answer it, then go on.
-
-            Args:
-                accept: True presses OK (or Leave); False presses Cancel (or Stay)
-            """
             return answer("browser_dialog", _dialog, _truthy(accept), "")
 
         def _eval(expression: str) -> str:
@@ -1518,27 +1503,9 @@ class BrowserUseToolsMixin:
                 "web page", "The value the script returned from the page.", text
             )
 
-        @tool(atomic=True, registry=registry)
         def browser_eval(expression: str) -> str:
-            """Run a short JavaScript expression in the browser pane's page and get its value as JSON.
-
-            Only for the user's own app on localhost. Use it to check what the
-            page does not show: localStorage, app state, a computed style. To
-            read the page's text or buttons, use browser_snapshot instead.
-
-            Args:
-                expression: One JavaScript expression, like
-                    localStorage.getItem('cart') or document.title
-            """
-            if not (expression or "").strip():
-                return "Error: give a JavaScript expression to run."
-            if len(expression) > MAX_EVAL_SCRIPT_CHARS:
-                return (
-                    f"Error: not run. A script for browser_eval is at most "
-                    f"{MAX_EVAL_SCRIPT_CHARS} characters, so the user can read all "
-                    "of it before approving. Use a shorter expression."
-                )
-            return answer("browser_eval", _eval, expression)
+            refused = _script_error(expression or "")
+            return refused or answer("browser_eval", _eval, expression)
 
         def _act_step(driver, name: str, args: Dict[str, Any]) -> str:
             ref = str(args.get("ref") or "")
@@ -1585,23 +1552,7 @@ class BrowserUseToolsMixin:
                 None,
             )
 
-        @tool(atomic=True, timeout=300, registry=registry)
         def browser_batch(steps: List[dict]) -> str:
-            """Run several browser steps in one call, in order, in the browser pane.
-
-            Use for a known sequence, like filling in a form. Steps can use
-            browser_open, browser_click, browser_type, browser_press,
-            browser_back, browser_snapshot and browser_screenshot. The batch
-            stops at the first step that fails, and before any step that needs
-            the user's approval: call that step on its own and GAIA asks. It
-            also stops at a step that opens a box on the page (answer it with
-            browser_dialog).
-
-            Args:
-                steps: Steps in order, each a tool name and its arguments, e.g.
-                    [{"tool": "browser_type", "ref": "g2e3", "text": "Ada"},
-                    {"tool": "browser_click", "ref": "g2e7"}]
-            """
             try:
                 plan = _parse_batch(steps)
             except ValueError as e:
@@ -1674,9 +1625,20 @@ class BrowserUseToolsMixin:
                 lines += ["", render(snap)]
             return "\n".join(lines)
 
-    def _register_dev_server_tool(self, tool, registry, fail, seen) -> None:
-        """dev_server, on this agent alone: only GAIA desktop runs dev servers."""
-        from gaia.browser.dev_servers import MAX_READY_TIMEOUT_S, describe, pick_running
+        return {
+            "browser_screenshot": browser_screenshot,
+            "browser_logs": browser_logs,
+            "browser_press": browser_press,
+            "browser_viewport": browser_viewport,
+            "browser_tabs": browser_tabs,
+            "browser_dialog": browser_dialog,
+            "browser_eval": browser_eval,
+            "browser_batch": browser_batch,
+        }
+
+    def _dev_server_tools(self, fail, seen) -> Dict[str, Callable[..., Any]]:
+        """The dev_server body: only GAIA desktop runs dev servers."""
+        from gaia.browser.dev_servers import describe, pick_running
         from gaia.browser.snapshot import render
 
         mixin = self
@@ -1691,7 +1653,7 @@ class BrowserUseToolsMixin:
             if shown is None or spec.digest != shown.digest:
                 raise _Refused(
                     "Error: not started. The server's command changed after the user "
-                    "approved it, or it was never approved. Call dev_server again and "
+                    "approved it, or it was never approved. Call browser-pane/dev_server again and "
                     "GAIA will ask the user."
                 )
             res = driver.dev_server_ensure(spec.key, spec.to_wire())
@@ -1759,12 +1721,11 @@ class BrowserUseToolsMixin:
                 return f'{pane.where}\nStopped dev server "{server["name"]}"; port {server["port"]} is free.'
             servers = pane.dev_servers()
             if not servers:
-                return f"{pane.where}\nNo dev servers. Start one with dev_server(action='start')."
+                return f"{pane.where}\nNo dev servers. Start one with browser-pane/dev_server(action='start')."
             return f"{pane.where}\nDev servers:\n" + "\n".join(
                 f"  {describe(s)}" for s in servers
             )
 
-        @tool(atomic=True, timeout=MAX_READY_TIMEOUT_S + 60, registry=registry)
         def dev_server(
             action: str,
             name: str = "",
@@ -1772,27 +1733,6 @@ class BrowserUseToolsMixin:
             errors_only: bool = False,
             contains: str = "",
         ) -> str:
-            """Run a project's dev server and show it in the browser pane; or list, stop, or read its logs.
-
-            Use this, not run_shell_command or a Python script, to start any
-            web server: it keeps running after the reply. A folder of plain
-            HTML/CSS/JS needs no setup: dev_server(action="start",
-            project="<folder>"). An app with its own dev command needs
-            <project>/.gaia/launch.json; write it with write_file first, like:
-            {"version": "0.0.1", "configurations": [{"name": "web",
-            "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173}]}
-            Starting asks the user first. A server already running is reused.
-
-            Args:
-                action: 'start' (runs it and opens it in the pane), 'list',
-                        'logs', or 'stop'
-                name: The server's name in launch.json, like 'web'. Needed when
-                      it has more than one.
-                project: The folder to serve, or the one holding
-                         .gaia/launch.json. Leave empty for the current project.
-                errors_only: For logs: only error lines
-                contains: For logs: only lines containing this text
-            """
             from gaia.browser.dev_servers import LaunchConfigError
 
             if action not in ("start", "list", "logs", "stop"):
@@ -1805,6 +1745,8 @@ class BrowserUseToolsMixin:
                 logger.error("dev_server(%s, %s) failed: %s", action, name, e)
                 return fail(e)
 
+        return {DEV_SERVER_TOOL: dev_server}
+
 
 def _answered_line(box: Dict[str, Any], accept: bool) -> str:
     """What browser_dialog did, for the model."""
@@ -1815,6 +1757,19 @@ def _answered_line(box: Dict[str, Any], accept: bool) -> str:
     if kind == "alert":
         return f"Closed the notice {page_words(message)}."
     return f'Pressed {"OK" if accept else "Cancel"} on {page_words(message)}.'
+
+
+def _script_error(expression: str) -> Optional[str]:
+    """Why browser_eval won't run this expression, or None."""
+    if not expression.strip():
+        return "Error: give a JavaScript expression to run."
+    if len(expression) > MAX_EVAL_SCRIPT_CHARS:
+        return (
+            f"Error: not run. A script for browser_eval is at most "
+            f"{MAX_EVAL_SCRIPT_CHARS} characters, so the user can read all "
+            "of it before approving. Use a shorter expression."
+        )
+    return None
 
 
 def _visible_script(expression: str) -> str:
@@ -1934,6 +1889,8 @@ def _parse_batch(steps: Any) -> List[Tuple[str, Dict[str, Any]]]:
 
 
 def _call_text(name: str, args: Dict[str, Any]) -> str:
+    if name in _PANE_SKILL_STEPS:
+        name = f"{BROWSER_PANE_SKILL}/{name}"
     return f"{name}({', '.join(f'{k}={v!r}' for k, v in args.items())})"
 
 
@@ -1951,7 +1908,9 @@ def _describe_viewport(res: dict) -> str:
             "Tell the user, and ask them to pick Fill pane there if they want "
             "your size."
         )
-    return f"The page now shows at {look}. Call browser_screenshot to see it."
+    return (
+        f"The page now shows at {look}. Call browser-pane/browser_screenshot to see it."
+    )
 
 
 def _render_tabs(res: dict, switched_to: str) -> str:

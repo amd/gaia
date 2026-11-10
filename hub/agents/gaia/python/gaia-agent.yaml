@@ -29,11 +29,10 @@ icon: sparkles
 # + remember_skill_lesson
 # + search_tools, which GAIA_DYNAMIC_TOOLS=0 or dynamic_tools=false leaves out.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
-# + 9 browser-pane tools, which register only for a chat open in GAIA desktop.
 # This is the REGISTERED size — what the agent can do. Bundled skills that
 # ship their own tools add them only once loaded, so they are not counted:
 # send-email (8 drafting and sending tools) and calendar (5).
-tools_count: 114
+tools_count: 105
 
 language: python
 # ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165)

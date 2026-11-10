@@ -81,7 +81,9 @@ def headless(url: str):
             "Install it with: pip install 'amd-gaia[browser]' && python -m "
             "playwright install chromium"
         )
-    drv = browser_driver.PlaywrightDriver(headless=True, allow_navigation=lambda _u: True)
+    drv = browser_driver.PlaywrightDriver(
+        headless=True, allow_navigation=lambda _u: True
+    )
     drv.start()
     return drv, drv.goto(url)
 
@@ -162,7 +164,10 @@ def bench_devserver(args) -> int:
     def run_direct() -> float:
         start = time.perf_counter()
         proc = subprocess.Popen(
-            list(spec.argv), cwd=spec.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            list(spec.argv),
+            cwd=spec.cwd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         try:
             wait_for_port(spec.port)

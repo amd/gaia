@@ -242,7 +242,7 @@ describe("parsing", () => {
 
   test("every op has a parser, a handler, and a place in the contract", () => {
     const handlers = createHandlers({ getHost: () => null, devServers: { list: () => [] }, appVersion: "x" });
-    const contractOps = [...CONTRACT.split("export interface BridgeOps {")[1].split("\n}\n")[0].matchAll(/^  (\w+): \{/gm)].map((m) => m[1]);
+    const contractOps = [...CONTRACT.split("export interface BridgeOps {")[1].split(/\r?\n\}\r?\n/)[0].matchAll(/^  (\w+): \{/gm)].map((m) => m[1]);
     expect(Object.keys(handlers).sort()).toEqual(Object.keys(PARSERS).sort());
     expect(contractOps.sort()).toEqual(Object.keys(PARSERS).sort());
     expect(fixture("hello.json").ops.sort()).toEqual(Object.keys(PARSERS).sort());

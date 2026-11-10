@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
-from gaia.agents.base.tool_grants import DEV_SERVER_TOOL, launch_digest
+from gaia.agents.base.tool_grants import launch_digest
 
 LAUNCH_FILE = Path(".gaia") / "launch.json"
 STATIC_NAME = "static"
@@ -174,7 +174,7 @@ def load_specs(
     except FileNotFoundError:
         raise LaunchConfigError(
             f"{path} does not exist. Write it with write_file, then call "
-            f"dev_server again. Example: {_EXAMPLE}"
+            f"browser-pane/dev_server again. Example: {_EXAMPLE}"
         ) from None
     except OSError as e:
         raise LaunchConfigError(f"Could not read {path}: {e}") from e
@@ -241,7 +241,8 @@ def resolve_spec(
     if not any(project.glob("*.htm*")):
         raise LaunchConfigError(
             f"{project} has no .html file and no {LAUNCH_FILE}. For a plain web "
-            "page, write index.html there and call dev_server again; it is served "
+            "page, write index.html there and call browser-pane/dev_server again; it "
+            "is served "
             f"with no setup. For an app with its own dev command, write "
             f"{launch_file(project)} with write_file. Example: {_EXAMPLE}"
         )
@@ -616,8 +617,8 @@ def _dotted(func: ast.expr) -> Optional[str]:
 
 
 def dev_server_offered(agent: Any) -> bool:
-    """Whether this agent has dev_server, loaded or loadable: it registers only in GAIA desktop."""
-    return DEV_SERVER_TOOL in (getattr(agent, "_tools_registry", None) or {})
+    """Whether this chat can load the browser-pane skill's dev_server: GAIA desktop only."""
+    return bool(getattr(agent, "_browser_pane_attached", False))
 
 
 def server_refusal(what: str, folder: Optional[str], offered: bool) -> str:
@@ -645,9 +646,10 @@ def _how_to_serve(folder: Optional[str], offered: bool) -> str:
     target = folder or "<the folder holding index.html>"
     if offered:
         return (
-            f'To show the page in the browser pane, call dev_server(action="start", '
-            f'project="{target}"); call load_tools("dev_server") first if it is not '
-            "in your tools. A folder of HTML files needs no setup."
+            "To show the page in the browser pane, call "
+            f'browser-pane/dev_server(action="start", project="{target}"); call '
+            'load_skill("browser-pane") first if it is not in your tools. A folder '
+            "of HTML files needs no setup."
         )
     return (
         "Starting servers needs GAIA desktop's browser pane, which this chat does not "

@@ -161,7 +161,7 @@ _STEP_SUMMARY = "The browser pane could not do that step."
 
 #: What GAIA says for each bridge code, never quoting the page.
 _STEP_SUMMARIES = {
-    "no_such_tab": "That browser pane tab is gone. Call browser_tabs to see the open ones.",
+    "no_such_tab": "That browser pane tab is gone. Call browser-pane/browser_tabs to see the open ones.",
     "no_page": "The browser pane tab has no web page in it. Open one with browser_open(url).",
     "unsupported": "The browser pane can't do that on this page.",
     "navigation_failed": "The page in the browser pane did not load.",
@@ -189,11 +189,11 @@ _STEP_SUMMARIES = {
         "hidden, disabled, or not the right kind of element). Call browser_snapshot() "
         "and try again, or ask the user to do this step."
     ),
-    "dialog_open": "Nothing was done: the page is showing a box. Answer it with browser_dialog first.",
+    "dialog_open": "Nothing was done: the page is showing a box. Answer it with browser-pane/browser_dialog first.",
     "dev_server_failed": "The dev server did not start. Its report and last log lines follow.",
     "port_in_use": "The dev server's port is already taken.",
     "no_such_server": (
-        'GAIA has not started that dev server. Call dev_server(action="list") to '
+        'GAIA has not started that dev server. Call browser-pane/dev_server(action="list") to '
         "see the ones it has."
     ),
 }

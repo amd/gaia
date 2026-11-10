@@ -350,7 +350,7 @@ def call(agent, **args):
     return (
         shown,
         asks and not granted,
-        lambda: agent._tool_overrides["dev_server"]["function"](**args),
+        lambda: agent._pane_tool_bodies["dev_server"](**args),
     )
 
 
@@ -398,7 +398,7 @@ def test_an_approved_start_sends_the_spec_and_opens_it_in_the_pane(
 
 
 def test_writing_launch_json_approves_nothing(agent, bridge):
-    out = agent._tool_overrides["dev_server"]["function"](action="start", name="web")
+    out = agent._pane_tool_bodies["dev_server"](action="start", name="web")
     assert "never approved" in out
     assert "ensure" not in [b["op"] for b in dev_ops(bridge)]
 
@@ -456,9 +456,7 @@ def test_a_server_that_crashes_reports_its_last_log_lines(agent, bridge):
 def test_logs_send_a_filtered_slice_request(agent, bridge, project):
     spec = spec_named(project, "web", allowed=allow(project))
     bridge.servers = [server_state(spec)]
-    out = agent._tool_overrides["dev_server"]["function"](
-        action="logs", errors_only=True
-    )
+    out = agent._pane_tool_bodies["dev_server"](action="logs", errors_only=True)
     logs = [b for b in dev_ops(bridge) if b["op"] == "logs"][0]
     assert set(logs) == set(fixture("requests.json")["devServers_logs"])
     assert logs["key"] == spec.key and logs["errorsOnly"] is True
@@ -469,7 +467,7 @@ def test_logs_send_a_filtered_slice_request(agent, bridge, project):
 def test_stop_names_the_freed_port(agent, bridge, project):
     spec = spec_named(project, "web", allowed=allow(project))
     bridge.servers = [server_state(spec)]
-    out = agent._tool_overrides["dev_server"]["function"](action="stop", name="web")
+    out = agent._pane_tool_bodies["dev_server"](action="stop", name="web")
     stop = [b for b in dev_ops(bridge) if b["op"] == "stop"][0]
     assert set(stop) == set(fixture("requests.json")["devServers_stop"])
     assert 'Stopped dev server "web"; port 4173 is free.' in out
@@ -482,7 +480,7 @@ def test_no_project_named_finds_the_one_launch_json(agent, bridge):
 
 def test_an_app_too_old_for_dev_servers_says_so(agent, bridge):
     agent._pane()._bridge.ops = frozenset({"hello", "attach", "tabs"})
-    out = agent._tool_overrides["dev_server"]["function"](action="list")
+    out = agent._pane_tool_bodies["dev_server"](action="list")
     assert "older than the agent" in out
 
 
@@ -593,9 +591,12 @@ def test_a_named_server_in_a_plain_folder_says_there_is_only_static(agent, site)
     assert '"static"' in run()
 
 
-def test_the_docstring_teaches_the_no_setup_call(agent):
-    doc = agent._tool_overrides["dev_server"]["description"]
-    assert 'dev_server(action="start", project="<folder>")' in " ".join(doc.split())
+def test_the_docstring_teaches_the_no_setup_call():
+    skill_tools = (
+        Path(__file__).resolve().parents[2] / "hub" / "skills" / "browser-pane"
+    ) / "tools.py"
+    doc = " ".join(skill_tools.read_text(encoding="utf-8").split())
+    assert 'browser-pane/dev_server(action="start", project="<folder>")' in doc
 
 
 def test_the_static_server_answers_on_loopback_only(tmp_path):

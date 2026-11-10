@@ -211,6 +211,7 @@ def _server_refusal(
         "has_errors": True,
     }
 
+
 #: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
 SCRIPT_LIBRARIES_PLACEHOLDER = "{script_libraries}"
 
@@ -1790,8 +1791,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
         # Only a chat open in GAIA desktop, where the user can see the pane.
-        if browser_section and getattr(self, "_browser_route", None) is not None:
-            browser_section += """**BROWSER PANE:** The user sees a browser pane beside this chat. For "the page", "this page" or anything open in the browser pane, call browser_snapshot to read it (also browser_find, browser_screenshot, browser_logs). browser_open opens a URL there.
+        if browser_section and getattr(self, "_browser_pane_attached", False):
+            browser_section += """**BROWSER PANE:** The user sees a browser pane beside this chat; the browser tools act there, and "this page" is its page (browser_snapshot reads it).
 """
 
         # Tail of Tier 1: indexing note kept separately so gated sections can

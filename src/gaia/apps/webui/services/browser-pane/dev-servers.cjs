@@ -353,7 +353,7 @@ class DevServerSupervisor {
   /** Another chat's server is "not started" to an agent, never a hint that it exists. */
   require(key, chat = null) {
     const entry = this.entries.get(key);
-    if (!entry || (chat !== null && !entry.chats.includes(chat))) throw new BridgeError("no_such_server", "GAIA has not started that dev server. Call dev_server(action=\"list\") to see the ones it has.");
+    if (!entry || (chat !== null && !entry.chats.includes(chat))) throw new BridgeError("no_such_server", "GAIA has not started that dev server. Call browser-pane/dev_server(action=\"list\") to see the ones it has.");
     return entry;
   }
 
