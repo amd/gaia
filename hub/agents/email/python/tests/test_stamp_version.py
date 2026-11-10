@@ -238,15 +238,15 @@ def test_check_fails_when_no_v_pinned_link_drifts(tree):
     assert any("9.9.9" in m for m in result.mismatches)
 
 
-def test_stamp_keeps_no_v_form(tree):
-    """Stamping preserves the tag form in the file: no-v links stay no-v."""
+def test_stamp_writes_v_form_over_no_v_links(tree):
+    """A bump always writes the v-form tag the release workflow documents."""
     _to_no_v_form(tree)
     vpy = tree / "hub/agents/email/python/gaia_agent_email/version.py"
     vpy.write_text('AGENT_VERSION = "2.0.0"\nAPI_VERSION = "9.9.9"\n', encoding="utf-8")
     assert stamp.main([]) == 0
     readme = (tree / "hub/agents/email/npm/README.md").read_text(encoding="utf-8")
-    assert "agent-pkg-email-2.0.0/" in readme
-    assert "agent-pkg-email-v2.0.0" not in readme
+    assert "agent-pkg-email-v2.0.0/" in readme
+    assert "agent-pkg-email-2.0.0/" not in readme
     assert stamp.main(["--check"]) == 0
 
 
