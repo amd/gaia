@@ -389,9 +389,7 @@ See the [MCP integration guide](/integrations/mcp#json-rpc-methods) for the full
   </Step>
 
   <Step title="Review Workflow">
-    The workflow checks `GET /health`, asks a question on `POST /chat`,
-    summarizes the answer with `POST /llm`, and calls the `gaia.query` tool
-    over JSON-RPC (`POST /`)
+    The workflow chats through `/chat`, summarizes through `/llm`, checks `/health`, and calls the `gaia.query` tool over JSON-RPC
   </Step>
 </Steps>
 
@@ -665,8 +663,7 @@ server {
   </Step>
 
   <Step title="Import Example Workflow">
-    Import the example workflow from `src/gaia/mcp/n8n.json`: a health check,
-    a chat turn, an LLM summary, and a JSON-RPC tool call
+    Import the example workflow from `src/gaia/mcp/n8n.json`
   </Step>
 
   <Step title="Build Custom Workflows">

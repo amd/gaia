@@ -7635,11 +7635,19 @@ class LemonadeClient:
             url += "?show_all=true"
         catalog = self._send_request("get", url, timeout=timeout)
         self._check_model_list_shape(catalog)
-        for entry in catalog["data"]:
-            if entry.get("id"):
-                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+        self.remember_model_metadata(catalog["data"])
         record_cloud_models(catalog)
         return catalog
+
+    def remember_model_metadata(self, entries: Iterable[Dict[str, Any]]) -> None:
+        """Cache ``/models`` entries already read, exactly as ``list_models`` does.
+
+        Lets ``cloud_model_provider`` name a runtime-discovered provider for these
+        ids without reading the catalog again.
+        """
+        for entry in entries:
+            if entry.get("id"):
+                self._model_metadata.setdefault(entry["id"], {}).update(entry)
 
     def _check_model_list_shape(self, catalog: Any) -> None:
         """Raise ``LemonadeClientError`` unless *catalog* is ``{"data": [{...}]}``."""

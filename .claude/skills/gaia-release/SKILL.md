@@ -415,7 +415,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | Installers (Windows setup, `.pkg`, `.deb`/`.rpm`) | built and attached by `publish.yml`, around the flagship the lock pins; no approval beyond `approve-publish` | built and attached by `publish.yml`, around the RC's own flagship |
 | `release_components.yml` | publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them, behind the `agent-publish` approval; attaches nothing on a tag | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
-| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
+| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub. Inside the run, before the pre-release exists, every frozen core's real-engine check installs it from the run's artifacts (`build_core.yml` `flagship: artifact`, `GAIA_RC_FLAGSHIP_URL`), so the desktop installers wait for `rc-flagship` |
 | `release` branch, post-release notes check (`claude.yml` `release-notes`) | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 

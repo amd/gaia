@@ -79,6 +79,30 @@ _DEFAULT_DESCRIPTION = (
 )
 
 
+def _agent_skills_dir(value: str) -> Path:
+    """Map ``--agent-dir`` to the ``skills/`` folder that agent package ships."""
+    skills = Path(value).expanduser() / "skills"
+    if not skills.is_dir():
+        raise argparse.ArgumentTypeError(
+            f"no skills/ folder at {skills}. Pass the agent package directory, "
+            "the one that holds agent.py and its skills/ folder."
+        )
+    return skills
+
+
+def _add_agent_dir_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent-dir",
+        action="append",
+        type=_agent_skills_dir,
+        dest="agent_skill_dirs",
+        metavar="DIR",
+        default=None,
+        help="Also discover the skills bundled in this agent package's skills/ "
+        "folder, at agent-bundled precedence. Repeatable.",
+    )
+
+
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Register ``gaia skill`` and its subcommands."""
     p = subparsers.add_parser(
@@ -108,6 +132,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Only show skills from this discovery root "
         "(agent-bundled | user | claude-project | claude-import)",
     )
+    _add_agent_dir_argument(p_list)
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")
     p_info.add_argument("name", help="Skill name (== its directory name)")
@@ -117,6 +142,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_info.add_argument(
         "--body", action="store_true", help="Also print the Markdown instructions"
     )
+    _add_agent_dir_argument(p_info)
 
     # Adaptive skills (#2674): inspect/approve/revert the learned overlay.
     from gaia.skills.deltas_cli import add_deltas_parser
@@ -513,10 +539,20 @@ def _manager() -> SkillManager:
     return SkillManager(project_dir=default_project_dir())
 
 
+def _manager_for(args: argparse.Namespace) -> SkillManager:
+    """The CLI manager, plus any agent-bundled roots named by ``--agent-dir``."""
+    agent_skill_dirs = getattr(args, "agent_skill_dirs", None)
+    if not agent_skill_dirs:
+        return _manager()
+    return SkillManager(
+        project_dir=default_project_dir(), agent_skill_dirs=agent_skill_dirs
+    )
+
+
 def _handle_list(args: argparse.Namespace) -> int:
     from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift
 
-    manager = _manager()
+    manager = _manager_for(args)
     skills = manager.list_skills()
     if args.root:
         skills = [s for s in skills if s.root == args.root]
@@ -623,7 +659,7 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_info(args: argparse.Namespace) -> int:
-    manager = _manager()
+    manager = _manager_for(args)
     skill = manager.load(args.name)
 
     if getattr(args, "as_json", False):
