@@ -56,18 +56,19 @@ type fetched struct {
 
 // Speak plays pieces back to back, fetching the next while the current one
 // plays. It returns when the last piece has played, on the first failure, or
-// when ctx is cancelled. Every temporary file it wrote is gone when the last
-// fetch it started has finished.
+// when ctx is cancelled. Every temporary file it wrote is gone when it returns.
 func Speak(ctx context.Context, pieces []string, synth Synthesizer, play PlayFunc) error {
 	if len(pieces) == 0 {
 		return nil
 	}
-	// Read once: a fetch can still be writing after Speak has returned.
 	dir := tempDir
 	fetch := func(text string) <-chan fetched {
 		ch := make(chan fetched, 1)
 		go func() {
 			wav, err := synth(ctx, text)
+			if err == nil {
+				err = ctx.Err()
+			}
 			if err != nil {
 				ch <- fetched{err: err}
 				return
@@ -82,13 +83,11 @@ func Speak(ctx context.Context, pieces []string, synth Synthesizer, play PlayFun
 		if next == nil {
 			return
 		}
-		// A fetch still running when we stop: remove its file once it lands.
-		pending := next
-		go func() {
-			if r := <-pending; r.path != "" {
-				os.Remove(r.path)
-			}
-		}()
+		// A fetch still running when we stop is cancelled with ctx; wait for
+		// it so its file is removed before the caller cleans up.
+		if r := <-next; r.path != "" {
+			os.Remove(r.path)
+		}
 	}()
 	for i := range pieces {
 		var r fetched

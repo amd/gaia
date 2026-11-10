@@ -63,7 +63,7 @@ export function speechPieces(markdown: string, max = 1000): string[] {
     if (!text) return [];
     const sentences = text
         .split(/(?<=[.!?…؟])\s+|\n+/)
-        .flatMap((s) => cutLong(s, Math.min(PIECE_CHARS, max)));
+        .flatMap((s, i) => cutLong(s, Math.min(i === 0 ? FIRST_PIECE_CHARS : PIECE_CHARS, max)));
     const pieces: string[] = [];
     let current = '';
     for (const sentence of sentences) {

@@ -231,3 +231,32 @@ func TestRunCommandNamesTheProfileThatIsRun(t *testing.T) {
 		t.Errorf("RunCommand = %q, but RunArgs uses profile %q", got, args[i+1])
 	}
 }
+
+// The terminal installers put `gaia` beside gaia-tui; a pip-installed `gaia`
+// earlier on PATH is another release and must not answer for it.
+func TestBinaryPrefersTheGaiaBesideThisProgram(t *testing.T) {
+	name := "gaia"
+	if runtime.GOOS == "windows" {
+		name = "gaia.exe"
+	}
+	isolateCLIHome(t)
+	onPath := t.TempDir()
+	t.Setenv("PATH", onPath)
+	shipped := t.TempDir()
+	for _, dir := range []string{onPath, shipped} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := selfExecutable
+	selfExecutable = func() (string, error) { return filepath.Join(shipped, "gaia-tui"), nil }
+	t.Cleanup(func() { selfExecutable = orig })
+
+	got, err := Binary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(shipped, name); got != want {
+		t.Errorf("Binary() = %q, want %q", got, want)
+	}
+}

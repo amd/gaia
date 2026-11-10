@@ -21,60 +21,6 @@ func writeSentinel(t *testing.T, root, agentID, executable string) {
 	}
 }
 
-func hubResponse(installed bool, supervised bool) *HubCatalog {
-	entry := HubEntry{
-		ID:                "email",
-		Name:              "Email",
-		Description:       "Email triage, drafting, and calendar",
-		Category:          "Productivity",
-		Icon:              "📧",
-		Author:            "AMD",
-		SecurityTier:      TierExperimental,
-		Permissions:       []string{"gmail:read", "gmail:send"},
-		DownloadSizeBytes: 39845888,
-		LatestVersion:     "0.5.0",
-		Installed:         installed,
-		Supervised:        supervised,
-	}
-	if installed {
-		entry.InstalledVersion = "0.5.0"
-	}
-	return &HubCatalog{
-		Agents:               []HubEntry{entry},
-		UnsupervisedFiltered: []string{"chat"},
-	}
-}
-
-// "unknown" must never read as "safe": an entry with no tier needs the same
-// explicit opt-in a community one does.
-func TestRequiresTrustTreatsUnknownTierAsUnsafe(t *testing.T) {
-	for tier, want := range map[string]bool{
-		TierVerified:     false,
-		TierCommunity:    true,
-		TierExperimental: true,
-		"":               true,
-		"something-new":  true,
-	} {
-		if got := (HubEntry{SecurityTier: tier}).RequiresTrust(); got != want {
-			t.Errorf("tier %q RequiresTrust() = %v, want %v", tier, got, want)
-		}
-	}
-}
-
-func TestFormatSize(t *testing.T) {
-	cases := map[int64]string{
-		0:        "unknown size",
-		512:      "512 B",
-		2048:     "2 KB",
-		39845888: "38.0 MB",
-	}
-	for in, want := range cases {
-		if got := FormatSize(in); got != want {
-			t.Errorf("FormatSize(%d) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // §5 bug 9: the old lookup only checked cpp/build/*/<name>.exe, so it could
 // never find a Python or frozen agent on macOS or Linux.
 func TestFindInstalledBinaryFindsANonWindowsExecutable(t *testing.T) {

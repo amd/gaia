@@ -261,6 +261,10 @@ class GaiaConfig:
         read_aloud_speed: How fast replies are read aloud, as a percentage of
             normal speed (50-200).
         read_aloud_auto: Read every finished reply aloud without being asked.
+        dynamic_tools: Start a flagship session on its most-used tools, in short
+            form, and move to every tool at most once, so the first reply reads
+            less and the prompt cache survives. Applies to new sessions.
+            ``GAIA_DYNAMIC_TOOLS`` overrides it.
         voice_language: The language you speak to GAIA in, as a two-letter code
             or ``auto``. ``None`` follows the app's language.
         voice_asr_model: The speech recognizer, ``auto`` or a Lemonade model id.
@@ -292,6 +296,7 @@ class GaiaConfig:
     read_aloud_voice: Optional[str] = None
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
+    dynamic_tools: bool = True
     voice_language: Optional[str] = None
     voice_asr_model: str = "auto"
     voice_turn_taking: str = "hands_free"

@@ -13,16 +13,14 @@ matrix defined in issue #992. Each scenario validates:
 
 Scenarios that require self-hosted runners with AMD hardware (Lemonade,
 NPU) are skipped on GitHub-hosted runners via the ``require_lemonade``
-fixture or the ``GAIA_HAS_LEMONADE`` env var. The full 8-cell matrix
-(2 OS x 2 UV x 2 Lemonade) is exercised on self-hosted runners labelled
+fixture or the ``GAIA_HAS_LEMONADE`` env var. The full 4-cell matrix
+(2 OS x 2 Lemonade) is exercised on self-hosted runners labelled
 ``gaia-installer-matrix`` once the infrastructure from issue #991 lands.
 
 UV installation methods:
-  - "bundled": UV binary shipped inside the Electron installer (the
-    desktop-app path). Simulated here by using the bundled UV fixture
-    or the system UV if available.
   - "system": UV pre-installed on PATH by the user (the developer/CI
-    path). The default for pytest runs.
+    path). The desktop app ships a frozen ``gaia`` and uses no uv;
+    installer/core/smoke_test.py checks that build.
 """
 
 from __future__ import annotations
@@ -63,32 +61,18 @@ def _gaia_cli() -> list[str]:
 # Parametrized scenario matrix
 # ---------------------------------------------------------------------------
 
-UV_METHODS = ["system", "bundled"]
+UV_METHODS = ["system"]
 LEMONADE_STATES = ["available", "unavailable"]
 
 
 @pytest.mark.parametrize("uv_method", UV_METHODS, ids=lambda m: f"uv={m}")
 class TestInstallerScenarioMatrix:
-    """Post-install smoke checks across UV x Lemonade scenarios.
-
-    The ``bundled`` UV cell shadows PATH to route through the vendored UV
-    binary under ``build/vendor/uv/``. Until self-hosted runners with the
-    built vendor tree are provisioned (issue #991), the ``bundled`` cell
-    skips on standard CI runners. When #991 lands the skip disappears and
-    the cell actually exercises the Electron-installer UV path.
-    """
+    """Post-install smoke checks across UV x Lemonade scenarios."""
 
     @staticmethod
     def _should_skip_uv(uv_method: str) -> str | None:
         if uv_method == "system" and not _has_uv():
             return "uv not on PATH — install uv or run on a provisioned runner"
-        if uv_method == "bundled":
-            bundled = REPO_ROOT / "src/gaia/apps/webui/build/vendor/uv"
-            if not bundled.exists():
-                return (
-                    "bundled UV not built — run the build-installers workflow "
-                    "or fetch the vendor/uv tree first"
-                )
         return None
 
     @staticmethod
@@ -100,21 +84,6 @@ class TestInstallerScenarioMatrix:
             )
         return None
 
-    @staticmethod
-    def _env_for_uv(uv_method: str) -> dict[str, str] | None:
-        """Return an env overlay that routes through the bundled UV binary."""
-        if uv_method != "bundled":
-            return None
-        vendor = REPO_ROOT / "src/gaia/apps/webui/build/vendor/uv"
-        if not vendor.exists():
-            return None
-        # Prepend the vendor dir so the bundled uv shadows any system uv.
-        env = os.environ.copy()
-        candidates = list(vendor.rglob("uv")) + list(vendor.rglob("uv.exe"))
-        if candidates:
-            env["PATH"] = str(candidates[0].parent) + os.pathsep + env.get("PATH", "")
-        return env
-
     def test_gaia_version(self, uv_method: str):
         """``gaia --version`` exits 0 and prints a version string."""
         reason = self._should_skip_uv(uv_method)
@@ -125,7 +94,6 @@ class TestInstallerScenarioMatrix:
             capture_output=True,
             text=True,
             timeout=30,
-            env=self._env_for_uv(uv_method),
         )
         assert (
             result.returncode == 0
@@ -142,7 +110,6 @@ class TestInstallerScenarioMatrix:
             capture_output=True,
             text=True,
             timeout=30,
-            env=self._env_for_uv(uv_method),
         )
         assert result.returncode == 0, f"import gaia failed: {result.stderr}"
 
@@ -168,7 +135,6 @@ class TestInstallerScenarioMatrix:
             capture_output=True,
             text=True,
             timeout=300,
-            env=self._env_for_uv(uv_method),
         )
         assert result.returncode == 0, (
             f"gaia init --yes failed (rc={result.returncode}):\n"

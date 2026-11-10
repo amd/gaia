@@ -7,7 +7,18 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
@@ -18,14 +29,17 @@ from ..lemonade_client import (
     CONTEXT_OVERFLOW_PHRASES,
     CONVERSATION_SLOT,
     DEFAULT_MODEL_NAME,
+    FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
     CloudModelUnavailableError,
+    CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
     active_profile_ctx_size,
+    cloud_model_provider,
     is_tool_calling_model,
     lemonade_log_hint,
     local_sampling_defaults,
@@ -38,6 +52,7 @@ from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
     TUI_PROVIDER_AUTH_HINT,
+    TUI_PROVIDER_SETTINGS,
     TUI_SETUP_HINT,
 )
 
@@ -322,6 +337,21 @@ _ENGINE_START_RE = re.compile(
 #: How a failed turn names this cause to a front-end, which offers the fix.
 MODEL_SERVER_DOWN = "model_server_down"
 
+#: How these messages name the local server.
+_LOCAL_SERVER_RE = re.compile(r"\bthe local (?:LLM|model)(?: server)?\b", re.IGNORECASE)
+
+
+def wording_for_model(message: str, model_id: Optional[str]) -> str:
+    """*message* as a chat on *model_id* should read it.
+
+    A cloud chat still goes through GAIA's Lemonade, so a failure there is
+    real, but "the local LLM" would tell the user their model runs here.
+    """
+    if not message or cloud_model_provider(model_id) is None:
+        return message
+    return _LOCAL_SERVER_RE.sub("GAIA's AI engine", message)
+
+
 #: The wording of :class:`LemonadeServerDownError`, once a wrapper flattened it.
 _SERVER_DOWN_RE = re.compile(
     r"the (?:local )?model server(?: at (\S+))? isn't answering[^\n]*",
@@ -449,6 +479,19 @@ class LemonadeCloudModelUnavailableError(LemonadeError):
             ),
             payload=payload,
         )
+
+
+class LemonadeCloudDisconnectedError(LemonadeError):
+    """GAIA's model server restarted, lost the cloud provider, and GAIA could
+    not reconnect it. The message names the fix; a resend fails the same way."""
+
+    retryable = False
+    user_message = (
+        "GAIA's AI engine lost its cloud provider connection (it may have "
+        "restarted). "
+        f"Reconnect the provider {TUI_PROVIDER_SETTINGS}, then send your message "
+        "again."
+    )
 
 
 class LemonadeAuthRejectedError(LemonadeError):
@@ -869,6 +912,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CloudProviderDisconnectedError):
+            return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
         if isinstance(cur, CloudDisabledError):
@@ -1006,8 +1051,11 @@ class LemonadeProvider(LLMClient):
         port: Optional[int] = None,
         system_prompt: Optional[str] = None,
         api_key: Optional[str] = None,
+        model_metadata: Optional[Iterable[Dict[str, Any]]] = None,
         **kwargs,
     ):
+        """*model_metadata*: ``/models`` entries the caller already read, so
+        ``cloud_model_provider`` knows them without another catalog request."""
         # Build kwargs for LemonadeClient, only including non-None values
         backend_kwargs = {}
         if model is not None:
@@ -1023,6 +1071,8 @@ class LemonadeProvider(LLMClient):
         backend_kwargs.update(kwargs)
 
         self._backend = LemonadeClient(**backend_kwargs)
+        if model_metadata is not None:
+            self._backend.remember_model_metadata(model_metadata)
         self._model = model
         self._last_model = model
         self._system_prompt = system_prompt
@@ -1045,9 +1095,10 @@ class LemonadeProvider(LLMClient):
 
         Goes through the backend, which carries the catalog metadata, so a
         provider discovered at runtime is recognised as well as the two whose
-        id prefixes are known up front. Answers ``None`` for a runtime-
-        discovered provider until ``refresh_model_catalog`` (or any call that
-        reads ``list_models``) has populated that metadata at least once.
+        id prefixes are known up front. Names a runtime-discovered provider
+        only once this client holds its catalog entry (``model_metadata`` at
+        construction, or any call that reads ``list_models``); before that, a
+        model another client discovered counts as cloud under its id prefix.
         """
         return self._backend.cloud_model_provider(
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
@@ -1074,18 +1125,6 @@ class LemonadeProvider(LLMClient):
     ) -> bool:
         """Wait for GAIA's own server to answer again (see ``LemonadeClient``)."""
         return self._backend.wait_for_gaia_lemonade(model, on_status=on_status)
-
-    def refresh_model_catalog(self, show_all: bool = True) -> None:
-        """Read the Lemonade catalog once so ``cloud_model_provider`` can
-        recognise a runtime-discovered provider right away.
-
-        A freshly constructed client has no catalog metadata yet —
-        ``cloud_model_provider`` only reads what ``list_models`` has cached —
-        so anything composed from it immediately after construction (a
-        switch message, a rebuilt system prompt) would call a runtime-
-        discovered cloud model local (#4365).
-        """
-        self._backend.list_models(show_all=show_all)
 
     def generate(
         self,
@@ -1136,6 +1175,10 @@ class LemonadeProvider(LLMClient):
         # runaway, so they get the client's standard 0.7.
         if not self._backend.cloud_model_provider(effective_model):
             wanted = kwargs.get("id_slot")
+            if wanted == FULL_TOOLS_SLOT:
+                # An evicted model reports one slot; the turn would then re-read
+                # on the wrong slot, and again on the right one.
+                self._backend._ensure_model_loaded(effective_model)
             if wanted not in (None, CONVERSATION_SLOT) and wanted >= (
                 self._backend.slot_count(effective_model)
             ):
@@ -1511,7 +1554,7 @@ class LemonadeProvider(LLMClient):
                 "%s kept writing after its tool call; stopped the stream there",
                 self._last_model,
             )
-            # The client reads out the rest: cutting FastFlowLM off restarts it.
+            # On the NPU, the client reads out the rest: cutting FastFlowLM off restarts it.
             close = getattr(response, "close", None)
             if close is not None:
                 close()

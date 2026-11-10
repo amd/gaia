@@ -26,6 +26,10 @@ class ConfigurationError(ConnectorsError):
     """Required configuration (env var, runbook entry) is missing."""
 
 
+class InvalidConfigValueError(ConnectorsError):
+    """A value the user typed into a connector's configure form is not usable."""
+
+
 class OAuthClientNotConfiguredError(ConfigurationError):
     """An ``oauth_pkce`` connector has no OAuth *client* credentials configured.
 

@@ -164,6 +164,11 @@ class IndexResult:
 # the version bump forces a one-time full re-index.
 _CACHE_VERSION = 2
 
+# Tries, and the pause between them, for a batch the embedder answers with no
+# vectors while it is still loading. The same as RAG's EMBED_WARMUP_* values.
+_EMBED_WARMUP_ATTEMPTS = 3
+_EMBED_WARMUP_PAUSE_S = 2
+
 
 class CodeIndexCacheError(RuntimeError):
     """The on-disk index and its metadata do not belong together."""
@@ -443,6 +448,8 @@ class CodeIndexSDK:
                 f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
 
+        # Embedding raises rather than dropping a chunk, so this is now a guard;
+        # chunks_dropped stays in IndexResult for the callers that report it.
         # A file that lost even one chunk to a failed embedding must NOT have
         # its hash recorded: the hash marks it "indexed", every later run
         # would skip it as unchanged, and the missing chunks would stay
@@ -915,54 +922,51 @@ class CodeIndexSDK:
         )
         return [item.get("embedding", []) for item in (response or {}).get("data", [])]
 
-    def _embed_batch_resilient(self, batch: List[str]) -> List[list]:
-        """Embed one batch, retrying transport errors and short/empty responses.
+    def _embed_batch(self, batch: List[str]) -> List[list]:
+        """One embeddings call for *batch*: a vector for every text, or an error.
 
-        Lemonade occasionally answers HTTP 200 with fewer (or zero) vectors
-        than requested while the model is still warming up — no exception is
-        raised, so a naive caller can't distinguish that from "embeddings
-        legitimately came back empty". Retrying the *same batch* a couple of
-        times resolves the transient case without callers paying the ~25x
-        cost of a one-by-one fallback for what is usually a load race.
-
-        Returns whatever the backend produced — may be shorter than *batch*
-        if retries are exhausted. Callers decide whether that's fatal.
+        The only repeat is a short wait while the model is still loading
+        (no vectors at all, no error), as RAG does. A failed call or a short
+        batch is raised at once: sending it again won't fix a dead backend
+        or a wrong model name.
         """
-        max_retries = 2
-        result: List[list] = []
-        for attempt in range(max_retries + 1):
+        model = self.config.embedding_model
+        attempt = 1
+        while True:
             try:
-                result = self._embed_batch_call(batch)
-            except Exception as e:
-                if attempt < max_retries:
-                    self.log.warning(
-                        f"Embedding batch attempt {attempt + 1} failed: {e}"
-                    )
-                    time.sleep(2)
-                    continue
-                raise
-
-            if len(result) == len(batch):
-                return result
-
-            if attempt < max_retries:
+                vectors = self._embed_batch_call(batch)
+            except Exception as e:  # noqa: BLE001 — re-raised with the remedy
+                reason = str(e).rstrip(". ") or type(e).__name__
+                raise RuntimeError(
+                    f"Embedding a batch of {len(batch)} chunk(s) with {model!r} "
+                    f"failed: {reason}. Check that Lemonade Server is reachable "
+                    f"and that {model!r} is loaded. "
+                    f"{describe_client_hint('load', model).instruction}"
+                ) from e
+            if not any(vectors) and attempt < _EMBED_WARMUP_ATTEMPTS:
+                attempt += 1
                 self.log.warning(
-                    f"Embedding batch returned {len(result)}/{len(batch)} vectors "
-                    f"(no error) — backend likely still loading "
-                    f"{self.config.embedding_model!r}, retrying batch "
-                    f"(attempt {attempt + 1}/{max_retries})"
+                    f"No embeddings back from {model!r}: it is still loading; "
+                    f"try {attempt}/{_EMBED_WARMUP_ATTEMPTS} in "
+                    f"{_EMBED_WARMUP_PAUSE_S}s."
                 )
-                time.sleep(2)
-
-        return result
+                time.sleep(_EMBED_WARMUP_PAUSE_S)
+                continue
+            if len(vectors) != len(batch) or not all(vectors):
+                got = sum(1 for v in vectors if v)
+                raise RuntimeError(
+                    f"Embedding backend returned {got}/{len(batch)} vectors from "
+                    f"{model!r}. Verify Lemonade Server is reachable and the "
+                    "model is fully loaded, then index again. No partial batch "
+                    "was kept."
+                )
+            return vectors
 
     def _encode_texts(self, texts: List[str]):
         """Encode texts using Lemonade embeddings. Returns numpy array.
 
-        Fails loudly if the backend cannot produce a vector for every text
-        after retries — this is the query-encode path used by search(),
-        which must never silently hand back fewer vectors than requested
-        (that previously surfaced as "no matches" instead of a real error).
+        Raises RuntimeError when a batch can't be embedded, so search() never
+        mistakes a dead backend for "no matches".
         """
         import numpy as np
 
@@ -977,23 +981,16 @@ class CodeIndexSDK:
         for batch_start in range(0, len(safe_texts), BATCH_SIZE):
             raise_if_cancelled()
             batch = safe_texts[batch_start : batch_start + BATCH_SIZE]
-            batch_embeddings = self._embed_batch_resilient(batch)
-            if len(batch_embeddings) != len(batch):
-                raise RuntimeError(
-                    f"Embedding backend returned {len(batch_embeddings)}/"
-                    f"{len(batch)} vectors after retries against "
-                    f"{self.config.embedding_model!r}. Verify Lemonade "
-                    "Server is reachable and the model is fully loaded "
-                    "(not mid-warm-up)."
-                )
-            all_embeddings.extend(batch_embeddings)
+            all_embeddings.extend(self._embed_batch(batch))
 
         return np.array(all_embeddings, dtype=np.float32)
 
     def _encode_texts_with_sync(self, texts: List[str], chunks: List):
         """
-        Encode texts and return (embeddings, valid_chunks) in lockstep.
-        Filters out chunks whose embedding failed (empty vector).
+        Encode texts and return (embeddings, chunks) in lockstep.
+
+        Raises RuntimeError on the first batch that can't be embedded, so an
+        index is never built with chunks silently missing.
         """
         import numpy as np
 
@@ -1003,61 +1000,21 @@ class CodeIndexSDK:
 
         BATCH_SIZE = 25
 
-        valid_chunks = []
-        valid_embeddings = []
+        embeddings: List[list] = []
         self.progress = {"embedded": 0, "to_embed": len(texts)}
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
             raise_if_cancelled()
             self.progress["embedded"] = batch_start
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
-            batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
-
-            try:
-                batch_embeddings = self._embed_batch_resilient(safe_texts)
-            except Exception as e:
-                self.log.error(f"Batch embedding failed after retries: {e}")
-                batch_embeddings = []
-
-            # Last-resort one-by-one fallback — only reached once the whole-batch
-            # retries above (transient "still loading") are exhausted, so this
-            # is now the rare path instead of the common one.
-            if len(batch_embeddings) != len(batch_chunks):
-                self.log.warning(
-                    f"Batch embedding still short ({len(batch_embeddings)}/"
-                    f"{len(batch_chunks)}) after retries — falling back to "
-                    "one-by-one for this batch"
-                )
-                batch_embeddings = []
-                for single_text in safe_texts:
-                    try:
-                        resp = self._embedder.embeddings(
-                            [single_text], model=self.config.embedding_model, timeout=60
-                        )
-                        data = resp.get("data", [])
-                        batch_embeddings.append(
-                            data[0].get("embedding", []) if data else []
-                        )
-                    except Exception as e:
-                        self.log.warning(f"Single embedding failed: {e}")
-                        batch_embeddings.append([])
-
-            # Sync: only keep chunks with valid (non-empty) embeddings
-            for emb, chunk in zip(batch_embeddings, batch_chunks):
-                if emb:
-                    valid_chunks.append(chunk)
-                    valid_embeddings.append(emb)
-                else:
-                    self.log.debug(
-                        f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
-                    )
+            embeddings.extend(self._embed_batch(safe_texts))
 
         self.progress["embedded"] = len(texts)
-        if not valid_embeddings:
+        if not embeddings:
             return np.array([], dtype=np.float32), []
 
-        return np.array(valid_embeddings, dtype=np.float32), valid_chunks
+        return np.array(embeddings, dtype=np.float32), list(chunks)
 
     def _build_faiss_index(self, embeddings):
         """Build a FAISS IndexFlatL2 from embeddings array."""

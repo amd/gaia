@@ -40,7 +40,7 @@ case "$1" in
             gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
         fi
 
-        echo 'Per-user data remains in ~/.gaia; run ~/.gaia/venv/bin/gaia uninstall --purge to remove it.'
+        echo 'Per-user data remains in ~/.gaia; delete that folder to remove it.'
         ;;
     upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;

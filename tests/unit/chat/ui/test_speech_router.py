@@ -29,9 +29,19 @@ class _FakeTTS:
 
     calls = []
     error = None
+    model = "kokoro-v1"
+    base_url = "http://127.0.0.1:13305/api/v1"
+    catalog_entries = [
+        {"id": "kokoro-v1", "labels": ["tts"], "downloaded": True, "size": 0.35}
+    ]
 
     def __init__(self, *a, **k):
         pass
+
+    def catalog(self):
+        if _FakeTTS.error:
+            raise _FakeTTS.error
+        return _FakeTTS.catalog_entries
 
     def ensure_model(self, say=None):
         if _FakeTTS.error:
@@ -46,6 +56,9 @@ class _FakeTTS:
 def tts(monkeypatch):
     _FakeTTS.calls = []
     _FakeTTS.error = None
+    _FakeTTS.catalog_entries = [
+        {"id": "kokoro-v1", "labels": ["tts"], "downloaded": True, "size": 0.35}
+    ]
     monkeypatch.setattr(lemonade_tts, "LemonadeTTSClient", _FakeTTS)
     return _FakeTTS
 
@@ -172,6 +185,32 @@ def test_a_lemonade_speech_failure_is_502_with_its_reason(client, tts):
     reply = client.post("/api/speech", json={"text": "Hi"})
     assert reply.status_code == 502
     assert "kokoro-v1" in reply.json()["detail"]
+
+
+# ── The voice model ────────────────────────────────────────────────────────
+
+
+def test_the_voice_model_says_whether_it_is_downloaded(client, tts):
+    assert client.get("/api/speech/model").json() == {
+        "downloaded": True,
+        "size_gb": 0.35,
+    }
+    tts.catalog_entries = [
+        {"id": "kokoro-v1", "labels": ["tts"], "downloaded": False, "size": 0.35}
+    ]
+    assert client.get("/api/speech/model").json()["downloaded"] is False
+
+
+def test_a_lemonade_without_the_voice_model_is_502(client, tts):
+    tts.catalog_entries = []
+    reply = client.get("/api/speech/model")
+    assert reply.status_code == 502
+    assert "kokoro-v1" in reply.json()["detail"]
+
+
+def test_the_voice_model_check_is_503_when_lemonade_is_unreachable(client, tts):
+    tts.error = ConnectionError("Lemonade Server is not reachable at http://x")
+    assert client.get("/api/speech/model").status_code == 503
 
 
 # ── gaia config ────────────────────────────────────────────────────────────

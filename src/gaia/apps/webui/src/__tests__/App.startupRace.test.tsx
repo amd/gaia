@@ -106,7 +106,7 @@ describe('startup before the backend listens', () => {
             expect(screen).not.toMatch(/Could not check whether GAIA is set up/);
             expect(screen).not.toMatch(/assistant didn/);
             expect(screen).not.toMatch(/No chats yet/);
-            expect(screen).not.toMatch(/Lost the connection/i);
+            expect(screen).not.toMatch(/Can’t reach GAIA’s assistant/i);
         }
     });
 

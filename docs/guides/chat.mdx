@@ -163,7 +163,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 </Tabs>
 
 <Note>
-  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
+  **Document Indexing Requirements:** Text in images and scans is read by a Vision Language Model (VLM): a tested vision model that is already loaded, then your default chat model when it can read images, which `Gemma-4-E4B-it-GGUF` and `Qwen3.6-35B-A3B-GGUF` both can, and otherwise `Gemma-4-E4B-it-GGUF`. If that model isn't downloaded but another tested one is, such as `Qwen3.6-35B-A3B-GGUF`, GAIA reads images with the one on disk instead of asking you to download it. While chat runs on the NPU, images are not read at all: the NPU model doesn't read them, and GAIA says so instead of loading a second model. `gaia init` already downloads these, unless you set a `default_model` that can't read images: then `gaia init` skips Gemma, so download it yourself:
   ```bash
   lemonade pull Gemma-4-E4B-it-GGUF
   ```
@@ -285,7 +285,13 @@ print(result)
   </Accordion>
 
   <Accordion title="Performance Tuning">
+    `enable_rag` is on `AgentSDK`, not `SimpleChat`. Pick one of the settings below:
+
     ```python
+    from gaia.chat.sdk import AgentSDK, AgentConfig
+
+    chat = AgentSDK(AgentConfig())
+
     # Faster processing
     chat.enable_rag(documents=["doc.pdf"], chunk_size=300, max_chunks=2)
 
@@ -301,57 +307,49 @@ print(result)
 ## Dynamic Tool Loading
 
 <Note>
-**Off by default.** This is the first stage of a phased rollout
-([Dynamic Tool Loader plan](/plans/tool-loader)); enable it explicitly to try it.
+**On by default.** Turn it off under **Settings → Advanced → Dynamic Tools**, or with
+`gaia config set dynamic_tools false`. Either applies to new chats.
 </Note>
 
-The agent can load tools **semantically per turn** instead of showing the LLM
-every registered tool on every turn. A small always-on CORE set is combined with
-tools whose descriptions best match the conversation, which shrinks the
-first-turn prompt and speeds up the first reply.
+A local model has to read every tool's description before it can answer, which is most
+of the wait on a first reply. With dynamic tool loading a chat starts on the 27 tools people
+use most, in short form (name, one sentence, and parameters). On a Radeon 8060S with
+Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens to about
+8,900, and the time to read it from 37.5 s to 18.7 s.
 
-It works on the flagship `gaia` agent and on a ChatAgent using the `full`
-(default) or `doc` prompt profile; the `chat` and `file` profiles ignore it.
-`gaia eval agent` scores the flagship, so an eval run measures the flagship's
-loader. The old `--agent-type doc` id now resolves to the flagship as well, so it
-no longer selects the `doc` profile.
-Turn it on with the config field, an environment variable, or the Agent UI
-**Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
-is set, the UI toggle reflects the effective value and disables itself — which is
-handy for the eval harness:
+When a turn needs something else, the session moves to the full list once, and the list
+then stays put. The full list is kept ready beside the short one, so a first task starts
+as quickly as a first "hello". That move happens before the model is asked, when your
+message names a tool or a recalled procedure needs one, or when a tool outside the list is
+a clearly better match than every tool on it. If the agent still lacks something, it calls
+`search_tools`, which finds tools and installed skills by what they do.
 
-```python
-from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
+A session that chats for a while and then needs a rare tool pays for one re-read of the
+conversation, and both apps show **Loading more tools** while it happens. A chat reopened
+after its agent was rebuilt starts on the full list. Loading a skill
+adds the tools it needs, and unloading it takes them away unless another loaded skill needs
+them. The agent gets a tool's full documentation from `search_tools`, or automatically if it
+calls a tool with the wrong arguments.
 
-agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
-```
+This applies to local models, where every token is read on your hardware. Cloud models
+keep every tool in full. If the embedder is unreachable, the session offers every tool
+and logs a warning. Precedence is `GAIA_DYNAMIC_TOOLS`, then an explicit
+`GaiaAgentConfig(dynamic_tools=...)`, then `dynamic_tools` in `~/.gaia/config.json`. A
+plain `ChatAgent` stays off unless you set it. When the environment variable is set, the
+Settings toggle shows the effective value and disables itself.
 
-The env var is read by the process that runs the agent. `gaia eval agent` drives
-the agent through the Agent UI backend, so for an eval run the override goes on
-the backend, started first, not on the eval command. Setting it in front of
-`gaia eval agent` changes nothing, and with no backend running the eval stops at
-pre-flight with `Agent UI not reachable at http://localhost:4200`. See the eval
-guide's [Prerequisites](/guides/eval#prerequisites) for the rest of the setup.
-
-```bash
-# Terminal 1: start the Agent UI backend with the override
-GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
-
-# Optional tuning, also on the backend: match threshold (cosine, inclusive)
-# and loaded-set cap. The values shown are the flagship's defaults; the cap
-# counts the always-on CORE tools, and a ChatAgent's default cap is 14.
-GAIA_DYNAMIC_TOOLS_TAU=0.20 GAIA_DYNAMIC_TOOLS_MAX=29 GAIA_DYNAMIC_TOOLS=1 gaia chat --ui
-```
+The environment variable is read by the process that runs the agent. `gaia eval agent`
+drives the agent through the Agent UI backend, so for an eval run set it on the backend,
+started first, not on the eval command. See the eval guide's
+[Prerequisites](/guides/eval#prerequisites) for the rest of the setup.
 
 ```bash
+# Terminal 1: start the Agent UI backend with the loader off, to compare to the default
+GAIA_DYNAMIC_TOOLS=0 gaia chat --ui
+
 # Terminal 2: run the eval against it
 gaia eval agent --category tool_selection
 ```
-
-It needs memory enabled (it reuses the memory embedder). If memory is off, the
-toggle is off, or the embedder is unreachable, the agent automatically falls back
-to showing **all** tools — so a turn never loses access to a tool it needs. See
-the [Dynamic Tool Loader plan](/plans/tool-loader) for the full design.
 
 ## Next Steps
 

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Square, Volume2 } from 'lucide-react';
 import * as api from '../../services/api';
+import * as speechApi from '../../services/speechApi';
 import { useReadAloudStore } from '../../stores/readAloudStore';
 import { useT } from '../../i18n/useT';
 import { ReadAloudError } from '../ReadAloudButton';
@@ -11,7 +12,7 @@ import { ReadAloudError } from '../ReadAloudButton';
 /** Speeds offered, as percent of normal; the server accepts any in its range. */
 const SPEEDS = [50, 75, 100, 125, 150, 175, 200];
 
-const GROUPS: Array<{ accent: api.Voice['accent']; gender: api.Voice['gender'] }> = [
+const GROUPS: Array<{ accent: speechApi.Voice['accent']; gender: speechApi.Voice['gender'] }> = [
     { accent: 'american', gender: 'female' },
     { accent: 'american', gender: 'male' },
     { accent: 'british', gender: 'female' },
@@ -40,14 +41,15 @@ export function ReadAloudSettings({ embedded = false }: { embedded?: boolean } =
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        api.getSpeechSettings().then(setSettings).catch((err) => setLoadError(errorText(err)));
+        speechApi.getSpeechSettings().then(setSettings).catch((err) => setLoadError(errorText(err)));
     }, [setSettings]);
 
-    const save = (change: Parameters<typeof api.updateSpeechSettings>[0]) => {
+    const save = (change: Parameters<typeof speechApi.updateSpeechSettings>[0]) => {
         setSaving(true);
         setSaveError(null);
-        stop();
-        api.updateSpeechSettings(change)
+        // A preview in the old voice is stale; a reply playing in the chat is not.
+        if (useReadAloudStore.getState().messageId === PREVIEW_ID) stop();
+        speechApi.updateSpeechSettings(change)
             .then(setSettings)
             .catch((err) => setSaveError(errorText(err)))
             .finally(() => setSaving(false));

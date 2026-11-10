@@ -18,12 +18,16 @@ from gaia.ui.run_manager import DONE, Run, RunManager
 
 
 class _FakeHandler:
-    """Minimal stand-in for SSEOutputHandler — only ``cancelled`` is used."""
+    """Minimal stand-in for SSEOutputHandler's cancel surface."""
 
     def __init__(self):
         import threading
 
         self.cancelled = threading.Event()
+        self.relay_closed = False
+
+    def close_active_relay_response(self):
+        self.relay_closed = True
 
 
 async def _drain(q: asyncio.Queue) -> list:
@@ -160,6 +164,7 @@ async def test_cancel_sets_handler_flag():
 
     assert mgr.cancel("sess-6") is True
     assert run.handler.cancelled.is_set()
+    assert run.handler.relay_closed
 
     release.set()
     await run.task

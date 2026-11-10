@@ -310,8 +310,8 @@ func (m ChatModel) runVoiceCommand(arg string) (tea.Model, tea.Cmd) {
 		id := strings.ToLower(fields[0])
 		v, ok := speech.LookupVoice(id)
 		if !ok {
-			return m.errorNote(fmt.Sprintf("%q is not a voice. Use one of: %s. %s",
-				fields[0], strings.Join(voiceIDs(), ", "), voiceUsage)), nil
+			return m.errorNote(fmt.Sprintf(
+				"%q is not a voice. Type /voice to see them all, grouped by accent and gender.", fields[0])), nil
 		}
 		return m, saveReadAloudCmd(nil, func() (string, error) { return preflight.WriteReadAloudVoice(v.ID) },
 			"Voice set to "+voiceLabel(v)+".")
@@ -338,14 +338,6 @@ func saveReadAloudCmd(auto *bool, save func() (string, error), text string) tea.
 		}
 		return readAloudSavedMsg{text: text, auto: auto}
 	}
-}
-
-func voiceIDs() []string {
-	var ids []string
-	for _, v := range speech.Voices() {
-		ids = append(ids, v.ID)
-	}
-	return ids
 }
 
 // voiceLabel is "Bella (af_bella, American English, female)".

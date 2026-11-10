@@ -2,13 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
-import { ArrowUp, AudioLines, FileText, Plus, Square, X } from 'lucide-react';
+import { ArrowUp, AudioLines, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
 import { useDictation } from '../hooks/useDictation';
 import { useT } from '../i18n/useT';
+import { isVideoFile } from '../utils/mediaFiles';
+import type { Attachment } from '../types';
 import { DictationNotice, MicButton } from './voice/MicButton';
 import { LevelMeter } from './voice/LevelMeter';
 import './Composer.css';
+
+function attachmentIcon(attachment: Attachment) {
+    if (!attachment.isMedia) return FileText;
+    return isVideoFile(attachment.name) ? FileVideo : FileAudio;
+}
 
 interface ComposerProps {
     value: string;
@@ -149,13 +156,22 @@ export function Composer({
         >
             {attachments.attachments.length > 0 && (
                 <ul className="composer-attachments" aria-label={t('composer.attached')}>
-                    {attachments.attachments.map((a) => (
-                        <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}`}>
+                    {attachments.attachments.map((a) => {
+                        const Icon = attachmentIcon(a);
+                        return (
+                        <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}`}>
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
-                                : <FileText size={14} aria-hidden="true" />}
+                                : <Icon size={14} aria-hidden="true" />}
                             <span className="composer-attachment-name" title={a.name} dir="auto">{a.name}</span>
-                            {a.uploading && <span className="composer-attachment-state">{t('composer.uploading')}</span>}
+                            {a.uploading && (
+                                <span className="composer-attachment-state">
+                                    {a.progress === undefined
+                                        ? t('composer.uploading')
+                                        : t('composer.uploadingPercent', { percent: a.progress })}
+                                </span>
+                            )}
+                            {a.uploaded && a.isMedia && <span className="composer-attachment-state">{t('composer.mediaReady')}</span>}
                             {a.error && <span className="composer-attachment-state" role="alert" title={a.error}>{a.error}</span>}
                             <button
                                 type="button"
@@ -166,7 +182,8 @@ export function Composer({
                                 <X size={12} />
                             </button>
                         </li>
-                    ))}
+                        );
+                    })}
                 </ul>
             )}
             {recording && (
