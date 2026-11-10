@@ -107,6 +107,64 @@ def test_slow_index_returns_in_progress_then_success(tmp_path, slow_rag):
     host.rebuild_system_prompt.assert_called()
 
 
+class _ObservedEvent(threading.Event):
+    def __init__(self):
+        super().__init__()
+        self.waited_on = threading.Event()
+
+    def wait(self, timeout=None):
+        self.waited_on.set()
+        return super().wait(timeout)
+
+
+def test_asking_while_a_finished_index_is_recorded_does_not_index_again(
+    tmp_path, slow_rag, monkeypatch
+):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    host = _RagHost(rag)
+    host.register_rag_tools()
+    assert _call("index_document", file_path=str(doc))["status"] == "in_progress"
+    (job,) = rag_tools._INDEX_JOBS[rag].values()
+    job.done = _ObservedEvent()
+
+    recording, proceed = threading.Event(), threading.Event()
+    record = rag_tools._finish_unattended
+
+    def held_open(*args):
+        recording.set()
+        assert proceed.wait(CALL_DEADLINE_S)
+        record(*args)
+
+    monkeypatch.setattr(rag_tools, "_finish_unattended", held_open)
+    release.set()
+    assert recording.wait(CALL_DEADLINE_S)
+    # Embedded but not yet on the agent: not "indexing", not searchable here.
+    assert rag_tools.documents_still_indexing(rag) == []
+    assert str(doc) not in host.indexed_files
+
+    holder = {}
+    caller = threading.Thread(
+        target=lambda: holder.update(
+            result=_TOOL_REGISTRY["index_document"]["function"](file_path=str(doc))
+        ),
+        daemon=True,
+    )
+    caller.start()
+    try:
+        assert job.done.waited_on.wait(
+            CALL_DEADLINE_S
+        ), "the caller started a second index instead of waiting on the first"
+    finally:
+        proceed.set()
+        caller.join(CALL_DEADLINE_S)
+    assert holder["result"]["status"] == "success", holder
+    assert rag.index_document.call_count == 1
+    assert str(doc) in host.indexed_files
+    assert not rag_tools._INDEX_JOBS.get(rag)
+
+
 def test_still_indexing_lists_a_document_only_until_it_is_searchable(
     tmp_path, slow_rag
 ):

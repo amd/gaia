@@ -113,6 +113,9 @@ class _IndexJob:
         self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
+        #: ``index_document`` returned; the document is no longer "indexing".
+        self.finished = threading.Event()
+        #: Finished and recorded on the agent: the result is final.
         self.done = threading.Event()
         #: Set once a caller returned "in progress": nobody is waiting on it.
         self.backgrounded = False
@@ -206,13 +209,18 @@ def _index_within_budget(
                     job.error = e
                 finally:
                     with _INDEX_JOBS_LOCK:
-                        job.done.set()
-                        # Finished jobs leave the map: a later call indexes afresh.
-                        if jobs.get(key) is job:
-                            del jobs[key]
+                        job.finished.set()
                         unattended = job.backgrounded
-                    if unattended:
-                        _finish_unattended(rag, key, job, on_indexed)
+                    try:
+                        if unattended:
+                            _finish_unattended(rag, key, job, on_indexed)
+                    finally:
+                        # Only once recorded, or a caller in between re-indexes it.
+                        with _INDEX_JOBS_LOCK:
+                            job.done.set()
+                            # Finished jobs leave the map: a later call indexes afresh.
+                            if jobs.get(key) is job:
+                                del jobs[key]
 
             ctx = contextvars.copy_context()
             threading.Thread(
@@ -220,11 +228,12 @@ def _index_within_budget(
                 name=f"rag-index:{Path(path).name}",
                 daemon=True,
             ).start()
-    if not job.done.wait(budget):
+    if not job.finished.wait(budget):
         with _INDEX_JOBS_LOCK:
-            if not job.done.is_set():
+            if not job.finished.is_set():
                 job.backgrounded = True
                 return None, job
+    job.done.wait()
     if job.error is not None:
         raise job.error
     return job.result, job
@@ -236,7 +245,7 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(job.path for job in jobs.values() if not job.done.is_set())
+        return sorted(job.path for job in jobs.values() if not job.finished.is_set())
 
 
 def documents_failed_indexing(rag: Any) -> List[Tuple[str, str]]:
