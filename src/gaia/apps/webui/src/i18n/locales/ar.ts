@@ -1666,7 +1666,7 @@ const messages: Messages = {
     'settings.advanced.downloading': 'جارٍ التنزيل…',
     'settings.advanced.wrongModel': 'حُمّل نموذج غير صحيح.',
     'settings.advanced.smallContext': 'نافذة السياق صغيرة جدًا.',
-    'settings.advanced.loadHint': 'حمّل {name} بسياق {size} رمز.',
+    'settings.advanced.loadHint': 'حمّل {name} بنافذة السياق التي تحتاجها المحادثة.',
     'settings.advanced.loading': 'جارٍ التحميل…',
     'settings.advanced.load': 'تحميل النموذج',
     'settings.advanced.details': 'تفاصيل أكثر',

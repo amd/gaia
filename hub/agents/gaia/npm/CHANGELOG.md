@@ -33,6 +33,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **The agent leaves a file another program owns or locks alone.** It no
   longer edits, overwrites, deletes or works around such a file; it says how to
   release it and waits for you, on every model and in any folder.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 
