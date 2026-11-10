@@ -41,6 +41,8 @@ uv pip install -e '.[rag]'
 
 Embeddings are generated locally by Lemonade. If you haven't installed it yet, `gaia init` installs the server and pulls the model — `gaia daemon` starts and supervises it from there.
 
+Lemonade Server **10.9.0 or newer is required**: this is the minimum version GAIA's profiles set for the `user.embeddinggemma-300m-GGUF` embedder, and older servers cannot load it. Check yours with `lemonade-server --version`. On an older server, embedding fails with an HTTP 422 (`Failed to load user.embeddinggemma-300m-GGUF with llama-server`) — or hangs for minutes on a download that already finished — because the model load silently fails; upgrade Lemonade Server rather than retrying the download.
+
 <Note>
 The embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M). A cached index (under `~/.gaia/code_index/`) records the model it was built with, so an index built before v0.22.0 with `nomic-embed-text-v2-moe-GGUF` fails loudly with a model-mismatch error naming both models. Re-index to rebuild it with EmbeddingGemma.
 </Note>
