@@ -3588,7 +3588,8 @@ afterwards (or `swebench <run_dir>` does, later).
 
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
-        "cache", help="Manage Context7 API cache and rate limiting"
+        "cache",
+        help="Show GAIA's caches and their sizes, or clear the Context7 cache",
     )
     cache_subparsers = cache_parser.add_subparsers(
         dest="cache_action", help="Cache action to perform"
@@ -8031,6 +8032,59 @@ def handle_gateway_command(args):
         sys.exit(1)
 
 
+def _cache_folder_usage(folder: Path) -> tuple:
+    """Bytes, file count and unreadable entries under *folder*, without following links."""
+    size = files = 0
+    # Files and folders that couldn't be read, so the size never quietly comes up short.
+    unreadable: list = []
+    for dirpath, _dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+        for name in filenames:
+            try:
+                stat = os.lstat(os.path.join(dirpath, name))
+            except OSError as e:
+                unreadable.append(e)
+                continue
+            size += stat.st_size
+            files += 1
+    return size, files, len(unreadable)
+
+
+def _print_cache_folders() -> None:
+    """Print each folder under GAIA's cache root, largest first, with its size."""
+    from gaia.home import gaia_home
+    from gaia.security import _format_size
+
+    root = gaia_home() / "cache"
+    print(f"\n=== GAIA caches ({root}) ===")
+    if not root.is_dir():
+        print("No caches yet.")
+        return
+    rows = []
+    for entry in root.iterdir():
+        if entry.is_dir() and not entry.is_symlink():
+            rows.append((entry.name, *_cache_folder_usage(entry)))
+        elif entry.is_file() and not entry.is_symlink():
+            try:
+                rows.append((entry.name, entry.lstat().st_size, 1, 0))
+            except OSError:  # removed or locked while listing
+                rows.append((entry.name, 0, 0, 1))
+    if not rows:
+        print("No caches yet.")
+        return
+    rows.sort(key=lambda row: (-row[1], row[0]))
+    width = max(len(row[0]) for row in rows + [("Total",)])
+
+    def count(files: int) -> str:
+        return f"{files:>7,} {'file' if files == 1 else 'files'}"
+
+    for name, size, files, unreadable in rows:
+        note = f"  ({unreadable} unreadable)" if unreadable else ""
+        print(f"  {name:<{width}}  {_format_size(size):>10}  {count(files)}{note}")
+    total_size = sum(row[1] for row in rows)
+    total_files = sum(row[2] for row in rows)
+    print(f"  {'Total':<{width}}  {_format_size(total_size):>10}  {count(total_files)}")
+
+
 def handle_cache_command(args):
     """Handle the cache management command.
 
@@ -8048,7 +8102,8 @@ def handle_cache_command(args):
 
     try:
         if args.cache_action == "status":
-            # Check Context7 availability first
+            _print_cache_folders()
+
             is_available = Context7Service.check_availability()
 
             print("\n=== Context7 Service Status ===")

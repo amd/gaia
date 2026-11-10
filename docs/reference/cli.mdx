@@ -4109,9 +4109,9 @@ remove them all with `gaia uninstall --purge`.
 
 ### Cache Command
 
-Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,
-context7 library docs, etc.). Caches live under `~/.gaia/cache/` (Windows:
-`%LOCALAPPDATA%/gaia/cache/`).
+Inspect or clear GAIA's on-disk caches. They live under `~/.gaia/cache/` on every
+platform (`$GAIA_HOME/cache/` when `GAIA_HOME` is set), one folder per feature,
+such as `rag` for document Q&A and `context7` for library docs.
 
 ```bash
 gaia cache {status,clear} [OPTIONS]
@@ -4121,14 +4121,14 @@ gaia cache {status,clear} [OPTIONS]
 
 | Action | Description |
 |--------|-------------|
-| `status` | Print size and location of each cache directory |
-| `clear` | Remove cache contents (scoped by flags below) |
+| `status` | List each folder in the cache directory with its size and file count, largest first, then Context7's service and rate-limit status |
+| `clear` | Clear the Context7 cache (flags below) |
 
 **Flags for `clear`:**
 
 | Flag | Description |
 |------|-------------|
-| `--all` | Remove every cache directory (safe: preserves models under `~/.gaia/models/`) |
+| `--all` | Clear every cache `gaia cache clear` manages; today that is only the Context7 cache |
 | `--context7` | Clear only the Context7 MCP library-docs cache |
 
 **Examples:**
