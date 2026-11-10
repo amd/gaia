@@ -947,6 +947,90 @@ def test_a_refused_rm_cannot_be_rerouted_through_a_python_script(tmp_path, victi
     assert "do not reach it with another tool" in rerouted["error"]
 
 
+def _hosts_script(tmp_path):
+    """The rc17 eval run's reroute: a script that writes the refused file."""
+    hosts = tmp_path / "etc" / "hosts"
+    hosts.parent.mkdir()
+    hosts.write_text("127.0.0.1 localhost\n")
+    script = tmp_path / "add-hosts.ps1"
+    script.write_text(
+        f"Add-Content -Path '{hosts}' -Value \"`r`n127.0.0.1 widgetworks.local\"\n"
+    )
+    return hosts, script
+
+
+def _elevated_reroutes(script):
+    return [
+        f"powershell -NoProfile -ExecutionPolicy Bypass -File {script}",
+        f"pwsh -ep bypass {script}",
+        f'powershell -Command "Start-Process powershell -ArgumentList '
+        f"'-NoProfile -ExecutionPolicy Bypass -File {script}' -Verb RunAs\"",
+        f"Start-Process -FilePath powershell -ArgumentList '-File',\"{script}\" "
+        "-Verb RunAs -Wait",
+    ]
+
+
+def test_running_a_script_elevated_is_what_the_script_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in _elevated_reroutes(script):
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_a_content_value_is_not_a_path_the_command_changes(tmp_path):
+    effects = effects_of_shell_command(
+        "Add-Content -Path notes.txt -Value 'todo later' -Encoding utf8",
+        str(tmp_path),
+    )
+    changed = {e.target for e in effects if e.kind == PATH}
+    assert changed == {_canonical_in(tmp_path, "notes.txt")}
+
+
+def _canonical_in(folder, name):
+    return next(
+        e.target
+        for e in effects_of_shell_command(f"rm {name}", str(folder))
+        if e.kind == PATH
+    )
+
+
+def test_a_refused_write_cannot_be_rerouted_by_running_it_as_admin(tmp_path):
+    """rc17: the hosts file was refused, then a script ran with -Verb RunAs."""
+    hosts, script = _hosts_script(tmp_path)
+
+    def refuse_hosts(name, args):
+        command = str((args or {}).get("command", ""))
+        if command.startswith("Add-Content"):
+            return {
+                "status": "error",
+                "tier": "refuse",
+                "error": f"Access denied: {hosts} is protected. No approval can grant it.",
+            }
+        return None
+
+    for command in _elevated_reroutes(script):
+        console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+        agent = _agent(console, tmp_path)
+        agent.policy_refusal_for_call = refuse_hosts
+        refused = agent._execute_tool(
+            "run_shell_command", {"command": f"Add-Content -Path '{hosts}' -Value x"}
+        )
+        rerouted = agent._execute_tool("run_shell_command", {"command": command})
+
+        assert refused["executed"] is False
+        assert rerouted["status"] == "denied", command
+        assert rerouted["executed"] is False
+        assert agent.ran == []
+        assert console.questions == []
+        assert "do not reach it with another tool" in rerouted["error"]
+
+
 def test_a_users_no_is_still_put_to_them_once(tmp_path, victim):
     """Only a policy refusal skips the question; a person's no can be lifted."""
     console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)

@@ -189,6 +189,38 @@ _NEUTRAL_PROGRAMS = frozenset(
 
 _SHELLS = frozenset({"bash", "sh", "zsh", "dash", "cmd", "powershell", "pwsh"})
 _SHELL_COMMAND_FLAGS = frozenset({"-c", "/c", "/k", "-command", "-commandwithargs"})
+_SHELL_FILE_FLAGS = frozenset({"-file", "-f"})
+#: PowerShell switches whose next word is their value, not the script to run.
+_SHELL_VALUE_FLAGS = frozenset(
+    {
+        "-executionpolicy",
+        "-ep",
+        "-ex",
+        "-windowstyle",
+        "-w",
+        "-version",
+        "-workingdirectory",
+        "-wd",
+        "-inputformat",
+        "-outputformat",
+        "-configurationname",
+        "-settingsfile",
+        "-custompipename",
+    }
+)
+#: PowerShell's process launcher. Not ``start``: cmd's own takes a title first.
+_START_PROCESS = frozenset({"start-process", "saps"})
+_START_PROCESS_VALUE_FLAGS = frozenset(
+    {
+        "-verb",
+        "-workingdirectory",
+        "-windowstyle",
+        "-redirectstandardoutput",
+        "-redirectstandarderror",
+        "-redirectstandardinput",
+        "-credential",
+    }
+)
 
 _PYTHON_RE = re.compile(r"^(?:python|pythonw|py)(?:\d+(?:\.\d+)*)?$")
 _EXE_SUFFIX_RE = re.compile(r"\.(?:exe|cmd|bat|ps1|com)$", re.IGNORECASE)
@@ -230,6 +262,22 @@ _PATH_MUTATORS = frozenset(
         "ac",
         "xcopy",
         "robocopy",
+    }
+)
+#: Switches of those commands whose value is content or a setting, not a path.
+_NON_PATH_VALUE_FLAGS = frozenset(
+    {
+        "-value",
+        "-encoding",
+        "-stream",
+        "-delimiter",
+        "-itemtype",
+        "-type",
+        "-inputobject",
+        "-filter",
+        "-include",
+        "-exclude",
+        "-credential",
     }
 )
 #: cmd programs whose ``/X`` arguments are switches, not paths.
@@ -631,6 +679,59 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
     return effects
 
 
+def _positionals(args: Sequence[str], value_flags: frozenset) -> List[str]:
+    """The words of *args* that are neither switches nor a switch's value."""
+    found: List[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg.startswith("-"):
+            skip = arg.lower() in value_flags
+        else:
+            found.append(arg)
+    return found
+
+
+def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
+    """What ``Start-Process <program> -ArgumentList '...'`` would run."""
+    program: Optional[str] = None
+    arguments: List[str] = []
+    i = 0
+    while i < len(rest):
+        arg, value = rest[i].lower(), rest[i + 1] if i + 1 < len(rest) else None
+        if arg in ("-filepath", "-path") and value is not None:
+            program, i = value, i + 2
+        elif arg in ("-argumentlist", "-args") and value is not None:
+            # An array (``'-File', "x.ps1"``) arrives split after each comma.
+            end = i + 2
+            while end < len(rest) and (
+                rest[end - 1].endswith(",") or rest[end].startswith(",")
+            ):
+                end += 1
+            arguments = _argument_list(" ".join(rest[i + 1 : end]))
+            i = end
+        elif arg in _START_PROCESS_VALUE_FLAGS:
+            i += 2
+        elif arg.startswith("-"):
+            i += 1
+        elif program is None:
+            program, i = rest[i], i + 1
+        else:
+            arguments = arguments or _argument_list(rest[i])
+            i += 1
+    if program is None:
+        return set()
+    return _effects_of_argv([program, *arguments], cwd, depth + 1)
+
+
+def _argument_list(value: str) -> List[str]:
+    """``'-File',"x.ps1"`` or ``'-File x.ps1'``: the words Start-Process passes on."""
+    spaced = re.sub(r"(['\"])\s*,\s*(['\"])", r"\1 \2", value)
+    words = (w.strip(",").strip("'\"") for w in _tokens(spaced))
+    return [w for w in words if w]
+
+
 def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     """Effects of one already-tokenised command, unwrapping launchers."""
     tokens = list(argv)
@@ -654,8 +755,12 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
                 return effects_of_shell_command(
                     " ".join(rest[idx + 1 :]), cwd, depth + 1
                 )
-        scripts = [a for a in rest if not a.startswith("-")]
+            if arg.lower() in _SHELL_FILE_FLAGS and idx + 1 < len(rest):
+                return effects_of_script(rest[idx + 1], cwd, depth + 1)
+        scripts = _positionals(rest, _SHELL_VALUE_FLAGS)
         return effects_of_script(scripts[0], cwd, depth + 1) if scripts else set()
+    if program in _START_PROCESS:
+        return hosts | _started_process(rest, cwd, depth)
     effects: Set[Effect] = set(hosts)
     family = _canonical_family(program, rest)
     if family:
@@ -664,7 +769,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     if program in _PATH_MUTATORS:
         changed = [
             arg
-            for arg in rest
+            for arg in _positionals(rest, _NON_PATH_VALUE_FLAGS)
             # ``xcopy a b /Y``: a cmd switch, not a folder at the drive root.
             if not (program in _SLASH_SWITCH_PROGRAMS and _SLASH_SWITCH_RE.match(arg))
         ]
