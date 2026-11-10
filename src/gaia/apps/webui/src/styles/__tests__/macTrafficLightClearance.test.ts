@@ -40,26 +40,26 @@ function narrowMac(): string {
 
 describe('macOS window buttons with the sidebar collapsed', () => {
     it('the collapsed rail starts its icons below the buttons', () => {
-        const [top] = px(decls(':root[data-titlebar="mac"] .sb.is-collapsed .sb-top'), 'padding');
+        const [top] = px(decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed .sb-top'), 'padding');
         expect(top).toBeGreaterThan(LIGHTS_BOTTOM);
     });
 
     it('the chat title starts right of the buttons beside the collapsed rail', () => {
         const [rail] = px(decls('.sb.is-collapsed', sidebarCss), 'width');
-        const [left] = px(decls(':root[data-titlebar="mac"] .app:has(.sb.is-collapsed) .task-header'), 'padding-left');
+        const [left] = px(decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .app:has(.sb.is-collapsed) .task-header'), 'padding-left');
         expect(rail + left).toBeGreaterThan(LIGHTS_RIGHT + 12);
     });
 
     it('the floating toggle starts right of the buttons', () => {
-        const [left] = px(decls(':root[data-titlebar="mac"] .sidebar-toggle', narrowMac()), 'left');
+        const [left] = px(decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .sidebar-toggle', narrowMac()), 'left');
         expect(left).toBeGreaterThan(LIGHTS_RIGHT);
     });
 
     it('top rows, the chat title among them, start right of the toggle', () => {
         const block = narrowMac();
-        const [left] = px(decls(':root[data-titlebar="mac"] .sidebar-toggle', block), 'left');
+        const [left] = px(decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .sidebar-toggle', block), 'left');
         const [width] = px(decls('.sidebar-toggle'), 'width');
-        const [clearance] = px(decls(':root[data-titlebar="mac"]', block), '--sidebar-toggle-clearance');
+        const [clearance] = px(decls(':root[data-titlebar="mac"]:not([dir="rtl"])', block), '--sidebar-toggle-clearance');
         expect(clearance).toBeGreaterThan(left + width);
     });
 });

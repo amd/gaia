@@ -16,6 +16,8 @@ import { useAppOverlayOpen } from '../../hooks/useAppOverlayOpen';
 import { useDockedResize } from '../../hooks/useDockedResize';
 import { formatShortcut } from '../../utils/platform';
 import { log } from '../../utils/logger';
+import { useT, type Translate } from '../../i18n/useT';
+import type { MessageKey } from '../../i18n/registry';
 import { usePickedElementsStore } from '../../stores/pickedElementsStore';
 import { AgentStrip, BrowserToolbar, PickStrip, TOGGLE_SHORTCUT } from './BrowserToolbar';
 import { PageDialogBar } from './PageDialogBar';
@@ -80,6 +82,7 @@ function OpenPane({ api, pane, active }: { api: GaiaBrowserPaneAPI; pane: PaneSt
     const viewportRef = useRef<HTMLDivElement>(null);
     const addressRef = useRef<HTMLInputElement>(null);
     const [frozen, setFrozen] = useState<string | null>(null);
+    const t = useT();
     const resize = useDockedResize({
         width,
         setWidth,
@@ -131,16 +134,16 @@ function OpenPane({ api, pane, active }: { api: GaiaBrowserPaneAPI; pane: PaneSt
     }, [active.id, active.url]);
 
     return (
-        <aside className="browser-pane" style={{ width: resize.width }} aria-label="Browser pane">
+        <aside className="browser-pane" style={{ width: resize.width }} aria-label={t('browserPane.label')}>
             <div
                 className={`bp-resize${resize.dragging ? ' is-dragging' : ''}`}
-                aria-label="Resize browser pane"
+                aria-label={t('browserPane.resize')}
                 {...resize.separatorProps}
             />
             <BrowserToolbar pane={pane} api={api} onClosePane={() => setOpen(false)} addressRef={addressRef} />
             {pane.picking ? <PickStrip api={api} /> : <AgentStrip tab={active} api={api} />}
             {active.dialog && <PageDialogBar tab={active} api={api} />}
-            {active.notice && <NoticeBar notice={active.notice} />}
+            {active.notice && <NoticeBar notice={active.notice} t={t} />}
             <div ref={viewportRef} className="bp-viewport">
                 {frozen && <img className="bp-frozen" src={frozen} alt="" aria-hidden="true" />}
                 {active.url === null && !frozen && (
@@ -156,44 +159,50 @@ function OpenPane({ api, pane, active }: { api: GaiaBrowserPaneAPI; pane: PaneSt
     );
 }
 
-const PERMISSION_NAMES: Record<string, string> = {
-    media: 'camera and microphone',
-    geolocation: 'location',
-    notifications: 'notifications',
+const PERMISSION_NAMES: Record<string, MessageKey> = {
+    media: 'browserPane.permission.media',
+    geolocation: 'browserPane.permission.geolocation',
+    notifications: 'browserPane.permission.notifications',
 };
 
-function noticeText(notice: PaneNotice): string {
+function noticeText(notice: PaneNotice, t: Translate): string {
     switch (notice.kind) {
         case 'blocked':
             return notice.message;
         case 'load-failed':
-            return `Couldn't load ${notice.url}: ${notice.message}`;
-        case 'permission-denied':
-            return `Blocked ${PERMISSION_NAMES[notice.permission] ?? notice.permission} for ${notice.origin || 'this page'}. The browser pane doesn't share devices or alerts with pages.`;
+            return t('browserPane.notice.loadFailed', { url: notice.url, message: notice.message });
+        case 'permission-denied': {
+            const known = PERMISSION_NAMES[notice.permission];
+            return t('browserPane.notice.permissionDenied', {
+                what: known ? { ref: known } : notice.permission,
+                origin: notice.origin || { ref: 'browserPane.notice.thisPage' },
+            });
+        }
     }
 }
 
-function NoticeBar({ notice }: { notice: PaneNotice }) {
+function NoticeBar({ notice, t }: { notice: PaneNotice; t: Translate }) {
     return (
         <div className={`bp-notice is-${notice.kind}`} role={notice.kind === 'load-failed' ? 'alert' : 'status'}>
-            {noticeText(notice)}
+            {noticeText(notice, t)}
         </div>
     );
 }
 
 function NewTabPage({ pane, onOpen }: { pane: PaneState; onOpen: (url: string) => void }) {
+    const t = useT();
     return (
         <div className="bp-newtab">
-            <h2 className="bp-newtab-title">New tab</h2>
+            <h2 className="bp-newtab-title">{t('browserPane.newTab')}</h2>
             {pane.recent.length === 0 ? (
-                <p className="bp-newtab-empty">Pages you open here show up in this list. Type an address above to start.</p>
+                <p className="bp-newtab-empty">{t('browserPane.newTabEmpty')}</p>
             ) : (
-                <ul className="bp-recent" aria-label="Recent pages">
+                <ul className="bp-recent" aria-label={t('browserPane.recent')}>
                     {pane.recent.map((page) => (
                         <li key={page.url}>
                             <button type="button" className="bp-recent-item" onClick={() => onOpen(page.url)} title={page.url}>
                                 <span className="bp-recent-title">{page.title}</span>
-                                <span className="bp-recent-url">{page.url}</span>
+                                <span className="bp-recent-url" dir="ltr">{page.url}</span>
                             </button>
                         </li>
                     ))}
@@ -207,14 +216,16 @@ function NewTabPage({ pane, onOpen }: { pane: PaneState; onOpen: (url: string) =
 export function BrowserPaneToggle() {
     const open = useBrowserPaneOpen();
     const toggle = useBrowserPaneStore((s) => s.toggle);
+    const t = useT();
     if (!browserPaneApi()) return null;
-    const label = `${open ? 'Hide' : 'Show'} browser pane (${formatShortcut(TOGGLE_SHORTCUT)})`;
+    const name = t(open ? 'browserPane.hide' : 'browserPane.show');
+    const label = t.hint(name, formatShortcut(TOGGLE_SHORTCUT));
     return (
         <button
             type="button"
             className={`btn-icon-sm bp-toggle${open ? ' active' : ''}`}
             onClick={toggle}
-            aria-label={open ? 'Hide browser pane' : 'Show browser pane'}
+            aria-label={name}
             aria-pressed={open}
             title={label}
         >

@@ -8,6 +8,8 @@ import { CLAIMS_ESCAPE } from '../../hooks/useEscapeToClose';
 import { log } from '../../utils/logger';
 import { formatShortcut } from '../../utils/platform';
 import { normalizeAddress } from './address';
+import { useT } from '../../i18n/useT';
+import type { MessageKey } from '../../i18n/registry';
 import { DevServersMenu } from './DevServersMenu';
 import type { GaiaBrowserPaneAPI, PaneState, TabState, ViewportChoice } from '../../../services/browser-pane/contract';
 
@@ -27,11 +29,12 @@ interface BrowserToolbarProps {
 }
 
 export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserToolbarProps) {
-    const active = pane.tabs.find((t) => t.id === pane.activeTabId) as TabState;
+    const active = pane.tabs.find((tab) => tab.id === pane.activeTabId) as TabState;
     const hasPage = active.url !== null;
+    const t = useT();
     return (
         <div className="bp-toolbar">
-            <div className="bp-tabs" role="tablist" aria-label="Browser tabs">
+            <div className="bp-tabs" role="tablist" aria-label={t('browserPane.tabs')}>
                 {pane.tabs.map((tab) => {
                     const selected = tab.id === pane.activeTabId;
                     return (
@@ -45,14 +48,14 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                                 onClick={() => run('select tab', api.selectTab(tab.id))}
                             >
                                 {tab.loading && <span className="bp-tab-spinner" aria-hidden="true" />}
-                                {tab.control === 'private' && <Lock size={11} aria-label="Private" />}
-                                <span>{tab.title || tab.url || 'New tab'}</span>
+                                {tab.control === 'private' && <Lock size={11} aria-label={t('browserPane.private')} />}
+                                <span>{tab.title || tab.url || t('browserPane.newTab')}</span>
                             </button>
                             <button
                                 type="button"
                                 className="bp-tab-close"
-                                aria-label={`Close tab ${tab.title}`}
-                                title="Close tab"
+                                aria-label={t('browserPane.closeTabNamed', { name: tab.title })}
+                                title={t('browserPane.closeTab')}
                                 onClick={() => run('close tab', api.closeTab(tab.id))}
                             >
                                 <X size={12} />
@@ -63,8 +66,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className="btn-icon-sm bp-new-tab"
-                    aria-label="New tab"
-                    title="New tab"
+                    aria-label={t('browserPane.newTab')}
+                    title={t('browserPane.newTab')}
                     onClick={() => run('open tab', api.openTab(null))}
                 >
                     <Plus size={14} />
@@ -74,8 +77,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className="btn-icon-sm"
-                    aria-label="Back"
-                    title="Back"
+                    aria-label={t('browserPane.back')}
+                    title={t('browserPane.back')}
                     disabled={!active.canGoBack}
                     onClick={() => run('back', api.history(active.id, 'back'))}
                 >
@@ -84,8 +87,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className="btn-icon-sm"
-                    aria-label="Forward"
-                    title="Forward"
+                    aria-label={t('browserPane.forward')}
+                    title={t('browserPane.forward')}
                     disabled={!active.canGoForward}
                     onClick={() => run('forward', api.history(active.id, 'forward'))}
                 >
@@ -95,8 +98,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                     <button
                         type="button"
                         className="btn-icon-sm"
-                        aria-label="Stop loading"
-                        title="Stop loading"
+                        aria-label={t('browserPane.stopLoading')}
+                        title={t('browserPane.stopLoading')}
                         onClick={() => run('stop', api.history(active.id, 'stop'))}
                     >
                         <X size={15} />
@@ -105,8 +108,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                     <button
                         type="button"
                         className="btn-icon-sm"
-                        aria-label="Reload"
-                        title="Reload"
+                        aria-label={t('browserPane.reload')}
+                        title={t('browserPane.reload')}
                         disabled={!hasPage}
                         onClick={() => run('reload', api.history(active.id, 'reload'))}
                     >
@@ -122,9 +125,9 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className={`btn-icon-sm${pane.picking ? ' active' : ''}`}
-                    aria-label="Select element"
+                    aria-label={t('browserPane.select')}
                     aria-pressed={pane.picking}
-                    title={`${pane.picking ? 'Stop selecting' : 'Select an element to send to the chat'} (${formatShortcut(PICK_SHORTCUT)})`}
+                    title={t.hint(t(pane.picking ? 'browserPane.selectStop' : 'browserPane.selectStart'), formatShortcut(PICK_SHORTCUT))}
                     disabled={!hasPage}
                     onClick={() => run('select element', api.togglePicking())}
                 >
@@ -133,9 +136,9 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className={`btn-icon-sm${active.devToolsOpen ? ' active' : ''}`}
-                    aria-label="Developer tools"
+                    aria-label={t('browserPane.devTools')}
                     aria-pressed={active.devToolsOpen}
-                    title={active.devToolsOpen ? 'Hide developer tools' : 'Show developer tools'}
+                    title={t(active.devToolsOpen ? 'browserPane.devToolsHide' : 'browserPane.devToolsShow')}
                     disabled={!hasPage}
                     onClick={() => run('developer tools', api.toggleDevTools(active.id))}
                 >
@@ -147,8 +150,8 @@ export function BrowserToolbar({ pane, api, onClosePane, addressRef }: BrowserTo
                 <button
                     type="button"
                     className="btn-icon-sm"
-                    aria-label="Close browser pane"
-                    title={`Close browser pane (${formatShortcut(TOGGLE_SHORTCUT)})`}
+                    aria-label={t('browserPane.close')}
+                    title={t.hint(t('browserPane.close'), formatShortcut(TOGGLE_SHORTCUT))}
                     onClick={onClosePane}
                 >
                     <PanelRightClose size={15} />
@@ -165,6 +168,7 @@ function AddressBar({ tab, inputRef, onSubmit }: {
 }) {
     const [draft, setDraft] = useState<string | null>(null);
     const [invalid, setInvalid] = useState(false);
+    const t = useT();
 
     // A navigation the page made replaces whatever was half-typed.
     useEffect(() => {
@@ -191,10 +195,11 @@ function AddressBar({ tab, inputRef, onSubmit }: {
                 ref={inputRef}
                 type="text"
                 className={`bp-address-input${invalid ? ' is-invalid' : ''}`}
-                aria-label="Address"
+                aria-label={t('browserPane.address')}
                 aria-invalid={invalid}
-                title={invalid ? 'Not a web address. Type one like example.com or localhost:5173.' : undefined}
-                placeholder="Type a web address"
+                title={invalid ? t('browserPane.addressInvalid') : undefined}
+                placeholder={t('browserPane.addressPlaceholder')}
+                dir="ltr"
                 spellCheck={false}
                 autoComplete="off"
                 value={draft ?? tab.url ?? ''}
@@ -220,20 +225,21 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
     const [open, setOpen] = useState(false);
     const anchor = useRef<HTMLButtonElement>(null);
     const close = () => setOpen(false);
+    const t = useT();
     return (
         <div className="bp-menu">
             <button
                 ref={anchor}
                 type="button"
                 className={`btn-icon-sm${open ? ' active' : ''}`}
-                aria-label="More browser actions"
+                aria-label={t('browserPane.moreActions')}
                 aria-expanded={open}
-                title="More"
+                title={t('browserPane.more')}
                 onClick={() => setOpen((o) => !o)}
             >
                 <Ellipsis size={15} />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label="Browser actions" placement="below" align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label={t('browserPane.actions')} placement="below" align="end">
                 <button
                     type="button"
                     className="popover-item"
@@ -244,9 +250,9 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
                 >
                     {tab.control === 'private' ? <LockOpen size={14} aria-hidden="true" /> : <Lock size={14} aria-hidden="true" />}
                     <span className="popover-item-body">
-                        <span className="popover-item-title">{tab.control === 'private' ? 'Share this tab with GAIA' : 'Make this tab private'}</span>
+                        <span className="popover-item-title">{t(tab.control === 'private' ? 'browserPane.shareTab' : 'browserPane.privateTab')}</span>
                         <span className="popover-item-note">
-                            {tab.control === 'private' ? 'GAIA can see and use it again' : "GAIA can't see or use it"}
+                            {t(tab.control === 'private' ? 'browserPane.shareTabNote' : 'browserPane.privateTabNote')}
                         </span>
                     </span>
                 </button>
@@ -261,7 +267,7 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
                 >
                     <ExternalLink size={14} aria-hidden="true" />
                     <span className="popover-item-body">
-                        <span className="popover-item-title">Open in system browser</span>
+                        <span className="popover-item-title">{t('browserPane.openExternal')}</span>
                     </span>
                 </button>
                 <button
@@ -274,8 +280,8 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
                 >
                     <Eraser size={14} aria-hidden="true" />
                     <span className="popover-item-body">
-                        <span className="popover-item-title">Clear browsing data</span>
-                        <span className="popover-item-note">Cookies, site data, cache and recent pages in this pane</span>
+                        <span className="popover-item-title">{t('browserPane.clearData')}</span>
+                        <span className="popover-item-note">{t('browserPane.clearDataNote')}</span>
                     </span>
                 </button>
             </Popover>
@@ -284,19 +290,19 @@ function PaneMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }) {
 }
 
 /** Screens the Responsive menu offers. Fill pane lets the page fill the pane, and lets the agent choose again. */
-export const DEVICE_PRESETS: { name: string; width: number; height: number; mobile: boolean }[] = [
+export const DEVICE_PRESETS: { name: string; width: number; height: number; mobile: boolean; label?: MessageKey }[] = [
     { name: 'iPhone SE', width: 375, height: 667, mobile: true },
     { name: 'iPhone 15', width: 393, height: 852, mobile: true },
     { name: 'Pixel 8', width: 412, height: 915, mobile: true },
     { name: 'iPad mini', width: 768, height: 1024, mobile: true },
     { name: 'iPad Air', width: 820, height: 1180, mobile: true },
-    { name: 'Laptop', width: 1280, height: 800, mobile: false },
+    { name: 'Laptop', width: 1280, height: 800, mobile: false, label: 'browserPane.laptop' },
 ];
 
-const SCHEMES: { label: string; value: ViewportChoice['colorScheme'] }[] = [
-    { label: 'System', value: null },
-    { label: 'Light', value: 'light' },
-    { label: 'Dark', value: 'dark' },
+const SCHEMES: { label: MessageKey; value: ViewportChoice['colorScheme'] }[] = [
+    { label: 'browserPane.scheme.system', value: null },
+    { label: 'browserPane.scheme.light', value: 'light' },
+    { label: 'browserPane.scheme.dark', value: 'dark' },
 ];
 
 const MIN_SIDE = 200;
@@ -313,6 +319,7 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
     const scheme = current?.colorScheme ?? null;
     const [width, setWidth] = useState('');
     const [height, setHeight] = useState('');
+    const t = useT();
 
     useEffect(() => {
         setWidth(size ? String(size.width) : '');
@@ -336,26 +343,26 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
                 ref={anchor}
                 type="button"
                 className={`btn-icon-sm${current ? ' active' : ''}`}
-                aria-label="Responsive"
+                aria-label={t('browserPane.responsive')}
                 aria-expanded={open}
                 aria-pressed={current !== null}
-                title={size ? `Responsive: ${size.width}×${size.height}` : 'Responsive'}
+                title={size ? t('browserPane.responsiveSize', { width: size.width, height: size.height }) : t('browserPane.responsive')}
                 disabled={tab.url === null}
                 onClick={() => setOpen((o) => !o)}
             >
                 <MonitorSmartphone size={15} />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label="Responsive" placement="below" align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label={t('browserPane.responsive')} placement="below" align="end">
                 <div className="bp-responsive">
-                    {current?.source === 'agent' && <p className="bp-responsive-note">GAIA chose this. Pick one here and yours wins.</p>}
-                    <div className="bp-responsive-presets" role="group" aria-label="Screen size">
+                    {current?.source === 'agent' && <p className="bp-responsive-note">{t('browserPane.agentChose')}</p>}
+                    <div className="bp-responsive-presets" role="group" aria-label={t('browserPane.screenSize')}>
                         <button
                             type="button"
                             className={`bp-chip${size === null ? ' is-on' : ''}`}
                             aria-pressed={size === null}
                             onClick={() => choose({ size: null, colorScheme: scheme })}
                         >
-                            Fill pane
+                            {t('browserPane.fillPane')}
                         </button>
                         {DEVICE_PRESETS.map((d) => {
                             const on = size !== null && size.width === d.width && size.height === d.height;
@@ -368,7 +375,7 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
                                     title={`${d.width}×${d.height}`}
                                     onClick={() => choose({ size: { width: d.width, height: d.height, mobile: d.mobile }, colorScheme: scheme })}
                                 >
-                                    {d.name}
+                                    {d.label ? t(d.label) : d.name}
                                 </button>
                             );
                         })}
@@ -381,24 +388,24 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
                             choose({ size: { width: w, height: h, mobile: w < 768 }, colorScheme: scheme });
                         }}
                     >
-                        <input aria-label="Width" inputMode="numeric" value={width} placeholder="Width" onChange={(e) => setWidth(e.target.value)} />
+                        <input aria-label={t('browserPane.width')} inputMode="numeric" value={width} placeholder={t('browserPane.width')} onChange={(e) => setWidth(e.target.value)} />
                         <span aria-hidden="true">×</span>
-                        <input aria-label="Height" inputMode="numeric" value={height} placeholder="Height" onChange={(e) => setHeight(e.target.value)} />
+                        <input aria-label={t('browserPane.height')} inputMode="numeric" value={height} placeholder={t('browserPane.height')} onChange={(e) => setHeight(e.target.value)} />
                         <button type="submit" className="bp-chip" disabled={w === null || h === null}>
-                            Set
+                            {t('browserPane.setSize')}
                         </button>
                         <button
                             type="button"
                             className="btn-icon-sm"
-                            aria-label="Rotate"
-                            title="Rotate"
+                            aria-label={t('browserPane.rotate')}
+                            title={t('browserPane.rotate')}
                             disabled={size === null}
                             onClick={() => size && choose({ size: { ...size, width: size.height, height: size.width }, colorScheme: scheme })}
                         >
                             <RotateCcwSquare size={15} />
                         </button>
                     </form>
-                    <div className="bp-responsive-presets" role="group" aria-label="Color scheme">
+                    <div className="bp-responsive-presets" role="group" aria-label={t('browserPane.colorScheme')}>
                         {SCHEMES.map((sch) => (
                             <button
                                 key={sch.label}
@@ -407,7 +414,7 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
                                 aria-pressed={scheme === sch.value}
                                 onClick={() => choose({ size, colorScheme: sch.value })}
                             >
-                                {sch.label}
+                                {t(sch.label)}
                             </button>
                         ))}
                     </div>
@@ -417,33 +424,35 @@ function ResponsiveMenu({ api, tab }: { api: GaiaBrowserPaneAPI; tab: TabState }
     );
 }
 
-/** What the agent is doing in this tab, with Pause and Resume. Clicking the page itself also pauses it. */
 /** While picking: how to pick, and the way out. */
 export function PickStrip({ api }: { api: GaiaBrowserPaneAPI }) {
+    const t = useT();
     return (
         <div className="bp-agent-strip is-picking" role="status">
-            <span>Click an element to send it to the chat. Shift-click adds, ↑ ↓ walk to parent and child, Esc ends.</span>
+            <span>{t('browserPane.pickHelp')}</span>
             <button type="button" className="bp-chip" onClick={() => run('stop selecting', api.togglePicking())}>
-                Done
+                {t('browserPane.done')}
             </button>
         </div>
     );
 }
 
+/** What the agent is doing in this tab, with Pause and Resume. Clicking the page itself also pauses it. */
 export function AgentStrip({ tab, api }: { tab: TabState; api: GaiaBrowserPaneAPI }) {
+    const t = useT();
     if (tab.control === 'private') {
         return (
             <div className="bp-agent-strip is-private" role="status">
-                <span>Private tab. GAIA can't see or use it.</span>
+                <span>{t('browserPane.privateStrip')}</span>
             </div>
         );
     }
     if (tab.control === 'user') {
         return (
             <div className="bp-agent-strip is-paused" role="status">
-                <span>GAIA is paused in this tab. You have control.</span>
+                <span>{t('browserPane.paused')}</span>
                 <button type="button" className="bp-chip" onClick={() => run('resume', api.setControl(tab.id, 'shared'))}>
-                    Resume
+                    {t('browserPane.resume')}
                 </button>
             </div>
         );
@@ -451,9 +460,9 @@ export function AgentStrip({ tab, api }: { tab: TabState; api: GaiaBrowserPaneAP
     if (!tab.agentActing && !tab.agentBusy) return null;
     return (
         <div className="bp-agent-strip" role="status">
-            <span>{tab.agentActing ? 'GAIA is using this tab' : 'GAIA is reading this page'}</span>
+            <span>{t(tab.agentActing ? 'browserPane.agentUsing' : 'browserPane.agentReading')}</span>
             <button type="button" className="bp-chip" onClick={() => run('pause', api.setControl(tab.id, 'user'))}>
-                Pause
+                {t('browserPane.pause')}
             </button>
         </div>
     );

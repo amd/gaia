@@ -21,7 +21,7 @@
     height: 100%;
     min-width: var(--pane-min-w);
     background: var(--bg-primary);
-    border-left: 1px solid var(--border-light);
+    border-inline-start: 1px solid var(--border-light);
     font-family: var(--font-sans);
     font-size: var(--fs-ui);
     color: var(--text-primary);
@@ -31,7 +31,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: calc(var(--bp-handle) / -2);
+    inset-inline-start: calc(var(--bp-handle) / -2);
     width: var(--bp-handle);
     cursor: col-resize;
     touch-action: none;
@@ -43,7 +43,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: calc(var(--bp-handle) / 2 - 1px);
+    inset-inline-start: calc(var(--bp-handle) / 2 - 1px);
     width: 2px;
     background: var(--accent);
     opacity: 0;
@@ -65,8 +65,12 @@
 }
 
 /* Windows draws minimize, maximize and close over the top right, as in .task-header. */
-:root[data-titlebar="overlay"] .bp-toolbar {
+:root[data-titlebar="overlay"]:not([dir="rtl"]) .bp-toolbar {
     padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+}
+/* Right to left the pane sits at the window's left, under the macOS buttons. */
+:root[data-titlebar="mac"][dir="rtl"] .bp-toolbar {
+    padding-left: 84px;
 }
 
 .bp-tabs {
@@ -102,9 +106,10 @@
     flex: 1;
     min-width: 0;
     height: 100%;
-    padding: 0 4px 0 10px;
+    padding-block: 0;
+    padding-inline: 10px 4px;
     font-size: var(--fs-label);
-    text-align: left;
+    text-align: start;
 }
 
 .bp-tab-title > span:last-child {
@@ -130,7 +135,7 @@
     flex-shrink: 0;
     width: 20px;
     height: 20px;
-    margin-right: 4px;
+    margin-inline-end: 4px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
 }
@@ -246,7 +251,7 @@
 .bp-dialog-actions {
     display: flex;
     gap: 6px;
-    margin-left: auto;
+    margin-inline-start: auto;
 }
 
 .bp-agent-strip {
@@ -370,7 +375,7 @@
     width: 100%;
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    text-align: left;
+    text-align: start;
 }
 
 .bp-recent-item:hover,

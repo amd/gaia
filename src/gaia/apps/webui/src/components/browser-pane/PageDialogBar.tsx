@@ -9,13 +9,15 @@
 
 import { useEffect, useState } from 'react';
 import { log } from '../../utils/logger';
+import { useT } from '../../i18n/useT';
+import type { MessageKey } from '../../i18n/registry';
 import type { GaiaBrowserPaneAPI, PageDialog, TabState } from '../../../services/browser-pane/contract';
 
-const BUTTONS: Record<PageDialog['type'], { ok: string; cancel: string | null }> = {
-    alert: { ok: 'OK', cancel: null },
-    confirm: { ok: 'OK', cancel: 'Cancel' },
-    prompt: { ok: 'OK', cancel: 'Cancel' },
-    beforeunload: { ok: 'Leave', cancel: 'Stay' },
+const BUTTONS: Record<PageDialog['type'], { ok: MessageKey; cancel: MessageKey | null }> = {
+    alert: { ok: 'browserPane.dialog.ok', cancel: null },
+    confirm: { ok: 'browserPane.dialog.ok', cancel: 'browserPane.dialog.cancel' },
+    prompt: { ok: 'browserPane.dialog.ok', cancel: 'browserPane.dialog.cancel' },
+    beforeunload: { ok: 'browserPane.dialog.leave', cancel: 'browserPane.dialog.stay' },
 };
 
 function hostOf(url: string): string {
@@ -28,6 +30,7 @@ function hostOf(url: string): string {
 
 export function PageDialogBar({ tab, api }: { tab: TabState; api: GaiaBrowserPaneAPI }) {
     const dialog = tab.dialog;
+    const t = useT();
     const [text, setText] = useState(dialog?.defaultText ?? '');
     useEffect(() => setText(dialog?.defaultText ?? ''), [dialog]);
     if (!dialog) return null;
@@ -41,25 +44,25 @@ export function PageDialogBar({ tab, api }: { tab: TabState; api: GaiaBrowserPan
         <form
             className="bp-dialog"
             role="alertdialog"
-            aria-label={`${hostOf(dialog.url)} says`}
+            aria-label={t('browserPane.dialog.says', { host: hostOf(dialog.url) })}
             onSubmit={(e) => {
                 e.preventDefault();
                 answer(true);
             }}
         >
-            <span className="bp-dialog-from">{hostOf(dialog.url)} says</span>
+            <span className="bp-dialog-from">{t('browserPane.dialog.says', { host: hostOf(dialog.url) })}</span>
             <span className="bp-dialog-message">{dialog.message}</span>
             {dialog.type === 'prompt' && (
-                <input className="bp-dialog-input" aria-label="Your answer" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
+                <input className="bp-dialog-input" aria-label={t('browserPane.dialog.answer')} value={text} onChange={(e) => setText(e.target.value)} autoFocus />
             )}
             <span className="bp-dialog-actions">
                 {cancel && (
                     <button type="button" className="bp-chip" onClick={() => answer(false)}>
-                        {cancel}
+                        {t(cancel)}
                     </button>
                 )}
                 <button type="submit" className="bp-chip is-on">
-                    {ok}
+                    {t(ok)}
                 </button>
             </span>
         </form>

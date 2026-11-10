@@ -43,7 +43,7 @@ const SHORTCUTS: Array<[string, MessageKey]> = [
 ];
 
 /** The desktop app also has the browser pane. */
-const DESKTOP_SHORTCUTS: Array<[string, string]> = [['Mod+Shift+B', 'Show or hide the browser pane']];
+const DESKTOP_SHORTCUTS: Array<[string, MessageKey]> = [['Mod+Shift+B', 'settings.shortcut.browserPane']];
 
 export function GeneralSettings() {
     const t = useT();

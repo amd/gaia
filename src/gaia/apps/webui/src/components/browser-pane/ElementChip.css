@@ -20,7 +20,8 @@
     gap: 6px;
     max-width: 100%;
     min-width: 0;
-    padding: 3px 4px 3px 6px;
+    padding-block: 3px;
+    padding-inline: 6px 4px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -28,7 +29,7 @@
 }
 
 .element-chips.is-sent .element-chip {
-    padding-right: 8px;
+    padding-inline-end: 8px;
 }
 
 .element-chip.has-error {
