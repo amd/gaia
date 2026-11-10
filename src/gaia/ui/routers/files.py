@@ -88,6 +88,10 @@ SEARCH_MAX_ENTRIES = 20_000
 SEARCH_TIME_BUDGET_SEC = 10.0
 # Extra wait for a walk stuck inside one blocking read (e.g. a cloud mount).
 SEARCH_STALL_GRACE_SEC = 1.0
+# Setup allowance on top of the outer cap: resolving the user's document
+# folders happens before the scan budget starts, and must not trip the cap
+# on a loaded machine (#6974).
+SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 
 router = APIRouter(tags=["files"])
 
@@ -598,7 +602,6 @@ async def search_files(
         """Blocking filesystem scan -- runs in a thread. Returns ``truncated``."""
         seen_paths: set = set()
         start_time = _time.monotonic()
-        deadline = start_time + SEARCH_TIME_BUDGET_SEC
         visited = 0
         truncated = False
 
@@ -689,6 +692,8 @@ async def search_files(
             )
             if is_within_document_roots(directory)
         ]
+        # Start the clock after location setup so it can't eat the scan budget.
+        deadline = _time.monotonic() + SEARCH_TIME_BUDGET_SEC
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
                 break
@@ -727,7 +732,9 @@ async def search_files(
     try:
         truncated = await asyncio.wait_for(
             asyncio.wrap_future(walk),
-            timeout=SEARCH_TIME_BUDGET_SEC + SEARCH_STALL_GRACE_SEC,
+            timeout=SEARCH_SETUP_ALLOWANCE_SEC
+            + SEARCH_TIME_BUDGET_SEC
+            + SEARCH_STALL_GRACE_SEC,
         )
     except asyncio.TimeoutError:
         truncated = True

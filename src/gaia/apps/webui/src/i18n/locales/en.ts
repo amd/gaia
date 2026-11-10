@@ -1666,7 +1666,7 @@ export const enMessages = {
     'settings.advanced.downloading': 'Downloading…',
     'settings.advanced.wrongModel': 'Wrong model loaded.',
     'settings.advanced.smallContext': 'Context window too small.',
-    'settings.advanced.loadHint': 'Load {name} with {size} token context.',
+    'settings.advanced.loadHint': 'Load {name} with the context window chat needs.',
     'settings.advanced.loading': 'Loading…',
     'settings.advanced.load': 'Load Model',
     'settings.advanced.details': 'More details',
