@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|upgrade|launch|health|engine|setup|preflight|quit|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|engine|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a

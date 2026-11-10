@@ -425,9 +425,9 @@ jobs:
           - {row: ubuntu22-tui-deb, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb, packages: linux, title: Terminal .deb, phases: download install launch health preflight uninstall leftovers}
           - {row: ubuntu24-tui-deb-upgrade, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: tui-deb-upgrade, packages: linux, title: Terminal .deb upgrade from the previous stable release, phases: download install upgrade launch health uninstall leftovers}
-          - {row: fedora-tui-rpm, os: ubuntu-latest, os_label: Fedora (container), kind: tui-rpm, packages: linux, title: Terminal .rpm, phases: download install launch health engine preflight uninstall leftovers}
+          - {row: fedora-tui-rpm, os: ubuntu-latest, os_label: Fedora (container), kind: tui-rpm, packages: linux, title: Terminal .rpm, phases: download install launch health preflight engine uninstall leftovers}
           - {row: ubuntu22-install-sh, os: ubuntu-22.04, os_label: Ubuntu 22.04, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight uninstall leftovers}
-          - {row: ubuntu24-install-sh, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health engine preflight uninstall leftovers}
+          - {row: ubuntu24-install-sh, os: ubuntu-24.04, os_label: Ubuntu 24.04, kind: install-sh, title: install.sh in a sandbox home, phases: install launch health preflight engine uninstall leftovers}
     env:
       ROW: ${{ matrix.row }}
       KIND: ${{ matrix.kind }}
