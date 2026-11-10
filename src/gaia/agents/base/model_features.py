@@ -20,6 +20,7 @@ class ModelFeatures:
 
     scratchpad: bool
     email: bool
+    calendar: bool
     image_generation: bool
     skill_hub: bool
 
@@ -49,6 +50,16 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "list_waiting_on_you",
         }
     ),
+    # The bundled calendar skill's tools: a model not offered them can't load it.
+    "calendar": frozenset(
+        {
+            "calendar/list_calendar_events",
+            "calendar/check_calendar_availability",
+            "calendar/create_calendar_event",
+            "calendar/update_calendar_event",
+            "calendar/cancel_calendar_event",
+        }
+    ),
     "image_generation": frozenset(
         {"generate_image", "list_sd_models", "get_generation_history"}
     ),
@@ -56,12 +67,19 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
     "skill_hub": frozenset({"search_skill_hub", "install_skill", "remove_skill"}),
 }
 
-FULL = ModelFeatures(scratchpad=True, email=True, image_generation=True, skill_hub=True)
+FULL = ModelFeatures(
+    scratchpad=True, email=True, calendar=True, image_generation=True, skill_hub=True
+)
 # Measured on Gemma 4 E4B (GPU and NPU): no scratchpad scenario passed, email
 # passed 2/12 and followed phishing, image generation only ever fired on an
-# injected request, and no skill-hub scenario passed.
+# injected request, and no skill-hub scenario passed. Calendar has no compact
+# eval yet, and it writes to a real calendar.
 COMPACT = ModelFeatures(
-    scratchpad=False, email=False, image_generation=False, skill_hub=False
+    scratchpad=False,
+    email=False,
+    calendar=False,
+    image_generation=False,
+    skill_hub=False,
 )
 
 TIERS: Dict[str, ModelFeatures] = {"full": FULL, "compact": COMPACT}

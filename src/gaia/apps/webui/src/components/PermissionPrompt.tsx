@@ -15,6 +15,7 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
+import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
@@ -150,6 +151,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const isPath = notification.tool === PATH_ACCESS_TOOL;
     const { heading, question } = permissionPromptText(notification, t, markLtr);
 
+    const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
+
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
 
@@ -214,7 +217,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
-                    {!detail && !code && !exactText && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
+                    {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
+                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
                 </div>
                 {remaining !== null && !expired && (

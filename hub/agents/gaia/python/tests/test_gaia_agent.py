@@ -659,8 +659,10 @@ def _requirement(connector_id):
     )
 
 
-def test_required_connectors_declare_gmail_readonly_and_compose_only():
-    """One consent reads and writes, never modify, never permanent delete."""
+def test_required_connectors_declare_gmail_read_compose_and_calendar_only():
+    """One consent reads and writes mail, never modify, never permanent delete;
+    calendar is requested, not required, so mail stays usable alone."""
+    from gaia.agents.tools._calendar.scopes import SCOPE_GOOGLE_CALENDAR_EVENTS
     from gaia.agents.tools._email.scopes import (
         SCOPE_GMAIL_COMPOSE,
         SCOPE_GMAIL_MODIFY,
@@ -669,9 +671,27 @@ def test_required_connectors_declare_gmail_readonly_and_compose_only():
 
     google = _requirement("google")
     assert google is not None, "the flagship declares no Google mailbox requirement"
-    assert list(google.scopes) == [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]
+    assert list(google.scopes) == [
+        SCOPE_GMAIL_READONLY,
+        SCOPE_GMAIL_COMPOSE,
+        SCOPE_GOOGLE_CALENDAR_EVENTS,
+    ]
+    assert list(google.required_scopes) == [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]
     assert SCOPE_GMAIL_MODIFY not in google.scopes
     assert "https://mail.google.com/" not in google.scopes
+
+
+def test_microsoft_requires_mail_but_only_requests_calendar():
+    from gaia.agents.tools._calendar.scopes import SCOPE_GRAPH_CALENDARS_READWRITE
+    from gaia.agents.tools._email.scopes import SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND
+
+    microsoft = _requirement("microsoft")
+    assert list(microsoft.scopes) == [
+        SCOPE_MAIL_READWRITE,
+        SCOPE_MAIL_SEND,
+        SCOPE_GRAPH_CALENDARS_READWRITE,
+    ]
+    assert list(microsoft.required_scopes) == [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
 
 
 def test_both_mailbox_requirements_say_which_mailbox_they_are_for():
@@ -719,8 +739,8 @@ def test_the_published_registration_declares_both_mailbox_requirements():
     from gaia.agents.tools._email.scopes import DECLARED_SCOPES
 
     assert set(published) == {"google", "microsoft"}
-    assert tuple(published["google"].scopes) == DECLARED_SCOPES["google"]
-    assert tuple(published["microsoft"].scopes) == DECLARED_SCOPES["microsoft"]
+    assert tuple(published["google"].required_scopes) == DECLARED_SCOPES["google"]
+    assert tuple(published["microsoft"].required_scopes) == DECLARED_SCOPES["microsoft"]
 
 
 def test_the_registration_and_the_class_cannot_drift():
@@ -753,12 +773,14 @@ def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
 
     assert resolve_declared_scopes(registry, "google", ["installed:gaia"]) == {
         "installed:gaia": [
+            "https://www.googleapis.com/auth/calendar.events",
             "https://www.googleapis.com/auth/gmail.compose",
             "https://www.googleapis.com/auth/gmail.readonly",
         ]
     }
     assert resolve_declared_scopes(registry, "microsoft", ["installed:gaia"]) == {
         "installed:gaia": [
+            "https://graph.microsoft.com/Calendars.ReadWrite",
             "https://graph.microsoft.com/Mail.ReadWrite",
             "https://graph.microsoft.com/Mail.Send",
         ]

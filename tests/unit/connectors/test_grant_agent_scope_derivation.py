@@ -461,9 +461,7 @@ class TestFlagshipSidecarGrantDerivation:
             )
         }
 
-    def test_grant_agent_installed_gaia_requests_readonly_and_compose(
-        self, monkeypatch
-    ):
+    def test_grant_agent_installed_gaia_requests_mail_and_calendar(self, monkeypatch):
         # A frozen binary has no wheel to discover, even where one is installed.
         monkeypatch.setattr(
             "gaia.agents.registry.AgentRegistry.discover", lambda self: None
@@ -493,6 +491,7 @@ class TestFlagshipSidecarGrantDerivation:
         assert rc == 0, err
         assert captured["grant_agents"] == {
             "installed:gaia": [
+                "https://www.googleapis.com/auth/calendar.events",
                 "https://www.googleapis.com/auth/gmail.compose",
                 "https://www.googleapis.com/auth/gmail.readonly",
             ]
@@ -506,7 +505,7 @@ class TestFlagshipSidecarGrantDerivation:
         by_provider = {cr.connector_id: cr for cr in gaia_spec.required_connections}
         assert set(by_provider) == set(DECLARED_SCOPES)
         for provider, scopes in DECLARED_SCOPES.items():
-            assert by_provider[provider].scopes == tuple(scopes)
+            assert by_provider[provider].required_scopes == tuple(scopes)
 
     def test_spec_matches_flagship_required_connectors(self):
         connectors = pytest.importorskip("gaia_agent.connectors")

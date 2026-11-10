@@ -4,12 +4,13 @@
 
 Three different lists, and the differences are the point.
 
-``DECLARED_SCOPES`` is what a *new consent* asks for. It feeds
+``DECLARED_SCOPES`` is the mail half of what a *new consent* asks for. It feeds
 ``REQUIRED_CONNECTORS``, which is what both ``gaia connectors connect
---grant-agent`` and the Agent UI consent screen render. One consent has to cover
-reading and writing mail, so Google declares ``gmail.readonly`` plus
-``gmail.compose`` (drafts and sending), never ``gmail.modify``, which could also
-relabel, archive and trash mail the agent never needs to touch.
+--grant-agent`` and the Agent UI consent screen render, next to the calendar
+scope. One consent has to cover reading and writing mail, so Google declares
+``gmail.readonly`` plus ``gmail.compose`` (drafts and sending), never
+``gmail.modify``, which could also relabel, archive and trash mail the agent
+never needs to touch.
 
 ``READ_CAPABLE_SCOPES`` is what actually *confers read*, narrowest first. The
 grant ledger does exact subset matching with no scope implication, so a

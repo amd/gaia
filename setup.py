@@ -68,6 +68,7 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._calendar",
         "gaia.agents.tools._email",
         "gaia.governance",
         "gaia.factory",

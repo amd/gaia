@@ -75,7 +75,7 @@ Then sign in, and grant the flagship access:
 gaia connectors connect google --grant-agent installed:gaia
 ```
 
-That one consent asks for `gmail.readonly` to read and `gmail.compose` to draft and send. It does not ask for `gmail.modify`, which could also relabel, archive and trash your mail, or `https://mail.google.com/`, the scope that can permanently delete it.
+That one consent asks for `gmail.readonly` to read and `gmail.compose` to draft and send, plus `calendar.events` for the [calendar tools](/guides/gaia). It does not ask for `gmail.modify`, which could also relabel, archive and trash your mail, or `https://mail.google.com/`, the scope that can permanently delete it.
 
 The first command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
 
@@ -153,7 +153,7 @@ gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose
 ```
 
-That is a local ledger write — no browser, no OAuth round-trip. The grant cannot ask for more than the connection carries, so on a connection that only holds `gmail.readonly` (one made before the flagship could write), pass just that scope: reading works, and drafting or sending asks you to reconnect Google and approve `gmail.compose`.
+That is a local ledger write — no browser, no OAuth round-trip. It replaces the flagship's Google grant, so if it already holds `calendar.events`, list that scope too. The grant cannot ask for more than the connection carries, so on a connection that only holds `gmail.readonly` (one made before the flagship could write), pass just that scope: reading works, and drafting or sending asks you to reconnect Google and approve `gmail.compose`.
 
 ## Privacy
 
