@@ -1021,6 +1021,8 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
         elif self._pending_diff_card is not None:
             # ChatView and step persistence read a card from ``data``.
             event["result_data"] = self._pending_diff_card
@@ -1142,6 +1144,14 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
         # Media-producing tools return a verified local path.  The client gets
         # it through a typed card rather than scraping a model-written path out
         # of prose, so opening it cannot become an agent-output execution sink.

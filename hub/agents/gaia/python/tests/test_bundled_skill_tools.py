@@ -98,6 +98,46 @@ def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(flagship, tmp
     assert "rss-digest/fetch_rss" not in _TOOL_REGISTRY
 
 
+@pytest.mark.parametrize(
+    "skill_name, card, tools",
+    [
+        (
+            "guides",
+            "guide",
+            {
+                "show_recipe",
+                "show_workout",
+                "show_how_to",
+                "show_checklist",
+                "show_itinerary",
+            },
+        ),
+        ("calculators", "calculator", {"show_tip_calculator", "show_loan_calculator"}),
+    ],
+)
+def test_a_card_skill_adds_its_tools_only_once_loaded(
+    flagship, tmp_path, skill_name, card, tools
+):
+    """The card tools stay off the flagship's list until their skill loads, and
+    every one of them then draws its card in the Agent UI and the TUI."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    manager = _bundled_only(flagship.SKILL_DIRS, tmp_path)
+    expected = {f"{skill_name}/{name}" for name in tools}
+    before = set(flagship._tools_registry)
+    assert not before & (expected | tools), "card tools registered without a load"
+
+    flagship.load_skill(skill_name, manager=manager)
+    try:
+        assert set(flagship._tools_registry) - before == expected
+        for name in expected:
+            assert SSEOutputHandler._RENDER_TOOL_TO_LANG[name] == card
+    finally:
+        assert flagship.unload_skill(skill_name)
+
+    assert set(flagship._tools_registry) == before
+
+
 def test_the_calendar_skill_asks_before_every_change_on_the_flagship(
     flagship, tmp_path
 ):

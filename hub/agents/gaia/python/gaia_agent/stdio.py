@@ -1498,11 +1498,6 @@ def run_turn(
     translator = CanonicalTranslator(
         run_id=None,
         agent_id=AGENT_ID,
-        render_tool_map={
-            tool: render
-            for tool, render in SSEOutputHandler._RENDER_TOOL_TO_LANG.items()
-            if render == "media"
-        },
         debug=dev,
     )
     result: Dict[str, Any] = {}
