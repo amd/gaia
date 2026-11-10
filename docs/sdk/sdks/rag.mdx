@@ -365,7 +365,7 @@ key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
-`max_chunks` controls how many chunks are sent to the LLM:
+`max_chunks` controls how many chunks are sent to the LLM. Identical chunks count once, so a document indexed under two names doesn't take two places; its chunk lists both files.
 
 | max_chunks | Effect | Best for |
 |------------|--------|----------|
@@ -416,7 +416,9 @@ print(response.source_files)
 
 # Per-chunk metadata
 for meta in response.chunk_metadata:
-    print(f"File: {meta['source']}, Page: {meta.get('page', 'N/A')}")
+    print(f"File: {meta['source_file']}, score: {meta['relevance_score']:.2f}")
+    # Every file holding this exact text, when the same document was indexed twice
+    print(meta["source_files"])
 
 # Stats (if available)
 if response.stats:

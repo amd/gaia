@@ -40,6 +40,15 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "get_thread",
             "list_connected_mailboxes",
             "list_waiting_on_you",
+            # The bundled send-email skill: a model not offered email can't load it.
+            "send-email/list_drafts",
+            "send-email/create_draft",
+            "send-email/update_draft",
+            "send-email/discard_draft",
+            "send-email/send_draft",
+            "send-email/send_now",
+            "send-email/reply_to_message",
+            "send-email/forward_message",
         }
     ),
     # The bundled calendar skill's tools: a model not offered them can't load it.

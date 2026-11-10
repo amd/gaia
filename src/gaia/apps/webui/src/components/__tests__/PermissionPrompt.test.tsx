@@ -30,6 +30,25 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it.each([
+        ['from the args', 'send_now', { _exact_text: 'To: a@b.co\nSubject: Hi\n\nFull body' }, ''],
+        ['from a relayed summary', 'send_now', {}, 'To: a@b.co\nSubject: Hi\n\nFull body'],
+        ['from the skill, by its args', 'send-email/send_now', { _exact_text: 'To: a@b.co\nSubject: Hi\n\nFull body' }, ''],
+        ['from the skill, relayed', 'send-email/send_now', {}, 'To: a@b.co\nSubject: Hi\n\nFull body'],
+    ])('shows an email whole, %s, with no way to approve a shortened one', (_name, tool, toolArgs, summary) => {
+        useNotificationStore.getState().addNotification(request({ tool, toolArgs, summary }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('To: a@b.co\nSubject: Hi\n\nFull body');
+        expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /always/i })).not.toBeInTheDocument();
+    });
+
+    it.each(['update_draft', 'send-email/update_draft'])('shows a relayed draft edit whole (%s)', (tool) => {
+        useNotificationStore.getState().addNotification(request({ tool, toolArgs: {}, summary: 'Save this draft as:\n\nNew words' }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Save this draft as:\n\nNew words');
+    });
+
     it('shows a folder path with several spaces exactly as written', () => {
         const path = 'C:\\gtest\\docs8\\OneDrive - AMD\\_drafts\\plan.md';
         useNotificationStore.getState().addNotification(request({

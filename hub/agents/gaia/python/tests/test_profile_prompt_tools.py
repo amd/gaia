@@ -153,6 +153,37 @@ def test_scheduling_is_unsupported_only_without_the_calendar_skill():
         assert "scheduling" in _unsupported_line(agent._get_system_prompt())
 
 
+def test_sending_email_is_unsupported_only_without_the_send_email_skill():
+    from gaia.agents.base.model_features import COMPACT, FULL
+
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="full"))
+        assert "**UNSUPPORTED:** Email, " in agent._get_system_prompt()
+
+        added = "read_email" not in agent._tools_registry
+        agent._tools_registry["read_email"] = {}
+        try:
+            line = _unsupported_line(agent._get_system_prompt())
+            assert "**UNSUPPORTED:** Sending email, " in line
+
+            agent.BUNDLES_SEND_EMAIL_SKILL = True
+            agent.model_features = FULL
+            assert "email" not in _unsupported_line(agent._get_system_prompt())
+
+            agent.model_features = COMPACT
+            line = _unsupported_line(agent._get_system_prompt())
+            assert "**UNSUPPORTED:** Sending email, " in line
+        finally:
+            if added:
+                agent._tools_registry.pop("read_email", None)
+
+
 def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
     line = _unsupported_line(prompts_and_tools["data"][0])
     assert line.endswith(
