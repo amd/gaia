@@ -3,13 +3,13 @@
 //
 // The `/query` SSE contract (docs/spec/agent-ui-query-sse-contract.md §4.2/§4.3)
 // lets a sidecar declare how its result should be drawn — `email_pre_scan` for
-// the email agent's inbox triage, plus six generic primitives any agent can
+// the email agent's inbox triage, plus eight generic primitives any agent can
 // emit with no client work. §7 makes the receiving end's obligations explicit:
 // an unknown key degrades to a visible generic card with a raw dump, and a
 // payload that fails its schema says so. A card is never dropped and never
 // blanks the message.
 //
-// Of the six primitives this package draws four. `image` and `audio` cannot be
+// Of the eight primitives this package draws six. `image` and `audio` cannot be
 // shown or played in a terminal, so they degrade to a caption, the saved path
 // and (for audio) the length.
 package cards
@@ -60,6 +60,10 @@ func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[s
 		return renderMedia(data, width), nil
 	case "diff":
 		return renderDiff(data, width), nil
+	case "guide":
+		return renderGuide(data, width), nil
+	case "calculator":
+		return renderCalculator(data, width), nil
 	default:
 		return renderUnsupported(key, data, width), nil
 	}
