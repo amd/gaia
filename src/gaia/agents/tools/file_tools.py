@@ -380,6 +380,32 @@ def parse_date_range(date_range: str):
     return first[0], last[1]
 
 
+def _cell_period(value):
+    """The breakdown period a data cell falls in, or None if it can't be placed.
+
+    Returns ("YYYY-MM", datetime) for a date, or ("YYYY-Qn", None) for a
+    quarter. dateutil reads 'Q3 2025' as March and "Q1'25" as this year, so
+    quarters are matched first and any other Q1-Q4 text is unplaceable.
+    """
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m"), value
+    text = str(value).strip()
+    span = _parse_date_value(text)
+    if span is not None:
+        start_month, end_month = int(span[0][5:]), int(span[1][5:])
+        if span[0][:4] == span[1][:4] and end_month - start_month == 2:
+            return f"{span[0][:4]}-Q{end_month // 3}", None
+    if re.search(r"\bQ[1-4]\b", text, re.I):
+        return None
+    from dateutil import parser as date_parser
+
+    try:
+        dt = date_parser.parse(text, fuzzy=True)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return dt.strftime("%Y-%m"), dt
+
+
 class FileSearchToolsMixin:
     """
     Mixin providing shared file search and read operations.
@@ -2987,53 +3013,71 @@ class FileSearchToolsMixin:
                             monthly_totals: Dict[str, float] = {}
                             monthly_spending: Dict[str, float] = {}
                             monthly_income: Dict[str, float] = {}
-
-                            from dateutil import parser as date_parser
+                            quarterly_totals: Dict[str, float] = {}
+                            quarterly_spending: Dict[str, float] = {}
+                            quarterly_income: Dict[str, float] = {}
+                            unplaced = 0
 
                             for row in rows:
                                 date_val = row.get(primary_date_col)
                                 amount_val = _parse_numeric(row.get(primary_amount_col))
-                                if date_val is None or str(date_val).strip() == "":
+                                period = (
+                                    None
+                                    if date_val is None or str(date_val).strip() == ""
+                                    else _cell_period(date_val)
+                                )
+                                if period is None:
+                                    unplaced += 1
                                     continue
-
-                                try:
-                                    if isinstance(date_val, datetime):
-                                        dt = date_val
-                                    else:
-                                        dt = date_parser.parse(
-                                            str(date_val), fuzzy=True
-                                        )
-                                    month_key = dt.strftime("%Y-%m")
-                                    monthly_totals[month_key] = (
-                                        monthly_totals.get(month_key, 0) + amount_val
+                                key, dt = period
+                                if dt is None:
+                                    totals, spent, income = (
+                                        quarterly_totals,
+                                        quarterly_spending,
+                                        quarterly_income,
                                     )
-                                    if amount_val < 0:
-                                        monthly_spending[month_key] = (
-                                            monthly_spending.get(month_key, 0)
-                                            + abs(amount_val)
-                                        )
-                                    else:
-                                        monthly_income[month_key] = (
-                                            monthly_income.get(month_key, 0)
-                                            + amount_val
-                                        )
-                                except (ValueError, TypeError, OverflowError):
-                                    continue
+                                else:
+                                    totals, spent, income = (
+                                        monthly_totals,
+                                        monthly_spending,
+                                        monthly_income,
+                                    )
+                                totals[key] = totals.get(key, 0) + amount_val
+                                if amount_val < 0:
+                                    spent[key] = spent.get(key, 0) + abs(amount_val)
+                                else:
+                                    income[key] = income.get(key, 0) + amount_val
 
-                            if monthly_totals:
-                                sorted_months = sorted(monthly_totals.keys())
-                                spending["monthly_breakdown"] = [
+                            for name, label, totals, spent, income in (
+                                (
+                                    "monthly_breakdown",
+                                    "month",
+                                    monthly_totals,
+                                    monthly_spending,
+                                    monthly_income,
+                                ),
+                                (
+                                    "quarterly_breakdown",
+                                    "quarter",
+                                    quarterly_totals,
+                                    quarterly_spending,
+                                    quarterly_income,
+                                ),
+                            ):
+                                if not totals:
+                                    continue
+                                spending[name] = [
                                     {
-                                        "month": m,
-                                        "net": round(monthly_totals.get(m, 0), 2),
-                                        "spending": round(
-                                            monthly_spending.get(m, 0), 2
-                                        ),
-                                        "income": round(monthly_income.get(m, 0), 2),
+                                        label: k,
+                                        "net": round(totals.get(k, 0), 2),
+                                        "spending": round(spent.get(k, 0), 2),
+                                        "income": round(income.get(k, 0), 2),
                                     }
-                                    for m in sorted_months
+                                    for k in sorted(totals)
                                 ]
                                 spending["date_column"] = primary_date_col
+                            if unplaced:
+                                spending["date_rows_unplaced"] = unplaced
                     else:
                         spending["message"] = (
                             "Could not auto-detect amount columns. "
@@ -3088,30 +3132,30 @@ class FileSearchToolsMixin:
                         date_col = trend_date_cols[0]
                         amount_col = trend_amount_cols[0]
 
-                        from dateutil import parser as date_parser
-
                         monthly_data: Dict[str, List[float]] = {}
                         weekly_data: Dict[str, List[float]] = {}
+                        quarterly_data: Dict[str, List[float]] = {}
+                        trend_unplaced = 0
 
                         for row in rows:
                             date_val = row.get(date_col)
                             amount_val = _parse_numeric(row.get(amount_col))
-
-                            if date_val is None or str(date_val).strip() == "":
+                            period = (
+                                None
+                                if date_val is None or str(date_val).strip() == ""
+                                else _cell_period(date_val)
+                            )
+                            if period is None:
+                                trend_unplaced += 1
                                 continue
-
-                            try:
-                                if isinstance(date_val, datetime):
-                                    dt = date_val
-                                else:
-                                    dt = date_parser.parse(str(date_val), fuzzy=True)
-                                m_key = dt.strftime("%Y-%m")
-                                w_key = dt.strftime("%Y-W%W")
-
-                                monthly_data.setdefault(m_key, []).append(amount_val)
-                                weekly_data.setdefault(w_key, []).append(amount_val)
-                            except (ValueError, TypeError, OverflowError):
+                            key, dt = period
+                            if dt is None:
+                                quarterly_data.setdefault(key, []).append(amount_val)
                                 continue
+                            monthly_data.setdefault(key, []).append(amount_val)
+                            weekly_data.setdefault(dt.strftime("%Y-W%W"), []).append(
+                                amount_val
+                            )
 
                         if monthly_data:
                             monthly_summary = []
@@ -3152,6 +3196,19 @@ class FileSearchToolsMixin:
                                 )
                             # Limit weekly to most recent 20 weeks
                             trends["weekly"] = weekly_summary[-20:]
+
+                        if quarterly_data:
+                            trends["quarterly"] = [
+                                {
+                                    "period": quarter,
+                                    "total": round(sum(vals), 2),
+                                    "count": len(vals),
+                                    "average": round(sum(vals) / len(vals), 2),
+                                }
+                                for quarter, vals in sorted(quarterly_data.items())
+                            ]
+                        if trend_unplaced:
+                            trends["date_rows_unplaced"] = trend_unplaced
 
                         trends["date_column"] = date_col
                         trends["amount_column"] = amount_col
