@@ -96,7 +96,10 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
-from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.agents.tools.rag_tools import (
+    documents_failed_indexing,
+    documents_still_indexing,
+)
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
     _workspace_default,
@@ -922,7 +925,9 @@ class ChatAgent(
 
         Each entry carries its path, so a file tool never has to search for a
         document the user already attached. A document still indexing in the
-        background is not searchable, so it is named on a line of its own.
+        background is not searchable, so it is named on a line of its own, and
+        so is one whose background index failed after the model was told it
+        was still in progress.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
@@ -946,6 +951,12 @@ class ChatAgent(
             lines.append(
                 "[Still indexing in the background, not searchable yet: "
                 f"{', '.join(pending)}]"
+            )
+        failed = documents_failed_indexing(self.rag)
+        if failed:
+            reasons = "; ".join(f"{Path(fp).name}: {why}" for fp, why in failed)
+            lines.append(
+                f"[Indexing failed in the background, tell the user: {reasons}]"
             )
         return "\n".join(lines)
 

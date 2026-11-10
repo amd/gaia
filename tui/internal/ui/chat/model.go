@@ -1307,6 +1307,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case mediaActionResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: mediaStatus(msg.path, msg.action, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case pasteClipboardMsg:
 		text := normalizePastedText(msg.text)
 		if msg.err != nil || strings.TrimSpace(text) == "" {
@@ -1636,6 +1644,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case tea.KeyCtrlF:
+		return m, m.mediaActionCmd("open")
+
+	case tea.KeyCtrlG:
+		return m, m.mediaActionCmd("reveal")
+
 	case tea.KeyCtrlV:
 		// Reaches here only when the terminal did NOT already turn this into a
 		// bracketed paste above — most terminals bind Ctrl+V to their own paste
@@ -1646,21 +1660,21 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		return m.afterScroll(), nil
 
 	case tea.KeyPgDown:
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		return m.afterScroll(), nil
 
 	case tea.KeyUp:
 		// The composer is one line high, so the arrows have no job there and
 		// belong to the transcript — which is where a reader reaches first.
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyDown:
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyHome, tea.KeyEnd:
@@ -2789,24 +2803,6 @@ func (m ChatModel) answerWidth() int {
 		w = 20
 	}
 	return w
-}
-
-// wrapForPane wraps text to the visible pane, leaving it untouched before the
-// first WindowSizeMsg (when no width is known yet).
-func (m ChatModel) wrapForPane(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.cardWidth())
-}
-
-// wrapProse wraps to the same measure an answer lays out at, so prose from
-// either side of the conversation shares one column.
-func (m ChatModel) wrapProse(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.answerWidth())
 }
 
 // spacedAfter reports whether a message gets a blank line under it. Substantial

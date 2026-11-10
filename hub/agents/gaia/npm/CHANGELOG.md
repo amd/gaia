@@ -11,6 +11,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **GAIA sounds more like a person.** Replies use contractions and match how
   you write, with at most one emoji and only for tone, never in an error.
   On Discord the emoji becomes a reaction on your message instead.
+- **Generated images and audio arrive as a `media` card.** A successful
+  `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
+  result now carries `render: "media"` with the saved file's absolute path, type,
+  size and model, so a client can show and open it without reading a path out of
+  the answer. Only an existing local image or audio file becomes a card; anything
+  else stays a plain tool result.
 - **The "not confirmed" line on an answer is now documented.** An answer that
   ends with `I haven't confirmed this works — …` is the agent saying a check
   failed, was blocked, or never ran after a change. README, SPEC and SKILL say
@@ -33,6 +39,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 

@@ -1103,6 +1103,10 @@ export interface ResourceUsage {
    */
   networks_error?: string | null;
   /**
+   * Why NPUs can't be read when they're read apart from GPUs (Linux).
+   */
+  npus_error?: string | null;
+  /**
    * False until the first sample is in.
    */
   ready: boolean;

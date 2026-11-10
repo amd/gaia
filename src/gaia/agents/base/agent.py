@@ -2960,13 +2960,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2975,7 +2983,25 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
@@ -3094,8 +3120,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -3106,7 +3130,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -3135,7 +3159,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
@@ -8810,9 +8834,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -8844,6 +8870,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8880,7 +8912,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -9513,12 +9551,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 
@@ -10831,7 +10864,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -10844,7 +10877,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )

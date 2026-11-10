@@ -200,6 +200,111 @@ class TestGitSubcommands:
         assert validate("git show HEAD") is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo gh issue close 1",
+        "sudo -u root gh pr merge 1",
+        "doas gh issue close 1",
+        "env GAIA_TEST=1 gh pr merge 1",
+        "env -- gh issue close 1",
+        "timeout 5 gh pr merge 1",
+        "setsid gh issue close 1",
+        "nohup gh pr merge 1",
+        "time gh issue close 1",
+        "nice -n 10 gh pr merge 1",
+        "exec gh issue close 1",
+        "command gh pr merge 1",
+        "xargs -n 1 gh issue close 1",
+    ],
+)
+def test_a_launcher_cannot_downgrade_an_irreversible_gh_command(command):
+    """A known wrapper carries the inner command's never-offered tier (#6905)."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E gh pr merge 1",
+        "sudo -n gh issue close 1",
+        "sudo -s gh pr merge 1",
+        "sudo -P gh issue close 1",
+        "timeout -k 5 10 gh pr merge 1",
+        "timeout --kill-after=5 10 gh issue close 1",
+        "xargs -n 1 gh issue close 1",
+        "xargs -L 1 gh pr merge 1",
+        "conda run -n myenv gh issue close 1",
+        "conda run --name=myenv gh pr merge 1",
+        "conda run -p /env gh issue close 1",
+    ],
+)
+def test_launcher_flags_do_not_hide_the_irreversible_inner_command(command):
+    """Each launcher skips its own operands before applying the refusal tier."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -p pw gh pr merge 1",
+        "sudo -uroot gh issue close 1",
+        "sudo -Eu root gh pr merge 1",
+        "sudo --not-a-real-flag value gh pr merge 1",
+        "sudo -D /tmp gh issue close 1",
+        "/usr/bin/sudo gh pr merge 1",
+        "timeout -- 5 gh pr merge 1",
+        "timeout -v 5 gh issue close 1",
+        "env -P /usr/bin gh pr merge 1",
+        "env --unknown-option gh issue close 1",
+        "xargs --replace gh pr merge 1",
+        "sudo timeout -k 1 5 nice -n 3 env A=1 gh pr merge 1",
+    ],
+)
+def test_unfamiliar_launcher_spellings_still_keep_the_refusal(command):
+    """An option the parser doesn't know is read both ways; a refusal holds."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+def test_deeply_nested_launchers_refuse_without_recursing():
+    result = validate("sudo " * 300 + "gh pr merge 1")
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -p pw echo gh pr merge 1",
+        "env -u HOME echo gh pr merge 1",
+        "timeout -- 5 echo gh issue close 1",
+    ],
+)
+def test_known_launcher_operands_do_not_refuse_harmless_text(command):
+    result = validate(command)
+    assert result is None or result["tier"] != TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E echo gh pr merge 1",
+        "timeout -k 5 10 echo gh issue close 1",
+        "xargs -n 1 echo gh pr merge 1",
+    ],
+)
+def test_launcher_flags_do_not_refuse_harmless_text(command):
+    """Wrapper parsing must not mistake text in a harmless command for gh."""
+    result = validate(command)
+    assert result is None or result["tier"] != TIER_REFUSE
+
+
 # ---------------------------------------------------------------------------
 # Git global options that precede the subcommand
 # ---------------------------------------------------------------------------

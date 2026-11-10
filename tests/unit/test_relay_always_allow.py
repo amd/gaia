@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.registry import AgentRegistry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
@@ -31,7 +32,6 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
 from gaia.ui.email_sidecar import grants as relayed_grants
 from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,

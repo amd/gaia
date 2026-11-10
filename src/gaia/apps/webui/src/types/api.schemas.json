@@ -3586,6 +3586,18 @@
         "description": "Why network adapters can't be read, when CPU and memory still can.",
         "title": "Networks Error"
       },
+      "npus_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why NPUs can't be read when they're read apart from GPUs (Linux).",
+        "title": "Npus Error"
+      },
       "ready": {
         "description": "False until the first sample is in.",
         "title": "Ready",

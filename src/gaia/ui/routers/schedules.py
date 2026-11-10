@@ -92,16 +92,6 @@ class ScheduleListResponse(BaseModel):
     total: int
 
 
-class ScheduleResultResponse(BaseModel):
-    """A single schedule execution result."""
-
-    id: str
-    task_id: str
-    executed_at: str
-    result: Optional[str] = None
-    error: Optional[str] = None
-
-
 class ScheduleResultsResponse(BaseModel):
     """List of schedule execution results."""
 
