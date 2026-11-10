@@ -20,6 +20,7 @@ import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.deliverables import (
     FILE,
+    _script_opens,
     blocks_text,
     file_findings,
     input_paths,
@@ -515,8 +516,22 @@ def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
         "Path('bom.md').write_text(Path('bom.md').read_text().replace('TBD', '1'))",
         "import pandas as pd\n"
         "df = pd.read_csv('bom.md')\ndf.loc[0, 'Qty'] = 4\ndf.to_csv('bom.md')",
+        "import io\nrep = io.open('bom.md').read()\nopen('bom.md', 'w').write(rep)",
+        "import codecs\nrep = codecs.open('bom.md', encoding='utf-8').read()\n"
+        "open('bom.md', 'w').write(rep)",
+        "from pathlib import Path\np = Path('bom.md')\nrep = p.read_text()\n"
+        "open('bom.md', 'w').write(rep)",
     ],
-    ids=["read-back", "append", "patch-open", "patch-path", "patch-pandas"],
+    ids=[
+        "read-back",
+        "append",
+        "patch-open",
+        "patch-path",
+        "patch-pandas",
+        "io-open",
+        "codecs-open",
+        "path-variable",
+    ],
 )
 def test_a_script_that_did_not_write_the_report_does_not_source_it(report_open):
     records = [
@@ -630,6 +645,143 @@ def test_a_scratchpad_query_is_not_a_source_for_an_amount(query):
     )
 
     assert _check(_md(table), records, name="regions.md")
+
+
+@pytest.mark.parametrize(
+    "code,stdout",
+    [
+        (
+            "data = 'CM5108032,95,40;CM5 IO Board,60,40;27W PSU,12,40'\n"
+            "t = 0\n"
+            "for row in data.split(';'):\n"
+            "    name, price, qty = row.split(',')\n"
+            "    line = int(price) * int(qty)\n"
+            "    t += line\n"
+            "    print(name, price, line)\n"
+            "print(t)",
+            "CM5108032 95 3800\nCM5 IO Board 60 2400\n27W PSU 12 480\n6680\n",
+        ),
+        (
+            "import json\n"
+            'bom = json.loads(\'{"CM5108032": [95, 40], "CM5 IO Board": [60, 40],'
+            ' "27W PSU": [12, 40]}\')\n'
+            "for k, (p, q) in bom.items(): print(k, p * q)\n"
+            "print(sum(p * q for p, q in bom.values()))",
+            "CM5108032 3800\nCM5 IO Board 2400\n27W PSU 480\n6680\n",
+        ),
+        (
+            "from decimal import Decimal\n"
+            "for item in ('CM5 $95.00 x40', 'IO $60.00 x40', 'PSU $12.00 x40'):\n"
+            "    name, p, q = item.split()\n"
+            "    print(name, Decimal(p[1:]) * int(q[1:]))",
+            "CM5 3800.00\nIO 2400.00\nPSU 480.00\n",
+        ),
+        (
+            "prices = [9*10+5, 6*10, 1*10+2]\nqty = 4*10\n"
+            "for p in prices: print(p * qty)\nprint(sum(p * qty for p in prices))",
+            "3800\n2400\n480\n6680\n",
+        ),
+        (
+            "prices = [int('9'+'5'), int('6'+'0'), int('1'+'2')]\nqty = int('4'+'0')\n"
+            "for p in prices: print(p * qty)\nprint(sum(p * qty for p in prices))",
+            "3800\n2400\n480\n6680\n",
+        ),
+        (
+            "prices = [ord('_'), ord('<'), ord('\x0c')]\nqty = ord('(')\n"
+            "for p in prices: print(p * qty)\nprint(sum(p * qty for p in prices))",
+            "3800\n2400\n480\n6680\n",
+        ),
+    ],
+    ids=[
+        "string-split",
+        "json-loads",
+        "dollar-string",
+        "literal-arithmetic",
+        "string-concat",
+        "ord",
+    ],
+)
+def test_prices_hidden_in_a_scripts_literals_are_still_flagged(code, stdout):
+    findings = _bom_script(code, stdout)
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "$95.00" in findings[0].correction
+
+
+REGION_TABLE = (
+    "| Region | Revenue | Share |\n|---|---|---|\n"
+    "| North | 1838.00 | 30.6% |\n| South | 1410.00 | 23.5% |\n"
+    "| East | 1374.75 | 22.9% |\n| West | 1374.75 | 22.9% |\n"
+)
+REGION_STDOUT = (
+    "North 1838.00 30.6\nSouth 1410.00 23.5\nEast 1374.75 22.9\nWest 1374.75 22.9\n"
+)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import csv\nfrom collections import defaultdict\n"
+        "with open('orders.csv', newline='') as f:\n"
+        "    rows = list(csv.DictReader(f))\n"
+        "rev = defaultdict(float)\n"
+        "for r in rows: rev[r['region']] += int(r['units']) * float(r['unit_price'])\n"
+        "total = sum(rev.values())\n"
+        "for k, v in sorted(rev.items(), key=lambda kv: -kv[1]):\n"
+        "    print(k, f'{round(v, 2):.2f}', round(v / total * 100, 1))",
+        "import pandas as pd\ndf = pd.read_csv('orders.csv')\n"
+        "s = (df.units * df.unit_price).groupby(df.region).sum()\n"
+        "for k, v in s.sort_values(ascending=False).items():\n"
+        "    print(k, f'{v:.2f}', round(100 * v / s.sum(), 1))",
+        "import csv, io\nrows = list(csv.DictReader(io.open('orders.csv')))\n"
+        "rev = {}\n"
+        "for r in rows:\n"
+        "    rev[r['region']] = rev.get(r['region'], 0) + "
+        "int(r['units']) * float(r['unit_price'])\n"
+        "total = sum(rev.values())\n"
+        "for k, v in rev.items(): print(k, f'{v:.2f}', f'{v * 100 / total:.1f}')",
+        "import codecs, csv\n"
+        "rows = list(csv.DictReader(codecs.open('orders.csv', encoding='utf-8')))\n"
+        "rev = {}\n"
+        "for r in rows:\n"
+        "    rev[r['region']] = rev.get(r['region'], 0) + "
+        "int(r['units']) * float(r['unit_price'])\n"
+        "for k, v in rev.items(): print(k, f'{v:.2f}')",
+        "import csv, io\nfrom pathlib import Path\n"
+        "rows = list(csv.DictReader(io.StringIO(Path('orders.csv').read_text())))\n"
+        "rev = {}\n"
+        "for r in rows:\n"
+        "    rev[r['region']] = rev.get(r['region'], 0) + "
+        "int(r['units']) * float(r['unit_price'])\n"
+        "for k, v in rev.items(): print(k, f'{v:.2f}')",
+    ],
+    ids=["with-open-round-percent", "pandas-percent", "io-open", "codecs", "pathlib"],
+)
+def test_revenue_and_shares_a_script_computed_are_sourced(code):
+    records = [_read("orders.csv", ORDERS_CSV), _run_python(code, REGION_STDOUT)]
+
+    findings = _check(_md(REGION_TABLE), records, TOP_ORDERS_QUERY, "regions.md")
+
+    assert findings == []
+
+
+@pytest.mark.parametrize(
+    "expr,computed",
+    [
+        ("int(r['units']) / len(rows) * 100", True),
+        ("100 * int(r['units']) / len(rows)", True),
+        ("int(r['units']) * 100", False),
+        ("int(r['units']) * 100 / 4", False),
+    ],
+    ids=["ratio-times-100", "100-times-ratio", "price-100", "over-a-literal"],
+)
+def test_only_a_hundred_that_scales_a_ratio_is_not_a_typed_figure(expr, computed):
+    code = (
+        "import csv\nrows = list(csv.DictReader(open('orders.csv')))\n"
+        f"for r in rows: print(r['region'], {expr})"
+    )
+
+    assert (_script_opens(_run_python(code)) is not None) is computed
 
 
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():

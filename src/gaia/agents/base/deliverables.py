@@ -23,7 +23,9 @@ deliverable, and nothing here edits it.
 from __future__ import annotations
 
 import ast
+import builtins
 import csv
+import decimal
 import io
 import json
 import logging
@@ -687,6 +689,136 @@ _PY_UNSEEN = {
 #: The largest figure a script may type itself: a count, an index, a rounding.
 _SMALL_INT = 10
 _NUMERIC_STRING = re.compile(r"\s*[-+]?\d[\d,]*(?:\.\d+)?\s*")
+_DIGITS = re.compile(r"\d+(?:\.\d+)?")
+#: ``%10.2f`` and ``{:>12}`` size a column; they type no figure.
+_FORMAT_DIRECTIVE = re.compile(
+    r"%[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXr%]|\{[\w.\[\]]*(?:![rsa])?(?::[^{}]*)?\}"
+)
+#: Builtins that turn literals into a figure: ``int('9' + '5')``, ``ord('_')``.
+_PY_FOLDERS = {"int", "float", "str", "Decimal", "ord", "chr", "len", "abs", "round"}
+_PY_OPEN_MODULES = {"io", "codecs"}
+
+
+class _Unfoldable(Exception):
+    """The expression depends on something other than the script's literals."""
+
+
+def _fold(node: Any, depth: int = 0) -> Any:
+    """The value of an expression built only from literals, ``9*10+5``."""
+    if depth > 32:
+        raise _Unfoldable
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float, str)):
+        return node.value
+    try:
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            value = _fold(node.operand, depth + 1)
+            return -value if isinstance(node.op, ast.USub) else +value
+        if isinstance(node, ast.BinOp):
+            left = _fold(node.left, depth + 1)
+            right = _fold(node.right, depth + 1)
+            if isinstance(node.op, ast.Pow) and (abs(right) > 64 or abs(left) > 1e6):
+                raise _Unfoldable
+            if isinstance(node.op, ast.Mult) and isinstance(left, str) != isinstance(
+                right, str
+            ):
+                if abs(right if isinstance(left, str) else left) > 1000:
+                    raise _Unfoldable
+            ops = {
+                ast.Add: lambda a, b: a + b,
+                ast.Sub: lambda a, b: a - b,
+                ast.Mult: lambda a, b: a * b,
+                ast.Div: lambda a, b: a / b,
+                ast.FloorDiv: lambda a, b: a // b,
+                ast.Mod: lambda a, b: a % b,
+                ast.Pow: lambda a, b: a**b,
+            }
+            if type(node.op) not in ops:
+                raise _Unfoldable
+            return ops[type(node.op)](left, right)
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for part in node.values:
+                if isinstance(part, ast.FormattedValue):
+                    parts.append(str(_fold(part.value, depth + 1)))
+                else:
+                    parts.append(str(_fold(part, depth + 1)))
+            return "".join(parts)
+        if isinstance(node, ast.Call) and not node.keywords:
+            func = node.func
+            args = [_fold(a, depth + 1) for a in node.args]
+            if isinstance(func, ast.Name) and func.id in _PY_FOLDERS:
+                if func.id == "Decimal":
+                    return decimal.Decimal(*args)
+                return getattr(builtins, func.id)(*args)
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "join"
+                and len(node.args) == 1
+                and isinstance(node.args[0], (ast.List, ast.Tuple))
+            ):
+                sep = _fold(func.value, depth + 1)
+                items = [_fold(e, depth + 1) for e in node.args[0].elts]
+                return sep.join(items)
+    except _Unfoldable:
+        raise
+    except Exception as e:  # noqa: BLE001 - a literal that won't evaluate types nothing
+        raise _Unfoldable from e
+    raise _Unfoldable
+
+
+def _types_a_figure(value: Any) -> bool:
+    """*value* holds a number larger than a count: ``95``, ``'$95.00'``."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        text = _FORMAT_DIRECTIVE.sub(" ", value)
+        return any(float(n) > _SMALL_INT for n in _DIGITS.findall(text))
+    try:
+        return abs(value) > _SMALL_INT
+    except TypeError:
+        return False
+
+
+def _percent_scales(tree: ast.AST) -> Set[int]:
+    """The ``100`` constants that turn a ratio into a percentage: ``a / b * 100``."""
+
+    def is_hundred(node: Any) -> bool:
+        return isinstance(node, ast.Constant) and node.value == 100
+
+    def is_ratio(node: Any) -> bool:
+        return any(
+            isinstance(n, ast.BinOp)
+            and isinstance(n.op, ast.Div)
+            and not _foldable(n.right)
+            for n in ast.walk(node)
+        )
+
+    scales = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp):
+            continue
+        if isinstance(node.op, ast.Mult):
+            for side, other in ((node.left, node.right), (node.right, node.left)):
+                if is_hundred(side) and is_ratio(other):
+                    scales.add(id(side))
+        elif (
+            isinstance(node.op, ast.Div)
+            and isinstance(node.left, ast.BinOp)
+            and isinstance(node.left.op, ast.Mult)
+            and not _foldable(node.right)
+        ):
+            for side in (node.left.left, node.left.right):
+                if is_hundred(side):
+                    scales.add(id(side))
+    return scales
+
+
+def _foldable(node: Any) -> bool:
+    try:
+        _fold(node)
+    except _Unfoldable:
+        return False
+    return True
 
 
 def _string_names(tree: ast.AST) -> Dict[str, str]:
@@ -759,12 +891,25 @@ def _call_arg(call: ast.Call, index: int, keyword: str) -> Any:
     return next((k.value for k in call.keywords if k.arg == keyword), None)
 
 
+def _is_open(func: Any) -> bool:
+    """``open``, ``io.open`` or ``codecs.open``: the same path-then-mode call."""
+    return isinstance(func, ast.Name) or (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in _PY_OPEN_MODULES
+    )
+
+
+def _is_print(call: ast.Call) -> bool:
+    return isinstance(call.func, ast.Name) and call.func.id == "print"
+
+
 def _truncates(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
     """The path *call* replaces: ``open(p, 'w')``, ``Path(p).write_text``,
     ``df.to_csv(p)``. Not a read, and not an append."""
     func = call.func
     ident = getattr(func, "id", getattr(func, "attr", None))
-    if ident == "open" and isinstance(func, ast.Name):
+    if ident == "open" and _is_open(func):
         mode = _call_arg(call, 1, "mode")
         if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
             if set(mode.value) & {"w", "x"}:
@@ -789,7 +934,7 @@ def _reads(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
     ``pd.read_csv(p)``."""
     func = call.func
     ident = getattr(func, "id", getattr(func, "attr", None))
-    if ident == "open" and isinstance(func, ast.Name):
+    if ident == "open" and _is_open(func):
         return _literal_path(_call_arg(call, 0, "file"), named)
     if ident in ("read_text", "read_bytes") and isinstance(func, ast.Attribute):
         receiver = func.value
@@ -811,7 +956,8 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
 
     Each file it opens is named, as a literal or a name bound once to one; it
     reaches no other data; and it types no figure beyond a small count —
-    ``v*40`` or ``1500 - 90`` invents its result rather than computing it.
+    ``v*40``, ``1500 - 90``, ``9*10+5`` or ``'CM5,95'.split(',')`` invents its
+    result rather than computing it.
     """
     if _name(record) != "run_python":
         return None
@@ -826,19 +972,46 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
     replaced: Set[str] = set()
     read_from: Set[str] = set()
     named = _string_names(tree)
+    scales = _percent_scales(tree)
+    # Column widths in f"{v:>12}" and an encoding name type no figure.
+    untyped = {
+        id(c)
+        for node in ast.walk(tree)
+        for spec in ([node.format_spec] if isinstance(node, ast.FormattedValue) else [])
+        + [k.value for k in getattr(node, "keywords", []) if k.arg == "encoding"]
+        if spec is not None
+        for c in ast.walk(spec)
+    }
+    typed_strings: Set[str] = set()
+    paths: Set[str] = set()
+    refs: Dict[str, int] = {}
+    truncations: Dict[str, int] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant):
             value = node.value
             if isinstance(value, str) and value.lower().startswith(("http:", "https:")):
                 return None
-            # Decimal('95.00') types a price as surely as 95 does.
-            if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value):
-                if abs(_number(value)) > _SMALL_INT:
-                    return None
+            # '$95.00', "CM5,95,40" or json.loads('{"cm5": 95}') types a price
+            # as surely as 95 does, unless the string is a path the script opens.
+            if isinstance(value, str) and id(node) not in untyped:
+                if _types_a_figure(value):
+                    typed_strings.add(value)
             if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
+                if id(node) in scales:
+                    continue
                 if not isinstance(value, int) or abs(value) > _SMALL_INT:
                     return None
-        elif isinstance(node, (ast.Name, ast.Attribute)):
+        elif (
+            isinstance(node, (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.Call))
+            and id(node) not in untyped
+        ):
+            # 9*10+5 or int('9'+'5'): small literals that make a price.
+            try:
+                if _types_a_figure(_fold(node)):
+                    return None
+            except _Unfoldable:
+                pass
+        if isinstance(node, (ast.Name, ast.Attribute)):
             if (node.id if isinstance(node, ast.Name) else node.attr) in _PY_UNSEEN:
                 return None
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -851,10 +1024,17 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
             wrote = _truncates(node, named)
             if wrote is not None:
                 replaced.add(_basename(wrote))
+                paths.add(wrote)
+                truncations[_basename(wrote)] = truncations.get(_basename(wrote), 0) + 1
             else:
                 source = _reads(node, named)
                 if source is not None:
                     read_from.add(_basename(source))
+                    paths.add(source)
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                ref = _literal_path(arg, named)
+                if ref is not None and not _is_print(node):
+                    refs[_basename(ref)] = refs.get(_basename(ref), 0) + 1
             func = node.func
             if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
                 continue
@@ -863,6 +1043,12 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
             if path is None:
                 return None
             opened.append(_basename(path))
+            paths.add(path)
+    if typed_strings - paths:
+        return None
+    # A path handed to any call besides the overwrite, Path(p).read_text()
+    # through a variable included, may have read the file first.
+    read_from |= {name for name in replaced if refs.get(name, 0) > truncations[name]}
     return opened, replaced - read_from
 
 
