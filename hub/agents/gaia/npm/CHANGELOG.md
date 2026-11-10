@@ -52,6 +52,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `calculator` for the tools above), and a result without a card payload never
   names one. A client that has no renderer for a key should draw its
   unknown-card fallback.
+- **The agent leaves a locked file alone.** It no longer edits or unlocks a
+  file another program, the OS or you have locked; it says how to release the
+  lock and asks first, on every model and in any folder.
 - **`/index` reads a file outside the working folder, and `/resume` counts
   only what loaded** (#6978). `/index <file>` grants the file it names before
   indexing it, so a PDF elsewhere on disk indexes instead of being refused.

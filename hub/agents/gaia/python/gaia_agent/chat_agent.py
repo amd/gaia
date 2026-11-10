@@ -1697,6 +1697,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 - Output tool-call syntax as text (e.g. "[tool:query_specific_file]"). Issue the actual JSON tool call.
 - Answer capability questions ("what can you do?") with bullet lists — single paragraph, 1-2 sentences max.
 
+**LOCKED FILES:** Never edit or unlock a locked file; say how to release it and ask.
+
 **OUTPUT FORMATTING:** Use Markdown — **bold** for emphasis, `inline code` for paths/commands, bullet/numbered lists for enumerations, ### headings for long responses, tables for tabular data, code blocks for snippets. Keep responses scannable.
 """
 
