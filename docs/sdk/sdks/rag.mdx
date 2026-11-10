@@ -1060,7 +1060,7 @@ except PermissionError as e:
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+**Security Consideration:** Without `allowed_paths`, RAG reads only the working directory, and `index_document` refuses any other file with `file_unreadable`. A caller that names a file grants it first with `path_validator.add_allowed_path(path)`, as `quick_rag()` and the chat agent's `/index` do. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
 
 `allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write), and the agent's `index_document` / `index_directory` tools apply them too. Calling `RAGSDK.index_document` directly checks the scope only.
 </Warning>
