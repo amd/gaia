@@ -734,15 +734,19 @@ class PathValidator:
                 it and every later grant is held to it (see
                 :func:`env_allowed_paths`).
         """
-        from gaia.config import gaia_home
+        from gaia.config import gaia_home, generated_media_dirs
 
         self._env_scope: Optional[List[Path]] = env_allowed_paths()
         self.allowed_paths: Set[Path] = set()
         # Readable but never writable, e.g. a loaded skill's own folder. GAIA's
-        # transcripts are here unless the environment confines this session.
+        # transcripts and the media it generated are here unless the environment
+        # confines this session.
         self.read_only_paths: Set[Path] = set()
         if self._env_scope is None:
             self.read_only_paths.add(Path(_real_path(gaia_home() / "transcripts")))
+            self.read_only_paths.update(
+                Path(_real_path(folder)) for folder in generated_media_dirs()
+            )
         # Folders the user took away from this chat: refused, never prompted for.
         self.withheld_paths: Set[Path] = set()
         self.scratch_dir: Optional[Path] = None

@@ -55,6 +55,13 @@ GAIA_CONFIG_FILE = Path(
     os.getenv("GAIA_CONFIG_FILE", str(GAIA_CONFIG_DIR / "config.json"))
 )
 
+
+def generated_media_dirs() -> Tuple[Path, Path]:
+    """The folders GAIA saves generated images and audio in, in that order."""
+    cache = Path(GAIA_CONFIG_DIR) / "cache"
+    return cache / "sd" / "images", cache / "audio" / "generations"
+
+
 # Read-aloud speed, as a percentage of Kokoro's normal speed.
 READ_ALOUD_MIN_SPEED = 50
 READ_ALOUD_MAX_SPEED = 200
