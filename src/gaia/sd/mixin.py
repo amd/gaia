@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
-from gaia.agents.tools.path_access import image_file_error, read_access_error
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
@@ -313,6 +312,8 @@ class SDToolsMixin:
                 model must already be downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
+                from gaia.agents.tools.path_access import read_access_error
+
                 refusal = read_access_error(self, image_path)
                 if refusal:
                     return refusal
@@ -411,6 +412,8 @@ class SDToolsMixin:
         self, image_path: str
     ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
         """Check read scope and resolve one local source image."""
+        from gaia.agents.tools.path_access import image_file_error, read_access_error
+
         path = Path(image_path).expanduser()
         denied = read_access_error(self, path)
         if denied:
@@ -422,6 +425,23 @@ class SDToolsMixin:
             return path.resolve(strict=True), None
         except OSError as exc:
             return None, {"status": "error", "error": f"Cannot read image: {exc}"}
+
+    def _image_model_missing(self, model: str, action: str) -> Optional[Dict[str, Any]]:
+        """Refuse a model that is not downloaded, so a call never starts a download."""
+        if action == "edit" and model in self.SD_MODELS:
+            return None
+        try:
+            downloaded = {m.get("id") for m in self.sd_client.list_sd_models()}
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        if model in downloaded:
+            return None
+        return {
+            "status": "error",
+            "error": f"The {action} model '{model}' is not downloaded in Lemonade. "
+            f"Download it ({describe_client_hint('pull', model).instruction}) "
+            "or call list_sd_models() to pick a downloaded model.",
+        }
 
     def _save_image_reply(
         self, response: Any, *, prefix: str, source: Path, model: str
@@ -442,7 +462,7 @@ class SDToolsMixin:
             paths = [
                 str(
                     self._save_image(
-                        f"{prefix}_{source.stem}_{index}", image_bytes, model
+                        f"{prefix}_{index}_{source.stem}", image_bytes, model
                     )
                 )
                 for index, image_bytes in enumerate(images, start=1)
@@ -464,7 +484,14 @@ class SDToolsMixin:
         if error:
             return error
         selected_model = model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "edit")
+        if missing:
+            return missing
+        legacy_sd = selected_model in self.SD_MODELS
         try:
+            self.sd_client.load_model(
+                selected_model, auto_download=legacy_sd, prompt=False, timeout=600
+            )
             response = self.sd_client.edit_image(
                 source,
                 prompt,
@@ -501,6 +528,9 @@ class SDToolsMixin:
         if error:
             return error
         selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "upscale")
+        if missing:
+            return missing
         try:
             response = self.sd_client.upscale_image(
                 source, model=selected_model, timeout=900
@@ -532,6 +562,8 @@ class SDToolsMixin:
         n: int = 1,
     ) -> Dict[str, Any]:
         """Vary *image_path* through Lemonade and save each result as a PNG."""
+        from gaia.agents.tools.path_access import read_access_error
+
         refusal = read_access_error(self, image_path)
         if refusal:
             return refusal
@@ -932,13 +964,12 @@ class SDToolsMixin:
         Returns:
             Path to saved image file
         """
-        # Both prompt and model can originate in a tool call: neither may
-        # introduce path segments or control whitespace into an output name.
+        # Create safe filename from prompt
         safe_prompt = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", prompt[:40]).strip())
-        safe_model = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", model[:80]).strip())
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
+        safe_model = re.sub(r"[^A-Za-z0-9_.-]", "_", model)
         filename = f"{safe_prompt}_{safe_model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename

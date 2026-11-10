@@ -217,6 +217,8 @@ result = agent.process_query("create a sunset over mountains")
 - `list_sd_models()` - List the image models downloaded in Lemonade, with each one's `image_defaults`
 - `get_generation_history(limit)` - See generated images from session
 
+Edit and upscale write new files under the output directory and never modify the source image. Their model (default `Flux-2-Klein-4B` for edits, `RealESRGAN-x4plus` for upscaling) must already be downloaded in Lemonade (legacy SD models such as `SD-Turbo` download on first use, as in `generate_image`); otherwise the tool returns an error naming how to download it.
+
 To opt into image-to-3D reconstruction, initialize the mixin with
 `enable_3d_tools=True`. This adds
 `generate_3d_model(image_path, model="TRELLIS-3D", resolution=512, seed=42, bg_removal="threshold")`,

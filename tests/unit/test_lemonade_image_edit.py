@@ -153,6 +153,10 @@ def edit_tools(monkeypatch, tmp_path):
         base_url=BASE,
         edit_image=MagicMock(),
         upscale_image=MagicMock(),
+        load_model=MagicMock(),
+        list_sd_models=MagicMock(
+            return_value=[{"id": "Flux-2-Klein-4B"}, {"id": "RealESRGAN-x4plus"}]
+        ),
     )
     monkeypatch.setattr("gaia.sd.mixin.LemonadeClient", _ClientFactory(backend))
     host = SDToolsMixin()
@@ -267,8 +271,56 @@ def test_registered_image_tools_reject_unusable_reply_without_writing(
     assert not list(output.glob("*.png"))
 
 
-def test_save_image_sanitizes_a_model_path(edit_tools):
+def test_save_image_keeps_a_model_path_inside_the_output_dir(edit_tools):
     host, _backend, output = edit_tools
     saved = host._save_image("edited source", b"image", "../../x")
     assert saved.parent == output.resolve()
-    assert ".." not in saved.name and "/" not in saved.name and "\\" not in saved.name
+    assert "/" not in saved.name and "\\" not in saved.name
+
+
+@pytest.mark.parametrize("method", ["edit_image", "upscale_image"])
+def test_a_model_that_is_not_downloaded_is_refused_with_a_remedy(
+    edit_tools, tmp_path, method
+):
+    host, backend, output = edit_tools
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    source = allowed / "source.png"
+    source.write_bytes(_png_bytes())
+    _scope(host, allowed)
+    backend.list_sd_models.return_value = []
+
+    if method == "edit_image":
+        result = _TOOL_REGISTRY[method]["function"](str(source), "change it")
+    else:
+        result = _TOOL_REGISTRY[method]["function"](str(source))
+
+    assert result["status"] == "error"
+    assert "not downloaded" in result["error"]
+    assert "list_sd_models" in result["error"]
+    getattr(backend, method).assert_not_called()
+    backend.load_model.assert_not_called()
+    assert not list(output.glob("*.png"))
+
+
+@pytest.mark.parametrize("method", ["edit_image", "upscale_image"])
+def test_a_source_inside_the_output_dir_is_never_overwritten(edit_tools, method):
+    host, backend, output = edit_tools
+    original = _png_bytes()
+    source = output / "photo.png"
+    source.write_bytes(original)
+    _scope(host, output)
+    reply = _png_bytes(((10, 200, 10), (20, 20, 220)))
+    getattr(backend, method).return_value = {
+        "data": [{"b64_json": _b64(reply)}, {"b64_json": _b64(reply)}]
+    }
+
+    if method == "edit_image":
+        result = _TOOL_REGISTRY[method]["function"](str(source), "change it", n=2)
+    else:
+        result = _TOOL_REGISTRY[method]["function"](str(source))
+
+    assert result["status"] == "success"
+    assert source.read_bytes() == original
+    assert str(source.resolve()) not in result["image_paths"]
+    assert len(set(result["image_paths"])) == 2
