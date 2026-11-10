@@ -438,6 +438,48 @@ test('finished answer', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+const RECIPE_CARD = {
+    kind: 'guide', guideType: 'recipe', title: 'خبز الموز', description: 'رطب وسهل التحضير.',
+    notes: 'يحفظ ثلاثة أيام.', servings: 8,
+    items: ['2 cups flour', '3 ripe bananas', '1/2 cup sugar', '1 teaspoon baking soda'],
+    steps: ['Mix: اخلط المكونات الجافة', 'Bake 60 minutes at 350°F'],
+};
+const LOAN_CARD = {
+    kind: 'calculator', calculator: 'loan', title: '', currency: 'EUR',
+    inputs: { amount: 300_000, annualRatePercent: 6.5, years: 30, downPayment: 60_000 },
+};
+
+async function withGuideCards(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'وصفة خبز الموز وقسط قرض', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'بالهناء والشفاء.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'guides/show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
+                            { id: 2, type: 'tool', tool: 'calculators/show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`recipe and loan cards lay out in the interface direction (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withGuideCards);
+        await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
+        await expect(page.locator('.render-calc')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
+        await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';

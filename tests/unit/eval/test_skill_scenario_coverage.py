@@ -47,6 +47,10 @@ DEFERRED: dict[str, str] = {
         "Runs later through a delivery channel; its store, runner, CLI and policy "
         "are unit-tested."
     ),
+    "calculators": (
+        "The card does the math in the client; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
     "calendar": (
         "Requires a Google or Outlook calendar connection; the eval mailbox "
         "fixture has no calendar, and every change needs a person to approve."
@@ -55,6 +59,10 @@ DEFERRED: dict[str, str] = {
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
+    "guides": (
+        "The answer is a card the client draws; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
     "image-gen": "Needs Stable Diffusion loaded; out of scope for the text lanes.",
     "inbox-triage": "Requires a mailbox connector; covered by the email eval lane.",
     "music-gen": (

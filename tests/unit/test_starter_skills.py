@@ -53,6 +53,7 @@ STARTER_PACK = frozenset(
     {
         "analyze-recording",
         "automations",
+        "calculators",
         "calendar",
         "check-in",
         "coding",
@@ -61,6 +62,7 @@ STARTER_PACK = frozenset(
         "document-brief",
         "file-ops",
         "github-triage",
+        "guides",
         "image-gen",
         "inbox-triage",
         "music-gen",
