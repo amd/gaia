@@ -1209,7 +1209,8 @@ class EmbeddedLemonade:
         The embedder is loaded on demand by ``/embeddings`` as well as by GAIA's
         explicit loads, so its ubatch has to live in Lemonade's saved options.
         A saved CPU backend is dropped so each start tries the GPU again; the
-        client saves the CPU back only if the GPU load fails.
+        client saves the CPU back only if the GPU load fails. On macOS, where
+        Lemonade picks the backend, only the ubatch is written.
         """
         from gaia.llm.lemonade_client import (
             DEFAULT_EMBEDDING_MODEL,
@@ -1235,11 +1236,12 @@ class EmbeddedLemonade:
             options = loaded
         # Lemonade keys saved options by the registered (``user.``) name.
         for model in (DEFAULT_EMBEDDING_MODEL,):
-            if not manages_embedder_backend(model):
-                continue
             entry = options.get(model)
             entry = dict(entry) if isinstance(entry, dict) else {}
-            if entry.get("llamacpp_backend") == "cpu":
+            if (
+                manages_embedder_backend(model)
+                and entry.get("llamacpp_backend") == "cpu"
+            ):
                 log.info(
                     "Clearing the saved CPU backend for %s in %s so it tries the "
                     "GPU again",

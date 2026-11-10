@@ -96,7 +96,10 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
-from gaia.agents.tools.rag_tools import documents_still_indexing
+from gaia.agents.tools.rag_tools import (
+    documents_failed_indexing,
+    documents_still_indexing,
+)
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
     _workspace_default,
@@ -913,7 +916,9 @@ class ChatAgent(
 
         Each entry carries its path, so a file tool never has to search for a
         document the user already attached. A document still indexing in the
-        background is not searchable, so it is named on a line of its own.
+        background is not searchable, so it is named on a line of its own, and
+        so is one whose background index failed after the model was told it
+        was still in progress.
         """
         profile = getattr(self.config, "prompt_profile", "full")
         if "doc_rag" not in get_profile_spec(profile).tool_groups:
@@ -937,6 +942,12 @@ class ChatAgent(
             lines.append(
                 "[Still indexing in the background, not searchable yet: "
                 f"{', '.join(pending)}]"
+            )
+        failed = documents_failed_indexing(self.rag)
+        if failed:
+            reasons = "; ".join(f"{Path(fp).name}: {why}" for fp, why in failed)
+            lines.append(
+                f"[Indexing failed in the background, tell the user: {reasons}]"
             )
         return "\n".join(lines)
 
@@ -1818,7 +1829,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # Only advertise web and media tools the profile registers.
         # List only what this session lacks; a contradicting line wins on Gemma.
         lacking = ["cloud storage", "file conversion", "live collaboration"]
-        if not self._offers_scheduling():
+        if not (self._offers_scheduling() or self._offers_calendar()):
             lacking.insert(0, "scheduling")
         # The email tools only read mail, so sending stays unsupported either way.
         reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
@@ -3337,6 +3348,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         return bool(getattr(self.config, "enable_sd_tools", False)) and (
             self.model_features.image_generation
         )
+
+    #: The calendar skill ships with this agent (GaiaAgent sets it).
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = False
+
+    def _offers_calendar(self) -> bool:
+        """This agent bundles the calendar skill and the model is offered it."""
+        return self.BUNDLES_CALENDAR_SKILL and self.model_features.calendar
 
     def _register_loop_control_tools(self) -> None:
         """Register set_loop_state and request_user_input tools for autonomous mode.
