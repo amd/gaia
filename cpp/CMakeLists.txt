@@ -553,6 +553,13 @@ if(GAIA_BUILD_TESTS)
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
+    # Runs the built gaiacpp program end to end against the mock model server.
+    if(GAIA_BUILD_GAIA_AGENT)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp)
+        target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
+        add_dependencies(tests_mock gaiacpp)
+    endif()
+
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)
         target_sources(tests_mock PRIVATE
