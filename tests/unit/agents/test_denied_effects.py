@@ -129,6 +129,28 @@ def test_pipeline_helpers_and_cd_are_never_the_denied_effect(tmp_path):
     assert effects == {Effect(COMMAND, TEST_SUITE)}
 
 
+@pytest.mark.parametrize(
+    "wrapped_delete",
+    [
+        "call del victim.txt",
+        "start del victim.txt",
+        "& rm -rf victim.txt",
+        ". rm -rf victim.txt",
+        "conda run -n myenv rm -rf victim.txt",
+        "conda run --name=myenv rm -rf victim.txt",
+        "conda run -p C:/env rm -rf victim.txt",
+    ],
+)
+def test_wrapped_deletes_remain_overlapping_after_a_refusal(wrapped_delete, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell("rm -rf victim.txt"),
+        "run_shell_command",
+        _shell(wrapped_delete),
+        tmp_path,
+    )
+
+
 def test_a_url_inside_file_content_is_not_a_request(tmp_path):
     effects = effects_of_call(
         "write_file",
@@ -309,6 +331,27 @@ def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E rm -rf victim_rm",
+        "timeout 5 rm -rf victim_rm",
+        "timeout -k 5 10 rm -rf victim_rm",
+        "xargs -n 1 rm -rf victim_rm",
+        "xargs -L 1 rm -rf victim_rm",
+        "timeout -- 5 rm -rf victim_rm",
+        "sudo -p pw rm -rf victim_rm",
+    ],
+)
+def test_wrapped_deletes_are_recorded_with_their_inner_operands(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    expected = os.path.normcase(str(tmp_path / "victim_rm"))
+    assert any(
+        effect.kind == PATH and os.path.normcase(effect.target) == expected
+        for effect in effects
+    )
+
+
 def test_a_denied_file_is_denied_through_the_shell_too(tmp_path):
     denied = {"file_path": "notes/todo.txt", "content": "x"}
     assert _overlaps(
@@ -482,6 +525,8 @@ def test_a_delete_whose_target_the_code_computes_is_treated_as_overlapping(victi
     for code in [
         "import shutil, sys\nshutil.rmtree(sys.argv[1])",
         "import os\nos.remove(input('path? '))",
+        "from pathlib import Path\nPath(input('path? ')).unlink()",
+        "import os\ngetattr(os, 'remove')(input('path? '))",
         "import shutil, base64\nshutil.rmtree(base64.b64decode('eA==').decode())",
     ]:
         assert ledger.conflict("run_python", {"code": code}) is not None, code

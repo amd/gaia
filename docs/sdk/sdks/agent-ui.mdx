@@ -184,6 +184,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace

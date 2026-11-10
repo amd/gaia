@@ -200,13 +200,27 @@ _EMAIL_REQUIRED_CONNECTIONS = (
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/calendar.events",
+        ),
+        required_scopes=("https://www.googleapis.com/auth/gmail.readonly",),
+        reason=(
+            "Read and search your Gmail so the agent can triage your inbox, and see "
+            "and, with your approval, change your Google calendar."
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
-        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Calendars.ReadWrite",
+        ),
+        required_scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
+        reason=(
+            "Read and search your Outlook mail so the agent can triage your inbox, "
+            "and see and, with your approval, change your Outlook calendar."
+        ),
     ),
 )
 

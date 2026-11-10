@@ -53,6 +53,7 @@ STARTER_PACK = frozenset(
     {
         "analyze-recording",
         "calculators",
+        "calendar",
         "check-in",
         "coding",
         "daily-brief",

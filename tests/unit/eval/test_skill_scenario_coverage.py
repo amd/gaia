@@ -47,6 +47,10 @@ DEFERRED: dict[str, str] = {
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."
     ),
+    "calendar": (
+        "Requires a Google or Outlook calendar connection; the eval mailbox "
+        "fixture has no calendar, and every change needs a person to approve."
+    ),
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",

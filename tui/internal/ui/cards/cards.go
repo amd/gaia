@@ -56,6 +56,8 @@ func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[s
 		return renderImage(data, width), nil
 	case "audio":
 		return renderAudio(data, width), nil
+	case "media":
+		return renderMedia(data, width), nil
 	case "diff":
 		return renderDiff(data, width), nil
 	case "guide":

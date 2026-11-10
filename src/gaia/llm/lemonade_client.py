@@ -546,9 +546,14 @@ def resolve_default_vision_model() -> Optional[str]:
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
     current = config.last_model or model
-    cloud = current.startswith("claude-") or bool(cloud_model_provider(current))
+    cloud = current.startswith("claude-") or bool(
+        cloud_model_provider(current) or is_cloud_model(current)
+    )
+    # The catalog only changes the answer for an -FLM id, so only that asks it.
     if not cloud and runs_on_npu(current):
-        return None
+        if not is_cloud_model_with_catalog(current):
+            return None
+        cloud = True
     chosen = config.vision_model
     if chosen:
         return chosen
@@ -3371,6 +3376,25 @@ def may_be_cloud_model(model_id: Optional[str]) -> bool:
     if not model_id or "." not in model_id:
         return False
     return not any(mr.model_id == model_id for mr in MODELS.values())
+
+
+def is_cloud_model_with_catalog(
+    model_id: Optional[str], base_url: Optional[str] = None
+) -> bool:
+    """Classify a model even before this process has read Lemonade's catalog.
+
+    Built-in, known-cloud and known-local ids incur no request. Ambiguous ids
+    read the catalog once and fail loudly if it is unavailable rather than
+    silently taking a gateway model down a local hardware path.
+    """
+    if cloud_model_provider(model_id) or is_cloud_model(model_id):
+        return True
+    # A user-added model is local by declaration even when its id contains a
+    # dot. Do not ask a stopped Lemonade server to classify it as a gateway
+    # model; callers must retain the normal local startup/setup path.
+    if not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None:
+        return False
+    return LemonadeClient(base_url=base_url, verbose=False)._is_cloud_model(model_id)
 
 
 def is_tool_calling_model(model_id: Optional[str]) -> bool:

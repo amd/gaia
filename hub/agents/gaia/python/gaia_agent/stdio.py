@@ -1495,7 +1495,11 @@ def run_turn(
     agent.console = handler
     if state is not None:
         state.attach(handler)
-    translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID, debug=dev)
+    translator = CanonicalTranslator(
+        run_id=None,
+        agent_id=AGENT_ID,
+        debug=dev,
+    )
     result: Dict[str, Any] = {}
 
     def _run() -> None:

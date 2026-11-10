@@ -138,6 +138,30 @@ def test_a_card_skill_adds_its_tools_only_once_loaded(
     assert set(flagship._tools_registry) == before
 
 
+def test_the_calendar_skill_asks_before_every_change_on_the_flagship(
+    flagship, tmp_path
+):
+    """The calendar tools stay off the list until the skill loads, and then
+    every create, move and cancel waits for a person; reads do not."""
+    assert flagship.BUNDLES_CALENDAR_SKILL
+    assert not any(n.startswith("calendar/") for n in flagship._tools_registry)
+
+    flagship.load_skill(
+        "calendar", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in (
+            "create_calendar_event",
+            "update_calendar_event",
+            "cancel_calendar_event",
+        ):
+            assert flagship._tool_requires_confirmation(f"calendar/{name}", {})
+        for name in ("list_calendar_events", "check_calendar_availability"):
+            assert not flagship._tool_requires_confirmation(f"calendar/{name}", {})
+    finally:
+        assert flagship.unload_skill("calendar")
+
+
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
     """A skill's scripts/ file is on disk at <skill directory>/scripts/<file>.
 

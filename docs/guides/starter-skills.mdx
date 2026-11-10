@@ -271,6 +271,23 @@ answer.
   and `calculators/show_loan_calculator` (price, yearly rate, years, down
   payment).
 
+### calendar
+
+Reads and changes the main calendar of a connected Google or Outlook account:
+lists events, checks free time, and creates, moves or cancels events.
+
+- **Demonstrates** — a tool-providing skill whose writes reach other people, so
+  its manifest marks them `requires_confirmation: true`: every create, move or
+  cancel asks the person, even under Full access, and a run with nobody to ask
+  refuses it.
+- **Provides** — `calendar/list_calendar_events`,
+  `calendar/check_calendar_availability`, `calendar/create_calendar_event`,
+  `calendar/update_calendar_event`, `calendar/cancel_calendar_event`.
+- **Configure** — connect Google or Microsoft with calendar access; see
+  [Google](/connectors/google) or [Microsoft](/connectors/microsoft).
+- **Note** — event titles, locations and addresses come from whoever made the
+  event, so they reach the model marked as untrusted text.
+
 ### image-gen
 
 Turns "draw me a red bicycle" into a prompt worth generating, runs it through
