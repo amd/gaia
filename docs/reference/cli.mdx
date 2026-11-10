@@ -1897,9 +1897,12 @@ It applies everywhere GAIA sends a prompt or a key:
   cloud provider, enter a gateway token, or switch to a cloud model.
 - The web-search tool that answers through Perplexity's cloud AI is turned off.
 
-Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway or Claude)
-from `default_model` and `last_model` in `config.json`, and prints what it cleared
-and the local model GAIA uses instead. `gaia config show` lists the policy file and the current level.
+Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway, Claude, or
+any other gateway model Lemonade lists) from `default_model` and `last_model` in
+`config.json`, and prints what it cleared and the local model GAIA uses instead. A
+saved id that only Lemonade can identify as cloud is checked against its model list;
+if Lemonade can't be reached, that id stays saved and the command warns that it
+wasn't checked. `gaia config show` lists the policy file and the current level.
 
 What it does not cover:
 

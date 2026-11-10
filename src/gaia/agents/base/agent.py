@@ -2960,13 +2960,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2975,7 +2983,25 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
@@ -3094,8 +3120,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -3106,7 +3130,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -3135,7 +3159,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
