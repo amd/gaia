@@ -278,7 +278,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
 | `working_directory` | no | Contract ≥ 2.24. Absolute chat workspace used to resolve relative file paths for reads, writes, edits and approval prompts. It is separate from `allowed_paths`; a relative path is a **422**. Send the same folder the UI shows. |
 | `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
-| `internet_off` | no | Contract ≥ 2.23. `true` refuses web search and page fetches, the browser, connector and Agent Hub tools, mailbox reads, and any call or shell command that contacts another host, with a message telling the model the internet is off for this chat; `false` allows them. A retained session keeps the last value: send it every turn. Omit it to leave the agent as it is. To change it mid-turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}`; the next tool call follows it, and an unknown session is a **404**. Post it only once `/query` has answered, since the turn's own value replaces an earlier one; re-read the switch then and post it if it changed. |
+| `internet_off` | no | Contract ≥ 2.23. `true` refuses web search and page fetches, the browser, connector and Agent Hub tools, mailbox and calendar access, and any call or shell command that contacts another host, with a message telling the model the internet is off for this chat; `false` allows them. A retained session keeps the last value: send it every turn. Omit it to leave the agent as it is. To change it mid-turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}`; the next tool call follows it, and an unknown session is a **404**. Post it only once `/query` has answered, since the turn's own value replaces an earlier one; re-read the switch then and post it if it changed. |
 | `changes_turn_id` | no | Contract ≥ 2.19. Needs `session_id`. The agent copies each file before changing it, under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`, so the turn can be reviewed and undone; the copies are complete before the terminal event. Format: 14 digits of local time, `-`, 8 hex digits (`YYYYmmddHHMMSS-xxxxxxxx`); anything else is a **422**. Omit it to copy nothing. |
 | `surface` | no | Contract ≥ 2.20. `"agent_ui"`, `"tui"` or `"cli"` — the front-end the turn comes from. With `"agent_ui"` the agent points recurring requests at the Agent UI's **Scheduled tasks** page. It also picks where a model-provider error tells the user to fix it; omitted (a headless caller), that is the model server the GAIA host uses (`LEMONADE_BASE_URL`). Read when a session is built. |
 | `turns` | no | Contract ≥ 2.25. Earlier turns as the model saw them, oldest first: each is that turn's `final.model_messages`, or a `{user, assistant}` text pair for a turn without one. Send it instead of `context` (then `[]`, or the request is a **422**) so the agent sees its own earlier tool calls and their results; send `[]` on the first turn. It keeps the newest whole turns that fit its window. Sent, even as `[]`, it makes `final` carry `model_messages`; `[]` also clears a retained session's history. |
@@ -387,7 +387,7 @@ surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Thirteen of the agent's 108 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
-offered the scratchpad, email, image-generation or skill-hub tools, so
+offered the scratchpad, email, calendar, image-generation or skill-hub tools, so
 `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
@@ -397,7 +397,19 @@ a PowerShell child on Windows to draw the notification, **`install_cli`** /
 account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it. A capture that does
+content under `~/.gaia/skills` and removing one deletes it. The bundled
+`calendar` skill's tools join the list when the skill loads, and its
+**`calendar/create_calendar_event`**, **`calendar/update_calendar_event`** and
+**`calendar/cancel_calendar_event`** ask as well (its manifest marks them
+`requires_confirmation`), because they change a real calendar and can email the
+people on the event. `update_calendar_event` and `cancel_calendar_event` take
+`expected_title`, `expected_start` and `notify_attendees`, and a call whose values
+don't match the real event is refused before any approval is asked.
+`create_calendar_event` takes `calendar_account`, refused the same way unless it names
+the account the event lands on; a change or cancel prompt names that account too. A
+time that carries today's UTC offset onto a date past a daylight-saving change is
+refused with the offset in force on that date. A calendar change always asks a person, even under
+full access or `GAIA_AUTO_APPROVE_TOOLS`, and is refused when nobody can answer. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,

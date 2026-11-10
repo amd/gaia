@@ -203,7 +203,7 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
 
 def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch, acquire_error=SidecarError("daemon not reachable at :59171")
@@ -216,7 +216,7 @@ def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
 
 
 def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch,

@@ -142,6 +142,14 @@ def _stop_test_owned_email_schedulers(monkeypatch, _join_threads_started_by_the_
 
 
 @pytest.fixture(autouse=True)
+def _stub_desktop_notifications(monkeypatch):
+    """Keep scheduler tests from opening real desktop notification dialogs."""
+    from gaia.schedule import sinks
+
+    monkeypatch.setattr(sinks, "dispatch", lambda *args, **kwargs: None)
+
+
+@pytest.fixture(autouse=True)
 def _join_threads_started_by_the_test():
     """Fail a test that leaves a thread running (#2786)."""
     import threading

@@ -947,33 +947,3 @@ class SlackAdapter:
             )
             return
         self._edit(target.channel, target.reply_ts, text)
-
-
-def run_slack(
-    bot_token: str,
-    app_token: str,
-    allowed_users: Optional[Set[str]] = None,
-    *,
-    team_id: Optional[str] = None,
-    agent_argv: Optional[Sequence[str]] = None,
-    deny_gated_tools: bool = False,
-    upload_roots: Optional[Sequence[str]] = None,
-) -> SlackAdapter:
-    """Build and start a Slack adapter.
-
-    Raises:
-        SlackAllowlistError: if ``allowed_users`` is empty. Every member of a
-            workspace can DM a bot, so an empty allowlist would offer the local
-            agent to all of them.
-    """
-    adapter = SlackAdapter(
-        bot_token=bot_token,
-        app_token=app_token,
-        allowed_users=allowed_users,
-        team_id=team_id,
-        agent_argv=agent_argv,
-        deny_gated_tools=deny_gated_tools,
-        upload_roots=upload_roots,
-    )
-    adapter.start()
-    return adapter

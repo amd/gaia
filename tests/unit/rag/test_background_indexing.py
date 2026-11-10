@@ -8,6 +8,7 @@ The tool now hands a slow index to a background thread after a short budget
 and says so; the SDK embeds outside its state lock so searches keep working.
 """
 
+import os
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -167,6 +168,126 @@ def test_background_failure_is_reported_not_swallowed(tmp_path):
     result = _call("index_document", file_path=str(doc))
     assert result["status"] == "error"
     assert "embedder unreachable" in result["error"]
+
+
+def _until(predicate):
+    deadline = time.monotonic() + CALL_DEADLINE_S
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return predicate()
+
+
+@pytest.mark.parametrize("tool_name", ["index_document", "query_specific_file"])
+def test_background_index_is_saved_to_the_session_without_a_second_call(
+    tmp_path, slow_rag, tool_name
+):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    host = _RagHost(rag)
+    host.current_session = MagicMock(indexed_documents=[])
+    host.session_manager = MagicMock()
+    host.session_manager.save_session.return_value = True
+    host.register_rag_tools()
+
+    args = {"file_path": str(doc)}
+    if tool_name == "query_specific_file":
+        args["query"] = "needle"
+    assert _call(tool_name, **args)["status"] == "in_progress"
+    assert host.current_session.indexed_documents == []
+
+    release.set()
+    assert _until(lambda: host.current_session.indexed_documents == [str(doc)])
+    assert str(doc) in host.indexed_files
+    host.session_manager.save_session.assert_called_with(host.current_session)
+    host.rebuild_system_prompt.assert_called()
+    assert _until(lambda: not rag_tools._INDEX_JOBS.get(rag))
+    assert rag_tools.documents_failed_indexing(rag) == []
+
+
+def test_a_finished_background_job_is_not_handed_back_as_a_stale_result(tmp_path):
+    release = threading.Event()
+    rag = MagicMock()
+    rag.indexed_files = set()
+
+    def index_document(path, progress_callback=None, wait_callback=None):
+        assert release.wait(30)
+        rag.indexed_files.add(path)
+        return {"success": True}
+
+    rag.index_document.side_effect = index_document
+    path = str(tmp_path / "big.pdf")
+    try:
+        result, job = rag_tools._index_within_budget(rag, path, budget=0)
+        assert result is None
+    finally:
+        release.set()
+    assert _until(lambda: not rag_tools._INDEX_JOBS.get(rag))
+
+    # The document was removed meanwhile: asking again must index it again.
+    rag.indexed_files.clear()
+    result, again = rag_tools._index_within_budget(rag, path, budget=5)
+    assert result == {"success": True}
+    assert again is not job
+    assert rag.index_document.call_count == 2
+    assert rag.indexed_files == {path}
+
+
+def test_two_spellings_of_one_file_share_one_job(tmp_path, slow_rag):
+    rag, release = slow_rag
+    (tmp_path / "sub").mkdir()
+    plain = str(tmp_path / "big.pdf")
+    roundabout = str(tmp_path / "sub" / ".." / "big.pdf")
+
+    _, first = rag_tools._index_within_budget(rag, plain, budget=0)
+    _, second = rag_tools._index_within_budget(rag, roundabout, budget=0)
+
+    assert second is first
+    release.set()
+    assert first.done.wait(CALL_DEADLINE_S)
+    assert rag.index_document.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "outcome, reason",
+    [
+        (ConnectionError("embedder unreachable"), "embedder unreachable"),
+        ({"success": False, "error": "no text in file"}, "no text in file"),
+    ],
+)
+def test_a_background_failure_is_reported_until_indexed_again(
+    tmp_path, outcome, reason
+):
+    release = threading.Event()
+    rag = MagicMock()
+    rag.indexed_files = set()
+
+    def index_document(path, progress_callback=None, wait_callback=None):
+        assert release.wait(30)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    rag.index_document.side_effect = index_document
+    host = _RagHost(rag)
+    host.current_session = MagicMock(indexed_documents=[])
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    host.register_rag_tools()
+
+    assert _call("index_document", file_path=str(doc))["status"] == "in_progress"
+    release.set()
+    assert _until(lambda: rag_tools.documents_failed_indexing(rag))
+    ((path, why),) = rag_tools.documents_failed_indexing(rag)
+    assert path == os.path.realpath(doc)
+    assert reason in why
+    assert host.current_session.indexed_documents == []
+    assert str(doc) not in host.indexed_files
+
+    rag.index_document.side_effect = None
+    rag.index_document.return_value = {"success": True}
+    assert _call("index_document", file_path=str(doc))["status"] == "success"
+    assert rag_tools.documents_failed_indexing(rag) == []
 
 
 @pytest.fixture

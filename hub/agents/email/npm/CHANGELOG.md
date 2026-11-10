@@ -6,6 +6,7 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **Scheduled failures now tell you what happened (#5411).** A failed send, a failed snooze restore, and an interrupted send get different notices; an interrupted send warns that it may already have been delivered and tells you to check Sent before retrying.
 - **Private and memory-off email chats stay out of memory (#5482, schema 2.16).** `EmailQueryRequest` now accepts `memory: "on" | "private" | "off"`; private and memory-off turns stop the agent from reading or writing memory.
 - **The drafting eval's judge prefers your Claude Code login.** It now uses
   the subscription before `ANTHROPIC_API_KEY`, and prints which credential
