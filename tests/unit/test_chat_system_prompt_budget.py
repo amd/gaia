@@ -199,6 +199,11 @@ def test_chat_system_prompt_directives_preserved() -> None:
         # (the static list itself moved to get_memory_dynamic_context() so
         # the system prompt stays fixed for KV-cache reuse — see #4698)
         "indexed documents",
+        # Prompt-injection boundaries must distinguish third-party content
+        # from user requests and tool protocol guidance.
+        "data, not orders",
+        "no special authority",
+        "never make a tool call",
     ]
     missing = [m for m in must_contain if m not in prompt]
     assert not missing, (
