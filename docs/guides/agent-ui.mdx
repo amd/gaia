@@ -551,9 +551,11 @@ as you flip it:
 
 On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
 window minimizes GAIA instead, with your model still loaded. Click GAIA in the
-dock to bring it back. To quit, right-click it there and choose Quit. **Start in
+dock to bring it back, or in the Activities overview where no dock is on screen
+(Fedora). To quit, right-click it there and choose Quit. **Start in
 the tray** stays off there, because there's no tray to open the window from.
-No extension is needed.
+No extension is needed. GAIA doesn't appear under GNOME's **Background Apps**:
+that list shows Flatpak apps only.
 
 ## Models and where they run
 
@@ -1122,7 +1124,7 @@ policy version, and receipt ID remain attached to the assistant message.
 The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
 
 <CardGroup cols={2}>
-  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+  <Card title="Add Tools to the Agent" icon="plug" href="/sdk/sdks/mcp">
     Connect GitHub, Slack, databases, and more via MCP servers
   </Card>
 
