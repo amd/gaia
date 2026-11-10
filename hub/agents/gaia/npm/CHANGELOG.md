@@ -30,9 +30,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
-- **The agent leaves a file another program owns or locks alone.** It no
-  longer edits, overwrites, deletes or works around such a file; it says how to
-  release it and waits for you, on every model and in any folder.
+- **The agent leaves a locked file alone.** It no longer edits or unlocks a
+  file another program, the OS or you have locked; it says how to release the
+  lock and asks first, on every model and in any folder.
 - **A large document that finishes indexing in the background stays attached
   to the chat.** It is saved to the session as soon as it is searchable, and a
   background index that fails is now reported instead of dropping out of
