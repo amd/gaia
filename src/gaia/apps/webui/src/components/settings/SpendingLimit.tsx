@@ -56,6 +56,11 @@ export function SpendingLimit() {
                     {t.plural('settings.spend.unpriced', report.unpriced_turns)}
                 </p>
             )}
+            {report.unreported_turns > 0 && (
+                <p className="settings-hint">
+                    {t.plural('settings.spend.unreported', report.unreported_turns)}
+                </p>
+            )}
             {report.state === 'near' && (
                 <p className="spending-warning" role="status">
                     <AlertTriangle size={13} aria-hidden="true" /> {t('settings.spend.near')}

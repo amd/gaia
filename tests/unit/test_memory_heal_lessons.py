@@ -81,8 +81,8 @@ FIX_FAILS = (
     {"status": "error", "error": "ModuleNotFoundError: toybox", "return_code": 1},
 )
 LESSON = (
-    "run_shell_command: `pytest -q` failed (test clock not configured. See "
-    "docs/TESTING.md). `env TOYBOX_CLOCK=frozen pytest -q` worked: added "
+    'run_shell_command: `pytest -q` failed with "test clock not configured. See '
+    'docs/TESTING.md". `env TOYBOX_CLOCK=frozen pytest -q` worked: added '
     "`env TOYBOX_CLOCK=frozen`."
 )
 
@@ -185,7 +185,7 @@ class TestLaterSessionsSeeIt:
             second.close()
 
         today = datetime.now().astimezone().date().isoformat()
-        assert "Lessons learned in this workspace (observations quoting tool " in prompt
+        assert "What worked last time in this workspace (reuse these fixes " in prompt
         assert f"  - {LESSON} (confidence: 0.50, learned {today})" in prompt
 
     def test_another_workspace_does_not_see_it(self, db_path, workspace, tmp_path):

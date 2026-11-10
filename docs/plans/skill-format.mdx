@@ -133,6 +133,7 @@ metadata:
         atomic: false              # maps to @tool(atomic=...)
     tools_required: []             # registry tools this skill CONSUMES (recipe contract)
     pairs_with: []                 # skills this one is combined with (mutual; unknown names ignored)
+    loads_with: []                 # tools from tools_required only this skill drives; calling one loads it
 ```
 
 #### `tools` vs `tools_required` — never conflate them
@@ -162,6 +163,7 @@ The field name **`tools_required` is locked** as the cross-spec contract with
 | `metadata.gaia.tools` | list | no | Provided `@tool` declarations. Default: none (instruction-only). |
 | `metadata.gaia.tools_required` | list | no | Registry tool names consumed (recipe contract). Default: `[]`. |
 | `metadata.gaia.pairs_with` | list | no | Skills this one is usually combined with on one request. Mutual, shown in the skill catalogue and named by `load_skill`; names that are not installed are ignored. See [Companion skills](/spec/agent-skills#companion-skills). Default: `[]`. |
+| `metadata.gaia.loads_with` | list | no | Tools from `tools_required` that only this skill drives. When the model calls one without loading the skill, GAIA loads it, but only for a skill bundled with the agent that has no `tools` of its own. Each name must also be in `tools_required`, and no two installed skills should claim the same tool. See [Skills that load with their tools](/spec/agent-skills#skills-that-load-with-their-tools). Default: `[]`. |
 
 ### Manifest-side grammar: `skills`, `skill_sets`, `default_skill_set`
 
@@ -1423,7 +1425,9 @@ implementation-level questions for whoever builds the runtime:
    does not need to be its own policy — body findings feed the same tier gate as
    code findings, so the split falls out for free: at `experimental` a body
    finding is surfaced and does not gate, at `community` it forces `REVIEW`, at
-   `verified` a `medium` is already enough to hold it. See
+   `verified` a `medium` is already enough to hold it. The one exception is an
+   instruction to send content to a URL or webhook (`body.injection.outbound_url`),
+   which is held for `REVIEW` even at `experimental`. See
    [Pre-publish security audit](#pre-publish-security-audit) for the scan itself.
 
    Two decisions inside it are worth recording, because both trade precision

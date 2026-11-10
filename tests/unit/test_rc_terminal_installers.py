@@ -164,13 +164,17 @@ def test_the_final_release_job_steps(publish):
         "Extract release notes",
         "Download TUI binaries",
         "Checksum TUI binaries",
+        "Download the gaia core builds",
+        "Attach and checksum the gaia core",
         "Download the combined Windows setup",
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
         "Check every desktop installer is attached",
-        "Create GitHub Release",
+        "actions/setup-python@v7",
+        "Check the update manifests name only attached files",
+        "Create GitHub Release with bounded rate-limit retry",
     ]
 
 

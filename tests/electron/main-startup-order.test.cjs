@@ -141,3 +141,79 @@ describe("crash-loop safe mode (issue #938)", () => {
     expect(ret).toBeLessThan(body.indexOf("cleanupOrphanedBackend()"));
   });
 });
+
+describe("the window opens before anything slow", () => {
+  const position = (needle) => {
+    const at = whenReadyBody().indexOf(needle);
+    expect(at).toBeGreaterThan(-1);
+    return at;
+  };
+
+  test("the window and tray exist before seeding, orphan cleanup, install or backend", () => {
+    const window = position("createWindow();");
+    expect(window).toBeLessThan(position("initializeServices();"));
+    for (const later of [
+      "agentSeeder.seedBundledAgents()",
+      "await cleanupOrphanedBackend()",
+      "engineInstall.run()",
+      "backendStarting = startBackend();",
+    ]) {
+      expect(position("initializeServices();")).toBeLessThan(position(later));
+    }
+  });
+
+  test("an install puts its screen up before the slow steps, and only then runs", () => {
+    const decided = position("showingInstallScreen = !backendInstaller.isBackendCurrent();");
+    const screen = position("if (showingInstallScreen) await loadApp();");
+    expect(decided).toBeLessThan(screen);
+    expect(screen).toBeLessThan(position("agentSeeder.seedBundledAgents()"));
+    expect(position("await cleanupOrphanedBackend()")).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("a current backend loads the app once, with no install page first", () => {
+    expect(position("if (!showingInstallScreen) await loadApp();")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("the install screen waits for the backend to answer, then loads the app", () => {
+    const answered = position("backendReady = await waitForBackend(");
+    const app = position("showingInstallScreen = false;");
+    expect(answered).toBeLessThan(app);
+    expect(app).toBeLessThan(whenReadyBody().indexOf("await loadApp();", app));
+  });
+
+  test("the app page carries the real port once the backend has one", () => {
+    const body = functionBody("loadApp");
+    expect(body).toContain(
+      "showingInstallScreen ? INSTALL_SCREEN_QUERY : buildIndexQuery(backendPort)"
+    );
+    expect(position("trayManager.setBackendPort(backendPort)")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("a reopened window on the macOS dock is wired before a long install can need it", () => {
+    expect(position('app.on("activate"')).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("the separate progress window and its native failure boxes are gone", () => {
+    expect(MAIN).not.toMatch(/createProgressWindow|showFailureDialog|isBootstrapping/);
+  });
+
+  test("a quit stops the install, or releases one waiting on Try again, and waits for it", () => {
+    const body = functionBody("cleanup");
+    expect(body).toContain("const installStopped = engineInstall ? engineInstall.stop() : null;");
+    expect(body).toContain("await Promise.all([installStopped, ");
+  });
+
+  test("SIGTERM is wired to quit past the work-in-progress question", () => {
+    expect(MAIN).toContain("quitOnTermSignal({ proc: process, app, guard: quitGuard });");
+  });
+
+  test("a failed install is shown even after a start in the tray", () => {
+    const body = functionBody("showInstallFailure");
+    expect(body).toContain("win.show()");
+    expect(body).toContain("_fatalHandler(err)");
+  });
+});

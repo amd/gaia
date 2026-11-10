@@ -21,6 +21,7 @@ Two rules:
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import Any, Dict
 from unittest.mock import patch
@@ -32,11 +33,14 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
+from gaia.version import get_package_version
 
 
 class _ToolBase:
@@ -186,7 +190,61 @@ class TestRefusalsAreNotStored:
             "which is not on PATH."
         ]
         assert rows[0]["source"] == "error_auto"
-        assert rows[0]["metadata"] == {"operation": "load_skill coding"}
+        assert rows[0]["metadata"] == {
+            "operation": "load_skill coding",
+            "gaia_version": get_package_version(),
+            "model": None,
+        }
+
+
+class _FullMailbox(EmailToolsMixin):
+    """An email host whose turn budget is already spent."""
+
+    def _email_call(self, *args, **kwargs):
+        raise AssertionError("a full turn must not reach the mailbox")
+
+
+class TestOwnLimitsAreNotStored:
+    """GAIA's own per-turn caps say nothing about the world.
+
+    Stored, "Searched 3 times this turn" sat in every later chat's prompt.
+    """
+
+    def test_a_search_budget_refusal_is_not_stored(self, host, store):
+        refusal = {
+            **NOT_EXECUTED,
+            "status": "error",
+            "error": "Searched 3 times this turn. Use a tool from your list, "
+            "or tell the user what is missing.",
+        }
+
+        host.run("search_tools", {"query": "tool number 4"}, refusal)
+
+        assert _stored_errors(store) == []
+        assert not getattr(host, "_turn_failures", None)
+
+    def test_a_mail_budget_refusal_is_not_stored(self, host, store):
+        mailbox = _FullMailbox()
+        with _registered(mailbox, "register_email_tools") as registry:
+            mailbox._turn_seq = mailbox._email_turn_token = 1
+            mailbox._email_turn_body_chars = mailbox._email_turn_budget_chars()
+            mailbox._email_turn_reads = 1
+            refusal = registry["read_email"]["function"](message_id="AAMk-1")
+        assert json.loads(refusal)["turn_budget_exhausted"] is True
+
+        host.run("read_email", {"message_id": "AAMk-1"}, refusal)
+
+        assert _stored_errors(store) == []
+        assert not getattr(host, "_turn_failures", None)
+
+    def test_a_json_envelope_that_ran_and_failed_is_still_stored(self, host, store):
+        failure = json.dumps({"error": "Mailbox not found", "success": False})
+
+        host.run("read_email", {"message_id": "AAMk-1"}, failure)
+
+        assert [r["content"] for r in _stored_errors(store)] == [
+            "read_email: Mailbox not found"
+        ]
 
 
 class TestSuccessRetiresOnlyTheSameOperation:

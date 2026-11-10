@@ -23,7 +23,7 @@ npm install -g @amd-gaia/agent-ui
 gaia-ui
 ```
 
-The first time it opens, the app sets itself up: it installs GAIA's local model server, downloads the models and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
+The first time it opens, the app checks your PC and suggests a setup, showing which models it will download and how much space they take. Nothing downloads until you choose **Download and start** (or **Customize** to change the models); it then downloads them and checks they load, with each step shown in the window. No accounts or API keys are needed to run locally.
 
 ---
 
@@ -102,6 +102,28 @@ tool calls, model loads, model memory and cost. Hover a number for the exact
 value. Anything that was not measured says "unknown". The panel reads nothing
 until you open it.
 
+### Watch Your PC's Resources
+
+A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+network use, each with a graph of the last minute, so you can see the model
+working while it answers. The numbers match Windows Task Manager: CPU with its
+clock speed, memory in use out of the total, for a GPU or NPU the load of its
+busiest engine and the memory it holds, and for each connected network adapter
+what it sends (S, the dashed line) and receives (R). A PC with several GPUs
+numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
+left out, as Task Manager leaves them out.
+
+The strip is on in every chat. Close it with **✕**, and bring it back with the
+pulse button in the chat's header or **Settings › General › Show resource
+usage in chats**. GAIA remembers the choice. While the strip is closed or the
+window is hidden, GAIA stops measuring about 15 seconds later.
+
+On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
+network only. When usage can't be read, the strip says so and dims the last readings
+until it can read them again. If only the GPU or network can't be read, as in
+a virtual machine or over Remote Desktop, CPU and memory keep showing and that
+tile says **Unavailable**, with the reason when you point at it.
+
 ### Type While GAIA Works
 
 You can keep typing while a reply runs. Press Enter and the message waits in a
@@ -157,6 +179,11 @@ says where the documents you add go: the open chat, or your next new chat. A
 new chat lists the library's documents and offers to attach them; picking
 **Ask about your documents** attaches them all.
 
+A document you ask the agent to index ("add this file to my documents") goes
+into the library and is attached to the chat you asked in, the same as one you
+add from the library. A file outside the folders the library reads from goes in
+as a copy, and the chat says so: edits to the original don't reach the copy.
+
 While a large document indexes, its row in the library shows how far it has
 got: "Reading page 37 of 229" for a PDF, then "Embedding 412 of 1,180", each
 with a percent. Formats without a page count show a moving bar and the count
@@ -186,8 +213,9 @@ Pick the install path that fits you best:
   <Tab title="Desktop installer (easiest)">
     Prebuilt desktop installers are published on the
     [GitHub Releases page](https://github.com/amd/gaia/releases) alongside
-    each tagged release. They bundle the Electron shell; Lemonade Server and
-    the default model are downloaded automatically on first launch. This is
+    each tagged release. They bundle the Electron shell and Lemonade Server
+    and download no models; on first launch the app asks which models to
+    download. This is
     the simplest path for non-developer end users.
 
     If that first-launch setup fails (for example, too little free memory to
@@ -271,38 +299,79 @@ Pick the install path that fits you best:
     </Note>
 
     <Note>
-      If you see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. For the one-line installer's environment (which has no `pip` and is not activated) that is:
+      The `gaia` from the apps and the one-line installer already includes the Agent UI. If you installed GAIA with `pip` yourself and see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. In an activated environment of your own that is:
 
       ```bash
-      uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[ui]"
-      # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[ui]"
+      uv pip install "amd-gaia[ui]"
       ```
     </Note>
 
-    **First run:** no separate setup command is needed. When the app opens on a
-    PC that is not set up yet, it checks the PC (device, memory, disk), asks
-    where GAIA runs, starts the local model server, and then shows the models
-    it will download before any byte moves: each with its purpose, the size
-    left to download, whether it is already on this PC, and a **Recommended
-    for this PC** mark. Untick any you don't want, tick others, or make a chat
-    model you already have in Lemonade (FLM/NPU included) the default. The
-    total updates against the free space on the drive Lemonade stores models
-    on; a model too big for this PC's memory or a selection too big for the
-    disk gets a warning with the numbers, and you can still go ahead. On an
-    integrated GPU (Strix Halo) where a bigger GPU share would let a larger
-    model run, setup offers to change it, or shows where to change it in AMD
-    Software, and checks the new split after you restart. It skips this step
-    when the larger model isn't one you want: you unticked it, or picked a
-    different chat model. Downloads then show
-    per-model and overall progress with speed and time left; Cancel keeps
-    what finished and what was partly downloaded, and **Retry** or **Resume**
-    continues from there. If one model fails, the ones that already downloaded
-    are kept and checked when you finish setup; only a model that downloaded
-    but won't load is deleted and downloaded again, after you confirm. Tick **Keep trying if the connection drops** to wait
-    out a dropped connection for up to two minutes; otherwise a dropped
-    connection fails at once with Retry. If you choose a Lemonade Server you
-    already run, setup uses it instead of installing GAIA's own. Running
-    `gaia init` yourself beforehand also works.
+    **First run:** no separate setup command is needed. The window opens and
+    GAIA checks the PC by itself: processor, GPU, NPU, memory, disk, its model
+    server and the backends this PC supports. **Check this PC** shows what it
+    found, with links to the models folder and GAIA's data and logs, and opens
+    each check and the full details on request. If a Lemonade Server already
+    runs on the PC, it asks whether to **Install GAIA's own** (the default)
+    or **Use the one I have**. It then recommends a setup, with the reasons, and **Download
+    and start** takes it. Each step's main action is at the bottom right, and
+    the language can be changed from the first screen.
+
+    **Customize** opens the model choices; the steps beside the screen stay
+    the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
+    on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
+    the memory for GAIA's NPU model or already has an NPU model. These are the
+    two GAIA has tested. Picking one picks that device's chat model, and the
+    chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
+    when it starts. On an integrated GPU, **Change how memory is split** opens GPU
+    memory from there or from Check this PC. It is optional: unless you pick a
+    new size, GAIA changes nothing. The models are grouped by job, and picking
+    a chat model updates the jobs that depend on it:
+
+    | Job | What you choose |
+    |---|---|
+    | Chat | One model. **Recommended** is what GAIA evaluated as the default for this PC, **Verified** passed GAIA's evaluations, and **Untested** runs at your own risk |
+    | Reading images | Nothing, when the chat model reads images itself. Otherwise Gemma 4 E4B is preselected, and you can pick another or skip it. Off when chat runs on the NPU: the NPU model doesn't read images, so setup says so and downloads nothing for it, and a chat with an image says the image won't be read |
+    | Documents and memory | The embedding model |
+    | Optional extras | Speech to text, text to speech and creating images, off by default. Creating images isn't available with Gemma 4 E4B |
+
+    **What you'll get** shows the result of those choices. A model too big for
+    this PC's memory, or a selection too big for the disk, gets a warning with
+    the numbers, and you can still go ahead.
+
+    **Download** lists everything that comes to this PC, with its size and
+    where it comes from: the model server, the model runtime, Python packages,
+    the GAIA agent and each model. Models show per-model and overall progress
+    with speed and time left. Cancel keeps what finished, and **Retry** or
+    **Resume** continues from there. Tick **Keep trying if the connection
+    drops** to wait out a dropped connection for up to two minutes. Optional
+    extras can be added here too; they are fetched and tested after the rest.
+
+    **Test** runs what you downloaded, because a download doesn't prove it
+    works: the server answers, the chat model loads and answers, the vision
+    model names the colour of a test image, the embedding model makes an
+    embedding, each extra does its job, and GAIA answers one real message,
+    on the cloud model when you chose one.
+    Setup says it's ready only when the required tests pass. A failed test
+    shows the error with **Test again**, **Choose another model** and, for a
+    broken model, an option to download it again. A model that failed for
+    any other reason, such as too little free memory or an empty answer,
+    keeps its file: its **Retry** tests it again without downloading it. A
+    test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
+    yourself beforehand also works.
+
+    Each step keeps a log, collapsed under it until you open it. **Save a
+    troubleshooting report** on any step saves setup's logs, GAIA's logs and
+    this PC's details in one file. Secrets kept in environment variables are
+    left out, but the logs go in as they are, so look it over before you share
+    it. A copy stays in `~/.gaia`.
+
+    Later, if a job needs a model that isn't on this PC, GAIA says which one,
+    how big it is and where it comes from, and offers **Download and
+    continue**. Your message waits until it's ready.
+
+    **Settings → Setup** lists everything setup chose, each with a link to where
+    you change it, and **Run setup again** goes through it once more. Your
+    models, keys and chats stay.
 
     Every choice can be changed later in **Settings → Model**: the default chat
     model and the models on this PC under **Manage downloads and disk space**
@@ -470,15 +539,23 @@ as you flip it:
 
 - **Keep running when the window closes**: close hides the window instead of
   quitting.
-- **Start GAIA when you sign in.** On Windows this is the startup entry the
-  installer adds, so it starts on; once you turn it off, an update or reinstall
-  doesn't turn it back on. It also follows Task Manager → Startup apps. On Linux
+- **Start GAIA when you sign in.** Off until you turn it on; an entry an earlier
+  version added stays on, and an update keeps your choice. On Windows it also
+  follows Task Manager → Startup apps. On Linux
   this writes `gaia-agent-ui.desktop` to `$XDG_CONFIG_HOME/autostart` (usually
   `~/.config/autostart`). If the system refuses, or macOS waits for your
   approval in System Settings → Login Items, the switch stays off and says why.
 - **Start in the tray**: every launch opens without the window. Takes effect
   from the next launch. On Windows a launch at sign-in always starts in the
   tray.
+
+On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
+window minimizes GAIA instead, with your model still loaded. Click GAIA in the
+dock to bring it back, or in the Activities overview where no dock is on screen
+(Fedora). To quit, right-click it there and choose Quit. **Start in
+the tray** stays off there, because there's no tray to open the window from.
+No extension is needed. GAIA doesn't appear under GNOME's **Background Apps**:
+that list shows Flatpak apps only.
 
 ## Models and where they run
 
@@ -490,10 +567,11 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
-- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
-  connecting Fireworks AI or the gateway and selecting a cloud model are refused
-  with a message saying so, and a saved cloud model isn't restored. Settings has no
-  switch for it yet; use the command.
+- With [Local only](/reference/cli#local-only) on, connecting Fireworks AI or the gateway
+  and selecting a cloud model are refused, with the providers shown as blocked. Turn it
+  on or off in **Settings → Privacy → Local only**; the CLI equivalent is
+  `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
+  model isn't restored.
 - Keys are masked, go only to GAIA's local model server and your OS credential
   store, and are refused over mobile access. A saved key shows as a read-only row with
   its last four characters and whether it's connected. **Replace** swaps it, and
@@ -567,21 +645,22 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
   transcription, vision, reranking, image or 3D), labelled by its type, with
   its name, backend and context window.
 
-To choose the backend, pick **Auto**, **Vulkan**, **ROCm** or **CPU** under
-*llama.cpp backend for chat models*. Only backends Lemonade can run on this PC
-are listed; one marked "downloads on first use" is fetched by Lemonade the
-first time it loads (ROCm is about 4 GB). The choice applies the next time the
-chat model loads; **Reload chat model now** applies it at once. The embedding
-model keeps its own backend.
+*llama.cpp backend for chat models* offers only the backends GAIA has tested:
+**Vulkan** for the GPU. A chat model on a Ryzen AI NPU runs on FastFlowLM
+instead; choose one with **Change model**, or under **Backend** when you
+Customize setup. A different backend saved earlier still loads and shows here,
+so you can switch it to Vulkan. The choice applies the next time the chat model
+loads; **Reload chat model now** applies it at once. The embedding model keeps
+its own backend.
 
 The same setting from a terminal:
 
 ```bash
-gaia config set llamacpp_backend rocm   # vulkan | rocm | metal | cpu | auto
+gaia config set llamacpp_backend vulkan   # vulkan | auto
 ```
 
-**Change model** opens Settings → Model. To use a different server, set
-`LEMONADE_BASE_URL`.
+**Change model** opens Settings → Model. To use a different server, enter its
+address under **Settings → Advanced → Model server** (see [Use a Lemonade you already run](/guides/install#use-a-lemonade-you-already-run)).
 
 ## Permissions
 
@@ -763,7 +842,7 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Privacy and Advanced (model server and
+Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
@@ -790,7 +869,13 @@ pick from 32K up to the window it was trained for. GAIA can't check those fit
 first, so a size too large fails to load and says so.
 
 The model chip in the composer opens the same list. While GAIA is answering,
-a model you pick there applies to your next message. The model pill
+a model you pick there applies to your next message. On most PCs, a local
+model you pick starts loading right away, and a banner counts the seconds; you
+can type meanwhile, and a message waits for the load. On a PC with under 24 GB
+of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+message instead. If the model can't load, for
+example because other apps hold the memory it needs, the banner says why and
+offers **Try again**. The model pill
 at the bottom of the sidebar shows whether the model is loaded, warming up or
 stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
@@ -802,6 +887,18 @@ and a taskbar flash when GAIA isn't focused. Alerts fire whether or not the
 notification panel is open, and never for the chat you're looking at. In the
 desktop app it also keeps the PC from idle-sleeping while a chat is working; on
 battery it lets the PC sleep below the level you choose (20% by default).
+
+**Read aloud.** The speaker button on a reply reads it in a voice that runs on
+this PC through Lemonade; press it again to stop. Code blocks and links are
+skipped, so you hear the words. **Settings → Read aloud** picks the voice
+(American or British English, female or male, with **Preview**), the speed
+(0.5× to 2×), and whether every reply is read when it finishes. The voices
+speak English, so a reply in another language is read with an English accent.
+The first reading after a restart takes longer while Lemonade loads the voice.
+On a PC without the voice model, the first press downloads it once (~350 MB)
+and says so under the reply; reading starts when it finishes. (The agent's own
+`text_to_speech` tool never downloads it in the middle of a chat.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
 
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also
@@ -834,6 +931,17 @@ or use a model on this PC. The total is an estimate at list price: it leaves
 out cache discounts, and turns that fail or are stopped before a reply, so
 your provider's bill is the final word.
 
+While a chat runs on a priced cloud model, the composer shows what it has cost
+so far and what all your chats have cost today, such as "$0.04 · today $0.31".
+Click it for each answer's cost, newest first, and a link to this month's total
+and limit. The amounts add up the cost each answer's details show, cache
+discounts included, so they can sit a little below the monthly total. "Today"
+is your own calendar day and counts the chats you still have. A stopped answer
+sends no token count, so its cost is unknown: it shows "Not reported", the
+total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
+how many were left out, since the provider may still bill them. On a model on
+this PC, or a cloud model with no known price, nothing is shown.
+
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade
 Server and one you already run: enter its address (and its API key, if it needs
 one) and choose **Use this server**. The setup screen offers a Lemonade it finds
@@ -862,10 +970,10 @@ Everything lives in **Settings → General → Updates** (desktop installer only
 
 An update downloads in the background, usually only the parts that changed, and
 installs with no setup wizard. Once it is ready, the corner chip offers the restart,
-whenever suits you; quitting GAIA also installs it. Before offering the restart, GAIA
-also fetches the new version's Python backend, so the first launch afterwards doesn't
-depend on the package server. A restart that would leave no working app, such as one
-with no disk space, is refused with the reason.
+whenever suits you; quitting GAIA also installs it. The update carries the new
+version's backend, so the first launch afterwards downloads nothing for it. A restart
+that would leave no working app, such as one with no disk space, is refused with the
+reason.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
@@ -941,7 +1049,7 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 | What happened | A reply being written | A document being indexed |
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
-| You close the desktop window | Keeps going: the window hides to the tray (unless you turned that off) and GAIA keeps running | Keeps going |
+| You close the desktop window | Keeps going: the window hides to the tray (or, on a desktop with no tray, minimizes to the dock) and GAIA keeps running. With that turned off, closing quits (next row) | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
 GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
@@ -981,7 +1089,7 @@ GAIA reads every word or rejects the schedule and says what to change; it never 
 - A weekly time with no day, such as `weekly at 9am` or `every 7d at 9am`. Name the day: `every monday at 9am`.
 - Combinations that can't be honored yet: `every other tuesday`, `every 2 days at 9am`, monthly schedules, and windows that don't start and end on the hour.
 
-Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live. **Run now** runs a schedule once immediately, to try a new one without waiting for its first due time; its next scheduled run stays as it was, and the reply lands in the schedule's chat like any other run. While a run is in flight, Run now is unavailable and a timed run that comes due is skipped.
+Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. A schedule's name can't contain `/`. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live. **Run now** runs a schedule once immediately, to try a new one without waiting for its first due time; its next scheduled run stays as it was, and the reply lands in the schedule's chat like any other run. While a run is in flight, Run now is unavailable and a timed run that comes due is skipped.
 
 Behavior notes:
 
@@ -1016,7 +1124,7 @@ policy version, and receipt ID remain attached to the assistant message.
 The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
 
 <CardGroup cols={2}>
-  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+  <Card title="Add Tools to the Agent" icon="plug" href="/sdk/sdks/mcp">
     Connect GitHub, Slack, databases, and more via MCP servers
   </Card>
 

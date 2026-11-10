@@ -23,7 +23,7 @@ is deliberately **not** the same selection model:
 Capability is never fully gated on the semantic match: :meth:`Agent.load_skill`
 is itself the explicit escape hatch — calling it again on an already-loaded
 skill always re-activates that skill's body for the rest of the turn, whether
-or not the query matched it (mirrors ToolLoader's ``load_tools`` escape hatch).
+or not the query matched it (mirrors ``search_tools``).
 """
 
 from __future__ import annotations

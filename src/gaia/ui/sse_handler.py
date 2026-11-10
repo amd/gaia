@@ -20,7 +20,6 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
@@ -39,6 +38,7 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
+from gaia.llm.reasoning import THINK_CLOSE, THINK_OPEN, has_lone_close
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
@@ -48,6 +48,7 @@ from gaia.ui.event_narration import (
     tool_phrase,
 )
 from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -565,6 +566,8 @@ class SSEOutputHandler(OutputHandler):
         self._in_thinking = False  # True while inside a <think>...</think> block
         # Part of the open <think> block already went out.
         self._thinking_streamed = False
+        # This reply has shown a think tag, so a later </think> is not lone.
+        self._reply_saw_think = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -648,6 +651,7 @@ class SSEOutputHandler(OutputHandler):
         self._turn_metrics: Optional[Dict[str, Any]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
+        self._turn_failure: Optional[str] = None
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
@@ -672,6 +676,11 @@ class SSEOutputHandler(OutputHandler):
             self._text_since_tool = ""
         elif etype == "answer":
             self._text_since_tool = ""
+        elif etype in ("thinking", "status") and event.get("retracts_answer"):
+            # The text shown since the last tool was reasoning, or a reply that
+            # was cut off; either way it is not commentary.
+            self._text_since_tool = ""
+            self._shown_fence, self._shown_line_start = None, True
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -684,6 +693,7 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         self._raw_line_start = True
         self._call_progress_next = 0.0
+        self._reply_saw_think = False
 
     def _elapsed(self) -> float:
         if self._start_time is None:
@@ -825,6 +835,9 @@ class SSEOutputHandler(OutputHandler):
         event.update(_mcp_identity(tool_name))
         self._emit(event)
 
+    def print_skill_use(self, name: str, loaded: List[str], how: str):
+        self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
+
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
         success, self._last_tool_success = self._last_tool_success, True
@@ -899,6 +912,8 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("num_chunks"), int):
+                event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
         if self._last_tool_name == "search_web" and isinstance(data, str):
             event["sources"] = search_hits(data)
@@ -963,7 +978,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -1082,6 +1097,18 @@ class SSEOutputHandler(OutputHandler):
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
 
+    def restart_answer(self, message: str) -> None:
+        self.delivered_answer = ""
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "phase": "answer_restart",
+                "message": message,
+                "retracts_answer": True,
+            }
+        )
+
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(
             {
@@ -1148,9 +1175,10 @@ class SSEOutputHandler(OutputHandler):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
 
-    def mark_turn_failed(self) -> None:
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
         self._turn_failed = True
+        self._turn_failure = failure
 
     def print_final_answer(
         self,
@@ -1225,6 +1253,9 @@ class SSEOutputHandler(OutputHandler):
         if self._turn_failed:
             self._turn_failed = False
             event["failed"] = True
+            if self._turn_failure:
+                event["failure"] = self._turn_failure
+            self._turn_failure = None
         self.delivered_answer = event["content"] or ""
         self._emit(event)
 
@@ -1587,7 +1618,13 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._envelope_scan = None  # a cancelled stream left it behind
             while self._in_thinking or (
-                self._envelope_scan is None and "<think>" in self._stream_buffer
+                self._envelope_scan is None
+                and (
+                    THINK_OPEN in self._stream_buffer
+                    or (
+                        not self._reply_saw_think and THINK_CLOSE in self._stream_buffer
+                    )
+                )
             ):
                 if self._in_thinking:
                     # We're inside a thinking block — look for closing tag
@@ -1618,10 +1655,17 @@ class SSEOutputHandler(OutputHandler):
                             self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
+                elif not self._reply_saw_think and has_lone_close(self._stream_buffer):
+                    head, _, self._stream_buffer = self._stream_buffer.partition(
+                        THINK_CLOSE
+                    )
+                    self._retract_as_reasoning(head)
+                    continue
                 else:
                     # Not in thinking — look for opening tag
                     open_idx = self._stream_buffer.find("<think>")
                     if open_idx >= 0:
+                        self._reply_saw_think = True
                         # Emit any text before <think> as regular content,
                         # stripping thought/tool-call JSON artifacts that the
                         # model sometimes outputs before its think block.
@@ -1813,6 +1857,23 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream:
             self._answer_stream = None
 
+    def _retract_as_reasoning(self, head: str) -> None:
+        """A lone ``</think>`` ended reasoning that streamed as answer text.
+
+        Everything shown since the last tool call, plus *head*, goes to the
+        thinking step; ``retracts_answer`` tells the consumer to drop it from
+        the answer it has drawn so far.
+        """
+        self._reply_saw_think = True
+        shown = self._text_since_tool
+        reasoning = (shown + head).strip()
+        if not reasoning:
+            return
+        event: Dict[str, Any] = {"type": "thinking", "content": reasoning}
+        if shown:
+            event["retracts_answer"] = True
+        self._emit(event)
+
     def _emit_answer_text(self, text: str) -> None:
         if text:
             self.delivered_answer = (self.delivered_answer or "") + text
@@ -1864,6 +1925,7 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        self._answered_prompt = None
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
@@ -2047,6 +2109,8 @@ class SSEOutputHandler(OutputHandler):
         result = self._confirm_result
         timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
+        if not timed_out:
+            self.note_prompt_answered(tool_name)
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".
@@ -2420,7 +2484,7 @@ class SSEOutputHandler(OutputHandler):
         active relay run to answer (already finished, or never one) so the
         caller can 404 rather than report an accepted answer nothing reads.
         Any sidecar rejection (e.g. the question is no longer pending)
-        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        propagates as :class:`~gaia.daemon.sidecars.errors.SidecarError` —
         never swallowed.
         """
         proxy = self.active_relay_proxy
@@ -2688,7 +2752,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results
@@ -2728,7 +2793,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", data.get("display_message", "")))
+        # Written for the user; message may be written for the model.
+        if data.get("display_message"):
+            return str(data["display_message"])[:200]
+        msg = data.get("message", data.get("error", ""))
         if msg:
             return f"{status}: {str(msg)[:200]}"
         # A bare "success" tells the user nothing. Report what came back

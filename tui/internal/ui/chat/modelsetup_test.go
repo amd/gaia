@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
@@ -116,7 +117,7 @@ func TestABackgroundDownloadShowsOnTheStatusLine(t *testing.T) {
 
 	// Tick gpt-oss-20b and apply.
 	for _, k := range []tea.KeyMsg{
-		{Type: tea.KeyDown}, {Type: tea.KeyDown},
+		{Type: tea.KeyDown},
 		{Type: tea.KeySpace, Runes: []rune{' '}},
 		{Type: tea.KeyRunes, Runes: []rune("a")},
 	} {
@@ -216,6 +217,100 @@ func TestFinishingFirstRunSetupSaysSo(t *testing.T) {
 	}
 }
 
+func TestFirstRunSetupUsesTheSelectedLocalModelBeforeTheAgentStarts(t *testing.T) {
+	selected := "Gemma-4-E4B-it-GGUF"
+	c := client.NewCanonicalSubprocessClient("unused", []string{"--json-events", "--model", "old-model"}, false)
+	var saves []savedCall
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false).
+		WithModelMemory(func(provider, model string) error {
+			saves = append(saves, savedCall{provider, model})
+			return nil
+		})
+	m.width, m.height = 100, 30
+	m.modelSetup = &modelsetup.Model{}
+	m.modelSetupOpen = true
+	m.startup = startupModel{kind: StartupRestore, provider: "local", model: "old-model", pending: true}
+
+	updated, cmd := m.Update(modelsetup.FinishedMsg{ChatModel: selected})
+	m = updated.(ChatModel)
+	runSends(cmd)
+
+	if got := c.ModelAtLaunch(); got != selected {
+		t.Fatalf("launch model = %q, want %q", got, selected)
+	}
+	if m.modelDisplay != selected || m.modelBackend != "lemonade" || m.modelRemote || m.claudeMode {
+		t.Fatalf("local setup choice was not reflected in the chat state: %+v", m)
+	}
+	if m.startup.pending || m.startup.inFlight {
+		t.Fatalf("the old startup restore survived setup: %+v", m.startup)
+	}
+	if len(callsFrom(m, "/model ")) != 0 {
+		t.Fatalf("an unstarted client must not receive a /model turn: %v", callsFrom(m, "/model "))
+	}
+	if len(saves) != 1 || saves[0] != (savedCall{"local", selected}) {
+		t.Fatalf("saved %v, want selected local model", saves)
+	}
+}
+
+func TestFirstRunSetupSwitchesARunningAgentAndCancelsAnOldRestore(t *testing.T) {
+	selected := "Gemma-4-E4B-it-GGUF"
+	c := &queryCapturingClient{}
+	var saves []savedCall
+	m := NewChatModelForCatalogAgent(c, setupAgentID, "GAIA", false).
+		WithModelMemory(func(provider, model string) error {
+			saves = append(saves, savedCall{provider, model})
+			return nil
+		})
+	m.width, m.height = 100, 30
+	m.modelSetup = &modelsetup.Model{}
+	m.modelSetupOpen = true
+	m.modelID = "old-model"
+	m.startup = startupModel{kind: StartupRestore, provider: "local", model: "old-model", pending: true}
+
+	updated, cmd := m.Update(modelsetup.FinishedMsg{ChatModel: selected})
+	m = updated.(ChatModel)
+	runSends(cmd)
+	if len(c.sent) != 1 || c.sent[0] != "/model "+selected {
+		t.Fatalf("sent %v, want one setup switch", c.sent)
+	}
+	if m.startup.pending || m.startup.inFlight {
+		t.Fatalf("the old restore can still run after the setup switch: %+v", m.startup)
+	}
+	if len(saves) != 0 {
+		t.Fatalf("a live switch is only saved after its confirmation, got %v", saves)
+	}
+}
+
+func TestFirstRunSetupDoesNotSwitchACloudChatModel(t *testing.T) {
+	withSetupAPI(t, setupFake())
+	m := gaiaTestModel(t)
+	m.modelSetup = &modelsetup.Model{}
+	m.modelSetupOpen = true
+	m.modelRemote = true
+	m.modelID = "fireworks.deepseek-v4p1-flash"
+
+	updated, cmd := m.Update(modelsetup.FinishedMsg{})
+	m = updated.(ChatModel)
+	runSends(cmd)
+	if len(callsFrom(m, "/model ")) != 0 {
+		t.Fatalf("cloud-only setup must not emit a local model switch: %v", callsFrom(m, "/model "))
+	}
+}
+
+func callsFrom(m ChatModel, prefix string) []string {
+	c, ok := m.client.(*queryCapturingClient)
+	if !ok {
+		return nil
+	}
+	var calls []string
+	for _, sent := range c.sent {
+		if strings.HasPrefix(sent, prefix) {
+			calls = append(calls, sent)
+		}
+	}
+	return calls
+}
+
 // A hidden download that loses GAIA, or fails, is not reported as finished:
 // the chat says what happened and /models picks it back up.
 func TestAHiddenDownloadThatFailsIsNotCalledFinished(t *testing.T) {
@@ -237,7 +332,7 @@ func TestAHiddenDownloadThatFailsIsNotCalledFinished(t *testing.T) {
 			m = feedSetup(t, updated.(ChatModel), cmd)
 			var pending tea.Cmd
 			for _, k := range []tea.KeyMsg{
-				{Type: tea.KeyDown}, {Type: tea.KeyDown},
+				{Type: tea.KeyDown},
 				{Type: tea.KeySpace, Runes: []rune{' '}},
 				{Type: tea.KeyRunes, Runes: []rune("a")},
 				{Type: tea.KeyEsc},
@@ -284,7 +379,7 @@ func TestSetupComesBackWithTheChoiceLeft(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.View()), "[x] embeddinggemma-300m") {
 		t.Fatalf("embedder not ticked to start:\n%s", ansi.Strip(m.View()))
 	}
-	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}, {Type: tea.KeyEsc}} {
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyDown}, {Type: tea.KeySpace, Runes: []rune{' '}}, {Type: tea.KeyEsc}} {
 		updated, cmd = m.Update(k)
 		m = feedSetup(t, updated.(ChatModel), cmd)
 	}

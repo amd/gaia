@@ -82,6 +82,9 @@ class MachineCapacity:
     disk_free_gb: Optional[float]
     #: System RAM an FLM model loads into, or ``None`` when no NPU is reported.
     npu_memory_gb: Optional[float] = None
+    #: The NPU is this Linux PC's, whose own setup decides whether FastFlowLM
+    #: runs (:func:`npu_problems`); read only when an NPU model is judged.
+    npu_setup_matters: bool = False
 
     @property
     def on_gpu(self) -> bool:
@@ -103,7 +106,24 @@ def npu_capacity(capacity: MachineCapacity) -> Optional[MachineCapacity]:
         memory_source=NPU_RAM,
         disk_free_gb=capacity.disk_free_gb,
         npu_memory_gb=capacity.npu_memory_gb,
+        npu_setup_matters=capacity.npu_setup_matters,
     )
+
+
+def npu_problems(capacity: Optional[MachineCapacity]) -> List[Any]:
+    """What stops a model running on this PC's NPU though it is there."""
+    from gaia.llm import npu_linux
+
+    if capacity is None or not capacity.has_npu or not capacity.npu_setup_matters:
+        return []
+    return npu_linux.problems()
+
+
+def npu_not_ready_reason(capacity: Optional[MachineCapacity]) -> Optional[str]:
+    """:func:`npu_problems` as one predicate ("needs ... set up first: ..."), or None."""
+    from gaia.llm import npu_linux
+
+    return npu_linux.summary(npu_problems(capacity))
 
 
 @dataclass(frozen=True)
@@ -111,33 +131,6 @@ class FitVerdict:
     fits: bool
     #: Why not, in words a user can act on. Empty when it fits.
     reason: str = ""
-
-
-def check_server_supports(
-    min_version: Optional[str], server_version: Optional[str]
-) -> FitVerdict:
-    """Whether a Lemonade server is new enough to load a model.
-
-    An unknown server version cannot show support, so it does not pass: the
-    cost of guessing wrong is a large download the server then cannot load.
-    """
-    if not min_version:
-        return FitVerdict(True)
-    from gaia.version import parse_version
-
-    found, wanted = parse_version(server_version), parse_version(min_version)
-    if found is not None and wanted is not None and found >= wanted:
-        return FitVerdict(True)
-    running = (
-        f"this server is v{server_version}"
-        if server_version
-        else ("this server's version is unknown")
-    )
-    return FitVerdict(
-        False,
-        f"needs Lemonade v{min_version} or newer ({running}); "
-        "upgrade it with `gaia init --force-reinstall`",
-    )
 
 
 def required_memory_gb(size_gb: float, kv_cache_gb: float = 0.0) -> float:
@@ -389,24 +382,43 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
                 "Update Lemonade (`gaia init`) and retry."
             )
         pool = (ram, SYSTEM_RAM)
+    from gaia.llm import npu_linux
+
     disk, _ = model_store_free_gb(info)
+    npu_gb = _npu_memory_gb(
+        info.get("devices") or {}, ram, _physical_counts_carve_out(info)
+    )
     return MachineCapacity(
         memory_gb=pool[0],
         memory_source=pool[1],
         disk_free_gb=disk,
-        npu_memory_gb=_npu_memory_gb(info.get("devices") or {}, ram),
+        npu_memory_gb=npu_gb,
+        npu_setup_matters=bool(npu_gb) and npu_linux.applies_to(info),
     )
 
 
-def _npu_memory_gb(devices: Dict[str, Any], physical_gb: float) -> Optional[float]:
+def _physical_counts_carve_out(info: Dict[str, Any]) -> bool:
+    """Lemonade's ``Physical Memory`` includes an APU's GPU carve-out.
+
+    True on Windows, where it is installed RAM; on Linux it is ``MemTotal``,
+    which the carve-out is already out of.
+    """
+    return str(info.get("OS Version") or "").lower().startswith("windows")
+
+
+def _npu_memory_gb(
+    devices: Dict[str, Any], physical_gb: float, counts_carve_out: bool
+) -> Optional[float]:
     """System RAM an FLM model can load into, or ``None`` with no NPU.
 
-    The NPU shares the RAM the OS sees, so an APU's GPU carve-out — which
-    installed RAM still counts — comes off first.
+    The NPU shares the RAM the OS sees, so when *physical_gb* still counts an
+    APU's GPU carve-out, it comes off first.
     """
     npu = devices.get("amd_npu")
     if not isinstance(npu, dict) or not npu.get("available") or physical_gb <= 0:
         return None
+    if not counts_carve_out:
+        return physical_gb
     carve_out = 0.0
     for vendor, integrated, gpu in _gpu_entries(devices):
         if vendor == "AMD" and integrated:

@@ -85,8 +85,6 @@ class TestBareInitTargetsTheFlagship:
             "user.embeddinggemma-300m-GGUF",
         ]
         assert profile["pip_extras"] == ["ui"]
-        # EmbeddingGemma only loads on 10.9.0+ (same floor as chat/rag).
-        assert profile["min_lemonade_version"] == "10.9.0"
 
     def test_ui_extras_cover_rag_and_the_daemon(self):
         """Swapping [rag] for [ui] must not drop a document dependency."""
@@ -97,21 +95,23 @@ class TestBareInitTargetsTheFlagship:
         assert any(r.startswith("fastapi") for r in ui)
         assert any(r.startswith("uvicorn") for r in ui)
 
-    def test_availability_probe_uses_the_flagships_real_module_name(self, monkeypatch):
-        """`gaia_agent_gaia` does not exist and never will, so probing for it
-        would report the flagship missing forever and reinstall it every run."""
+    def test_an_importable_flagship_package_does_not_count_as_installed(
+        self, monkeypatch
+    ):
+        """The apps run the flagship as its binary, so a checkout's importable
+        `gaia_agent` must not stop `gaia init` installing that binary."""
         asked = []
 
         def fake_find_spec(name):
             asked.append(name)
-            return None
+            return object()
 
         monkeypatch.setattr(
             "gaia.installer.init_command.importlib.util.find_spec", fake_find_spec
         )
         monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: None)
-        InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID)
-        assert asked == [FLAGSHIP_IMPORT_NAME]
+        assert InitCommand._is_hub_agent_available(FLAGSHIP_AGENT_ID) is False
+        assert FLAGSHIP_IMPORT_NAME not in asked
 
     def test_other_agents_keep_the_gaia_agent_prefix_convention(self, monkeypatch):
         asked = []
@@ -120,8 +120,8 @@ class TestBareInitTargetsTheFlagship:
             lambda name: asked.append(name),
         )
         monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: None)
-        InitCommand._is_hub_agent_available("chat")
-        assert asked == ["gaia_agent_chat"]
+        InitCommand._is_hub_agent_available("email")
+        assert asked == ["gaia_agent_email"]
 
     def test_a_binary_only_flagship_install_counts_as_present(self, monkeypatch):
         """The flagship publishes a native binary — `~/.gaia/agents/gaia/`
@@ -259,6 +259,8 @@ class TestGoTuiContract:
             "loaded": False,
             "error": "boom",
             "downloaded": None,
+            # verify.go reads it to word the row; only "broken" is a bad file.
+            "kind": None,
         }
 
     def test_load_failed_exit_code_is_three(self):
@@ -509,17 +511,28 @@ class TestRuntimeFailureStillInstallsTheFlagship:
         )
         return tmp_path
 
-    def _run(self, failing_step, install_effect=None):
+    def _run(
+        self,
+        failing_step,
+        install_effect=None,
+        index_effect=None,
+        emit=None,
+        source_effect=None,
+    ):
         from gaia.hub import installer as hub_installer
 
         cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True, skip_webui_build=True)
+        if emit is not None:
+            cmd.events.emit = emit
         steps = {
             "_choose_lemonade": True,
             "_ensure_lemonade_ready": True,
+            "_ensure_llamacpp_backend": True,
             "_download_models": True,
             "_install_pip_extras": True,
         }
-        steps[failing_step] = False
+        if failing_step:
+            steps[failing_step] = False
         patches = [
             patch.object(InitCommand, name, return_value=ok)
             for name, ok in steps.items()
@@ -531,10 +544,15 @@ class TestRuntimeFailureStillInstallsTheFlagship:
             side_effect=install_effect,
         )
         with (
-            patch("gaia.hub.prerelease.flagship_source", return_value=None),
+            patch(
+                "gaia.hub.prerelease.flagship_source",
+                return_value=None,
+                side_effect=source_effect,
+            ),
             patch(
                 "gaia.hub.catalog.load_index",
                 return_value=SimpleNamespace(agents=[{"id": FLAGSHIP_AGENT_ID}]),
+                side_effect=index_effect,
             ),
             install as install_mock,
         ):
@@ -585,6 +603,83 @@ class TestRuntimeFailureStillInstallsTheFlagship:
         out = capsys.readouterr().out
         assert "has no build for this machine" in out
         assert "Everything else is set up" not in out
+
+    def test_an_unreachable_hub_marks_the_agent_row_failed(self, cold_home):
+        seen = []
+
+        def emit(event, **fields):
+            if event == "component" and fields["component"] == "agent":
+                seen.append(fields["state"])
+
+        code, install_mock = self._run(
+            None, index_effect=OSError("hub is down"), emit=emit
+        )
+
+        assert code == 1
+        install_mock.assert_not_called()
+        assert seen == ["active", "failed"]
+
+    @staticmethod
+    def _agent_rows(seen):
+        def emit(event, **fields):
+            if event == "component" and fields["component"] == "agent":
+                seen.append((fields["state"], fields.get("kind")))
+
+        return emit
+
+    def test_a_dropped_hub_connection_says_a_retry_may_help(self, cold_home):
+        import requests
+
+        seen = []
+        code, _ = self._run(
+            None,
+            index_effect=requests.ConnectionError("reset"),
+            emit=self._agent_rows(seen),
+        )
+
+        assert code == 1
+        assert seen == [("active", None), ("failed", "transient")]
+
+    def _rc_failure(self, cause):
+        from gaia.hub import prerelease
+
+        try:
+            raise prerelease.PrereleaseFlagshipError(
+                "Could not read gaia-agent-release.json. Check your network; ..."
+            ) from cause
+        except prerelease.PrereleaseFlagshipError as exc:
+            return exc
+
+    def test_a_missing_release_file_says_a_retry_will_not_help(self, cold_home):
+        import requests
+
+        resp = requests.Response()
+        resp.status_code = 404
+        seen = []
+        code, install_mock = self._run(
+            None,
+            source_effect=self._rc_failure(
+                requests.HTTPError("404 Not Found", response=resp)
+            ),
+            emit=self._agent_rows(seen),
+        )
+
+        assert code == 1
+        install_mock.assert_not_called()
+        assert seen == [("active", None), ("failed", "other")]
+
+    def test_a_timed_out_release_file_says_a_retry_may_help(self, cold_home):
+        import requests
+
+        seen = []
+        code, _ = self._run(
+            None,
+            source_effect=self._rc_failure(requests.ReadTimeout("Read timed out.")),
+            emit=self._agent_rows(seen),
+        )
+
+        assert code == 1
+        assert seen == [("active", None), ("failed", "transient")]
 
     def test_a_failed_agent_install_still_fails_init(self, cold_home, capsys):
         from gaia.hub.installer import InstallError

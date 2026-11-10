@@ -11,6 +11,8 @@ installer/
 ├── README.md      ← you are here
 ├── scripts/       build + bootstrap scripts (PowerShell, POSIX sh, Node)
 ├── version/       version normalization and bump helpers (Node)
+├── core/          freezes the `gaia` executable the desktop app ships, so a
+│                  user's PC installs no Python package (freeze.py, smoke_test.py)
 ├── nsis/          NSIS assets: the Agent UI's electron-builder include, the
 │                  developer shareable build, and the shared icon/sidebar
 ├── debian/        Debian packaging metadata for the Agent UI (postinst, prerm, postrm)
@@ -54,22 +56,29 @@ README for the per-platform builders and payload-staging steps.
 | `build-gaia-installer.ps1` | Package the two GAIA binaries into a single shareable Windows `.exe` |
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
+| `fetch_lemonade_embeddable.py` | Download the pinned embeddable Lemonade archive for the desktop app's `extraResources`, verified against `EMBEDDABLE_SHA256`, so first-run setup can unpack it instead of downloading it |
 | `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
 ### What the one-line installers download
 
-Both scripts install the `amd-gaia[api]` package from PyPI, the terminal binary
-(`gaia-<os>-<arch>`) from a GitHub release checked against that release's
-`gaia-tui-SHA256SUMS.txt`, and the GAIA agent (`gaia-agent`). Nothing installs
-without a matching SHA-256, and there is no fallback source.
+Both scripts install the frozen `gaia` (`gaia-core-<platform>.tar.gz`, checked
+against the release's `gaia-core-SHA256SUMS.txt`), the terminal binary
+(`gaia-<os>-<arch>`, checked against `gaia-tui-SHA256SUMS.txt`), both from a
+GitHub release, and the GAIA agent (`gaia-agent`). Nothing installs without a
+matching SHA-256, there is no fallback source, and neither installs Python or a
+PyPI package. `gaia` lands in `~/.gaia/core` linked from `~/.gaia/bin` on Linux
+and macOS, and in `~\.gaia\bin` beside `gaia-tui.exe` on Windows.
 
 `GAIA_RELEASE_TAG` picks the release, and pins all three to it:
 
-| `GAIA_RELEASE_TAG` | Core package | Terminal binary | GAIA agent |
-|---|---|---|---|
-| unset | latest `amd-gaia` | latest release | Agent Hub (`hub.amd-gaia.ai`), as `gaia init` |
-| `v0.25.0` | `amd-gaia==0.25.0` | that release | Agent Hub |
-| `v0.25.1-rc2` | `amd-gaia==0.25.1rc2` | that pre-release | frozen on that pre-release (`gaia-agent-release.json`), as an RC core installs it |
+| `GAIA_RELEASE_TAG` | `gaia` and the terminal binary | GAIA agent |
+|---|---|---|
+| unset | latest release | Agent Hub (`hub.amd-gaia.ai`), as `gaia init` |
+| `v0.25.0` | that release | Agent Hub |
+| `v0.25.1-rc2` | that pre-release | frozen on that pre-release (`gaia-agent-release.json`), as an RC core installs it |
+
+A release from before GAIA shipped as a binary carries no `gaia-core` files, so
+pinning one fails before anything installs.
 
 Any other value fails before anything installs.
 
@@ -103,6 +112,27 @@ npm run package:win      # or :mac / :linux
 ```
 
 `npm run make` is kept as an alias for `npm run package`.
+
+A packaged app runs only the `gaia` it ships, so freeze the core and stage it
+first; without it the app says it is missing its backend:
+
+```bash
+(cd src/gaia/apps/webui && npm ci && npm run build)    # the core serves this UI
+uv venv .venv-freeze --python 3.12
+uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+.venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
+.venv-freeze/Scripts/python installer/core/smoke_test.py installer/core/dist/gaia/gaia.exe
+rm -rf src/gaia/apps/webui/build/core && mkdir -p src/gaia/apps/webui/build/core
+cp -r installer/core/dist/gaia/. src/gaia/apps/webui/build/core/
+```
+
+A local build ships no Lemonade archive unless you fetch one first; without it,
+first-run setup downloads the archive instead:
+
+```bash
+python installer/scripts/fetch_lemonade_embeddable.py --platform win-x64 \
+  --out src/gaia/apps/webui/build/vendor/lemonade
+```
 
 > **Note:** the `build-ui-installer.ps1` / `.sh` scripts in `scripts/` still shell out
 > to `npx electron-forge package` / `make`, which no longer matches this tree —
@@ -149,7 +179,7 @@ PRs that touch installers, install scripts or the download page, and on demand
 | `posix-journey.sh`, `windows-journey.ps1` | One phase of one row. They refuse to run outside GitHub Actions: they install and remove system packages |
 | `fake_model_server.py` | A stand-in Lemonade, so the terminal can complete one real turn through the installed `gaia-agent` without a model |
 | `resolve_release.py` | Picks the release under test and waits for its assets |
-| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing |
+| `known_failures.json` | Filed installer bugs the journeys hit; each shows as `known #N` instead of failing, and fails again once it stops reproducing or its issue's release milestone ships |
 | `propose_thresholds.py` | Re-measures install times from recent runs and proposes new thresholds |
 
 ### Install-time thresholds

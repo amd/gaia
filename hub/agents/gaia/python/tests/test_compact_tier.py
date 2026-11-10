@@ -177,9 +177,12 @@ def test_switching_to_gemma_unloads_a_skill_it_cannot_run(monkeypatch):
         monkeypatch.setattr(
             stdio,
             "_reachable_lemonade_models",
-            lambda *a: ("http://localhost:13305/api/v1", [DEFAULT_MODEL_NAME]),
+            lambda *a: (
+                "http://localhost:13305/api/v1",
+                {DEFAULT_MODEL_NAME: {"id": DEFAULT_MODEL_NAME}},
+            ),
         )
-        # A client with no catalog to refresh: the switch must not reach a server.
+        # A stand-in client: the switch must not reach a server.
         monkeypatch.setattr(stdio, "create_client", lambda **k: object())
         statuses = []
         stdio._apply_local_switch(agent, DEFAULT_MODEL_NAME, statuses.append)

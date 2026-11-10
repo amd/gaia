@@ -87,6 +87,16 @@ test("the chip restarts silently and reopens the app when nothing would be lost"
   expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
 });
 
+test("the quit a restart starts is one that installs the update", async () => {
+  // main.cjs stops the daemon in that quit: the installer replaces the files it runs from.
+  mockUpdater.autoInstallOnAppQuit = false;
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  expect(m.installsOnQuit()).toBe(false);
+  await finishDownload();
+  await clickRestartChip();
+  expect(m.installsOnQuit()).toBe(true);
+});
+
 test("Keep running puts the restart off; the update installs on the next quit", async () => {
   saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
@@ -97,6 +107,7 @@ test("Keep running puts the restart off; the update installs on the next quit", 
   expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
   expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
   expect(m.getState().status).toBe("downloaded");
+  expect(m.installsOnQuit()).toBe(true);
 });
 
 test("a failing restart check reaches the chip's caller, and nothing installs", async () => {
@@ -466,6 +477,92 @@ describe("a silent install that fails", () => {
     expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
+  test("a failed install is reported once, and the launch after installs silently again", async () => {
+    failedLastTime();
+    initUpdater({ confirmRestart: async () => true });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    loaded.pop().destroy();
+    mockUpdater.removeAllListeners();
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  test("after the failure is reported, the next launch installs on quit again", async () => {
+    saveConfig({ autoUpdate: true });
+    failedLastTime();
+    let m = initUpdater({ confirmRestart: async () => true });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+    const on = jest.spyOn(electronMock.app, "on");
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+    await finishDownload();
+    on.mock.calls.filter(([event]) => event === "before-quit").at(-1)[1]();
+    expect(JSON.parse(fs.readFileSync(attemptFile(), "utf8"))).toEqual({
+      from: "0.25.0",
+      target: "0.26.0",
+    });
+  });
+
+  test("a retry that fails again is reported again, then forgotten", async () => {
+    failedLastTime();
+    let m = initUpdater({ confirmRestart: async () => true });
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+    mockUpdater.quitAndInstall.mockClear();
+
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toEqual({ target: "0.26.0", from: "0.25.0" });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    m.destroy();
+    mockUpdater.removeAllListeners();
+
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    await finishDownload();
+    await clickRestartChip();
+    expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  test("an attempt record that can't be deleted still reports the failure", () => {
+    failedLastTime();
+    const realRm = fs.rmSync;
+    const rm = jest.spyOn(fs, "rmSync").mockImplementation((target, opts) => {
+      if (target === attemptFile()) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      return realRm(target, opts);
+    });
+    const m = initUpdater({ confirmRestart: async () => true });
+    rm.mockRestore();
+    expect(m.getState().installFailed).toEqual({ target: "0.26.0", from: "0.25.0" });
+    expect(fs.existsSync(attemptFile())).toBe(true);
+  });
+
+  test("a failed install doesn't make a later backend failure blame an old update", () => {
+    saveConfig({ previousAppVersion: "0.24.0", launchesSinceUpdate: 4 });
+    failedLastTime();
+    let m;
+    jest.isolateModules(() => {
+      m = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
+    });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+    m = initUpdater({ confirmRestart: async () => true });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+    m.destroy();
+    m = initUpdater({ confirmRestart: async () => true });
+    m.reportStartFailure();
+    expect(m.getState().startFailed).toBe(false);
+  });
+
   test("a launch on a different version counts as installed and forgets the attempt", async () => {
     failedLastTime({ from: "0.24.0", target: "0.25.0" });
     const m = initUpdater({ confirmRestart: async () => true });
@@ -664,6 +761,28 @@ describe("going back after a bad update", () => {
       previousVersion: "0.25.0",
       installFailed: { target: "0.25.0", from: "0.26.0" },
     });
+  });
+
+  test("a go-back that didn't land is reported once; the launch after updates normally", () => {
+    saveConfig({ autoUpdate: true, pinnedVersion: "v0.25.0", previousAppVersion: "0.25.0" });
+    electronMock.app.getVersion = () => "0.26.0";
+    fs.mkdirSync(path.dirname(attemptFile()), { recursive: true });
+    fs.writeFileSync(attemptFile(), JSON.stringify({ from: "0.26.0", target: "0.25.0" }));
+    let m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toEqual({ target: "0.25.0", from: "0.26.0" });
+    expect(fs.existsSync(attemptFile())).toBe(false);
+    m.destroy();
+    m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState()).toMatchObject({ installFailed: null, pinnedVersion: null, previousVersion: "0.25.0" });
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  test("a landed update installs the next one on quit", () => {
+    saveConfig({ autoUpdate: true });
+    updatedFrom("0.25.0");
+    const m = initUpdater({ confirmRestart: async () => true });
+    expect(m.getState().installFailed).toBeNull();
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
   });
 
   test("a pinned launch checks the pinned release, not a dead default feed", () => {

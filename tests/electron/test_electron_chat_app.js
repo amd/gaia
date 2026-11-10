@@ -367,14 +367,17 @@ describe('Chat App Integration', () => {
     });
 
     it('should define StreamEvent interface', () => {
-      expect(typesContent).toContain('interface StreamEvent');
-      expect(typesContent).toContain("'chunk'");
-      expect(typesContent).toContain("'done'");
-      expect(typesContent).toContain("'error'");
-      expect(typesContent).toContain("'policy_alert'");
-      expect(typesContent).toContain('rule_ids?: string[]');
-      expect(typesContent).toContain('policy_version?: string');
-      expect(typesContent).toContain('receipt_id?: string');
+      // Stream types live in their own module, re-exported from index.ts.
+      expect(typesContent).toContain("export * from './stream';");
+      const streamContent = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/types/stream.ts'), 'utf8');
+      expect(streamContent).toContain('interface StreamEvent');
+      expect(streamContent).toContain("'chunk'");
+      expect(streamContent).toContain("'done'");
+      expect(streamContent).toContain("'error'");
+      expect(streamContent).toContain("'policy_alert'");
+      expect(streamContent).toContain('rule_ids?: string[]');
+      expect(streamContent).toContain('policy_version?: string');
+      expect(streamContent).toContain('receipt_id?: string');
     });
   });
 
@@ -980,7 +983,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('? `Confirm delete ${session.title} and its ${unsentWords}`');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
       expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
       expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
@@ -1149,7 +1153,12 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-upload dropped files', () => {
-      expect(chatContent).toContain('uploadDocumentBlob');
+      const chatDocuments = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/chatDocuments.ts'),
+        'utf8'
+      );
+      expect(chatContent).toContain('addDroppedFiles(sessionId');
+      expect(chatDocuments).toContain('api.uploadDocumentBlob(file)');
     });
 
     it('should have drag active CSS class', () => {

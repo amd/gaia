@@ -159,7 +159,7 @@ async def send_message(
                 await turn_queue.acquire(sid)
                 holds_turn = True
         except TurnCancelled:
-            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
+            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True, stopped=True)
             session_lock.release()
             raise HTTPException(
                 status_code=409,
@@ -410,8 +410,8 @@ async def _confirm_relayed_tool(
     """
     from starlette.concurrency import run_in_threadpool
 
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -557,7 +557,7 @@ async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -616,9 +616,9 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     """Revoke a grant the chat's relayed agent holds, through its sidecar."""
     from starlette.concurrency import run_in_threadpool
 
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -661,7 +661,7 @@ async def user_input(request: UserInputRequest):
     the sidecar). Tried in that order; a session with neither pending is a
     404, never a silent no-op accept.
     """
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -817,7 +817,7 @@ async def send_followup(request: FollowUpRequest):
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     text = request.text.strip()
     if not text:
@@ -954,12 +954,26 @@ async def retry_with(
 
     The answer is held until ``/api/chat/retry-with/choose`` keeps one.
     """
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_ctx_size
+    from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+
+    from .._chat_helpers import _runs_on_this_pc
 
     sid = request.session_id
     if not db.get_session(sid):
         raise HTTPException(status_code=404, detail="Session not found")
-    if cloud_model_provider(request.model, None):
+    try:
+        local = await asyncio.to_thread(_runs_on_this_pc, request.model)
+    except LemonadeClientError as exc:
+        logger.error(
+            "Retry with: couldn't check %s runs locally: %s", request.model, exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Retry with… couldn't confirm the model runs on this PC because "
+            "Lemonade's model list didn't load. Check that Lemonade is running in "
+            "Settings > Setup, then try again.",
+        ) from exc
+    if not local:
         raise HTTPException(
             status_code=400,
             detail="Retry with… compares models on this PC; pick a local model.",
