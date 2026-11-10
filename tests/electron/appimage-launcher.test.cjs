@@ -93,6 +93,53 @@ test("a launcher someone else wrote is never replaced", () => {
   expect(theirs).not.toContain(OWNED);
 });
 
+const writeOther = (name, text) => {
+  const file = path.join(path.dirname(entryPath()), name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return file;
+};
+
+test("an entry another tool wrote for this AppImage stops GAIA writing a second", () => {
+  const theirs = writeOther("appimagekit_abc-GAIA.desktop", `[Desktop Entry]\nName=GAIA\nExec=${appImage} %U\n`);
+  expect(installAppImageLauncher(deps)).toEqual({ status: "kept-existing", entry: theirs });
+  expect(fs.existsSync(entryPath())).toBe(false);
+  expect(fs.existsSync(theirs)).toBe(true);
+});
+
+test("a quoted, escaped Exec= or a TryExec= still matches this AppImage", () => {
+  deps.env.APPIMAGE = path.join(home, "My Apps", "50% gaia.AppImage");
+  writeOther("quoted.desktop", `[Desktop Entry]\nExec=${desktopExecArg(deps.env.APPIMAGE)} --flag\n`);
+  expect(installAppImageLauncher(deps).status).toBe("kept-existing");
+  fs.rmSync(path.join(path.dirname(entryPath()), "quoted.desktop"));
+  writeOther("tryexec.desktop", `[Desktop Entry]\nExec=env FOO=1 gaia\nTryExec=${deps.env.APPIMAGE}\n`);
+  expect(installAppImageLauncher(deps).status).toBe("kept-existing");
+});
+
+test("an entry that runs the AppImage through a symlink counts as the same app", () => {
+  fs.mkdirSync(path.dirname(appImage), { recursive: true });
+  fs.writeFileSync(appImage, "");
+  const link = path.join(home, "gaia.AppImage");
+  fs.symlinkSync(appImage, link);
+  writeOther("gaia.desktop", `[Desktop Entry]\nExec=${link}\n`);
+  expect(installAppImageLauncher(deps).status).toBe("kept-existing");
+});
+
+test("GAIA's own launcher is removed once another entry for the AppImage appears", () => {
+  installAppImageLauncher(deps);
+  const theirs = writeOther("gearlever_gaia.desktop", `[Desktop Entry]\nExec="${appImage}"\n`);
+  expect(installAppImageLauncher(deps)).toEqual({ status: "kept-existing", entry: theirs });
+  expect(fs.existsSync(entryPath())).toBe(false);
+  expect(fs.existsSync(theirs)).toBe(true);
+});
+
+test("entries for other apps, or another GAIA build, don't stop the launcher", () => {
+  writeOther("firefox.desktop", "[Desktop Entry]\nExec=firefox %u\n");
+  writeOther("old-gaia.desktop", `[Desktop Entry]\nExec=${path.join(home, "Apps", "gaia-agent-ui-0.9.0-x86_64.AppImage")}\n`);
+  fs.symlinkSync(path.join(home, "missing"), path.join(path.dirname(entryPath()), "dangling.desktop"));
+  expect(installAppImageLauncher(deps).status).toBe("written");
+});
+
 test("with the .deb's launcher installed, the AppImage writes none over it", () => {
   const system = path.join(home, "sys", "applications");
   fs.mkdirSync(system, { recursive: true });
