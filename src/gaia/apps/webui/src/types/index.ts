@@ -1228,4 +1228,6 @@ export interface ResourceUsage {
     devices_error?: string | null;
     /** Why network adapters can't be read, when CPU and memory still can. */
     networks_error?: string | null;
+    /** Why NPUs can't be read, where they're read apart from GPUs (Linux). */
+    npus_error?: string | null;
 }

@@ -282,6 +282,12 @@ Text-only `context` loses them, and the agent can't explain its own last turn.
 An empty `turns` list clears a retained session's history. Older binaries
 reject `turns` with `422`.
 
+An answer ends with one line such as `I haven't confirmed this works — the
+tests didn't pass.` when a check failed or was blocked, or a change went
+unchecked. It appears only then; a confirmed or purely conversational turn has
+no such line. It is part of `final.answer`, so show it to the user rather than
+trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
 that names what failed and what to do about it.
