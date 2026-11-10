@@ -378,14 +378,16 @@ def test_a_render_tool_result_carries_its_card_type(built, monkeypatch):
     client, _ = built
     card = {"kind": "guide", "guideType": "checklist", "title": "Camping"}
     monkeypatch.setattr(
-        _ScriptedAgent, "tool_call", ("show_checklist", {"ok": True, "data": card})
+        _ScriptedAgent,
+        "tool_call",
+        ("guides/show_checklist", {"ok": True, "data": card}),
     )
 
     r = client.post("/v1/gaia/query", json=_body())
 
     assert r.status_code == 200, r.text
     (result,) = [e for e in _events(r) if e["type"] == "tool_result"]
-    assert result["tool"] == "show_checklist"
+    assert result["tool"] == "guides/show_checklist"
     assert result["render"] == "guide"
     assert result["data"] == card
 

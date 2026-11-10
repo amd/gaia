@@ -38,8 +38,6 @@ from gaia_agent_email.sse_translation import (  # noqa: E402
     _RENDER_TOOL_TO_LANG as _SIDECAR_MAP,
 )
 
-from gaia.agents.tools.calculator_tools import CALCULATOR_TOOL_NAMES  # noqa: E402
-from gaia.agents.tools.guide_tools import GUIDE_TOOL_NAMES  # noqa: E402
 from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
 
 
@@ -48,13 +46,18 @@ class TestRenderToolToLangMapsStayInSync:
         """The two maps are deliberately no longer identical: the TUI drops
         the pre-scan card so the triage reply is its single inbox view, while
         the Agent UI — a different surface, not retested here — keeps it. The
-        guide and calculator cards are flagship tools the email agent never
-        registers. Pinned as an explicit difference so any OTHER drift still
-        fails."""
+        guide and calculator cards come from the flagship's bundled guides and
+        calculators skills, which the email agent never loads. Pinned as an
+        explicit difference so any OTHER drift still fails."""
         assert set(SSEOutputHandler._RENDER_TOOL_TO_LANG) - set(_SIDECAR_MAP) == {
             "pre_scan_inbox",
-            *GUIDE_TOOL_NAMES,
-            *CALCULATOR_TOOL_NAMES,
+            "guides/show_recipe",
+            "guides/show_workout",
+            "guides/show_how_to",
+            "guides/show_checklist",
+            "guides/show_itinerary",
+            "calculators/show_tip_calculator",
+            "calculators/show_loan_calculator",
         }
         assert not set(_SIDECAR_MAP) - set(SSEOutputHandler._RENDER_TOOL_TO_LANG)
         for tool, lang in _SIDECAR_MAP.items():

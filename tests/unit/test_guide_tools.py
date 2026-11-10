@@ -6,34 +6,39 @@ and that the card reaches the wire as ``tool_result.render == "guide"``."""
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from pathlib import Path
 
 import pytest
 
-from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.registry import KNOWN_TOOLS
-from gaia.agents.tools.guide_tools import GUIDE_TOOL_NAMES, GuideToolsMixin
+from gaia.skills import parse_skill_file
+from gaia.skills.loader import register_skill_tools
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
-
-class _GuideAgent(Agent, GuideToolsMixin):
-    def _get_system_prompt(self) -> str:
-        return ""
-
-    def _register_tools(self) -> None:
-        self.register_guide_tools()
+SKILL_DIR = Path(__file__).resolve().parents[2] / "hub" / "skills" / "guides"
+GUIDE_TOOL_NAMES = tuple(
+    "guides/" + name
+    for name in (
+        "show_recipe",
+        "show_workout",
+        "show_how_to",
+        "show_checklist",
+        "show_itinerary",
+    )
+)
 
 
 @pytest.fixture
 def tools():
+    """The skill's tools as the flagship gets them: through the skill loader,
+    which checks them against the manifest. Keyed by the unqualified name."""
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
-        with patch("gaia.agents.base.agent.AgentSDK"):
-            _GuideAgent(skip_lemonade=True, silent_mode=True)
-        yield {name: _TOOL_REGISTRY[name] for name in GUIDE_TOOL_NAMES}
+        added = register_skill_tools(parse_skill_file(SKILL_DIR))
+        assert set(added) == set(GUIDE_TOOL_NAMES)
+        yield {name.split("/", 1)[1]: entry for name, entry in added.items()}
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
@@ -223,7 +228,7 @@ def test_recipe_errors_name_what_failed(tools, overrides, expected):
 
     assert result["ok"] is False
     assert expected in result["error"]
-    assert result["error"].startswith("show_recipe")
+    assert result["error"].startswith("guides/show_recipe")
     assert "data" not in result
 
 
@@ -232,7 +237,7 @@ def test_workout_needs_an_exercise(tools):
     assert result == {
         "ok": False,
         "error": (
-            "show_workout needs at least one entry in exercises. "
+            "guides/show_workout needs at least one entry in exercises. "
             "Send one line per step."
         ),
     }
@@ -268,8 +273,13 @@ def test_a_failed_card_reads_as_a_failed_tool_call(tools):
 # --- registration -----------------------------------------------------------
 
 
-def test_registered_as_a_composable_mixin():
-    assert KNOWN_TOOLS["guide"] == ("gaia.agents.tools.guide_tools", "GuideToolsMixin")
+def test_the_core_agent_does_not_register_them():
+    """Domain tools ship in a skill, so they stay off the flagship's tool list
+    until the skill loads."""
+    from gaia.agents.registry import KNOWN_TOOLS
+
+    modules = {module for module, _cls in KNOWN_TOOLS.values()}
+    assert not any("guide" in module for module in modules)
 
 
 def test_each_tool_ships_its_trigger_words_and_reply_rule(tools):
@@ -317,7 +327,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_guide(tools, as_json):
     handler = SSEOutputHandler()
     translator = CanonicalTranslator("r1", agent_id="gaia")
 
-    handler.print_tool_usage("show_recipe")
+    handler.print_tool_usage("guides/show_recipe")
     handler.pretty_print_json(dict(_RECIPE), title="Arguments")
     handler.pretty_print_json(
         json.dumps(envelope) if as_json else envelope, title="Result"
@@ -325,7 +335,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_guide(tools, as_json):
 
     wire = [out for event in _drain(handler) for out in translator.translate(event)]
     (result,) = [e for e in wire if e["type"] == "tool_result"]
-    assert result["tool"] == "show_recipe"
+    assert result["tool"] == "guides/show_recipe"
     assert result["render"] == "guide"
     assert result["data"] == envelope["data"]
 
@@ -333,7 +343,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_guide(tools, as_json):
 def test_a_failed_card_reaches_the_wire_without_a_card(tools):
     envelope = _call(tools, "show_checklist", title="", items=["x"])
     handler = SSEOutputHandler()
-    handler.print_tool_usage("show_checklist")
+    handler.print_tool_usage("guides/show_checklist")
     _drain(handler)
     handler.pretty_print_json(envelope, title="Result")
 

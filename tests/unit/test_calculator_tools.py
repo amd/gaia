@@ -7,37 +7,36 @@ told, and that the card reaches the wire as ``tool_result.render ==
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from pathlib import Path
 
 import pytest
 
-from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.registry import KNOWN_TOOLS
-from gaia.agents.tools.calculator_tools import (
-    CALCULATOR_TOOL_NAMES,
-    CalculatorToolsMixin,
-)
+from gaia.skills import parse_skill_file
+from gaia.skills.loader import register_skill_tools
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
-
-class _CalculatorAgent(Agent, CalculatorToolsMixin):
-    def _get_system_prompt(self) -> str:
-        return ""
-
-    def _register_tools(self) -> None:
-        self.register_calculator_tools()
+SKILL_DIR = Path(__file__).resolve().parents[2] / "hub" / "skills" / "calculators"
+CALCULATOR_TOOL_NAMES = tuple(
+    "calculators/" + name
+    for name in (
+        "show_tip_calculator",
+        "show_loan_calculator",
+    )
+)
 
 
 @pytest.fixture
 def tools():
+    """The skill's tools as the flagship gets them: through the skill loader,
+    which checks them against the manifest. Keyed by the unqualified name."""
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
-        with patch("gaia.agents.base.agent.AgentSDK"):
-            _CalculatorAgent(skip_lemonade=True, silent_mode=True)
-        yield {name: _TOOL_REGISTRY[name] for name in CALCULATOR_TOOL_NAMES}
+        added = register_skill_tools(parse_skill_file(SKILL_DIR))
+        assert set(added) == set(CALCULATOR_TOOL_NAMES)
+        yield {name.split("/", 1)[1]: entry for name, entry in added.items()}
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
@@ -140,7 +139,7 @@ def test_tip_errors_name_what_failed(tools, overrides, expected):
 
     assert result["ok"] is False
     assert expected in result["error"]
-    assert result["error"].startswith("show_tip_calculator")
+    assert result["error"].startswith("calculators/show_tip_calculator")
     assert "data" not in result
 
 
@@ -162,7 +161,7 @@ def test_loan_errors_name_what_failed(tools, overrides, expected):
 
     assert result["ok"] is False
     assert expected in result["error"]
-    assert result["error"].startswith("show_loan_calculator")
+    assert result["error"].startswith("calculators/show_loan_calculator")
 
 
 def test_a_failed_card_reads_as_a_failed_tool_call(tools):
@@ -175,11 +174,13 @@ def test_a_failed_card_reads_as_a_failed_tool_call(tools):
 # --- registration -----------------------------------------------------------
 
 
-def test_registered_as_a_composable_mixin():
-    assert KNOWN_TOOLS["calculator"] == (
-        "gaia.agents.tools.calculator_tools",
-        "CalculatorToolsMixin",
-    )
+def test_the_core_agent_does_not_register_them():
+    """Domain tools ship in a skill, so they stay off the flagship's tool list
+    until the skill loads."""
+    from gaia.agents.registry import KNOWN_TOOLS
+
+    modules = {module for module, _cls in KNOWN_TOOLS.values()}
+    assert not any("calculator" in module for module in modules)
 
 
 def test_each_tool_ships_its_trigger_words_and_reply_rule(tools):
@@ -226,7 +227,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_calculator(tools, as_jso
     handler = SSEOutputHandler()
     translator = CanonicalTranslator("r1", agent_id="gaia")
 
-    handler.print_tool_usage("show_loan_calculator")
+    handler.print_tool_usage("calculators/show_loan_calculator")
     handler.pretty_print_json(dict(_LOAN), title="Arguments")
     handler.pretty_print_json(
         json.dumps(envelope) if as_json else envelope, title="Result"
@@ -234,7 +235,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_calculator(tools, as_jso
 
     wire = [out for event in _drain(handler) for out in translator.translate(event)]
     (result,) = [e for e in wire if e["type"] == "tool_result"]
-    assert result["tool"] == "show_loan_calculator"
+    assert result["tool"] == "calculators/show_loan_calculator"
     assert result["render"] == "calculator"
     assert result["data"] == envelope["data"]
 
@@ -242,7 +243,7 @@ def test_handler_lifts_the_card_and_translator_marks_it_calculator(tools, as_jso
 def test_a_failed_card_reaches_the_wire_without_a_card(tools):
     envelope = _call(tools, "show_tip_calculator", bill=0)
     handler = SSEOutputHandler()
-    handler.print_tool_usage("show_tip_calculator")
+    handler.print_tool_usage("calculators/show_tip_calculator")
     _drain(handler)
     handler.pretty_print_json(envelope, title="Result")
 

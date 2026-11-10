@@ -1135,13 +1135,14 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
-        "show_recipe": "guide",
-        "show_workout": "guide",
-        "show_how_to": "guide",
-        "show_checklist": "guide",
-        "show_itinerary": "guide",
-        "show_tip_calculator": "calculator",
-        "show_loan_calculator": "calculator",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:

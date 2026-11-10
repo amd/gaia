@@ -29,10 +29,8 @@ icon: sparkles
 # + remember_skill_lesson
 # + search_tools, which GAIA_DYNAMIC_TOOLS=0 or dynamic_tools=false leaves out.
 # + 3 audio-generation tools (enabled on the flagship, disabled in fast mode).
-# + 5 guide-card tools (gaia.agents.tools.guide_tools)
-# + 2 calculator-card tools (gaia.agents.tools.calculator_tools).
 # This is the REGISTERED size — what the agent can do.
-tools_count: 112
+tools_count: 105
 
 language: python
 # ChatAgent (gaia_agent.chat_agent) calls RAGSDK.document_scripts (#6165)

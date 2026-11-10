@@ -134,6 +134,14 @@ def _registered_tool_names() -> set:
                     _is_tool_decorator(d) for d in node.decorator_list
                 ):
                     names.add(node.name)
+    # A bundled skill's tools register as ``<skill>/<tool>`` once it loads.
+    for path in (REPO_ROOT / "hub" / "skills").glob("*/tools.py"):
+        tree = ast.parse(path.read_text(errors="replace"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                _is_tool_decorator(d) for d in node.decorator_list
+            ):
+                names.add(f"{path.parent.name}/{node.name}")
     return names | _PROGRAMMATIC_TOOLS
 
 

@@ -458,8 +458,8 @@ async function withGuideCards(page: Page): Promise<void> {
                     {
                         id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'بالهناء والشفاء.', created_at: NOW.toISOString(), rag_sources: null,
                         agent_steps: [
-                            { id: 1, type: 'tool', tool: 'show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
-                            { id: 2, type: 'tool', tool: 'show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
+                            { id: 1, type: 'tool', tool: 'guides/show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
+                            { id: 2, type: 'tool', tool: 'calculators/show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
                         ],
                     },
                 ],

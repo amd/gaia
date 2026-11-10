@@ -30,6 +30,20 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **Recipes, workouts, how-tos, checklists and trip plans show as cards, and
+  tip and loan questions get a calculator.** Two bundled skills ship the tools:
+  `guides` (`guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`,
+  `guides/show_checklist`, `guides/show_itinerary`) sends the answer as a
+  `guide` card, and `calculators` (`calculators/show_tip_calculator`,
+  `calculators/show_loan_calculator`) sends only the starting numbers as a
+  `calculator` card that does the math as the person edits it. The agent loads
+  the skill when a request matches, so the tools join the tool list only then
+  and the registered tool count stays 105.
+- **`tool_result.render` now reaches HTTP and stdio clients.** The sidecar's
+  `/query` stream and the stdio transport never set `render`, so a card tool's
+  result arrived as plain data and no card was drawn. Both now carry the card
+  type (`guide` or `calculator` for the tools above). A client that has no
+  renderer for a key should draw its unknown-card fallback.
 
 ## [0.3.5]
 
@@ -245,11 +259,6 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   own. An unknown session or key is a `404`.
 - **`needs_confirmation` carries `always_label`** beside `always_scope`: the
   same grant in plain words (`editing notes.md`), when there is one.
-- **`tool_result.render` now reaches HTTP and stdio clients.** The sidecar's
-  `/query` stream and the stdio transport never set `render`, so a card tool's
-  result arrived as plain data and no card was drawn. Both now carry the card
-  type (`guide` or `calculator` for the tools above). A client that has no
-  renderer for a key should draw its unknown-card fallback.
 - **`GET /v1/gaia/skills` can return `"source": "claude-project"`** for a skill
   in the `.claude/skills` of the project the agent works in. A host that groups
   rows by `source` must show a value it does not know ungrouped rather than
@@ -414,17 +423,6 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   asks for, without naming the required scopes, was refused because GAIA
   defaulted to the email agent's `gmail.modify` + `gmail.send`. Any one mail
   read scope now satisfies the default, for Gmail and Outlook.
-- **Recipes, workouts, how-tos and checklists show as cards.** Four new tools
-  (`show_recipe`, `show_workout`, `show_how_to`, `show_checklist`) send the
-  answer as a `guide` card the Agent UI draws, so the reply is a short tip
-  instead of a long list.
-- **Trip itineraries show as a day-by-day card.** `show_itinerary` sends one
-  line per day plus a packing list as a fifth kind of `guide` card.
-- **Tip and loan calculators.** `show_tip_calculator` and
-  `show_loan_calculator` send only the starting numbers as a `calculator`
-  card; the card does the math and recomputes as the person edits it, so a
-  small model's arithmetic never reaches the answer. Registered tool count
-  goes 105 → 112.
 
 ## [0.3.3]
 
