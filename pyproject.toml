@@ -40,7 +40,7 @@ skips = ["B101"]  # Skip assert warnings (common in tests)
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: marks tests as slow (real Docker operations, may take > 5 seconds)",
+    "slow: marks tests as slow (spawn the real gaia CLI or run an installer, may take > 5 seconds)",
     "integration: marks tests as integration tests (require external services like Lemonade server)",
     "gmail_live: marks tests that hit the live Gmail API (requires GAIA_GMAIL_LIVE_ACCOUNT env var; never in CI)",
     "real_model: marks tests that require a real Lemonade model server and real model inference (self-hosted runner only; see #1297)",

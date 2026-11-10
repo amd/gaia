@@ -256,7 +256,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    after the notes passed the Python validator (see the escaping rule in step 3). Its error is
    misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
    docs.json navigation but the file does not exist` — the file exists, it just never parsed.
-   Pre-existing parse errors under `docs/plans/` and `docs/superpowers/` are reported but
+   Pre-existing parse errors under `docs/plans/` are reported but
    non-fatal; leave them alone.
 
 ### Gate 1 — show the user the draft

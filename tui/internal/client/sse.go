@@ -141,8 +141,6 @@ type SSEClient struct {
 	agentID string
 	daemon  *daemon.Client
 	opts    SSEOptions
-	// stream is reused across turns: one Transport per client, not per turn.
-	stream *http.Client
 	// cancelHTTP is the short-timeout client for the cancel POST.
 	cancelHTTP *http.Client
 
