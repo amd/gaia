@@ -100,7 +100,7 @@ func addedModels(t *testing.T) []Recommended {
 func TestAnAddedModelIsListedBeforeItsFirstPull(t *testing.T) {
 	added := addedModels(t)
 	capacity := Capacity{MemoryGB: 32, MemorySource: "System RAM", DiskFreeGB: 500}
-	entries := BuildEntries("local", []Model{{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true, Labels: []string{"chat"}}}, capacity, nil, added...)
+	entries := BuildEntries("local", []Model{{ID: "Gemma-4-E4B-it-GGUF", Downloaded: true, Labels: []string{"chat"}}}, capacity, nil, NPUVerdict{}, added...)
 	var row *Entry
 	for i := range entries {
 		if entries[i].Recommended != nil && entries[i].Recommended.Custom {
@@ -122,7 +122,7 @@ func TestAnAddedModelIsListedBeforeItsFirstPull(t *testing.T) {
 func TestAnAddedModelMatchesTheBareNameLemonadeListsAfterThePull(t *testing.T) {
 	added := addedModels(t)
 	listed := Model{ID: "Qwen3-0.6B-Q4_K_M-GGUF", Downloaded: true, Labels: []string{"chat", "custom"}}
-	entries := BuildEntries("local", []Model{listed}, Capacity{MemoryGB: 32}, nil, added...)
+	entries := BuildEntries("local", []Model{listed}, Capacity{MemoryGB: 32}, nil, NPUVerdict{}, added...)
 	count := 0
 	for _, e := range entries {
 		if strings.Contains(e.Model.ID, "Qwen3-0.6B") {
@@ -139,7 +139,7 @@ func TestAnAddedModelMatchesTheBareNameLemonadeListsAfterThePull(t *testing.T) {
 
 func TestAddedModelsOnlyJoinTheLocalList(t *testing.T) {
 	added := addedModels(t)
-	for _, e := range BuildEntries("fireworks", nil, Capacity{}, nil, added...) {
+	for _, e := range BuildEntries("fireworks", nil, Capacity{}, nil, NPUVerdict{}, added...) {
 		if e.Recommended != nil && e.Recommended.Custom {
 			t.Fatalf("an added local model leaked into the cloud list: %+v", e)
 		}

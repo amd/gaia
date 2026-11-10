@@ -115,7 +115,7 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 		{ID: "Huge-GGUF", Size: 200, Labels: []string{"chat"}},
 		{ID: "Qwen3-Coder-Next-GGUF", Size: 48, Labels: []string{"chat", "coding"}},
 	}
-	entries := BuildEntries("local", models, capacityOf(t, macM4), nil)
+	entries := BuildEntries("local", models, capacityOf(t, macM4), nil, NPUVerdict{})
 	if entries[0].Model.ID != "Qwen3.6-35B-A3B-GGUF" || entries[0].Listed || entries[0].Selectable() {
 		t.Fatalf("the unlisted default should lead, unselectable on a 12 GB Mac: %+v", entries[0])
 	}
@@ -143,7 +143,7 @@ func TestEntriesPutRecommendationsFirstAndJudgeFit(t *testing.T) {
 
 func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 	models := []Model{{ID: "Tiny-GGUF", Size: 0.5, Labels: []string{"chat"}}, {ID: "Have-GGUF", Size: 9, Downloaded: true, Labels: []string{"chat"}}}
-	for _, e := range BuildEntries("local", models, Capacity{}, fmt.Errorf("boom")) {
+	for _, e := range BuildEntries("local", models, Capacity{}, fmt.Errorf("boom"), NPUVerdict{}) {
 		if e.NeedsDownload() && e.Selectable() {
 			t.Fatalf("%s downloadable without a fit check", e.Model.ID)
 		}
@@ -154,11 +154,11 @@ func TestUnreadableMachineBlocksEveryDownload(t *testing.T) {
 }
 
 func TestFireworksKeepsItsSuggestionFirstAndHidesWhatTheAccountLacks(t *testing.T) {
-	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: TopRecommendation().ID, Recipe: "cloud"}}, Capacity{}, nil)
+	entries := BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}, {ID: TopRecommendation().ID, Recipe: "cloud"}}, Capacity{}, nil, NPUVerdict{})
 	if len(entries) != 2 || entries[0].Model.ID != TopRecommendation().ID || !entries[0].Selectable() {
 		t.Fatalf("suggested Fireworks model should lead: %+v", entries)
 	}
-	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil) {
+	for _, e := range BuildEntries("fireworks", []Model{{ID: "fireworks.z", Recipe: "cloud"}}, Capacity{}, nil, NPUVerdict{}) {
 		if e.Model.ID == TopRecommendation().ID {
 			t.Fatal("a Fireworks model the account lacks was listed")
 		}
@@ -236,7 +236,7 @@ func TestCatalogListsUndownloadedChatModelsOnly(t *testing.T) {
 			{"id":"fireworks.glm","recipe":"cloud","labels":["chat"]}]}`)
 	}))
 	defer s.Close()
-	entries, err := New(s.URL).Catalog(context.Background(), "local", capacityOf(t, strixHalo128), nil)
+	entries, err := New(s.URL).Catalog(context.Background(), "local", capacityOf(t, strixHalo128), nil, NPUVerdict{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestCatalogListsUndownloadedChatModelsOnly(t *testing.T) {
 }
 
 func TestRecommendedBuiltinMissingFromLemonadeIsUnavailableNotTooBig(t *testing.T) {
-	for _, e := range BuildEntries("local", nil, capacityOf(t, strixHalo128), nil) {
+	for _, e := range BuildEntries("local", nil, capacityOf(t, strixHalo128), nil, NPUVerdict{}) {
 		if e.Model.ID != "Qwen3-Coder-Next-GGUF" {
 			continue
 		}
@@ -295,7 +295,7 @@ func TestRealLemonadeReportsMatchThePythonRule(t *testing.T) {
 }
 
 func TestUnknownFitIsLabelledAsSuch(t *testing.T) {
-	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom")) {
+	for _, e := range BuildEntries("local", []Model{{ID: "Tiny-GGUF", Size: 1, Labels: []string{"chat"}}}, Capacity{}, fmt.Errorf("boom"), NPUVerdict{}) {
 		if e.Model.ID == "Tiny-GGUF" && (!e.FitUnknown || e.Selectable()) {
 			t.Fatalf("%+v", e)
 		}
@@ -309,7 +309,7 @@ func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
 		{ID: "amd.DeepSeek-V4-Flash", Recipe: "cloud"},
 		{ID: "amd.DeepSeek-V4.1-Flash", Recipe: "cloud"},
 	}
-	entries := BuildEntries("amd", models, Capacity{}, nil)
+	entries := BuildEntries("amd", models, Capacity{}, nil, NPUVerdict{})
 	if len(entries) != 3 || entries[0].Model.ID != "amd.DeepSeek-V4.1-Flash" ||
 		entries[0].Recommended == nil || !entries[0].Selectable() {
 		t.Fatalf("first gateway row = %+v, want a selectable recommended DeepSeek-V4.1-Flash", entries[0])
@@ -331,7 +331,7 @@ func npuEntry(entries []Entry, id string) *Entry {
 }
 
 func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
-	entries := BuildEntries("local", nil, Capacity{MemoryGB: 8, DiskFreeGB: 500, NPUMemoryGB: 32}, nil)
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 8, DiskFreeGB: 500, NPUMemoryGB: 32}, nil, verdict(true, true, true))
 	e := npuEntry(entries, "gemma4-it-e4b-FLM")
 	if e == nil || !e.Selectable() || e.Listed || e.Featured() {
 		t.Fatalf("cold NPU row: %+v", e)
@@ -339,14 +339,15 @@ func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
 }
 
 func TestAPCWithoutAnNPUIsNotOfferedFLMModels(t *testing.T) {
-	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil)
-	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e != nil {
-		t.Fatalf("offered on a PC with no NPU: %+v", e)
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, verdict(false, false, true))
+	e := npuEntry(entries, "gemma4-it-e4b-FLM")
+	if e == nil || e.Selectable() || !strings.Contains(e.Reason, "reports none on this PC") {
+		t.Fatalf("a PC with no NPU must show it blocked, not drop it: %+v", e)
 	}
 }
 
 func TestAnFLMModelIsJudgedOnSystemRAM(t *testing.T) {
-	entries := BuildEntries("local", nil, Capacity{MemoryGB: 2, DiskFreeGB: 500, NPUMemoryGB: 32}, nil)
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 2, DiskFreeGB: 500, NPUMemoryGB: 32}, nil, verdict(true, true, true))
 	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e == nil || !e.Fits {
 		t.Fatalf("a small GPU pool must not refuse an NPU model: %+v", e)
 	}
@@ -424,7 +425,7 @@ func TestAFailedBackendInstallStopsThePull(t *testing.T) {
 
 func TestAnAddedFLMRowSurvivesAPCWithoutAnNPU(t *testing.T) {
 	rec := Recommended{ID: "qwen3.5-4b-FLM", Provider: "local", Device: "npu", Custom: true, SizeGB: 5}
-	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, rec)
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, NPUVerdict{}, rec)
 	e := npuEntry(entries, rec.ID)
 	if e == nil || e.Fits {
 		t.Fatalf("an added row must stay, so it can be removed, and must not fit: %+v", e)

@@ -65,7 +65,7 @@ func TestOnlyGemmaIsRecommendedAsAnNPUModel(t *testing.T) {
 }
 
 func TestBigNPUPCIsOfferedGemma(t *testing.T) {
-	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil))
+	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil, verdict(true, true, true)))
 	if e := by["gemma4-it-e4b-FLM"]; !e.Selectable() || !e.OnNPU() || e.Recommended == nil {
 		t.Fatalf("Gemma NPU should be a selectable NPU recommendation: %+v", e)
 	}
@@ -75,14 +75,14 @@ func TestBigNPUPCIsOfferedGemma(t *testing.T) {
 }
 
 func TestSmallNPULaptopIsOfferedGemmaOnly(t *testing.T) {
-	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, laptopNPU), nil))
+	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, laptopNPU), nil, verdict(true, true, true)))
 	if !by["gemma4-it-e4b-FLM"].Selectable() {
 		t.Fatalf("Gemma NPU should fit 15.5 GB of NPU RAM: %+v", by["gemma4-it-e4b-FLM"])
 	}
 }
 
 func TestNoNPUBlocksEveryFLMModelWithAReason(t *testing.T) {
-	for _, e := range BuildEntries("local", flmCatalog(), capacityOf(t, npuMissing), nil) {
+	for _, e := range BuildEntries("local", flmCatalog(), capacityOf(t, npuMissing), nil, verdict(false, false, true)) {
 		if !e.OnNPU() {
 			continue
 		}
@@ -92,23 +92,33 @@ func TestNoNPUBlocksEveryFLMModelWithAReason(t *testing.T) {
 	}
 }
 
-func TestDownloadedFLMModelStaysSelectable(t *testing.T) {
+// Downloaded skips the download checks, not the readiness check: on a ready
+// NPU it stays selectable even when memory alone would refuse it, and the
+// not-ready and unknown cases are covered in catalog_verdict_test.go.
+func TestDownloadedFLMModelStaysSelectableOnAReadyNPU(t *testing.T) {
 	models := flmCatalog()
 	models[0].Downloaded = true
-	by := entriesByID(BuildEntries("local", models, capacityOf(t, npuMissing), nil))
+	tight := Capacity{MemoryGB: 40, MemorySource: "AMD iGPU", DiskFreeGB: 500, NPUMemoryGB: 8}
+	by := entriesByID(BuildEntries("local", models, tight, nil, verdict(true, true, true)))
 	if !by["qwen3.6-moe-35b-a3b-FLM"].Selectable() {
 		t.Fatal("a downloaded model is never blocked by the fit check")
 	}
 }
 
+// An NPU recommendation stays listed either way: on a PC with no NPU it is
+// blocked with the absence reason, so the row explains itself instead of
+// vanishing (the visible-when-unknown case is in catalog_verdict_test.go).
 // Lemonade hides FLM models until its NPU backend is installed; Pull installs it.
-func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndDownloadableWithOne(t *testing.T) {
-	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil) {
-		if e.Recommended != nil && e.Recommended.Device == "npu" {
-			t.Fatalf("a PC with no NPU was shown %s", e.Model.ID)
+func TestAnNPURecommendationIsListedWhetherOrNotThePCHasOne(t *testing.T) {
+	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil, verdict(false, false, true)) {
+		if e.Recommended == nil || e.Recommended.Device != "npu" {
+			continue
+		}
+		if e.Selectable() || !strings.Contains(e.Reason, "reports none on this PC") {
+			t.Fatalf("a PC with no NPU must show %s as blocked: %+v", e.Model.ID, e)
 		}
 	}
-	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil))
+	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil, verdict(true, true, true)))
 	for _, id := range []string{"gemma4-it-e4b-FLM"} {
 		e, ok := by[id]
 		if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
@@ -129,7 +139,7 @@ func TestSingleTurnFLMBuildsAreNotChatOptions(t *testing.T) {
 // The NPU model is an option the user picks, never shown as a recommendation.
 func TestNPUModelIsListedWithTheOtherModelsNotRecommended(t *testing.T) {
 	gpu := Model{ID: "Gemma-4-E4B-it-GGUF", Size: 5.97, Labels: []string{"chat"}}
-	entries := BuildEntries("local", append([]Model{gpu}, flmCatalog()...), capacityOf(t, haloNPU), nil)
+	entries := BuildEntries("local", append([]Model{gpu}, flmCatalog()...), capacityOf(t, haloNPU), nil, verdict(true, true, true))
 	seenOther := false
 	for _, e := range entries {
 		if e.Model.ID == "gemma4-it-e4b-FLM" {
