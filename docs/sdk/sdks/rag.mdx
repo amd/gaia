@@ -1365,12 +1365,19 @@ Complete document Q&A examples
 
 ## Optional Lemonade reranking
 
-`RAGConfig(enable_reranking=True)` reranks the top vector candidates before
-passing the final `max_chunks` to the answering model. GAIA uses a reranker only
-when it is already downloaded in Lemonade and carries the `reranking` label.
-Set `reranking_model` to require a specific downloaded model, or leave it unset
-to use the first downloaded reranker. A missing or failed reranker raises an actionable error; it is never
-downloaded automatically.
+Reranking is off by default, and retrieval is unchanged until you turn it on.
+`RAGConfig(enable_reranking=True)` fetches `max_chunks * reranking_candidate_multiplier`
+(default 3) vector candidates, has a Lemonade reranker score them through
+`/v1/rerank`, and keeps the best `max_chunks`. Each rerank call times out after
+`reranking_timeout` seconds (default 30).
+
+GAIA uses a reranker only when it is already downloaded in Lemonade and carries
+the `reranking` label, such as `bge-reranker-v2-m3-GGUF`. Set `reranking_model`
+to require a specific one, or leave it unset to use the first downloaded
+reranker. GAIA never downloads one for you: download it with `lemonade pull <model>`
+or the Lemonade Model Manager. With reranking on, a missing reranker or a failed
+rerank call raises an error naming the fix, instead of quietly returning vector
+results.
 
 ```python
 config = RAGConfig(

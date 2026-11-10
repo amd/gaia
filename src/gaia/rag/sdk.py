@@ -520,6 +520,8 @@ EMBED_WAIT_REPORT_S = 15
 #: Tries for a batch the embedder answers with no vectors (still loading).
 EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
+#: Lemonade catalog reranker named when none is downloaded.
+_SUGGESTED_RERANKER = "bge-reranker-v2-m3-GGUF"
 
 
 def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
@@ -692,8 +694,7 @@ class RAGConfig:
     vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
-    # Optional second-stage retrieval. Reranking is off until the user downloads
-    # a reranker in Settings → Models and turns it on explicitly.
+    # Optional second-stage retrieval: off unless set, never downloads a reranker.
     enable_reranking: bool = False
     reranking_model: Optional[str] = None
     reranking_candidate_multiplier: int = 3
@@ -4678,7 +4679,10 @@ These positions indicate where to split the text."""
             models = self.llm_client.list_models(show_all=False).get("data", [])
         except Exception as error:
             raise RuntimeError(
-                "Unable to inspect downloaded Lemonade rerankers. Ensure Lemonade Server is running and try again."
+                "Reranking is enabled, but GAIA could not list Lemonade's "
+                f"downloaded models: {error}\n"
+                "Make sure Lemonade Server is running and reachable, or set "
+                "enable_reranking=False."
             ) from error
         requested = self.config.reranking_model
         candidates = [
@@ -4694,16 +4698,33 @@ These positions indicate where to split the text."""
             )
             if not self._reranking_model:
                 raise RuntimeError(
-                    f"Reranker {requested!r} is not downloaded. Download it in Settings -> Models, or clear reranking_model."
+                    f"Reranking is enabled, but reranker {requested!r} is not "
+                    "downloaded in Lemonade.\n"
+                    f"{self._reranker_download_hint(requested)}\n"
+                    "Or clear reranking_model, or set enable_reranking=False."
                 )
         elif candidates:
             self._reranking_model = candidates[0].get("id")
         else:
             raise RuntimeError(
-                "Reranking is enabled, but no downloaded model has the reranking label. Download a reranker in Settings -> Models, or disable enable_reranking."
+                "Reranking is enabled, but no downloaded Lemonade model has the "
+                "reranking label.\n"
+                f"{self._reranker_download_hint(_SUGGESTED_RERANKER)}\n"
+                "Or set enable_reranking=False."
             )
         self._reranking_checked = True
         return self._reranking_model
+
+    def _reranker_download_hint(self, model: str) -> str:
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+        )
+
+        server = getattr(self.llm_client, "base_url", None) or "your Lemonade Server"
+        return (
+            f"Download {model}. {describe_client_hint('pull', model).instruction}\n"
+            f"Or download it in the Lemonade Model Manager ({server})."
+        )
 
     def _rerank_candidates(
         self, query: str, candidate_chunks: List[str], model: str

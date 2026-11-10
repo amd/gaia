@@ -228,17 +228,78 @@ def test_no_reranking_labelled_model_is_actionable():
             {"id": "chat", "downloaded": True, "labels": ["chat", "reranker-ish"]},
         ]
     }
-    with pytest.raises(RuntimeError, match="no downloaded model has the reranking"):
+    client.base_url = "http://localhost:13305/api/v1"
+    with _pull_hint(), pytest.raises(RuntimeError) as info:
         _rag(client)._resolve_reranking_model()
+    message = str(info.value)
+    assert "no downloaded Lemonade model has the reranking label" in message
+    assert "Run: lemonade pull bge-reranker-v2-m3-GGUF" in message
+    assert "Lemonade Model Manager (http://localhost:13305/api/v1)" in message
+    assert "enable_reranking=False" in message
+    assert "Settings" not in message
 
 
 def test_requested_reranker_that_is_not_downloaded_is_refused():
     client = MagicMock()
+    client.base_url = "http://localhost:13305/api/v1"
     client.list_models.return_value = {
         "data": [{"id": "r", "downloaded": False, "labels": ["reranking"]}]
     }
-    with pytest.raises(RuntimeError, match="not downloaded"):
+    with _pull_hint(), pytest.raises(RuntimeError) as info:
         _rag(client, reranking_model="r")._resolve_reranking_model()
+    message = str(info.value)
+    assert "reranker 'r' is not downloaded" in message
+    assert "Run: lemonade pull r" in message
+    assert "clear reranking_model" in message
+    client.rerank.assert_not_called()
+
+
+def _pull_hint():
+    def hint(action, model):
+        return SimpleNamespace(instruction=f"Run: lemonade {action} {model}")
+
+    return patch("gaia.llm.lemonade_launcher.describe_client_hint", side_effect=hint)
+
+
+def test_reranked_results_keep_their_own_file_and_page():
+    """Reordering must move each chunk's index with it, or citations go wrong."""
+    from gaia.agents.tools.rag_tools import extract_page_from_chunk
+
+    chunks = [
+        "[Page 1]\nIntro to the manual.",
+        "[Page 2]\nThe NPU quantization flow uses int8.",
+        "[Page 7]\nAppendix: unrelated tables.",
+        "[Page 3]\nInstall steps for the other guide.",
+    ]
+    owners = {0: "/docs/a.pdf", 1: "/docs/a.pdf", 2: "/docs/a.pdf", 3: "/docs/b.pdf"}
+    client = MagicMock()
+    client.list_models.return_value = {
+        "data": [{"id": "r", "downloaded": True, "labels": ["reranking"]}]
+    }
+    client.rerank.return_value = {
+        "results": [
+            {"index": 0, "relevance_score": -2.0},
+            {"index": 1, "relevance_score": 9.0},
+            {"index": 2, "relevance_score": -6.0},
+            {"index": 3, "relevance_score": 4.0},
+        ]
+    }
+    rag, _ = _search_rag(client, chunks, [0.0, 1.0, 2.0, 3.0])
+    rag._snapshot_query_state.return_value["chunk_to_file"] = owners
+
+    snapshot = rag._search_chunks("npu quantization")
+    _, _, metadata = rag._retrieve_chunks_with_metadata("q", snapshot)
+
+    assert snapshot["retrieved_indices"] == [1, 3]
+    assert snapshot["retrieved_chunks"] == [chunks[1], chunks[3]]
+    assert [m["source_path"] for m in metadata] == ["/docs/a.pdf", "/docs/b.pdf"]
+    pages = [
+        extract_page_from_chunk(chunk, idx, chunks, owners)
+        for idx, chunk in zip(
+            snapshot["retrieved_indices"], snapshot["retrieved_chunks"]
+        )
+    ]
+    assert pages == [2, 3]
 
 
 def test_unreachable_lemonade_during_selection_is_raised_with_context():
