@@ -1,11 +1,11 @@
 {
   "_source": "src/gaia/agents/tools/_email/scopes.py (DECLARED_SCOPES) — hand-maintained, guarded by tests/unit/connectors/test_mail_scope_drift.py. agent_scopes is what the flagship's mail tools ask for at consent; identity_scopes is the one spelling both the catalog spec's default_scopes and the OAuthProvider's default_scopes must equal (#2738). Edit the source constants first, then this fixture.",
   "google": {
-    "agent_scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "agent_scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose"],
     "identity_scopes": ["openid", "https://www.googleapis.com/auth/userinfo.email"]
   },
   "microsoft": {
-    "agent_scopes": ["https://graph.microsoft.com/Mail.ReadWrite"],
+    "agent_scopes": ["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send"],
     "identity_scopes": ["offline_access", "https://graph.microsoft.com/User.Read"]
   },
   "microsoft_work": {

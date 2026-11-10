@@ -135,6 +135,9 @@
 /* The exact line a one-time approval runs: never clipped, never collapsed. */
 .perm-card-exact {
     max-height: none;
+    /* Each line of the email takes its own direction, whatever the app's language. */
+    unicode-bidi: plaintext;
+    text-align: start;
 }
 
 /* Collapsed code is already capped by line count; expanded, it scrolls. */

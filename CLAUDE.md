@@ -692,7 +692,7 @@ tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/) (for example
 `coding`, `file-ops`, `summarize`, `image-gen`); jira, docker, blender, emr and
 routing were dropped with no skill replacing them. The standalone email agent was
 removed too (#4825): mail is the flagship's read-only Gmail/Outlook tools (`email` in
-`KNOWN_TOOLS`) plus the `inbox-triage` skill. Adding a capability
+`KNOWN_TOOLS`) plus the `inbox-triage` and `send-email` skills. Adding a capability
 means writing a skill, not shipping an agent. Custom agents stay supported (`gaia agent
 init/pack/publish`, `~/.gaia/agents/` discovery); the one reference package `gaia agent
 init` mirrors is [`tests/fixtures/agents/hello-world/`](tests/fixtures/agents/hello-world/),

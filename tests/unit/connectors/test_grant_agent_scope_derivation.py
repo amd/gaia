@@ -388,9 +388,7 @@ class TestFlagshipSidecarGrantDerivation:
             )
         }
 
-    def test_grant_agent_installed_gaia_requests_mail_read_and_calendar(
-        self, monkeypatch
-    ):
+    def test_grant_agent_installed_gaia_requests_mail_and_calendar(self, monkeypatch):
         # A frozen binary has no wheel to discover, even where one is installed.
         monkeypatch.setattr(
             "gaia.agents.registry.AgentRegistry.discover", lambda self: None
@@ -421,6 +419,7 @@ class TestFlagshipSidecarGrantDerivation:
         assert captured["grant_agents"] == {
             "installed:gaia": [
                 "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/gmail.compose",
                 "https://www.googleapis.com/auth/gmail.readonly",
             ]
         }

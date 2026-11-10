@@ -76,9 +76,11 @@ The agent reads Gmail or Outlook once you connect the Google or Microsoft
 connector and grant it to the agent. Eight **read-only** tools list, search and
 open mail, follow a thread, list folders and find the threads waiting on your
 reply; the bundled `inbox-triage` skill does the triage judgment on top of them.
-It never archives, labels, drafts or sends, and every email body is read by the
-local model. Gemma 4 E4B (GPU or NPU) is not offered the mail tools; a larger
-model is. Setup and the full tool list:
+The bundled `send-email` skill drafts, replies, forwards and sends, and asks
+before anything leaves the mailbox. The agent never archives, labels or deletes
+received mail, and every email body is read by the local model. Gemma 4 E4B
+(GPU or NPU) is not offered the mail tools; a larger model is. Setup and the
+full tool list:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 There is no separate email agent: the standalone `@amd-gaia/agent-email` package
@@ -228,7 +230,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector and Agent Hub tools, mailbox and calendar access, and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, drafts and sends, calendar access, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an

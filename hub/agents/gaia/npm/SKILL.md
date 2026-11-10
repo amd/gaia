@@ -387,8 +387,8 @@ surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
-offered the scratchpad, email, calendar, image-generation or skill-hub tools, so
-`install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+offered the scratchpad, email, send-email, calendar, image-generation or skill-hub
+tools, so `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
@@ -397,8 +397,22 @@ a PowerShell child on Windows to draw the notification, **`install_cli`** /
 account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it. The bundled
-`calendar` skill's tools join the list when the skill loads, and its
+content under `~/.gaia/skills` and removing one deletes it.
+The bundled `send-email` skill's eight tools join the list when the skill loads,
+and its manifest marks six `requires_confirmation`: **`send-email/send_now`**,
+**`send-email/send_draft`**, **`send-email/reply_to_message`** and
+**`send-email/forward_message`**, because mail leaves the mailbox, and
+**`send-email/discard_draft`** and **`send-email/update_draft`**, because a
+deleted or overwritten draft can't be recovered and may be one the user wrote.
+`send-email/create_draft` and `send-email/list_drafts` don't ask. The prompt
+carries the sending account and the exact message. The four sending tools are
+refused, with nothing sent, wherever no person can answer the prompt, including a
+pre-approved run. A failed send returns `sent: false` when it definitely didn't
+go, and `sent: "unknown"` when it may have (a dropped connection or a provider
+server error): tell the user to check Sent and don't call again unless they ask.
+`send-email/forward_message` carries text only, and reports the files it left out
+in `attachments_left_out`.
+The bundled `calendar` skill's tools join the list when the skill loads, and its
 **`calendar/create_calendar_event`**, **`calendar/update_calendar_event`** and
 **`calendar/cancel_calendar_event`** ask as well (its manifest marks them
 `requires_confirmation`), because they change a real calendar and can email the
@@ -701,11 +715,13 @@ There is no silent null.
 
 ## Gotchas — read before debugging
 
-- **Mail is read-only, and only with a connector.** The agent reads Gmail or
-  Outlook through eight read-only tools plus the `inbox-triage` skill once the
-  Google or Microsoft connector is connected and granted to it. It never
-  archives, drafts or sends, Gemma 4 E4B is not offered the mail tools, and
-  there is no separate email agent to call. See the README's Email section.
+- **Mail needs a connector, and every send asks first.** The agent reads Gmail
+  or Outlook through eight read-only tools plus the `inbox-triage` skill once
+  the Google or Microsoft connector is connected and granted to it, and drafts
+  and sends through the `send-email` skill, which prompts before anything
+  leaves the mailbox. It never archives, labels or deletes received mail,
+  Gemma 4 E4B is not offered the mail tools, and there is no separate email
+  agent to call. See the README's Email section.
 - **`/health` green ≠ ready.** It never touches the model server. Use
   `GET /v1/gaia/init` and branch on `.ready`; it returns 503 with a full body and
   a `hint`, not an empty error.

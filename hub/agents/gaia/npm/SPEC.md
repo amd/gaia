@@ -357,7 +357,7 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
 web search and page fetches, the browser, connector (MCP) and Agent Hub
-tools, mailbox and calendar access, and any call or shell command that contacts a host other than the agent's own machine, and
+tools, mailbox reads, drafts and sends, calendar access, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -830,8 +830,11 @@ before sending rather than reading a 404 as "the run ended".
 Mail goes through the same `/query` route; there is no mail-specific endpoint
 and no separate email sidecar. The agent's eight mail tools are read-only
 (list, search, read, thread, folders, waiting-on-you, mailbox state) and need
-the Google or Microsoft connector connected and granted to the agent. A model
-on the `compact` feature tier (Gemma 4 E4B) is not offered them. Setup:
+the Google or Microsoft connector connected and granted to the agent. Drafting
+and sending come from the bundled `send-email` skill, whose tools join the
+list as `send-email/<tool>` once it loads; each send, and each change to a
+saved draft, raises a `needs_confirmation` first. A model on the `compact`
+feature tier (Gemma 4 E4B) is offered neither. Setup:
 [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ## 6. Process ownership
