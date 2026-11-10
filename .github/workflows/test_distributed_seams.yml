@@ -31,7 +31,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/ui/__init__.py'
       - 'src/gaia/ui/database.py'
+      - 'src/gaia/ui/sse_translation.py'
       - 'tests/integration/conftest.py'
       - 'tests/unit/conftest.py'
   pull_request:
@@ -49,7 +51,9 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/ui/__init__.py'
       - 'src/gaia/ui/database.py'
+      - 'src/gaia/ui/sse_translation.py'
       - 'tests/integration/conftest.py'
       - 'tests/unit/conftest.py'
   merge_group:
