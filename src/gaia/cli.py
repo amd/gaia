@@ -8034,17 +8034,19 @@ def handle_gateway_command(args):
 
 def _cache_folder_usage(folder: Path) -> tuple:
     """Bytes, file count and unreadable entries under *folder*, without following links."""
-    size = files = unreadable = 0
-    for dirpath, _dirnames, filenames in os.walk(folder, onerror=lambda _e: None):
+    size = files = 0
+    # Files and folders that couldn't be read, so the size never quietly comes up short.
+    unreadable: list = []
+    for dirpath, _dirnames, filenames in os.walk(folder, onerror=unreadable.append):
         for name in filenames:
             try:
                 stat = os.lstat(os.path.join(dirpath, name))
-            except OSError:
-                unreadable += 1
+            except OSError as e:
+                unreadable.append(e)
                 continue
             size += stat.st_size
             files += 1
-    return size, files, unreadable
+    return size, files, len(unreadable)
 
 
 def _print_cache_folders() -> None:
@@ -8062,7 +8064,10 @@ def _print_cache_folders() -> None:
         if entry.is_dir() and not entry.is_symlink():
             rows.append((entry.name, *_cache_folder_usage(entry)))
         elif entry.is_file() and not entry.is_symlink():
-            rows.append((entry.name, entry.lstat().st_size, 1, 0))
+            try:
+                rows.append((entry.name, entry.lstat().st_size, 1, 0))
+            except OSError:  # removed or locked while listing
+                rows.append((entry.name, 0, 0, 1))
     if not rows:
         print("No caches yet.")
         return

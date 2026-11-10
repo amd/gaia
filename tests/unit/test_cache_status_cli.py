@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+from pathlib import Path
 
 import pytest
 
@@ -118,3 +120,55 @@ def test_status_does_not_follow_a_link_out_of_the_cache(
         ["rag", "100", "B", "1", "file"],
         ["Total", "100", "B", "1", "file"],
     ]
+
+
+def test_a_folder_that_cannot_be_read_is_counted_not_dropped(
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog
+):
+    cache = tmp_path / ".gaia" / "cache"
+    _write(cache / "rag" / "doc.bin", 100)
+    (cache / "rag" / "locked").mkdir()
+    real_walk = os.walk
+
+    # Root can read any folder, so refuse one the way os.walk reports it.
+    def walk(top, onerror=None, **kwargs):
+        for dirpath, dirnames, filenames in real_walk(top, onerror=onerror, **kwargs):
+            if "locked" in dirnames:
+                dirnames.remove("locked")
+                onerror(PermissionError(13, "Permission denied", dirpath))
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(os, "walk", walk)
+
+    _status(monkeypatch, True, caplog)
+
+    assert _cache_lines(capsys.readouterr().out) == [
+        ["rag", "100", "B", "1", "file", "(1", "unreadable)"],
+        ["Total", "100", "B", "1", "file"],
+    ]
+
+
+def test_a_file_removed_while_listing_is_reported_and_the_rest_still_shows(
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog
+):
+    cache = tmp_path / ".gaia" / "cache"
+    _write(cache / "rag" / "doc.bin", 100)
+    _write(cache / "index.lock", 10)
+    real_lstat = Path.lstat
+
+    def lstat(self):
+        if self.name == "index.lock":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real_lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+
+    _status(monkeypatch, True, caplog)
+
+    out = capsys.readouterr().out
+    assert _cache_lines(out) == [
+        ["rag", "100", "B", "1", "file"],
+        ["index.lock", "0", "B", "0", "files", "(1", "unreadable)"],
+        ["Total", "100", "B", "1", "file"],
+    ]
+    assert "Context7" in out
