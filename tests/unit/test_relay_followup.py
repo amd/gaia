@@ -24,6 +24,7 @@ from fastapi import HTTPException
 import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.registry import AgentRegistry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
@@ -32,7 +33,6 @@ from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
 from gaia.ui.routers import chat as chat_router
 from gaia.ui.sidecar import daemon_client as daemon_client_module
-from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     GAIA_PROFILE,

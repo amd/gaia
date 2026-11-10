@@ -2586,10 +2586,10 @@ def _dispatch_sidecar_query(
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.config import GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
     from gaia.ui.sidecar import daemon_client
-    from gaia.ui.sidecar.errors import SidecarError
     from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)

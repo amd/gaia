@@ -1481,7 +1481,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             return None
         try:
             last_update = datetime.fromisoformat(newest_updated).replace(tzinfo=None)
-        except Exception:
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "System context memory %s has an unreadable updated_at %r: %s",
+                existing[0].get("id"),
+                newest_updated,
+                e,
+            )
             return None
         age_days = (datetime.now() - last_update).days
         if age_days >= _SYSTEM_CONTEXT_REFRESH_DAYS:
@@ -3354,7 +3360,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 item_map[item["id"]] = item
                 vectors.append(vec)
                 ids.append(item["id"])
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Skipping memory %s in reconciliation: corrupt embedding: %s",
+                    item.get("id"),
+                    e,
+                )
                 continue
 
         if len(vectors) < 2:

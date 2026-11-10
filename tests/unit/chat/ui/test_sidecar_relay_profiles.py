@@ -29,9 +29,9 @@ import pytest
 import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.sidecar.daemon_client as daemon_client_module
 import gaia.ui.sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
 from gaia.ui.models import ChatRequest
-from gaia.ui.sidecar.errors import SidecarError, SidecarSpawnError
 from gaia.ui.sidecar.profiles import (
     GAIA_PROFILE,
     api_version_supported,
@@ -89,7 +89,6 @@ def _registered_tool_names() -> set:
         "src/gaia/agents/tools",
         "src/gaia/sd",
         "src/gaia/vlm",
-        "src/gaia/agents/code_index",
         "hub/agents/gaia/python",
     ]
 

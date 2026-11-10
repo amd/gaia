@@ -113,8 +113,9 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     Raises:
         EnvironmentChangeError: The relayed agent could not be started to ask.
     """
+    from gaia.daemon.sidecars.errors import SidecarError
+
     from .sidecar import daemon_client
-    from .sidecar.errors import SidecarError
     from .sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
@@ -437,8 +438,9 @@ def _tell_running_relay(session_id: str, internet_off: bool) -> None:
     Raises:
         RelayedSwitchError: When the running turn's sidecar couldn't be told.
     """
+    from gaia.daemon.sidecars.errors import SidecarError
+
     from ._chat_helpers import _active_sse_handlers
-    from .sidecar.errors import SidecarError
 
     handler = _active_sse_handlers.get(session_id)
     if internet_off and getattr(handler, "relay_ignores_internet", False) is True:

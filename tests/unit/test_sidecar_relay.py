@@ -16,12 +16,12 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
-from gaia.ui.sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.sidecar.errors import (  # noqa: E402
+from gaia.daemon.sidecars.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
+from gaia.ui.sidecar import relay  # noqa: E402
 from gaia.ui.turn_summary import TurnLedger  # noqa: E402
 
 # ---------------------------------------------------------------------------

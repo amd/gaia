@@ -2479,7 +2479,7 @@ class SSEOutputHandler(OutputHandler):
         active relay run to answer (already finished, or never one) so the
         caller can 404 rather than report an accepted answer nothing reads.
         Any sidecar rejection (e.g. the question is no longer pending)
-        propagates as :class:`~gaia.ui.sidecar.errors.SidecarError` —
+        propagates as :class:`~gaia.daemon.sidecars.errors.SidecarError` —
         never swallowed.
         """
         proxy = self.active_relay_proxy

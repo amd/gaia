@@ -8,7 +8,7 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.ui.sidecar.errors import SidecarError, SidecarHTTPError
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sidecar.proxy import SidecarProxy
 
 

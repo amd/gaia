@@ -139,13 +139,6 @@ def token_f1(gold: str, prediction: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
-def first_hit_rank(hits: Sequence[bool]) -> Optional[int]:
-    for rank, hit in enumerate(hits, 1):
-        if hit:
-            return rank
-    return None
-
-
 def retrieval_summary(
     ranks: Iterable[Optional[int]], ks: Sequence[int] = RECALL_KS
 ) -> dict:

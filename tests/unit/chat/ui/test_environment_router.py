@@ -357,8 +357,8 @@ def test_a_relayed_agent_too_old_for_folders_cannot_start_with_one(
 def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     client, folder, relayed_gaia, monkeypatch
 ):
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.sidecar import daemon_client
-    from gaia.ui.sidecar.errors import SidecarError
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")
