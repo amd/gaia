@@ -1,10 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """A final answer that only announces its next action ("I will perform one
-final search…") is re-prompted, and never handed to the user as the answer.\n\nSeen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks\n(amd/gaia#6753, thread 1).\n
+final search…") is re-prompted, and never handed to the user as the answer.
+
+Seen on Gemma 4 E4B (NPU) in v0.25.4-rc13 and in the ai-pc-evals data tasks
+(amd/gaia#6753, thread 1).
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +16,7 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _split_announced_step,
     _unfinished_answer_kind,
 )
 from gaia.agents.base.verification import strip_verification_scope
@@ -498,3 +503,180 @@ def test_plan_ending_on_executing_now_ends_honestly(agent):
     final = _final_text(result)
     assert final.startswith("I didn't finish:")
     assert "Executing the final write now." in final
+
+
+# Gemma 4 E4B (NPU): after one analyze_data_file call, the answer laid out a
+# run_python plan and ended without running it.
+PLAN_INSTEAD_OF_WORK = (
+    Path(__file__).parents[2]
+    / "fixtures"
+    / "agent_answers"
+    / "plan_instead_of_work.txt"
+).read_text(encoding="utf-8")
+
+
+def test_a_prose_proceeding_line_is_narration():
+    """Announcing a numbered step in prose is narration, not an answer (#6914).
+
+    The digit in the closing used to exempt the whole answer from the
+    tool-plan guard, and the progressive pattern required a "now/next" tail
+    that "Proceeding with step 1." does not have.
+    """
+    assert (
+        _unfinished_answer_kind(_OLD_FILES_PLAN + "Proceeding with step 1.")
+        == "narration"
+    )
+
+
+def test_tool_plan_in_place_of_the_work_is_narration():
+    assert _unfinished_answer_kind(PLAN_INSTEAD_OF_WORK) == "narration"
+    body, step = _split_announced_step(PLAN_INSTEAD_OF_WORK)
+    assert (
+        step == "I will use the `run_python` tool to load the CSV data using `pandas`."
+    )
+    assert "Here is the plan" not in body
+    assert body.startswith("The previous tool call returned a result")
+
+
+def test_tool_plan_step_is_quoted_with_curly_apostrophes():
+    answer = (
+        "Here’s the plan:\n"
+        "1. I’ll use the `run_python` tool to load the CSV.\n"
+        "2. I’ll print the regional totals.\n\n"
+        "This should give you the breakdown."
+    )
+    assert _unfinished_answer_kind(answer) == "narration"
+    _, step = _split_announced_step(answer)
+    assert step == "I’ll use the `run_python` tool to load the CSV."
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            "Here is how I would approach it:\n"
+            "1. I will load the CSV with pandas.\n"
+            "2. I will filter out the returned orders.\n"
+            "3. I will group by region and sum units times price.",
+            id="tutorial-without-a-tool",
+        ),
+        pytest.param(
+            "Here is the plan:\n"
+            "1. I will use the `run_python` tool to load the CSV.\n"
+            "2. I will group by region.\n\n"
+            "Results: North $12,400.50, South $9,870.00, West $15,210.25.",
+            id="plan-then-results",
+        ),
+        pytest.param(
+            "Hi team,\n\nNext steps for the migration:\n"
+            "1. I will use the `deploy` tool to stage the build.\n"
+            "2. I will run the smoke tests.\n\nThanks,\nSam",
+            id="drafted-email-plan",
+        ),
+        pytest.param(
+            "Your notes say:\n\n"
+            "> 1. I will use the `run_python` tool to load the data.\n"
+            "> 2. I will print the totals.",
+            id="quoted-plan",
+        ),
+        pytest.param(
+            "Here's the plan:\n"
+            "1. I'll use the `list_files` tool to find files older than 30 days.\n"
+            "2. I'll move them to an Archive folder.\n\n"
+            "Want me to go ahead?",
+            id="plan-awaiting-confirmation",
+        ),
+        pytest.param(
+            "Here's the plan:\n"
+            "1. I'll use the `list_files` tool to find old files.\n"
+            "2. I'll move them to Archive.\n"
+            "Want me to go ahead?",
+            id="plan-question-right-under-the-list",
+        ),
+        pytest.param(
+            "Done. Here's what happened:\n"
+            "1. I'll use the `list_files` tool again if you add files.\n"
+            "2. I'll keep the Archive folder as is.\n"
+            "Moved 12 files.",
+            id="results-line-right-under-the-list",
+        ),
+        pytest.param(
+            "Here's what I propose:\n"
+            "1. I'll use the `list_files` tool to find the old files.\n"
+            "2. I'll move them to Archive.\n\n"
+            "Let me know and I'll start.",
+            id="plan-asks-permission",
+        ),
+        pytest.param(
+            "1. I will rename `load_config` to `read_settings`.\n"
+            "2. I will add a unit test.\n\n"
+            "Let me know if that works for you.",
+            id="code-plan-with-identifiers",
+        ),
+        pytest.param(
+            "Proposed change:\n"
+            "1. I will move `parse_args` into `cli_utils`.\n"
+            "2. I will update the imports.",
+            id="code-plan-no-closing-line",
+        ),
+    ],
+)
+def test_plan_look_alikes_are_not_narration(answer):
+    assert _unfinished_answer_kind(answer) is None
+
+
+_OLD_FILES_PLAN = (
+    "Here's the plan:\n"
+    "1. I'll use the `list_files` tool to find files older than 30 days.\n"
+    "2. I'll move them to an Archive folder.\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Once you confirm, I'll start.",
+        "Reply 'go' to proceed.",
+        "Reply ‘go’ to proceed.",
+        'Reply with "yes" to start.',
+        "Reply yes to continue.",
+        "Nothing has been changed yet.",
+        "Nothing’s been changed yet.",
+        "I'll wait for your confirmation before running anything.",
+        "Approve this and I'll run it.",
+        "I'll proceed when you're ready.",
+        "Ready when you are.",
+        "Just say go.",
+    ],
+)
+def test_a_plan_waiting_for_the_go_ahead_is_not_narration(closing):
+    assert _unfinished_answer_kind(_OLD_FILES_PLAN + closing) is None
+
+
+@pytest.mark.parametrize(
+    "closing",
+    [
+        "Once it runs, you'll have the list.",
+        "Nothing else is needed from you.",
+        "This shows which folders to reply to first.",
+        "The Archive folder keeps your originals.",
+        "This should give you the breakdown.",
+    ],
+)
+def test_a_plan_with_a_look_alike_closing_line_is_narration(closing):
+    assert _unfinished_answer_kind(_OLD_FILES_PLAN + closing) == "narration"
+
+
+def test_tool_plan_in_place_of_the_work_ends_honestly(agent):
+    sent = _script(agent, *[_answer(PLAN_INSTEAD_OF_WORK)] * 5)
+
+    result = agent.process_query(
+        "What is the net revenue excluding returned orders, broken down by region?",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert "I will use the `run_python` tool" in sent[1][-1]["content"]
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert "I will use the `run_python` tool" in final

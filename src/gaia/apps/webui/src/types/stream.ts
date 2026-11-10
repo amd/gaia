@@ -103,6 +103,8 @@ export interface StreamEvent {
     turn_summary?: TurnSummary;
     /** Library documents the agent indexed and attached to the chat (done events). */
     documents_added?: Document[];
+    /** Notices explaining files that were kept or could not be added (done events). */
+    library_notices?: string[];
     /** MCP server statuses (for mcp_status events). */
     servers?: MCPServerStatus[];
     /** Structured command output (for tool_result of run_shell_command). */

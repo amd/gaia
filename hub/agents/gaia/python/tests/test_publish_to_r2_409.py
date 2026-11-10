@@ -44,7 +44,13 @@ class _Resp409:
 @pytest.fixture
 def hub(monkeypatch, tmp_path):
     """Answer the POST with a 409 and serve `remote` as the published bytes."""
-    state = {"code": "version_exists", "remote": (LOCAL_SHA, 1024), "downloads": 0}
+    # `listed` None means the catalog lists whatever is stored.
+    state = {
+        "code": "version_exists",
+        "remote": (LOCAL_SHA, 1024),
+        "listed": None,
+        "downloads": 0,
+    }
 
     def fake_post(url, headers=None, files=None, timeout=None):
         return _Resp409(state["code"])
@@ -54,7 +60,12 @@ def hub(monkeypatch, tmp_path):
         return state["remote"]
 
     monkeypatch.setattr(pub.requests, "post", fake_post)
+
+    def fake_listed(*a, **k):
+        return state["listed"] or state["remote"][0]
+
     monkeypatch.setattr(pub, "_download_published", fake_download)
+    monkeypatch.setattr(pub, "_listed_sha256", fake_listed)
     manifest = tmp_path / "gaia-agent.yaml"
     manifest.write_text("id: gaia\nversion: 1.2.3\n", encoding="utf-8")
     artifact = tmp_path / "gaia-agent-linux-x64"
@@ -93,6 +104,53 @@ def test_strict_immutable_refuses_different_published_bytes(hub):
         hub["publish"](strict=True)
 
 
+@pytest.mark.parametrize("strict", [False, True])
+def test_stored_bytes_that_differ_from_the_catalog_fail(hub, strict):
+    # A re-run of a racing publish's loser: R2 holds its own bytes, but the
+    # catalog lists the winner's sha256, so installs fail their checksum check.
+    hub["listed"] = "e" * 64
+    with pytest.raises(SystemExit, match="concurrent_publish_conflict"):
+        hub["publish"](strict)
+
+
+class _JsonResp:
+    def __init__(self, status: int, body: dict) -> None:
+        self.status_code = status
+        self._body = body
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_listed_sha256_reads_either_channel(monkeypatch):
+    art = {"filename": "f.exe", "sha256": "a" * 64}
+    catalog = {"versions": {}, "next_versions": {"1.2.3-rc1": {"artifacts": [art]}}}
+    calls = []
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        return _JsonResp(200, catalog)
+
+    monkeypatch.setattr(pub.requests, "get", fake_get)
+    assert pub._listed_sha256("https://hub.example/", "demo", "1.2.3-rc1", "f.exe") == (
+        "a" * 64
+    )
+    assert calls == ["https://hub.example/agents/demo/manifest.json"]
+
+
+@pytest.mark.parametrize(
+    "resp",
+    [
+        _JsonResp(404, {}),
+        _JsonResp(200, {"versions": {"1.2.3": {"artifacts": []}}}),
+    ],
+)
+def test_listed_sha256_fails_when_the_catalog_cannot_confirm(monkeypatch, resp):
+    monkeypatch.setattr(pub.requests, "get", lambda *a, **k: resp)
+    with pytest.raises(SystemExit):
+        pub._listed_sha256("https://hub.example", "demo", "1.2.3", "f.exe")
+
+
 @pytest.mark.parametrize(
     "code",
     [
@@ -100,6 +158,7 @@ def test_strict_immutable_refuses_different_published_bytes(hub):
         "artifact_mismatch",
         "artifact_unverifiable",
         "id_conflict",
+        "concurrent_publish_conflict",
         "",
         None,  # body is not JSON
     ],

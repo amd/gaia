@@ -8,7 +8,8 @@ set -euo pipefail
 DEST_VOLUME="${3:-/}"
 BIN_DIR="${DEST_VOLUME%/}/usr/local/bin"
 
-for binary in gaia-tui gaia-agent; do
+# gaia is a link into /usr/local/lib/gaia, which the core component installs first.
+for binary in gaia-tui gaia-agent gaia; do
     path="${BIN_DIR}/${binary}"
 
     if [ ! -f "$path" ]; then
@@ -30,4 +31,5 @@ done
 echo "GAIA Terminal UI installed:"
 echo "  ${BIN_DIR}/gaia-tui"
 echo "  ${BIN_DIR}/gaia-agent"
+echo "  ${BIN_DIR}/gaia"
 echo "Run \`gaia-tui\` to start."

@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.1.1**. Companion to [`README.md`](./README.md), which is the
+Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,16 +32,16 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.1",
+  "agentVersion": "0.3.5",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
+      "componentVersion": "0.3.5",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
-      "componentVersion": "0.23.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "componentVersion": "0.25.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.25.0",
       "platforms": { "<platformKey>": { /* entry */ } }
     }
   }
@@ -147,13 +147,16 @@ without an agent behind it.
 
 ### 2.5 Placeholder hashes
 
-Between releases every `sha256` is `PENDING-replace-with-real-sha256`. The release
-pipeline regenerates the file with real hashes: for the sidecar, computed from the
-artifacts it just published; for the TUI, computed from the `terminal-hub`
-artifacts it downloaded and cross-checked against that lane's own recorded hashes
+The committed lock carries real hashes, never placeholders: the desktop-installer
+build verifies the sidecar it bundles against it, and a placeholder there fails
+that build on every platform (#3932). The release pipeline regenerates the file
+with real hashes: for the sidecar, computed from the artifacts it just published;
+for the TUI, computed from the `terminal-hub` artifacts it downloaded and
+cross-checked against that lane's own recorded hashes
 (`agents/terminal-hub/manifest.json`, which the hub computes server-side at publish
 time). Both are then re-fetched from the public origin and re-hashed before the
-release is allowed to ship.
+release is allowed to ship, and the release then opens a PR that commits the same
+file to `main`.
 
 `isPlaceholderSha()` treats a value as a placeholder when it is all zeros or
 contains `PENDING` (case-insensitive). A placeholder **blocks the fetch before any
@@ -518,6 +521,22 @@ connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
 server, not the provider. Offer to start the server. Older binaries never send
 `failure`, so read it only when present.
+
+#### The "not confirmed" note on `final.answer`
+
+When the turn's own tool log shows work that is not confirmed, the agent loop
+ends the answer with one plain-English line, for example
+`I haven't confirmed this works — the tests didn't pass.` It appears when a
+check failed, a check was blocked before it could run, a file was changed and
+nothing checked it afterwards, or the answer claims something the tool record
+does not support. It is capped at 200 characters and added at most once per
+turn. A turn where every check passed, or nothing needed checking, carries
+nothing. It is part of `final.answer` and of the streamed text, so it is also
+what you store and replay in the next turn's `context`. A client that wants the
+answer without it can drop the line that starts `I haven't confirmed this works`
+(the older label `Verification:` is dropped the same way). The agent applies
+`strip_verification_scope` from `gaia.agents.base.verification` to its own
+history.
 
 ### 5.2 `session_id` and agent retention
 

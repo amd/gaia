@@ -86,6 +86,7 @@ export interface ApiSchemas {
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
@@ -113,6 +114,10 @@ export interface ApiSchemas {
   SetupRunRequest: SetupRunRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SpeakRequest: SpeakRequest;
+  SpeechModel: SpeechModel;
+  SpeechSettings: SpeechSettings;
+  SpeechSettingsUpdate: SpeechSettingsUpdate;
   StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
@@ -138,6 +143,7 @@ export interface ApiSchemas {
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
   VisionModelRequest: VisionModelRequest;
+  Voice: Voice;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -813,6 +819,7 @@ export interface MessageResponse {
   content: string;
   created_at: string;
   id: number;
+  library_notices?: string[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;
@@ -1029,6 +1036,15 @@ export interface PermissionModeRequest {
   mode: string;
 }
 /**
+ * Structured Local only notice translated by the Agent UI.
+ */
+export interface PolicyNotice {
+  code: string;
+  reason?: string | null;
+  severity: "info" | "warning";
+  url?: string | null;
+}
+/**
  * Result of the first-run hardware scan.
  */
 export interface PreflightReport {
@@ -1231,6 +1247,9 @@ export interface SettingsResponse {
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
   model_status?: ModelStatus | null;
+  network_policy?: "cloud_allowed" | "local_ai_only";
+  policy_notices?: PolicyNotice[];
+  policy_warnings?: string[];
 }
 /**
  * Request to update user settings.
@@ -1252,6 +1271,10 @@ export interface SettingsUpdateRequest {
    * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
+   */
+  network_policy?: ("cloud_allowed" | "local_ai_only") | null;
 }
 /**
  * ``skip_chat_model`` when the chat runs on a cloud provider;
@@ -1276,6 +1299,38 @@ export interface SetupRunRequest {
 export interface SkipModelRequest {
   model_id: string;
   skipped?: boolean;
+}
+export interface SpeakRequest {
+  speed?: number | null;
+  text: string;
+  voice?: string | null;
+}
+/**
+ * Whether the voice model is on this PC, so a first read can say it downloads.
+ */
+export interface SpeechModel {
+  downloaded: boolean;
+  size_gb?: number | null;
+}
+export interface SpeechSettings {
+  auto: boolean;
+  max_speed?: number;
+  min_speed?: number;
+  speed: number;
+  voice: string;
+  voices: Voice[];
+}
+export interface Voice {
+  accent: string;
+  gender: string;
+  id: string;
+  name: string;
+  quality: string;
+}
+export interface SpeechSettingsUpdate {
+  auto?: boolean | null;
+  speed?: number | null;
+  voice?: string | null;
 }
 export interface StartAgentServerRequest {
   backend_url?: string;

@@ -638,6 +638,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: Headroom for the BOS/EOS tokens the server adds to every input.
+_EMBED_RESERVED_TOKENS = 48
+#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
+_EMBED_MIN_CHARS_PER_TOKEN = 1.0
+#: Longest text that embeds whole. No chunk is cut longer than this.
+EMBED_MAX_CHARS = int(
+    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+)
 
 
 def preferred_llamacpp_backend() -> Optional[str]:
@@ -3198,6 +3206,23 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
     return positive(entry.get("context_length"))
 
 
+def _json_type_name(value: Any) -> str:
+    """The JSON name for a decoded value's type, e.g. ``array`` for a list."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -5313,7 +5338,10 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         for entry in self.health_check().get("all_models_loaded", []):
-            if not _model_ids_match(entry.get("model_name"), model_name):
+            if not (
+                _model_ids_match(entry.get("model_name"), model_name)
+                or _model_ids_match(entry.get("id"), model_name)
+            ):
                 continue
             launch = entry.get("launch_command") or []
             args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""
@@ -7606,15 +7634,53 @@ class LemonadeClient:
         if show_all:
             url += "?show_all=true"
         catalog = self._send_request("get", url, timeout=timeout)
-        for entry in catalog.get("data", []):
+        self._check_model_list_shape(catalog)
+        for entry in catalog["data"]:
             if entry.get("id"):
                 self._model_metadata.setdefault(entry["id"], {}).update(entry)
         record_cloud_models(catalog)
         return catalog
 
+    def _check_model_list_shape(self, catalog: Any) -> None:
+        """Raise ``LemonadeClientError`` unless *catalog* is ``{"data": [{...}]}``."""
+        if not isinstance(catalog, dict):
+            got = f"a JSON {_json_type_name(catalog)}"
+        elif not isinstance(catalog.get("data"), list):
+            got = (
+                f"'data' as a JSON {_json_type_name(catalog['data'])}"
+                if "data" in catalog
+                else "an object with no 'data' field"
+            )
+        else:
+            bad = next(
+                (
+                    (i, e)
+                    for i, e in enumerate(catalog["data"])
+                    if not isinstance(e, dict)
+                ),
+                None,
+            )
+            if bad is None:
+                return
+            got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
+        raise LemonadeClientError(
+            f"The model list{self._from_server()} isn't in the expected shape: "
+            f"expected an object whose 'data' is a list of model objects, got "
+            f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
+            "that it is up to date; see "
+            "https://amd-gaia.ai/docs/reference/troubleshooting"
+        )
+
     def cloud_model_provider(self, model: str) -> Optional[str]:
-        """Return the provider for a built-in or previously discovered cloud model."""
-        return cloud_model_provider(model, self._model_metadata.get(model))
+        """Return the provider for a built-in or previously discovered cloud model.
+
+        The catalog is shared across clients, so a new client still recognises a
+        model another client discovered, before it has read the catalog itself.
+        """
+        metadata = self._model_metadata.get(model)
+        if metadata is None and is_cloud_model(model):
+            metadata = {"recipe": CLOUD_RECIPE}
+        return cloud_model_provider(model, metadata)
 
     def _from_server(self) -> str:
         """`` from the model server at host:port`` for an error, or ``""``.

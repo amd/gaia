@@ -51,6 +51,7 @@ PHASES = [
     "upgrade",
     "launch",
     "health",
+    "engine",
     "setup",
     "preflight",
     "quit",

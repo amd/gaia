@@ -25,6 +25,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.env import child_env
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,22 @@ def terminal_is_interactive() -> bool:
     return True
 
 
+def someone_can_answer(console: Any) -> bool:
+    """Whether a person can answer a prompt on *console* right now.
+
+    Never on a background run or an unattended sidecar query; always on a
+    console that waits for an explicit decision; on a terminal console, only
+    when the terminal is interactive. Every other console denies.
+    """
+    if getattr(console, "background_mode", False) is True:
+        return False
+    if getattr(console, "nobody_answers", False) is True:
+        return False
+    if getattr(console, "blocking_confirmation", False):
+        return True
+    return isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
+
+
 def _shorten(value: str) -> str:
     """Head+tail shortening, so the end of a command/path stays visible."""
     if len(value) <= MAX_CONFIRMATION_VALUE_CHARS:
@@ -367,6 +384,7 @@ class OutputHandler(ABC):
     """
 
     _last_denial: Optional[Denial] = None
+    _answered_prompt: Optional[str] = None
     """The most recent denial (#2210).
 
     Bound to the tool so a handler that denies without recording a reason can
@@ -707,6 +725,19 @@ class OutputHandler(ABC):
             setattr(self, attribute, value)
         return value
 
+    def note_prompt_answered(self, tool_name: str) -> None:
+        """Record that a person saw this tool's prompt and answered it."""
+        self._answered_prompt = tool_name
+
+    def take_prompt_answered(self, tool_name: str) -> bool:
+        """True once if a person answered a prompt for *tool_name*.
+
+        False for anything approved or denied without a prompt: a grant,
+        "accept edits", auto-approval, a timeout, or a console that never asks.
+        """
+        answered, self._answered_prompt = self._answered_prompt, None
+        return answered == tool_name
+
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""
         self._last_denial = None
@@ -935,6 +966,7 @@ class TerminalConfirmationMixin:
         stdout, CI, a subprocess host) there is nobody to ask, so the call is
         denied with an actionable message instead of silently approved (#2210).
         """
+        self._answered_prompt = None
         if self.auto_approve_confirmations_enabled():
             self.log_auto_approval(tool_name)
             return True
@@ -983,6 +1015,7 @@ class TerminalConfirmationMixin:
             return self.deny_tool_execution(
                 tool_name, unaskable_denial_message(tool_name)
             )
+        self.note_prompt_answered(tool_name)
 
         if scope is not None and answer in ("a", "always"):
             self.grant_call_for_session(tool_name, tool_args)
@@ -1722,7 +1755,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -1741,7 +1779,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass
 

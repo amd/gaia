@@ -5,6 +5,9 @@ package agents
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -306,5 +309,57 @@ func TestSelectedAgentStaysVisibleInALongList(t *testing.T) {
 			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 			m = next.(Model)
 		}
+	}
+}
+
+// The warning lines come after the rows, and the panel keeps only its tail
+// when it is too short, so a long warning must not push the selected row out.
+func TestASelectedRowStaysVisibleBesideInstallWarnings(t *testing.T) {
+	writeCorruptInstall(t, "broken")
+	client := &stubLister{catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
+		{ID: "gaia", Name: "GAIA"}, {ID: "alpha", Name: "Alpha"}, {ID: "bravo", Name: "Bravo"},
+		{ID: "charlie", Name: "Charlie"}, {ID: "delta", Name: "Delta"}, {ID: "echo", Name: "Echo"},
+	}}}
+	const width, height = 40, 14
+
+	view := ansi.Strip(loadSync(New(client, width, height)).View())
+
+	if !strings.Contains(view, "› gaia") {
+		t.Fatalf("the selected row was cropped off the panel:\n%s", view)
+	}
+	if !strings.Contains(view, "! ") {
+		t.Fatalf("the install warning is missing:\n%s", view)
+	}
+	if n := len(strings.Split(view, "\n")); n > height {
+		t.Fatalf("the panel is %d lines, taller than its %d-line window:\n%s", n, height, view)
+	}
+}
+
+// writeCorruptInstall leaves an install record GAIA cannot read, the way an
+// interrupted install or a damaged disk does.
+func writeCorruptInstall(t *testing.T, id string) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gaia", "agents", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, catalog.SentinelName), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+}
+
+func TestAnUnreadableInstallIsNamedNotDropped(t *testing.T) {
+	writeCorruptInstall(t, "email")
+	client := &stubLister{catalogOut: &catalog.HubCatalog{}}
+
+	view := ansi.Strip(loadSync(New(client, 120, 30)).View())
+
+	if !strings.Contains(view, "'email' is not listed as installed") || !strings.Contains(view, "reinstall it") {
+		t.Fatalf("the panel dropped the unreadable install silently:\n%s", view)
 	}
 }

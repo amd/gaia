@@ -1237,6 +1237,28 @@ describe('SetupScreen: cloud', () => {
         expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
     });
 
+    it('blocks cloud setup choices under Local only without loading their prices', async () => {
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '', blocked: true },
+                { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', blocked: true },
+            ],
+            active: null,
+            lemonade_error: null,
+        } as never);
+        await open();
+        await toKey();
+
+        const fireworks = await screen.findByRole('radio', { name: /Fireworks AI/ });
+        const gateway = screen.getByRole('radio', { name: /AMD LLM Gateway/ });
+        expect(fireworks).toBeDisabled();
+        expect(gateway).toBeDisabled();
+        expect(fireworks).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(screen.getByRole('alert')).toHaveTextContent('Blocked by Local only. Turn it off in Settings to use cloud models.');
+        expect(screen.getByRole('button', { name: /Test and connect/ })).toBeDisabled();
+        expect(mockedApi.getCloudPrices).not.toHaveBeenCalled();
+    });
+
     it('says a key was found in the environment, by its last characters only', async () => {
         mockedApi.listProviders.mockResolvedValue({
             providers: [{

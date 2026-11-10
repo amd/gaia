@@ -82,10 +82,12 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
   long tool call); run evals **serially** (two `gaia eval` runs against one
   Lemonade server race-evict each other's model); use `--experiments 3` for
   run-to-run variance (mean/stdev/95% CI).
-- **CI:** `test_email_agent_eval.yml` (nightly, report-mode on the self-hosted AMD
-  `stx` pool) and `email_scorecard_refresh.yml` (manual dispatch only; a full-corpus
-  run regenerates `SCORECARD.md`, a subset run smoke-tests the pipeline without
-  committing). The drafting eval needs a Claude judge — a subscription through the `claude`
-  CLI (`CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login) first, then `ANTHROPIC_API_KEY`.
-  With none it exits non-zero and fails the build; never a skip, never a pass.
+- **CI:** `email_scorecard_refresh.yml` only — the scheduled email eval was
+  removed while the email agent moves into the core agent (#3329), so
+  `SCORECARD.md` is not refreshed automatically. It runs on manual dispatch
+  only; a full-corpus run regenerates `SCORECARD.md`, a subset run
+  smoke-tests the pipeline without committing. The drafting eval needs a Claude
+  judge — a subscription through the `claude` CLI (`CLAUDE_CODE_OAUTH_TOKEN`,
+  or the CLI's own login) first, then `ANTHROPIC_API_KEY`. With none it exits
+  non-zero and fails the build; never a skip, never a pass.
 </details>
