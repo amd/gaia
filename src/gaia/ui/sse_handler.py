@@ -20,6 +20,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
@@ -47,6 +48,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.generated_media import is_remote_or_device_path
 from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
@@ -68,6 +70,13 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
+
+#: Generated media file types that a client may later open through an explicit
+#: card action.  Keep this intentionally narrow: a successful tool result is
+#: not enough to turn an arbitrary local file into a launchable UI payload.
+MEDIA_OUTPUT_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".flac"}
+)
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -1012,6 +1021,8 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
         elif self._pending_diff_card is not None:
             # ChatView and step persistence read a card from ``data``.
             event["result_data"] = self._pending_diff_card
@@ -1133,6 +1144,21 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
+        # Media-producing tools return a verified local path.  The client gets
+        # it through a typed card rather than scraping a model-written path out
+        # of prose, so opening it cannot become an agent-output execution sink.
+        "generate_image": "media",
+        "generate_music": "media",
+        "generate_sound_effect": "media",
+        "text_to_speech": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1162,12 +1188,73 @@ class SSEOutputHandler(OutputHandler):
             envelope = parsed
         else:
             return None
+        if lang == "media":
+            return self._media_card_payload(envelope)
         if not envelope.get("ok"):
             return None
         inner = envelope.get("data")
         if not isinstance(inner, dict) or inner.get("kind") != lang:
             return None
         return inner
+
+    @staticmethod
+    def _media_card_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return a typed card only for a verified media file this tool wrote.
+
+        The terminal must never open a path copied from model prose or from an
+        unrelated tool's payload.  The render map admits only media producers;
+        this second check requires their successful, absolute, regular-file
+        output before the path crosses the wire as an actionable card.
+        """
+        if envelope.get("status") != "success":
+            return None
+        path_key = next(
+            (
+                key
+                for key in ("image_path", "audio_path", "file_path")
+                if isinstance(envelope.get(key), str) and envelope[key].strip()
+            ),
+            None,
+        )
+        if path_key is None:
+            return None
+        # Judged on the string first: stat-ing a UNC path reaches out to the share.
+        if is_remote_or_device_path(envelope[path_key]):
+            return None
+        path = Path(envelope[path_key]).expanduser()
+        if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        if not path.is_file():
+            return None
+        image = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        media_type = "image" if image else "audio"
+        payload: Dict[str, Any] = {
+            "kind": "media",
+            "path": str(path),
+            "media_type": media_type,
+            "size_bytes": stat.st_size,
+            # A relayed turn reaches the Agent UI as this payload alone; its
+            # inline image/audio card and Outputs read the tool's own keys.
+            "status": "success",
+            path_key: str(path),
+        }
+        for key in (
+            "model",
+            "size",
+            "steps",
+            "voice",
+            "format",
+            "duration_seconds",
+            "duration_requested",
+            "generation_time_s",
+        ):
+            if envelope.get(key) is not None:
+                payload[key] = envelope[key]
+        return payload
 
     # === Completion Methods ===
 
@@ -2484,7 +2571,7 @@ class SSEOutputHandler(OutputHandler):
         active relay run to answer (already finished, or never one) so the
         caller can 404 rather than report an accepted answer nothing reads.
         Any sidecar rejection (e.g. the question is no longer pending)
-        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        propagates as :class:`~gaia.daemon.sidecars.errors.SidecarError` —
         never swallowed.
         """
         proxy = self.active_relay_proxy

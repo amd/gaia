@@ -206,3 +206,46 @@ def test_unreadable_file_gets_a_name_clear_cache_owns(tmp_path):
     name = os.path.basename(sdk._get_cache_path(missing))
     assert _CACHE_OWNED_FILE.search(name)
     assert _CACHE_OWNED_FILE.search(os.path.basename(sdk._extracted_markdown_path(key)))
+
+
+def test_a_document_that_cannot_be_hashed_is_not_indexed_or_cached(tmp_path, document):
+    """PDF, DOCX, XLSX and PPTX open the path themselves, so extraction can succeed
+    on a file hashing could not read. Caching that under the path-only key would
+    serve the first version's text for every later edit (#4800)."""
+    sdk = _make(tmp_path)
+    with (
+        patch.object(sdk, "_safe_open", side_effect=OSError("denied")),
+        patch.object(
+            sdk, "_extract_text_from_file", return_value=("First version. " * 40, {})
+        ) as extract,
+    ):
+        result = sdk.index_document(document)
+
+    assert not result.get("success")
+    assert result["error_type"] == "file_unreadable"
+    assert "notes.txt" in result["error"]
+    extract.assert_not_called()
+    assert document not in sdk.indexed_files
+    cache_dir = tmp_path / "cache"
+    cached = [p.name for p in cache_dir.iterdir()] if cache_dir.exists() else []
+    assert not [name for name in cached if "_notfound" in name]
+
+
+def test_an_edit_to_a_document_that_cannot_be_hashed_is_never_served_stale(
+    tmp_path, document
+):
+    for text in ("First version. " * 40, "Second version. " * 40):
+        sdk = _make(tmp_path)  # a new session each time, as after a restart
+        with (
+            patch.object(sdk, "_safe_open", side_effect=OSError("denied")),
+            patch.object(sdk, "_extract_text_from_file", return_value=(text, {})),
+        ):
+            result = sdk.index_document(document)
+        assert result["error_type"] == "file_unreadable"
+        assert not sdk.chunks, "text reached the index"
+
+
+def test_a_readable_document_still_indexes(tmp_path, document):
+    result = _make(tmp_path).index_document(document)
+    assert result["success"]
+    assert "error_type" not in result

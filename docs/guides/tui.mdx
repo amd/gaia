@@ -599,6 +599,8 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+| `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
+| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
 | `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
 
 ### Reading a turn
@@ -812,6 +814,10 @@ says what it would have run, so you can run it yourself.
 | `y` | Run it this once |
 | `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
+
+An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
+`y` only works once its last line has been on screen, because you are approving
+exactly what goes out. `n` and `Esc` work throughout.
 
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
 out**, not that you refused, so it asks whether you still want it rather than
