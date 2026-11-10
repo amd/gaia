@@ -362,6 +362,26 @@ class TestFrozenLoaderPaths:
         monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
         assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
 
+    def test_a_relaunch_of_itself_reuses_the_bundle(self, frozen_linux, monkeypatch):
+        """A one-file relaunch told to reset unpacks the whole bundle again."""
+        monkeypatch.setenv("LD_LIBRARY_PATH", f"{BUNDLE}:/opt/rocm/lib")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+        env = gaia_env.child_env(relaunch_self=True)
+        assert env["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+
+    def test_the_startup_pass_leaves_relaunches_free_to_reuse(
+        self, frozen_linux, monkeypatch
+    ):
+        monkeypatch.setenv("LD_LIBRARY_PATH", BUNDLE)
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
+        gaia_env.unfreeze_loader_paths(os.environ, reset=False)
+        assert "LD_LIBRARY_PATH" not in os.environ
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in os.environ
+        assert gaia_env.child_env()["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
     def test_an_explicit_path_still_wins(self, frozen_linux, monkeypatch):
         monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
         env = gaia_env.child_env({"LD_LIBRARY_PATH": "/caller"})
