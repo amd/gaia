@@ -375,15 +375,18 @@ function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
-    req.on("data", (chunk) => {
+    const collect = (chunk) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        // Discard the rest unread, so the caller gets this error instead of a reset connection.
+        req.off("data", collect);
+        req.resume();
         reject(bad(`The request body is over ${MAX_BODY_BYTES} bytes.`));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
-    });
+    };
+    req.on("data", collect);
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -483,6 +486,7 @@ async function startBridge({ discoveryFile, handlers, logger = console }) {
 module.exports = {
   BRIDGE_PROTOCOL,
   DISCOVERY_ENV,
+  LIMITS: { MAX_BODY_BYTES, MAX_SCRIPT_CHARS, MAX_TYPED_CHARS, MAX_EXPRESSION_CHARS, MAX_ARGV },
   PARSERS,
   createHandlers,
   devServerOrigins,

@@ -18,7 +18,7 @@ const { BrowserWindow } = require("electron");
 const WEBUI = path.resolve(__dirname, "..", "..", "src", "gaia", "apps", "webui");
 const PANE = path.join(WEBUI, "services", "browser-pane");
 const FIXTURES = path.resolve(__dirname, "..", "fixtures", "browser_pane", "bridge");
-const { BRIDGE_PROTOCOL, PARSERS, createHandlers, devServerOrigins, discoveryPath, parseRequest, startBridge } = require(path.join(PANE, "bridge-server.cjs"));
+const { BRIDGE_PROTOCOL, LIMITS, PARSERS, createHandlers, devServerOrigins, discoveryPath, parseRequest, startBridge } = require(path.join(PANE, "bridge-server.cjs"));
 const { BridgeError, PaneHost, inScope } = require(path.join(PANE, "pane-host.cjs"));
 const { isLocalPageHost } = require(path.join(PANE, "navigation-policy.cjs"));
 const { Ring, TabCdp } = require(path.join(PANE, "cdp-session.cjs"));
@@ -151,6 +151,70 @@ describe("who may call", () => {
       http.get({ host: "127.0.0.1", port: ctx.bridge.port, path: "/v1/hello", headers: ctx.auth }, (res) => resolve(res.statusCode));
     });
     expect(get).toBe(404);
+  });
+});
+
+describe("byte caps", () => {
+  const { MAX_BODY_BYTES, MAX_SCRIPT_CHARS, MAX_TYPED_CHARS, MAX_EXPRESSION_CHARS, MAX_ARGV } = LIMITS;
+  const requests = fixture("requests.json");
+  /** A JSON body of exactly `bytes` bytes, padded with `fill` (one or more bytes per character). */
+  const bodyOf = (bytes, fill = "a") => {
+    const shell = Buffer.byteLength('{"pad":""}');
+    const each = Buffer.byteLength(fill);
+    const body = `{"pad":"${fill.repeat(Math.floor((bytes - shell) / each))}${"a".repeat((bytes - shell) % each)}"}`;
+    expect(Buffer.byteLength(body)).toBe(bytes);
+    return body;
+  };
+
+  let ctx;
+  let hello;
+  beforeAll(async () => {
+    hello = jest.fn(async () => ({ protocol: BRIDGE_PROTOCOL }));
+    ctx = await running({ hello });
+  });
+  afterAll(async () => { await ctx.bridge.close(); });
+  beforeEach(() => hello.mockClear());
+
+  test("a body of exactly the cap is read", async () => {
+    const res = await post(ctx.bridge.port, "hello", bodyOf(MAX_BODY_BYTES), ctx.auth);
+    expect(res.status).toBe(200);
+    expect(hello).toHaveBeenCalledTimes(1);
+  });
+
+  test("one byte over the cap is refused with an answer, not a reset, and no handler runs", async () => {
+    const res = await post(ctx.bridge.port, "hello", bodyOf(MAX_BODY_BYTES + 1), ctx.auth);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({ code: "bad_request", message: expect.stringMatching(/over 1048576 bytes/) });
+    expect(hello).not.toHaveBeenCalled();
+  });
+
+  test("the cap counts bytes, not characters", async () => {
+    const body = bodyOf(MAX_BODY_BYTES + 2, "é");
+    expect(body.length).toBeLessThan(MAX_BODY_BYTES);
+    const res = await post(ctx.bridge.port, "hello", body, ctx.auth);
+    expect(res.status).toBe(400);
+    expect(hello).not.toHaveBeenCalled();
+  });
+
+  test("the bridge still answers after refusing an oversized body", async () => {
+    await post(ctx.bridge.port, "hello", bodyOf(MAX_BODY_BYTES * 2), ctx.auth);
+    const res = await post(ctx.bridge.port, "hello", {}, ctx.auth);
+    expect(res.status).toBe(200);
+  });
+
+  const fill = (text) => ({ ...requests.act_fill, action: { ...requests.act_fill.action, text } });
+  test.each([
+    ["evaluate script", "evaluate", (n) => ({ ...requests.evaluate, script: "x".repeat(n) }), MAX_SCRIPT_CHARS],
+    ["typed text", "act", (n) => fill("x".repeat(n)), MAX_TYPED_CHARS],
+    ["page box answer", "dialog", (n) => ({ ...requests.dialog_answer, text: "x".repeat(n) }), MAX_TYPED_CHARS],
+    ["script expression", "script", (n) => ({ ...requests.script, expression: "x".repeat(n) }), MAX_EXPRESSION_CHARS],
+    ["dev server argv", "devServers", (n) => ({ ...requests.devServers_ensure, spec: { ...requests.devServers_ensure.spec, argv: Array(n).fill("x") } }), MAX_ARGV],
+    ["dev server argument", "devServers", (n) => ({ ...requests.devServers_ensure, spec: { ...requests.devServers_ensure.spec, argv: ["x".repeat(n)] } }), 4096],
+    ["log pattern", "devServers", (n) => ({ ...requests.devServers_logs, pattern: "x".repeat(n) }), 200],
+    ["search path", "devServers", (n) => ({ ...requests.devServers_ensure, searchPath: "x".repeat(n) }), 32768],
+  ])("%s: the cap is allowed and one more is refused", (_name, op, make, cap) => {
+    expect(() => parseRequest(op, make(cap))).not.toThrow();
+    expect(() => parseRequest(op, make(cap + 1))).toThrow(BridgeError);
   });
 });
 
