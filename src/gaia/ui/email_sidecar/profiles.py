@@ -535,6 +535,14 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "update_memory": "Updating memory",
     "recall": "Recalling from memory",
     "search_past_conversations": "Searching past conversations",
+    # Cards drawn by the guides and calculators skills
+    "guides/show_recipe": "Showing recipe",
+    "guides/show_workout": "Showing workout",
+    "guides/show_how_to": "Showing how-to",
+    "guides/show_checklist": "Showing checklist",
+    "guides/show_itinerary": "Showing itinerary",
+    "calculators/show_tip_calculator": "Showing tip calculator",
+    "calculators/show_loan_calculator": "Showing loan calculator",
     # Agent internals the user still sees scroll past
     "read_tool_output": "Re-reading a tool result",
     "set_loop_state": "Tracking progress",

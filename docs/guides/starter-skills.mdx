@@ -234,9 +234,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
+The smallest **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
 function, declared in `metadata.gaia.tools` and registered as
-`rss-digest/fetch_rss`.
+`rss-digest/fetch_rss`. `guides` and `calculators` follow the same shape.
 
 - **Demonstrates** — a skill contributing its own `@tool`. The loader compares
   the manifest to the function signature and refuses the skill if they disagree,
@@ -244,6 +244,32 @@ function, declared in `metadata.gaia.tools` and registered as
 - **Configure** — a feed URL. Handles both RSS 2.0 and Atom.
 - **Note** — it fetches through GAIA's `WebClient`, so private and loopback
   addresses are refused.
+
+### guides
+
+Draws a recipe, workout, how-to, checklist or trip itinerary as an interactive
+card in the Agent UI and the TUI, so the written reply is a tip or two instead
+of a long list. A recipe card rescales amounts and switches units; workout and
+how-to cards run timers and tick off items.
+
+- **Demonstrates** — a tool-providing skill whose result is a render card
+  (`tool_result.render == "guide"`) rather than text for the model to retype.
+- **Provides** — `guides/show_recipe`, `guides/show_workout`,
+  `guides/show_how_to`, `guides/show_checklist`, `guides/show_itinerary`.
+- **Note** — each tool only validates and packages what the model wrote; a bad
+  argument comes back as an error naming the fix, so the model calls again.
+
+### calculators
+
+A tip or loan calculator card that does the arithmetic in the app and
+recomputes as you change the numbers, so a small model's math never reaches the
+answer.
+
+- **Demonstrates** — moving work a small model gets wrong out of the model: it
+  only supplies the starting numbers.
+- **Provides** — `calculators/show_tip_calculator` (bill, tip percent, people)
+  and `calculators/show_loan_calculator` (price, yearly rate, years, down
+  payment).
 
 ### calendar
 
