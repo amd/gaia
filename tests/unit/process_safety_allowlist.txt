@@ -14,7 +14,6 @@ src/gaia/agents/base/discovery.py:swallowed_exception 5
 src/gaia/agents/base/memory.py:swallowed_exception 2
 src/gaia/agents/base/system_context.py:swallowed_exception 19
 src/gaia/agents/base/tools.py:swallowed_exception 1
-src/gaia/agents/tools/browser_use_tools.py:swallowed_exception 1
 src/gaia/browser/driver.py:swallowed_exception 8
 src/gaia/cli.py:subprocess_no_timeout 3
 src/gaia/cli_agent.py:subprocess_no_timeout 1
