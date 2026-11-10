@@ -139,7 +139,7 @@ func (m ChatModel) statusHints() []hint {
 			}
 			hints = append(hints, hint{text: text, rank: rankSecondary})
 		}
-		if _, ok := m.latestMediaCard(); ok {
+		if _, ok := m.latestMediaCandidate(); ok {
 			hints = append(hints,
 				hint{text: "Ctrl+F open · Ctrl+G reveal", rank: rankSecondary},
 			)

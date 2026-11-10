@@ -164,3 +164,61 @@ func TestMediaArgvNeverUsesAShell(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamAndExpansionPathsAreRefused(t *testing.T) {
+	for _, p := range []string{
+		`C:\Users\me\a.png:hidden`,
+		`C:\Users\me\a.png::$DATA`,
+		`C:\Users\%USERNAME%\a.png`,
+		"/home/me/a%20b.png",
+		"/home/me/a:b.png",
+		`C:\a:b\c.png`,
+	} {
+		if !hasStreamOrExpansion(p) {
+			t.Errorf("hasStreamOrExpansion(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{`C:\Users\me\a.png`, `d:\out\b.wav`, "/home/me/a b.png"} {
+		if hasStreamOrExpansion(p) {
+			t.Errorf("hasStreamOrExpansion(%q) = true, want false", p)
+		}
+	}
+}
+
+func TestMediaCardWithAStreamOrVariablePathIsNotActionable(t *testing.T) {
+	dir := t.TempDir()
+	m := newTestChat(t)
+	for _, p := range []string{
+		filepath.Join(dir, "a.png") + ":evil.exe",
+		filepath.Join(dir, "%TEMP%", "a.png"),
+	} {
+		m.messages = []Message{{
+			Role:   RoleCard,
+			Render: "media",
+			Data:   json.RawMessage(`{"kind":"media","path":` + strconvQuote(p) + `,"media_type":"image"}`),
+		}}
+		if _, ok := m.latestMediaCandidate(); ok {
+			t.Errorf("latestMediaCandidate accepted %q", p)
+		}
+		msg, ok := m.mediaActionCmd("open")().(mediaActionResultMsg)
+		if !ok || msg.err == nil {
+			t.Errorf("open %q = %+v, want a refusal", p, msg)
+		}
+	}
+}
+
+func TestHintBarDoesNotStatTheMediaFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "later.png")
+	m := newTestChat(t)
+	m.messages = []Message{{
+		Role:   RoleCard,
+		Render: "media",
+		Data:   json.RawMessage(`{"kind":"media","path":` + strconvQuote(path) + `,"media_type":"image"}`),
+	}}
+	if _, ok := m.latestMediaCandidate(); !ok {
+		t.Fatal("candidate check should not need the file on disk")
+	}
+	if _, ok := m.latestMediaCard(); ok {
+		t.Fatal("latestMediaCard accepted a file that does not exist")
+	}
+}

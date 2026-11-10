@@ -394,10 +394,7 @@ type mediaPayload struct {
 	GenerationTimeS   float64 `json:"generation_time_s"`
 }
 
-// renderImage degrades rather than draws: `image.src` is inline base64 raster
-// (§4.3 forbids SVG and remote URLs), which a terminal cannot display. A
-// sixel/kitty path is deliberately out of scope, so the caption carries the
-// information and the card says plainly why there is no picture.
+// renderMedia describes a generated file on disk; Ctrl+F/Ctrl+G act on it.
 func renderMedia(data json.RawMessage, width int) string {
 	var p mediaPayload
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -449,6 +446,10 @@ func formatMediaBytes(n int64) string {
 	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 }
 
+// renderImage degrades rather than draws: `image.src` is inline base64 raster
+// (§4.3 forbids SVG and remote URLs), which a terminal cannot display. A
+// sixel/kitty path is deliberately out of scope, so the caption carries the
+// information and the card says plainly why there is no picture.
 func renderImage(data json.RawMessage, width int) string {
 	var p imagePayload
 	if err := json.Unmarshal(data, &p); err != nil {

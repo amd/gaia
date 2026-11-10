@@ -48,7 +48,26 @@ func isRemoteOrDevicePath(path string) bool {
 	return strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `\??\`)
 }
 
-func (m ChatModel) latestMediaCard() (mediaCard, bool) {
+// hasStreamOrExpansion refuses a ':' past the drive letter (an NTFS alternate
+// data stream) and '%', which the Windows launchers expand as a variable.
+func hasStreamOrExpansion(path string) bool {
+	if strings.ContainsRune(path, '%') {
+		return true
+	}
+	rest := path
+	if len(path) >= 2 && path[1] == ':' && isASCIILetter(path[0]) {
+		rest = path[2:]
+	}
+	return strings.ContainsRune(rest, ':')
+}
+
+func isASCIILetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// latestMediaCandidate is the newest media card whose path passes the string
+// checks; it does not touch the disk, so the hint bar can call it every frame.
+func (m ChatModel) latestMediaCandidate() (mediaCard, bool) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
 		if msg.Role != RoleCard || msg.Render != "media" {
@@ -59,21 +78,30 @@ func (m ChatModel) latestMediaCard() (mediaCard, bool) {
 			continue
 		}
 		raw := strings.TrimSpace(card.Path)
-		if isRemoteOrDevicePath(raw) {
+		if isRemoteOrDevicePath(raw) || hasStreamOrExpansion(raw) {
 			continue
 		}
 		path := filepath.Clean(raw)
 		if path == "." || !filepath.IsAbs(path) || !isAllowedMediaPath(path) {
 			continue
 		}
-		info, err := os.Stat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
-		}
 		card.Path = path
 		return card, true
 	}
 	return mediaCard{}, false
+}
+
+// latestMediaCard is the newest candidate whose file still exists on disk.
+func (m ChatModel) latestMediaCard() (mediaCard, bool) {
+	card, ok := m.latestMediaCandidate()
+	if !ok {
+		return mediaCard{}, false
+	}
+	info, err := os.Stat(card.Path)
+	if err != nil || !info.Mode().IsRegular() {
+		return mediaCard{}, false
+	}
+	return card, true
 }
 
 func mediaStatus(path, action string, err error) string {
