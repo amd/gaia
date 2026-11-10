@@ -132,7 +132,7 @@ def test_full_profile_unsupported_line_is_unchanged(prompts_and_tools):
     )
 
 
-def test_scheduling_is_unsupported_only_without_calendar_tools():
+def test_scheduling_is_unsupported_only_without_the_calendar_skill():
     from gaia.agents.base.model_features import COMPACT, FULL
 
     with (
@@ -145,7 +145,7 @@ def test_scheduling_is_unsupported_only_without_calendar_tools():
         agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="full"))
         assert "scheduling" in _unsupported_line(agent._get_system_prompt())
 
-        agent.register_calendar_tools = lambda: None
+        agent.BUNDLES_CALENDAR_SKILL = True
         agent.model_features = FULL
         assert "scheduling" not in _unsupported_line(agent._get_system_prompt())
 

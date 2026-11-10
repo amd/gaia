@@ -3349,11 +3349,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.model_features.image_generation
         )
 
+    #: The calendar skill ships with this agent (GaiaAgent sets it).
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = False
+
     def _offers_calendar(self) -> bool:
-        """This agent has the calendar tools and the model is offered them."""
-        return hasattr(self, "register_calendar_tools") and (
-            self.model_features.calendar
-        )
+        """This agent bundles the calendar skill and the model is offered it."""
+        return self.BUNDLES_CALENDAR_SKILL and self.model_features.calendar
 
     def _register_loop_control_tools(self) -> None:
         """Register set_loop_state and request_user_input tools for autonomous mode.

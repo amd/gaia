@@ -385,7 +385,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Sixteen of the agent's 110 tools change the machine or the person's calendar and need explicit approval
+Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, calendar, image-generation or skill-hub tools, so
 `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
@@ -394,12 +394,14 @@ offered the scratchpad, email, calendar, image-generation or skill-hub tools, so
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
 a PowerShell child on Windows to draw the notification, **`install_cli`** /
 **`sign_in_cli`**, which install software and sign a CLI in to the user's
-account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds six of its own
+account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it, and
-**`create_calendar_event`**, **`update_calendar_event`** and
-**`cancel_calendar_event`**, because they change a real calendar and can email the
+content under `~/.gaia/skills` and removing one deletes it. The bundled
+`calendar` skill's tools join the list when the skill loads, and its
+**`calendar/create_calendar_event`**, **`calendar/update_calendar_event`** and
+**`calendar/cancel_calendar_event`** ask as well (its manifest marks them
+`requires_confirmation`), because they change a real calendar and can email the
 people on the event. `update_calendar_event` and `cancel_calendar_event` take
 `expected_title`, `expected_start` and `notify_attendees`, and a call whose values
 don't match the real event is refused before any approval is asked.

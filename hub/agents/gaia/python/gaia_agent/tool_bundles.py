@@ -558,22 +558,6 @@ FULL_BUNDLES = [
             "reply, and say which mailbox account is connected."
         ),
     ),
-    ToolBundle(
-        name="calendar",
-        members=frozenset(
-            {
-                "list_calendar_events",
-                "check_calendar_availability",
-                "create_calendar_event",
-                "update_calendar_event",
-                "cancel_calendar_event",
-            }
-        ),
-        description=(
-            "See the connected Google or Outlook calendar, check free time, and "
-            "create, change or cancel meetings and events."
-        ),
-    ),
     # The description carries the file extensions deliberately: a real turn
     # says "summarize this meeting: <path>.mp4" and never says "transcribe",
     # so an extension-shaped query needs something to score against. Without
@@ -673,11 +657,6 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "get_thread",
         "list_connected_mailboxes",
         "list_waiting_on_you",
-        "list_calendar_events",
-        "check_calendar_availability",
-        "create_calendar_event",
-        "update_calendar_event",
-        "cancel_calendar_event",
         "generate_image",
         "list_sd_models",
         "get_generation_history",

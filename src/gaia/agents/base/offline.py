@@ -48,12 +48,13 @@ WEB_TOOLS = frozenset(
 #: Tools that always call an online service: mailbox, calendar or the Agent Hub.
 ONLINE_SERVICE_TOOLS = frozenset(
     {
-        "cancel_calendar_event",
-        "check_calendar_availability",
+        "calendar/cancel_calendar_event",
+        "calendar/check_calendar_availability",
+        "calendar/create_calendar_event",
+        "calendar/list_calendar_events",
+        "calendar/update_calendar_event",
         "check_mailbox_access",
-        "create_calendar_event",
         "get_thread",
-        "list_calendar_events",
         "list_inbox",
         "list_mail_folders",
         "list_waiting_on_you",
@@ -61,7 +62,6 @@ ONLINE_SERVICE_TOOLS = frozenset(
         "search_email",
         "search_skill_hub",
         "install_skill",
-        "update_calendar_event",
     }
 )
 

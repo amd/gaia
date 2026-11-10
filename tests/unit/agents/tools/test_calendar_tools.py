@@ -1,6 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The five calendar tools, through a real ``Agent`` where approval matters.
+"""The calendar skill's five tools, through a real ``Agent`` where approval matters.
+
+The tools ship in ``hub/skills/calendar`` and register as ``calendar/<tool>`` when
+the skill loads; ``_run`` and ``_asked`` take and give the bare names.
 
 A fake calendar behind ``httpx.MockTransport`` counts writes, and a recording
 console counts prompts, so "refused before the prompt" is observed rather than
@@ -57,8 +60,10 @@ from gaia.agents.tools._email.phishing import (
     UNTRUSTED_FIELD_CLOSE,
     UNTRUSTED_FIELD_OPEN,
 )
-from gaia.agents.tools.calendar_tools import CalendarToolsMixin
 from gaia.print_mode import configure_console
+from gaia.skills import parse_skill_file
+from gaia.skills.loader import register_skill_tools
+from gaia.skills.manager import SkillManager
 from gaia.ui.sse_handler import SSEOutputHandler
 
 WRITE_TOOLS = {
@@ -136,14 +141,48 @@ class _RecordingConsole(AgentConsole):
         return True
 
 
-class _CalendarAgent(Agent, CalendarToolsMixin):
-    CONFIRMATION_REQUIRED_TOOLS = frozenset(WRITE_TOOLS)
+SKILL_DIR = Path(__file__).resolve().parents[4] / "hub" / "skills" / "calendar"
+_MODULE = "gaia_skill_calendar_tools"
+
+
+def _ns(tool):
+    return tool if "/" in tool else f"calendar/{tool}"
+
+
+def _module():
+    """The skill's ``tools.py`` as the loader imports it, without its tools."""
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        register_skill_tools(parse_skill_file(SKILL_DIR))
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    return sys.modules[_MODULE]
+
+
+def _ops(agent):
+    return _module()._CalendarOps(agent)
+
+
+class _CalendarAgent(Agent):
+    """An agent with nothing but the calendar skill loaded, and no gate list:
+    the skill's manifest is what makes its writes ask."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.load_skill(
+            "calendar",
+            manager=SkillManager(
+                agent_skill_dirs=[SKILL_DIR.parent],
+                user_skills_root=SKILL_DIR.parent / ".no-user-skills",
+                include_claude_roots=False,
+            ),
+        )
 
     def _get_system_prompt(self) -> str:
         return "calendar"
 
     def _register_tools(self) -> None:
-        self.register_calendar_tools()
         self._snapshot_tools()
 
     def _create_console(self):
@@ -197,12 +236,12 @@ def make_agent():
 
 
 def _run(agent, tool, **args):
-    result = agent._execute_tool(tool, args)
+    result = agent._execute_tool(_ns(tool), args)
     return json.loads(result) if isinstance(result, str) else result
 
 
 def _asked(agent):
-    return [name for name, _ in agent.console.asked]
+    return [name.removeprefix("calendar/") for name, _ in agent.console.asked]
 
 
 class TestApprovalGate:
@@ -580,7 +619,9 @@ class TestWhichCalendar:
     def test_the_availability_tool_forbids_claiming_free_overall(self, make_agent):
         make_agent(_FakeGoogle())
         described = " ".join(
-            _TOOL_REGISTRY["check_calendar_availability"]["description"].split()
+            _TOOL_REGISTRY["calendar/check_calendar_availability"][
+                "description"
+            ].split()
         )
         assert "free overall" in described
 
@@ -688,14 +729,14 @@ class TestAConnectionThatChanged:
 
     def test_an_unrelated_token_failure_is_not_translated(self, agent):
         self.tokens["google"] = "tok"
-        agent._calendar_run(lambda backend: backend)
+        _ops(agent)._calendar_run(lambda backend: backend)
         self.tokens["google"] = RuntimeError("not a connector error")
         with pytest.raises(RuntimeError):
             agent._calendar_backend.get_event("x")
 
     def test_a_read_after_a_switch_answers_from_the_new_account(self, agent):
         self.tokens["google"] = "tok"
-        agent._calendar_run(lambda backend: backend)
+        _ops(agent)._calendar_run(lambda backend: backend)
         from gaia.connectors.errors import ConnectionRevokedError
 
         self.tokens["google"] = ConnectionRevokedError("google")
@@ -707,7 +748,7 @@ class TestAConnectionThatChanged:
 
     def test_a_write_after_a_switch_is_refused_and_sends_nothing(self, agent):
         self.tokens["google"] = "tok"
-        agent._calendar_run(lambda backend: backend)
+        _ops(agent)._calendar_run(lambda backend: backend)
         from gaia.connectors.errors import ConnectionRevokedError
 
         self.tokens["google"] = ConnectionRevokedError("google")
@@ -720,7 +761,7 @@ class TestAConnectionThatChanged:
 
     def test_a_write_retries_when_the_provider_stays_the_same(self, agent):
         self.tokens["google"] = "tok"
-        agent._calendar_run(lambda backend: backend)
+        _ops(agent)._calendar_run(lambda backend: backend)
         from gaia.connectors.errors import ConnectionRevokedError
 
         calls = iter([ConnectionRevokedError("google")])
@@ -866,7 +907,7 @@ class TestEventTextIsUntrusted:
     def test_the_tools_warn_that_event_text_is_data(self, make_agent):
         make_agent(_FakeGoogle())
         for name in ("list_calendar_events", "check_calendar_availability"):
-            described = " ".join(_TOOL_REGISTRY[name]["description"].split())
+            described = " ".join(_TOOL_REGISTRY[_ns(name)]["description"].split())
             assert "not instructions" in described
 
 
@@ -1095,7 +1136,7 @@ class TestConnectionErrors:
             {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
         )
         agent._calendar_backend = None
-        backend = agent._build_calendar_backend()
+        backend = _ops(agent)._build_calendar_backend()
         assert isinstance(backend, GraphCalendarBackend)
         assert agent._calendar_provider == "microsoft"
 
@@ -1145,27 +1186,49 @@ class TestGating:
         assert agent.console.asked == [] and fake.requests == []
 
     def test_every_tool_is_online_only(self):
-        assert ALL_TOOLS <= ONLINE_SERVICE_TOOLS
-        assert offline_refusal("list_calendar_events", {}) is not None
+        assert {_ns(t) for t in ALL_TOOLS} <= ONLINE_SERVICE_TOOLS
+        assert offline_refusal("calendar/list_calendar_events", {}) is not None
 
     def test_compact_withholds_and_full_keeps(self):
-        assert FEATURE_TOOLS["calendar"] == ALL_TOOLS
-        assert ALL_TOOLS <= withheld_tools(COMPACT)
-        assert not ALL_TOOLS & withheld_tools(FULL)
+        named = {_ns(t) for t in ALL_TOOLS}
+        assert FEATURE_TOOLS["calendar"] == named
+        assert named <= withheld_tools(COMPACT)
+        assert not named & withheld_tools(FULL)
 
-    def test_composable_by_name(self):
+    def test_a_compact_model_cannot_load_the_skill(self, make_agent):
+        from gaia.skills.errors import SkillUnavailableError
+
+        agent = make_agent(_FakeGoogle())
+        agent.unload_skill("calendar")
+        agent.model_features = COMPACT
+        with pytest.raises(SkillUnavailableError, match="larger model"):
+            agent.load_skill(
+                "calendar",
+                manager=SkillManager(
+                    agent_skill_dirs=[SKILL_DIR.parent],
+                    user_skills_root=SKILL_DIR.parent / ".no-user-skills",
+                    include_claude_roots=False,
+                ),
+            )
+        assert not any(name.startswith("calendar/") for name in agent._tools_registry)
+
+    def test_the_core_agent_registers_none_of_them(self):
         from gaia.agents.registry import KNOWN_TOOLS
 
-        assert KNOWN_TOOLS["calendar"] == (
-            "gaia.agents.tools.calendar_tools",
-            "CalendarToolsMixin",
-        )
+        assert "calendar" not in KNOWN_TOOLS
+        assert not any("calendar" in module for module, _cls in KNOWN_TOOLS.values())
+
+    def test_the_writes_ask_because_the_manifest_says_so(self):
+        skill = parse_skill_file(SKILL_DIR)
+        asks = {t.name for t in skill.gaia.tools if t.requires_confirmation}
+        assert asks == WRITE_TOOLS
 
 
 class TestEventsStateTheirWeekday:
     def _weekday(self, **over):
         from gaia.agents.tools._calendar.model import CalendarEvent
-        from gaia.agents.tools.calendar_tools import _event_payload
+
+        _event_payload = _module()._event_payload
 
         base = dict(
             id="e1",
@@ -1296,7 +1359,7 @@ class TestACalendarChangeNeedsAPerson:
         assert result["status"] == "denied"
         assert fake.writes == []
         request = next(e for e in _events(handler) if e["type"] == "permission_request")
-        assert request["tool"] == tool
+        assert request["tool"] == _ns(tool)
         assert NEEDS_PERSON_ARG not in request["args"]
         assert "always_scope" not in request
 
@@ -1368,6 +1431,25 @@ class TestACalendarChangeNeedsAPerson:
         assert "Unexpected argument" in result["error"]
         assert agent.console.asked == [] and fake.writes == []
 
+    @pytest.mark.parametrize("tool", sorted(WRITE_TOOLS))
+    def test_an_agent_that_would_not_ask_is_refused(self, make_agent, tool):
+        """The skill fails closed on a host that opened its own gate."""
+
+        class _NeverAsks(_CalendarAgent):
+            def _tool_requires_confirmation(self, tool_name, tool_args=None):
+                return False
+
+        fake = _FakeGoogle()
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _NeverAsks(silent_mode=True, skip_lemonade=True)
+        agent.console = _RecordingConsole()
+        agent._calendar_backend = fake.backend()
+        agent._calendar_provider = "google"
+        result = _run(agent, tool, **WRITE_CALLS[tool])
+        assert result["success"] is False
+        assert "always need" in result["error"]
+        assert agent.console.asked == [] and fake.requests == []
+
     def test_an_agent_that_does_not_list_the_tools_still_asks(self, make_agent):
         class _Unlisted(_CalendarAgent):
             CONFIRMATION_REQUIRED_TOOLS = frozenset()
@@ -1375,8 +1457,8 @@ class TestACalendarChangeNeedsAPerson:
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _Unlisted(silent_mode=True, skip_lemonade=True)
         for tool in WRITE_TOOLS:
-            assert agent._tool_requires_confirmation(tool, WRITE_CALLS[tool])
-        assert not agent._tool_requires_confirmation("list_calendar_events", {})
+            assert agent._tool_requires_confirmation(_ns(tool), WRITE_CALLS[tool])
+        assert not agent._tool_requires_confirmation(_ns("list_calendar_events"), {})
 
     @pytest.mark.parametrize(
         "preapprove", [_headless_skip, _headless_full_access, _env_preapproval]
@@ -2162,10 +2244,11 @@ class TestAChangeNeedsItsCheckedEvent:
 
     def test_the_prompt_never_shows_an_unchecked_event(self, make_agent):
         agent = make_agent(_FakeGoogle())
-        preflight = _TOOL_REGISTRY["cancel_calendar_event"]["preflight"]
+        preflight = _TOOL_REGISTRY["calendar/cancel_calendar_event"]["preflight"]
         agent._calendar_targets = None
-        with pytest.raises(CalendarError, match="list_calendar_events"):
-            preflight.prompt_args_of(dict(TARGET))
+        with agent._skill_tool_scope("calendar/cancel_calendar_event"):
+            with pytest.raises(CalendarError, match="list_calendar_events"):
+                preflight.prompt_args_of(dict(TARGET))
 
 
 @pytest.mark.usefixtures("no_env_preapproval")

@@ -687,14 +687,6 @@ def test_microsoft_requires_mail_but_only_requests_calendar():
     assert list(microsoft.required_scopes) == [SCOPE_MAIL_READWRITE]
 
 
-def test_calendar_writes_need_approval():
-    assert {
-        "create_calendar_event",
-        "update_calendar_event",
-        "cancel_calendar_event",
-    } <= GaiaAgent.CONFIRMATION_REQUIRED_TOOLS
-
-
 def test_both_mailbox_requirements_say_which_mailbox_they_are_for():
     """`reason` is the sentence shown in the OAuth consent dialog."""
     for connector_id, mailbox in (("google", "gmail"), ("microsoft", "outlook")):

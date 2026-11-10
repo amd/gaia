@@ -2253,10 +2253,10 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -7115,6 +7115,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _skill_tool_scope(self, tool_name: str) -> Any:
+        """Bind a loaded skill's tool to this agent, as its body is when it runs.
+
+        A skill's preflight and approval prompt need the agent too, and a skill
+        tool has no ``self``; any other tool gets a no-op context.
+        """
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill is None:
+            return contextlib.nullcontext()
+        from gaia.skills.context import bind
+
+        return bind(self, skill)
+
     def _policy_refusal(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -7143,7 +7157,8 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args or {})
+            with self._skill_tool_scope(tool_name):
+                refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -7777,7 +7792,8 @@ Do NOT wrap conversational replies in JSON.
         # on top of whatever the host already added to the prompt.
         prompt_args_of = getattr(preflight, "prompt_args_of", None)
         if callable(prompt_args_of):
-            shown = prompt_args_of(tool_args)
+            with self._skill_tool_scope(tool_name):
+                shown = prompt_args_of(tool_args)
             prompt_args = (
                 {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
             )

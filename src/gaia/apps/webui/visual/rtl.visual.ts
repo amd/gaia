@@ -2179,7 +2179,7 @@ const CALENDAR_PROMPTS = {
 /** A reply that asks one calendar approval and stays open: a closed stream dismisses the prompt. */
 async function replyWithCalendarApproval(page: Page, kind: keyof typeof CALENDAR_PROMPTS): Promise<void> {
     const label = { create: 'creating', update: 'changing', cancel: 'cancelling' }[kind];
-    const event = JSON.stringify({ type: 'permission_request', tool: `${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
+    const event = JSON.stringify({ type: 'permission_request', tool: `calendar/${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
     await page.addInitScript((line) => {
         const realFetch = window.fetch;
         window.fetch = (input, init) => (String(input).endsWith('/chat/send')

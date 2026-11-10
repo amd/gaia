@@ -84,7 +84,7 @@ class TestCalendarSummary:
 
     def test_create_keeps_the_title_and_every_attendee_however_long_the_list(self):
         summary = self._summary(
-            "create_calendar_event",
+            "calendar/create_calendar_event",
             title="Budget review",
             start="2026-11-03T09:00:00-05:00",
             end="2026-11-03T10:00:00-05:00",
@@ -101,7 +101,7 @@ class TestCalendarSummary:
 
     def test_update_says_what_changes(self):
         summary = self._summary(
-            "update_calendar_event",
+            "calendar/update_calendar_event",
             event_id="abc",
             expected_title="<<<UNTRUSTED_TEXT>>>Budget<<<END_UNTRUSTED_TEXT>>>",
             expected_start="2026-11-03T14:00:00Z",
@@ -124,7 +124,7 @@ class TestCalendarSummary:
 
     def test_cancel_says_when_nobody_is_told(self):
         summary = self._summary(
-            "cancel_calendar_event",
+            "calendar/cancel_calendar_event",
             event_id="abc",
             expected_title="Budget",
             expected_start="2026-11-03T14:00:00Z",

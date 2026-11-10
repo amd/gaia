@@ -66,7 +66,6 @@ from gaia.agents.base.skill_loader import (
     SkillLoader,
     dynamic_skills_env_override,
 )
-from gaia.agents.tools.calendar_tools import CalendarToolsMixin
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -382,7 +381,6 @@ class GaiaAgent(
     SkillLearningToolsMixin,
     CodeIndexToolsMixin,
     EmailToolsMixin,
-    CalendarToolsMixin,
 ):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
@@ -402,15 +400,10 @@ class GaiaAgent(
     # remember_skill_lesson deliberately is not: it writes only to this agent's
     # own memory, applies at once, announces itself, and undoes in one command.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
-        {
-            "install_skill",
-            "capture_skill",
-            "remove_skill",
-            "create_calendar_event",
-            "update_calendar_event",
-            "cancel_calendar_event",
-        }
+        {"install_skill", "capture_skill", "remove_skill"}
     )
+    # The calendar skill ships in this agent's bundled skills.
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = True
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         if config is not None and kwargs:
@@ -541,7 +534,6 @@ class GaiaAgent(
             self._init_code_index_state(repo_path=index_root, ceiling_paths=allowed)
             self.register_code_index_tools()
             self.register_email_tools()
-            self.register_calendar_tools()
         super()._register_tools()
         if engineering_tools:
             # Keep developer closures out of the process-global registry even

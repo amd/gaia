@@ -4,8 +4,8 @@
 import { Fragment, type ReactNode } from 'react';
 import { useT } from '../i18n/useT';
 
-/** The gated calendar tools (`calendar_tools.py`), whose arguments a person must see to approve. */
-export const CALENDAR_WRITE_TOOLS = new Set(['create_calendar_event', 'update_calendar_event', 'cancel_calendar_event']);
+/** The gated tools of the bundled calendar skill (`hub/skills/calendar`), whose arguments a person must see to approve. */
+export const CALENDAR_WRITE_TOOLS = new Set(['calendar/create_calendar_event', 'calendar/update_calendar_event', 'calendar/cancel_calendar_event']);
 
 const BARE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DAY = { year: 'numeric', month: 'short', day: 'numeric' } as const;
@@ -242,7 +242,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
         if (shown) rows.push([label, <Name value={shown} />]);
     };
 
-    if (tool === 'create_calendar_event') {
+    if (tool === 'calendar/create_calendar_event') {
         named(t('permission.calendar.title'), args.title);
         rows.push([t('permission.calendar.when'), <When start={text(args.start)} end={text(args.end)} />]);
         named(t('permission.calendar.account'), args.calendar_account);

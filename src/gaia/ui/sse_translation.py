@@ -814,8 +814,13 @@ COMMAND_SUMMARY_TOOLS = frozenset(
     {"run_shell_command", "run_cli_command", "wait_for_condition"}
 )
 CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
+#: The bundled calendar skill's writes, as they register once it loads.
 CALENDAR_WRITE_TOOLS = frozenset(
-    {"create_calendar_event", "update_calendar_event", "cancel_calendar_event"}
+    {
+        "calendar/create_calendar_event",
+        "calendar/update_calendar_event",
+        "calendar/cancel_calendar_event",
+    }
 )
 
 

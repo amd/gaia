@@ -42,13 +42,14 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "list_waiting_on_you",
         }
     ),
+    # The bundled calendar skill's tools: a model not offered them can't load it.
     "calendar": frozenset(
         {
-            "list_calendar_events",
-            "check_calendar_availability",
-            "create_calendar_event",
-            "update_calendar_event",
-            "cancel_calendar_event",
+            "calendar/list_calendar_events",
+            "calendar/check_calendar_availability",
+            "calendar/create_calendar_event",
+            "calendar/update_calendar_event",
+            "calendar/cancel_calendar_event",
         }
     ),
     "image_generation": frozenset(
