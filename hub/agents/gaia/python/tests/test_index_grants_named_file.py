@@ -95,6 +95,18 @@ def test_index_grants_the_file_only_not_its_folder(outside, monkeypatch):
     assert not agent.path_validator.is_path_allowed(str(neighbour))
 
 
+def test_index_of_a_protected_file_is_refused(outside, monkeypatch, capsys):
+    secret = outside / "credentials.json"
+    secret.write_text("{}")
+    agent = _agent(PathValidator())
+
+    _run(agent, monkeypatch, f"/index {secret}")
+
+    assert str(secret.absolute()) not in agent.rag.indexed_files
+    assert not agent.path_validator.is_path_allowed(str(secret))
+    assert "Read blocked" in capsys.readouterr().out
+
+
 def test_index_of_a_folder_grants_the_files_it_finds(outside, monkeypatch):
     agent = _agent(PathValidator())
 

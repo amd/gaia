@@ -322,6 +322,13 @@ def interactive_mode(agent: ChatAgent):
                             print("   Please check the file path and try again")
                             continue
 
+                        blocked, reason = agent.path_validator.is_read_blocked(
+                            str(path)
+                        )
+                        if blocked:
+                            print(f"\n❌ {reason}")
+                            continue
+
                         print(f"\n📄 Indexing: {path.name}")
                         print("=" * 60)
 
