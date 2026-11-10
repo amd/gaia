@@ -240,31 +240,22 @@ def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
 
 
 async def _auto_load_after_download(model_name: str) -> None:
-    """Issue a Lemonade ``/v1/load`` for ``model_name`` at our default ctx.
+    """Issue a Lemonade ``/v1/load`` for ``model_name`` at the window chat uses.
 
     Called from ``_stream_lemonade_pull`` only when the requester opts in
-    with ``load_after``. We use the same
-    ``DEFAULT_CONTEXT_SIZE`` (32K) the rest of GAIA expects, otherwise
-    Lemonade falls back to its own much smaller default and the next
-    chat hits the "ctx too small" reload branch.
+    with ``load_after``. The window is ``resolve_ctx_size(model_name)``, the
+    one the chat pre-flight asks for, so the first chat doesn't reload it.
 
     Skipped while a chat is answering, so a download never cuts an answer
     off. A failed load is logged and shows in ``/api/system/status``.
     """
-    logger.info(
-        "Auto-load after download: %s (ctx_size=%d)",
-        model_name,
-        DEFAULT_CONTEXT_SIZE,
-    )
+    logger.info("Auto-load after download: %s", model_name)
     # A chat answering on another model keeps it: the new one loads next turn.
     if _chats_answering():
         logger.info("Auto-load of %s skipped: a chat is answering", model_name)
         return
     await asyncio.to_thread(
-        _load_through_the_slot,
-        model_name,
-        DEFAULT_CONTEXT_SIZE,
-        f"Auto-load {model_name}",
+        _load_through_the_slot, model_name, None, f"Auto-load {model_name}"
     )
 
 
@@ -1401,19 +1392,29 @@ class LoadModelRequest(BaseModel):
 _last_load_failure: Optional[str] = None
 
 
-def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> None:
+def _load_through_the_slot(
+    model_name: str, ctx_size: Optional[int], log_context: str
+) -> None:
     """Load a model the way a chat turn does: broker lease, then the load lock.
 
     ``LemonadeClient.load_model`` takes the lease, checks free memory and adds
     the chosen llama.cpp backend; ``model_load_lock`` keeps it from racing a
-    chat's own pre-flight load in this process.
+    chat's own pre-flight load in this process. A ``ctx_size`` of None loads
+    at ``resolve_ctx_size(model_name)``.
     """
     from gaia.config import GaiaConfigError
     from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
-    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        resolve_ctx_size,
+    )
     from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
 
     try:
+        if ctx_size is None:
+            ctx_size = resolve_ctx_size(model_name)
+        logger.info("%s at ctx_size=%d", log_context, ctx_size)
         # The order every load in this process uses: lease, then the lock.
         with model_lease(model_name, priority="interactive"), model_load_lock:
             LemonadeClient(verbose=False).load_model(
@@ -1458,7 +1459,6 @@ async def load_model_endpoint(body: LoadModelRequest):
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
 
-    ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
     answering = _chats_answering()
     if answering and not body.force:
         raise HTTPException(
@@ -1470,6 +1470,19 @@ async def load_model_endpoint(body: LoadModelRequest):
                 "finish, or load anyway (force=true)."
             ),
         )
+    ctx_size = body.ctx_size
+    if ctx_size is None:
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+
+        # The window a chat on this model asks for, so its first turn doesn't reload.
+        try:
+            ctx_size = await asyncio.to_thread(resolve_ctx_size, model_name)
+        except (LemonadeClientError, GaiaConfigError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not size the context window for {model_name}: {exc}",
+            ) from exc
     task = asyncio.create_task(
         asyncio.to_thread(
             _load_through_the_slot, model_name, ctx_size, f"Load {model_name}"
