@@ -315,7 +315,7 @@ struct UsageStats {
         completionTokens += other.completionTokens;
         totalTokens += other.totalTokens;
         cachedTokens += other.cachedTokens;
-        peakContextTokens = std::max(peakContextTokens, other.peakContextTokens);
+        peakContextTokens = (std::max)(peakContextTokens, other.peakContextTokens);  // parenthesised: windows.h defines max()
     }
 
     json toJson() const {
