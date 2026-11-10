@@ -89,8 +89,13 @@ def _summary_text(chat: Any, prompt: str) -> str:
 INDEX_FOREGROUND_BUDGET_S = 120.0
 
 _INDEX_JOBS_LOCK = threading.Lock()
-#: RAGSDK -> {path: _IndexJob}; jobs go away with the SDK that runs them.
+#: RAGSDK -> {realpath: _IndexJob}; jobs go away with the SDK that runs them.
 _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+#: RAGSDK -> {realpath: (path, reason)} for background indexes that failed
+#: after every caller had already been told "in progress".
+_INDEX_FAILURES: "weakref.WeakKeyDictionary[Any, Dict[str, Tuple[str, str]]]" = (
     weakref.WeakKeyDictionary()
 )
 
@@ -108,7 +113,12 @@ class _IndexJob:
         self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
+        #: ``index_document`` returned; the document is no longer "indexing".
+        self.finished = threading.Event()
+        #: Finished and recorded on the agent: the result is final.
         self.done = threading.Event()
+        #: Set once a caller returned "in progress": nobody is waiting on it.
+        self.backgrounded = False
 
     def progress(self, embedded: int, total: int) -> None:
         if self.embed_started is None:
@@ -124,23 +134,65 @@ class _IndexJob:
         rate = self.embedded / max(time.monotonic() - self.embed_started, 1e-6)
         return int((self.total - self.embedded) / rate)
 
+    def failure(self) -> Optional[str]:
+        """Why the finished job did not index the document, or None."""
+        if self.error is not None:
+            return f"{type(self.error).__name__}: {self.error}"
+        if not (self.result or {}).get("success"):
+            return str((self.result or {}).get("error") or "indexing failed")
+        return None
+
+
+def _finish_unattended(
+    rag: Any,
+    key: str,
+    job: _IndexJob,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]],
+) -> None:
+    """Record a job that finished after its callers stopped waiting on it."""
+    failure = job.failure()
+    if failure is None and on_indexed is not None:
+        try:
+            on_indexed(job.result)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception(f"Recording background index of {job.path} failed")
+            failure = (
+                f"it was indexed but could not be attached to this chat "
+                f"({type(e).__name__}: {e})"
+            )
+    if failure is None:
+        logger.info(f"Background index of {job.path} finished")
+        return
+    logger.error(f"Background index of {job.path} failed: {failure}")
+    with _INDEX_JOBS_LOCK:
+        _INDEX_FAILURES.setdefault(rag, {})[key] = (job.path, failure)
+
 
 def _index_within_budget(
-    rag: Any, path: str, budget: Optional[float] = None
+    rag: Any,
+    path: str,
+    budget: Optional[float] = None,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
     """Index *path*, waiting at most *budget* seconds for it.
 
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
-    call for the same path waits on the running job instead of starting another.
+    call for the same file waits on the running job instead of starting another.
+
+    *on_indexed* is the bookkeeping a caller runs on success. When the job
+    finishes after every caller got ``None`` back, it runs on the indexing
+    thread instead; a failure then shows in ``documents_failed_indexing``.
     """
     budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
+    key = os.path.realpath(path)
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
-        job = jobs.get(path)
+        job = jobs.get(key)
         if job is None:
             job = _IndexJob(path)
-            jobs[path] = job
+            jobs[key] = job
+            _INDEX_FAILURES.get(rag, {}).pop(key, None)
 
             def _run():
                 from gaia.daemon.broker_client import detached_from_turn
@@ -156,7 +208,19 @@ def _index_within_budget(
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
-                    job.done.set()
+                    with _INDEX_JOBS_LOCK:
+                        job.finished.set()
+                        unattended = job.backgrounded
+                    try:
+                        if unattended:
+                            _finish_unattended(rag, key, job, on_indexed)
+                    finally:
+                        # Only once recorded, or a caller in between re-indexes it.
+                        with _INDEX_JOBS_LOCK:
+                            job.done.set()
+                            # Finished jobs leave the map: a later call indexes afresh.
+                            if jobs.get(key) is job:
+                                del jobs[key]
 
             ctx = contextvars.copy_context()
             threading.Thread(
@@ -164,11 +228,12 @@ def _index_within_budget(
                 name=f"rag-index:{Path(path).name}",
                 daemon=True,
             ).start()
-    if not job.done.wait(budget):
-        return None, job
-    with _INDEX_JOBS_LOCK:
-        if jobs.get(path) is job:
-            del jobs[path]
+    if not job.finished.wait(budget):
+        with _INDEX_JOBS_LOCK:
+            if not job.finished.is_set():
+                job.backgrounded = True
+                return None, job
+    job.done.wait()
     if job.error is not None:
         raise job.error
     return job.result, job
@@ -180,7 +245,18 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+        return sorted(job.path for job in jobs.values() if not job.finished.is_set())
+
+
+def documents_failed_indexing(rag: Any) -> List[Tuple[str, str]]:
+    """``(path, reason)`` for background indexes that failed unattended.
+
+    A document stays listed until it is indexed again.
+    """
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        return sorted((_INDEX_FAILURES.get(rag) or {}).values())
 
 
 def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
@@ -382,18 +458,23 @@ def _public(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _search_without(rag: Any, query: str, left_out) -> Tuple[List[str], List[float]]:
-    """``rag._retrieve_chunks`` minus the chunks the *left_out* files own."""
+    """``rag._retrieve_chunks`` minus the chunks only *left_out* files own."""
     # pylint: disable=protected-access
     snapshot = rag._search_chunks(query)
     owner = snapshot["chunk_to_file"]
+    copies = snapshot.get("duplicate_indices") or [
+        [] for _ in snapshot["retrieved_indices"]
+    ]
+    # A chunk stays when any copy of its text sits in a file still served.
     kept = [
         (chunk, score)
-        for idx, chunk, score in zip(
+        for idx, chunk, score, twins in zip(
             snapshot["retrieved_indices"],
             snapshot["retrieved_chunks"],
             snapshot["scores"],
+            copies,
         )
-        if owner.get(idx) not in left_out
+        if any(owner.get(i) not in left_out for i in [idx, *twins])
     ]
     return [chunk for chunk, _ in kept], [score for _, score in kept]
 
@@ -410,13 +491,27 @@ def _served_chunks(rag: Any, left_out) -> List[str]:
         ]
 
 
-def _served_positions(rag: Any, left_out) -> Dict[str, int]:
-    """First index of each chunk text owned by a file that is not left out."""
+def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
+    """Every index of each chunk text, leaving out chunks *left_out* files own.
+
+    A document indexed under two names has each chunk at two indices; citing
+    only the first would name one file for text both hold.
+    """
+    with rag._state_lock:  # pylint: disable=protected-access
+        positions: Dict[str, List[int]] = {}
+        for i, chunk in enumerate(rag.chunks):
+            if left_out and rag.chunk_to_file.get(i) in left_out:
+                continue
+            positions.setdefault(chunk, []).append(i)
+        return positions
+
+
+def _file_positions(rag: Any, file_path: str) -> Dict[str, int]:
+    """First index of each chunk text within *file_path*."""
     with rag._state_lock:  # pylint: disable=protected-access
         positions: Dict[str, int] = {}
-        for i, chunk in enumerate(rag.chunks):
-            if rag.chunk_to_file.get(i) not in left_out:
-                positions.setdefault(chunk, i)
+        for i in rag.file_to_chunk_indices.get(file_path, []):
+            positions.setdefault(rag.chunks[i], i)
         return positions
 
 
@@ -843,6 +938,26 @@ class RAGToolsMixin:
         """
         return "No documents are currently indexed."
 
+    def _attach_indexed_document(self, file_path: str, result: Dict[str, Any]) -> str:
+        """Record a successful index on the agent and its chat session.
+
+        Runs on the indexing thread when the document finished in the
+        background. Returns a warning when the session could not be saved.
+        """
+        _forget_evicted(self.indexed_files, result.get("evicted", []))
+        self.indexed_files.add(file_path)
+        save_warning = ""
+        session = getattr(self, "current_session", None)
+        if session and file_path not in session.indexed_documents:
+            session.indexed_documents.append(file_path)
+            manager = getattr(self, "session_manager", None)
+            if manager is not None and not manager.save_session(session):
+                save_warning = _SESSION_SAVE_WARNING
+                logger.warning(save_warning)
+        if hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
+        return save_warning
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -1133,32 +1248,21 @@ class RAGToolsMixin:
                 top_chunks = [chunk for chunk, score in kept]
                 top_scores = [score for chunk, score in kept]
 
-                # Find the actual chunk indices from the RAG system
-                chunk_indices = []
-                served_at = _served_positions(rag, left_out) if left_out else None
-                for chunk in top_chunks:
-                    if served_at is not None:
-                        # A twin chunk in a left-out file must not be cited.
-                        chunk_indices.append(served_at.get(chunk, -1))
-                        continue
-                    # Find this chunk's index in the global chunks list
-                    try:
-                        idx = rag.chunks.index(chunk)
-                        chunk_indices.append(idx)
-                    except ValueError:
-                        chunk_indices.append(-1)  # Not found
+                # A twin chunk in a left-out file must not be cited.
+                positions = _chunk_positions(rag, left_out)
+                chunk_indices = [positions.get(chunk, [-1])[0] for chunk in top_chunks]
 
                 # Format chunks with context markers for better readability
                 formatted_chunks = []
                 for i, chunk in enumerate(top_chunks):
-                    # Resolve the source file path for this chunk
-                    source_path = ""
-                    if hasattr(rag, "chunk_to_file"):
-                        ci = chunk_indices[i] if i < len(chunk_indices) else -1
-                        if ci >= 0:
-                            raw = rag.chunk_to_file.get(ci, "")
-                            if raw:
-                                source_path = str(Path(raw).resolve())
+                    holders = list(
+                        dict.fromkeys(
+                            str(Path(rag.chunk_to_file[ci]).resolve())
+                            for ci in positions.get(chunk, [])
+                            if rag.chunk_to_file.get(ci)
+                        )
+                    )
+                    source_path = holders[0] if holders else ""
 
                     # Omit ``page`` entirely when the chunk has no page
                     # metadata (markdown / HTML / plain text) so the agent
@@ -1182,6 +1286,8 @@ class RAGToolsMixin:
                     }
                     if _page is not None:
                         _entry["page"] = _page
+                    if len(holders) > 1:
+                        _entry["also_in"] = holders[1:]
                     formatted_chunks.append(_entry)
                 formatted_chunks = split_entries_at_pages(formatted_chunks)
 
@@ -1214,9 +1320,10 @@ class RAGToolsMixin:
                 # Collect unique source file paths from matched chunks only
                 matched_source_files = list(
                     dict.fromkeys(
-                        c["source_file"]
+                        path
                         for c in formatted_chunks
-                        if c.get("source_file")
+                        for path in [c.get("source_file"), *c.get("also_in", [])]
+                        if path
                     )
                 )
 
@@ -1328,33 +1435,19 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result, job = _index_within_budget(rag, resolved)
+                            idx_result, job = _index_within_budget(
+                                rag,
+                                resolved,
+                                on_indexed=functools.partial(
+                                    self._attach_indexed_document, file_path
+                                ),
+                            )
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
-                                _forget_evicted(
-                                    self.indexed_files, idx_result.get("evicted", [])
+                                save_warning = self._attach_indexed_document(
+                                    file_path, idx_result
                                 )
-                                self.indexed_files.add(file_path)
-                                if (
-                                    hasattr(self, "current_session")
-                                    and self.current_session
-                                ):
-                                    if (
-                                        file_path
-                                        not in self.current_session.indexed_documents
-                                    ):
-                                        self.current_session.indexed_documents.append(
-                                            file_path
-                                        )
-                                        if hasattr(self, "session_manager"):
-                                            if not self.session_manager.save_session(
-                                                self.current_session
-                                            ):
-                                                save_warning = _SESSION_SAVE_WARNING
-                                                logger.warning(save_warning)
-                                if hasattr(self, "rebuild_system_prompt"):
-                                    self.rebuild_system_prompt()
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
                                 # stores the absolute path, not the relative one passed in.
@@ -1382,14 +1475,14 @@ class RAGToolsMixin:
                                 "error": (
                                     f"File '{file_path}' not found in indexed documents "
                                     f"and does not exist on disk. "
-                                    f"Use search_files to find it first."
+                                    f"Use search_file to find it first."
                                 ),
                             }
                         # After auto-indexing, verify we have a match
                         if not matching_files:
                             return {
                                 "status": "error",
-                                "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                                "error": f"File '{file_path}' not found in indexed documents. Use search_file to find it first.",
                             }
                     if auto_indexed:
                         logger.info(
@@ -1655,15 +1748,9 @@ class RAGToolsMixin:
                         f"[DEBUG] query_specific_file complete: {debug_info['final_chunks_returned']} chunks returned from {debug_info['total_chunks_before_dedup']} total"
                     )
 
-                # Find the actual chunk indices from the RAG system
-                chunk_indices = []
-                for chunk in top_chunks:
-                    # Find this chunk's index in the global chunks list
-                    try:
-                        idx = rag.chunks.index(chunk)
-                        chunk_indices.append(idx)
-                    except ValueError:
-                        chunk_indices.append(-1)  # Not found
+                # Look only in this file: a twin chunk elsewhere has other pages.
+                in_file = _file_positions(rag, str(target_file))
+                chunk_indices = [in_file.get(chunk, -1) for chunk in top_chunks]
 
                 # Build chunk entries; omit ``page`` when absent so the
                 # agent can't template ``page null`` into the citation.
@@ -2003,11 +2090,16 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
-                # A file edited since it was indexed falls through and re-indexes.
+                # A file edited since it was indexed falls through and re-indexes,
+                # as does one whose images went unread and can be read now.
                 if (
-                    file_path in self.indexed_files
-                    or real_file_path in self.indexed_files
-                ) and self.rag.is_current(real_file_path):
+                    (
+                        file_path in self.indexed_files
+                        or real_file_path in self.indexed_files
+                    )
+                    and self.rag.is_current(real_file_path)
+                    and self.rag.unread_images_readable(real_file_path) is not True
+                ):
                     logger.debug(
                         "Skipping re-index for already-indexed file: %s", file_path
                     )
@@ -2023,28 +2115,19 @@ class RAGToolsMixin:
 
                 # A document too big to index within the budget keeps indexing
                 # in the background; say so instead of running into the timeout.
-                result, job = _index_within_budget(self.rag, real_file_path)
+                result, job = _index_within_budget(
+                    self.rag,
+                    real_file_path,
+                    on_indexed=functools.partial(
+                        self._attach_indexed_document, file_path
+                    ),
+                )
                 if result is None:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
                     evicted = result.get("evicted", [])
-                    _forget_evicted(self.indexed_files, evicted)
-                    self.indexed_files.add(file_path)
-                    save_warning = ""
-
-                    # Add to current session
-                    if self.current_session:
-                        if file_path not in self.current_session.indexed_documents:
-                            self.current_session.indexed_documents.append(file_path)
-                            if not self.session_manager.save_session(
-                                self.current_session
-                            ):
-                                save_warning = _SESSION_SAVE_WARNING
-                                logger.warning(save_warning)
-
-                    # Update system prompt to include the new document
-                    self.rebuild_system_prompt()
+                    save_warning = self._attach_indexed_document(file_path, result)
 
                     # Return detailed stats from RAG SDK
                     file_name = result.get("file_name", file_path)
@@ -2062,6 +2145,9 @@ class RAGToolsMixin:
                             f". The document library was full, so it removed {names}; "
                             "questions about it will find nothing until it is indexed again"
                         )
+                    unread = result.get("unread_images_note")
+                    if unread:
+                        msg += f". {unread} Tell the user."
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -2079,6 +2165,11 @@ class RAGToolsMixin:
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
                         **({"evicted": evicted} if evicted else {}),
+                        **(
+                            {"unread_image_pages": result["unread_image_pages"]}
+                            if unread
+                            else {}
+                        ),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":

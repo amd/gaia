@@ -15,6 +15,7 @@ Design constraints:
 - No personal data is collected (no usernames, documents, browsing history)
 """
 
+import logging
 import os
 import platform
 import shutil
@@ -24,6 +25,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 #: CLI tools whose presence also implies a desktop application is installed.
 #: Labels match the per-platform probes in ``collect_system_info`` so the two
@@ -113,8 +116,8 @@ def collect_system_info() -> List[Dict[str, str]]:
         if len(os_info) > 200:
             os_info = os_info[:200]
         facts.append({"content": f"Operating system: {os_info}", "domain": "system:os"})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: OS failed: %s", e)
 
     # 2. Architecture
     try:
@@ -123,8 +126,8 @@ def collect_system_info() -> List[Dict[str, str]]:
             facts.append(
                 {"content": f"CPU architecture: {arch}", "domain": "system:hardware"}
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: architecture failed: %s", e)
 
     # 3. Hostname
     try:
@@ -133,8 +136,8 @@ def collect_system_info() -> List[Dict[str, str]]:
             facts.append(
                 {"content": f"Hostname: {hostname}", "domain": "system:identity"}
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: hostname failed: %s", e)
 
     # 4. CPU
     try:
@@ -150,8 +153,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                 )
                 cpu_name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
                 winreg.CloseKey(key)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug("system context: CPU registry failed: %s", e)
         # Fallback to platform.processor()
         if not cpu_name:
             cpu_name = platform.processor()
@@ -168,8 +171,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                     "domain": "system:hardware",
                 }
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: CPU failed: %s", e)
 
     # 5. RAM (requires psutil)
     try:
@@ -183,10 +186,10 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:hardware",
             }
         )
-    except ImportError:
-        pass
-    except Exception:
-        pass
+    except ImportError as e:
+        logger.debug("system context: RAM skipped, psutil not importable: %s", e)
+    except Exception as e:
+        logger.debug("system context: RAM failed: %s", e)
 
     # 6. Disk
     try:
@@ -208,8 +211,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:hardware",
             }
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: disk failed: %s", e)
 
     # 7. GPU
     try:
@@ -229,17 +232,14 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=5,
                     stderr=subprocess.DEVNULL,
                     text=True,
-                    # A hardware name can carry a byte the locale codec
-                    # cannot map. These probes are wrapped in a bare
-                    # `except Exception: pass`, so a raise here does not
-                    # surface — it silently drops the whole reading.
+                    # A hardware name can carry a byte the locale codec cannot map.
                     errors="replace",
                 )
                 gpu_names = [
                     line.strip() for line in output.splitlines() if line.strip()
                 ]
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.debug("system context: GPU (PowerShell) failed: %s", e)
         elif _sys == "Darwin":
             # macOS: system_profiler gives GPU/display info
             try:
@@ -248,10 +248,7 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=5,
                     stderr=subprocess.DEVNULL,
                     text=True,
-                    # A hardware name can carry a byte the locale codec
-                    # cannot map. These probes are wrapped in a bare
-                    # `except Exception: pass`, so a raise here does not
-                    # surface — it silently drops the whole reading.
+                    # A hardware name can carry a byte the locale codec cannot map.
                     errors="replace",
                 )
                 for line in output.splitlines():
@@ -260,8 +257,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                         name = line.split(":", 1)[1].strip()
                         if name:
                             gpu_names.append(name)
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.debug("system context: GPU (system_profiler) failed: %s", e)
         elif _sys == "Linux":
             try:
                 output = subprocess.check_output(
@@ -269,10 +266,7 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=3,
                     stderr=subprocess.DEVNULL,
                     text=True,
-                    # A hardware name can carry a byte the locale codec
-                    # cannot map. These probes are wrapped in a bare
-                    # `except Exception: pass`, so a raise here does not
-                    # surface — it silently drops the whole reading.
+                    # A hardware name can carry a byte the locale codec cannot map.
                     errors="replace",
                 )
                 gpu_names = [
@@ -280,8 +274,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                     for line in output.splitlines()
                     if "vga" in line.lower() and line.strip()
                 ][:3]
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.debug("system context: GPU (lspci) failed: %s", e)
         if gpu_names:
             facts.append(
                 {
@@ -289,8 +283,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                     "domain": "system:hardware",
                 }
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: GPU failed: %s", e)
 
     # 8. Timezone
     try:
@@ -302,8 +296,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:locale",
             }
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: timezone failed: %s", e)
 
     # 9. Python version
     try:
@@ -314,8 +308,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:software",
             }
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: Python version failed: %s", e)
 
     # 10. GAIA version + Lemonade version
     try:
@@ -333,8 +327,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:software",
             }
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: GAIA version failed: %s", e)
 
     # 11. Installed applications (existence check only, no personal data)
     try:
@@ -359,8 +353,10 @@ def collect_system_info() -> List[Dict[str, str]]:
                 try:
                     if path.exists():
                         found_apps.append(name)
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug(
+                        "system context: installed app %s probe failed: %s", name, e
+                    )
 
         elif _sys == "Darwin":
             # macOS: most GUI apps live in /Applications/
@@ -380,8 +376,10 @@ def collect_system_info() -> List[Dict[str, str]]:
                 try:
                     if path.exists():
                         found_apps.append(name)
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug(
+                        "system context: installed app %s probe failed: %s", name, e
+                    )
 
         elif _sys == "Linux":
             # Linux: check common binary paths and .desktop launchers
@@ -408,8 +406,10 @@ def collect_system_info() -> List[Dict[str, str]]:
                 try:
                     if any(p.exists() for p in paths):
                         found_apps.append(name)
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug(
+                        "system context: installed app %s probe failed: %s", name, e
+                    )
 
         # Cross-platform: PATH probe for CLI tools.
         # Use the same display names as the platform checks to avoid duplicates.
@@ -425,8 +425,8 @@ def collect_system_info() -> List[Dict[str, str]]:
                     "domain": "system:software",
                 }
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: installed applications failed: %s", e)
 
     # 12. Collection date — regenerated on every refresh, so it reflects the
     # most recent collection, not a first-ever capture.
@@ -438,7 +438,7 @@ def collect_system_info() -> List[Dict[str, str]]:
                 "domain": "system:meta",
             }
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("system context: collection date failed: %s", e)
 
     return facts

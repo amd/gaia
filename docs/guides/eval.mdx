@@ -26,6 +26,20 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 ## Prerequisites
 
 <Steps>
+  <Step title="Clone the GAIA repository">
+    Agent Eval runs only from a source checkout. The scenarios, corpus and MCP
+    config live in the repository's `eval/` directory and are not part of the
+    installed package, so `gaia eval agent` on a `pip install amd-gaia` install
+    stops with an error saying a checkout is required.
+
+    ```bash
+    git clone https://github.com/amd/gaia
+    cd gaia
+    ```
+
+    Run every command on this page from the repository root.
+  </Step>
+
   <Step title="Install eval dependencies">
     ```bash
     uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python

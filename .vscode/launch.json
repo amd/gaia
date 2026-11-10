@@ -53,8 +53,8 @@
             "name": "Chat Agent Debug - Model Selection",
             "type": "debugpy",
             "request": "launch",
-            "module": "gaia_agent_chat.app",
-            "args": ["--query", "hi"],
+            "module": "gaia.cli",
+            "args": ["chat", "--query", "hi"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
@@ -63,7 +63,7 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": true,
-            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint in chat/agent.py line 222 (model_id variable)"]
+            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint on model_id in hub/agents/gaia/python/gaia_agent/chat_agent.py"]
         },
         {
             "name": "Chat Agent Debug - With Query",

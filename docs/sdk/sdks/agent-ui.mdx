@@ -183,6 +183,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
@@ -599,7 +602,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
-    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to the window a chat on that model asks for: its `MODELS` entry sized to this PC's memory, or `GAIA_CTX_SIZE` when set. The response reports the size used. |
     | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
@@ -632,7 +635,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
-    | `load_after` | boolean | No | Load the model after the download completes. Skipped while a chat is answering. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes, at the same window `load-model` defaults to. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
@@ -1808,7 +1811,9 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. A file that can't be read is a **422** whose
+    enqueues it for indexing. Content already in the library returns the
+    existing document; if that document's stored file is gone, the new copy
+    takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do.

@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.agents.base.tools import describe_registry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers, session_capabilities, session_environment
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.server import create_app
 
 

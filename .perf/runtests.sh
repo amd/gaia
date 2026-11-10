@@ -16,7 +16,7 @@ case "${MSYSTEM:-}${OS:-}" in
 esac
 
 PY=${GAIA_PYTHON:-python}
-export PYTHONPATH="$root/src$sep$root/hub/agents/chat/python$sep$root/hub/agents/gaia/python"
+export PYTHONPATH="$root/src$sep$root/hub/agents/gaia/python"
 export PYTHONIOENCODING=utf-8
 
 resolved=$("$PY" -c "import gaia,sys;sys.stdout.write(gaia.__file__)") || exit 2

@@ -16,7 +16,7 @@ Architectural commitments (mapped to plan's Acceptance Criteria):
         with the generic base set by ``Agent.confirmation_required_tools()``).
 - AC3 — Local-LLM only: ``EmailAgentConfig`` has no field that can route
         to a cloud LLM; ``base_url`` is allowlisted at startup; this
-        class never passes ``use_claude=True`` / ``use_chatgpt=True`` to
+        class never passes ``use_claude=True`` to
         the parent ``Agent``.
 - AC4 — Eval seam: backends are injectable via config; the eval harness
         passes ``FakeGmailBackend(mbox_path)`` to bypass live Gmail.
@@ -964,8 +964,8 @@ class EmailTriageAgent(
         # GGUF/Vulkan default makes Lemonade evict and reload the chat model
         # on every turn (NPU <-> Vulkan). When the resolved model is the NPU
         # candidate, thread the device-appropriate embedder into init_memory
-        # the same way ChatAgent does (hub/agents/chat/python/gaia_agent_chat/
-        # agent.py, get_embedding_model_for_device) so chat + embeddings stay
+        # the same way ChatAgent does (hub/agents/gaia/python/gaia_agent/
+        # chat_agent.py, get_embedding_model_for_device) so chat + embeddings stay
         # co-resident on the NPU backend. Any other resolved model keeps the
         # unchanged default (embedding_model=None -> the GGUF embedder
         # `gaia init` downloads).

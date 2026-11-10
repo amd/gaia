@@ -405,6 +405,19 @@ def _is_read_timeout(exc: BaseException) -> bool:
     return False
 
 
+def _vision_record(extracted: Dict[str, Any]) -> Dict[str, Any]:
+    """What the cache keeps about reading images, so a later load can redo them."""
+    return {
+        key: extracted[key]
+        for key in ("vlm_checked", "vlm_available", "unread_image_pages")
+        if key in extracted
+    }
+
+
+class _ImagesReadableNow(Exception):
+    """A cached document left image text unread, and the vision model is up now."""
+
+
 class _EmbedderWarmingUp(Exception):
     """The embedder answered with no vectors: it is still loading."""
 
@@ -920,6 +933,70 @@ class RAGSDK:
             f"{self.config.vlm_model} in Lemonade"
         )
 
+    def _vision_unavailable(self, vlm_available: bool) -> bool:
+        """Images were meant to be read, but the vision model couldn't be reached."""
+        return (
+            not vlm_available
+            and self.config.use_vlm
+            and self.config.vlm_model is not None
+        )
+
+    def _unread_images_note(self, pages: int) -> str:
+        """Tell the user which images went unread and how to get them read."""
+        return (
+            f"Text in images on {pages} page(s) was not read because the vision "
+            f"model ({self.config.vlm_model}) was not available. Once it is, "
+            "index this file again and those images are read."
+        )
+
+    def _images_readable_now(self, metadata: Dict[str, Any]) -> bool:
+        """Whether a cache made without the vision model should be re-extracted.
+
+        Only a cache that recorded unread images qualifies, and only once the
+        model answers now. Older caches never recorded it and are left alone.
+        """
+        if metadata.get("vlm_available") is not False:
+            return False
+        if not metadata.get("unread_image_pages"):
+            return False
+        if not self.config.use_vlm or self.config.vlm_model is None:
+            return False
+        try:
+            from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+
+            vlm = VLMClient(
+                vlm_model=resident_vision_model(
+                    self.config.vlm_model, self.config.base_url
+                ),
+                base_url=self.config.base_url,
+            )
+            return vlm.check_availability()
+        except Exception as e:  # pylint: disable=broad-except
+            # The same probe extraction makes; failing it means images still can't be read.
+            self.log.warning(
+                f"Could not reach the vision model, keeping the cache: {e}"
+            )
+            return False
+
+    def _left_images_unread(self, file_path: str) -> bool:
+        """Whether *file_path*'s indexed text skipped images the vision model should read.
+
+        Call with ``_state_lock`` held.
+        """
+        metadata = self.file_metadata.get(file_path, {})
+        return metadata.get("vlm_available") is False and bool(
+            metadata.get("unread_image_pages")
+        )
+
+    def unread_images_readable(self, file_path: str) -> bool:
+        """Whether indexing *file_path* again would read images it left unread."""
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if not self._left_images_unread(file_path):
+                return False
+            metadata = dict(self.file_metadata[file_path])
+        return self._images_readable_now(metadata)
+
     def _note_images_skipped(self) -> None:
         """Say once per file that its images aren't read while chat is on the NPU."""
         reason = self._vision_off()
@@ -1127,8 +1204,8 @@ class RAGSDK:
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash names each path's own entry, though
         :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
-        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
-        then fails at extraction.
+        unreadable file gets a path-only ``<hash>_notfound`` key, which
+        :meth:`index_document` refuses to index or cache under.
 
         Raises:
             PermissionError: With ``raise_locked``, when the read is refused as
@@ -1669,14 +1746,15 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+                PdfImageExtractionError,
+                PdfPageInspectionError,
+                count_images_in_page,
+                extract_images_from_page_pdfium,
+            )
+
             try:
                 from gaia.llm import VLMClient
-                from gaia.rag.pdf_utils import (
-                    PdfImageExtractionError,
-                    PdfPageInspectionError,
-                    count_images_in_page,
-                    extract_images_from_page_pdfium,
-                )
 
                 if self.config.vlm_model is None:
                     self._note_images_skipped()
@@ -1725,6 +1803,9 @@ class RAGSDK:
             vlm_pages_count = 0
             total_images_processed = 0
             image_pages_skipped = 0
+            # Pages whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
 
@@ -1753,6 +1834,12 @@ class RAGSDK:
                         # Not zero — unknown. Reporting 0 alongside
                         # has_images=True is a contradiction on the record.
                         num_imgs = None
+                elif unavailable and len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT:
+                    try:
+                        if count_images_in_page(page, page_num=i)[0]:
+                            unread_image_pages += 1
+                    except PdfPageInspectionError:
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 3: Extract from images if present
                 image_texts = []
@@ -1823,8 +1910,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
@@ -1885,6 +1972,7 @@ class RAGSDK:
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
                 "image_pages_skipped": image_pages_skipped,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -2050,6 +2138,7 @@ class RAGSDK:
                         "total_images": pdf_metadata.get("total_images", 0),
                         "vlm_checked": pdf_metadata.get("vlm_checked", False),
                         "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "unread_image_pages": pdf_metadata.get("unread_image_pages", 0),
                         "pptx_status": "readable",
                         "conversion": "powerpoint_com",
                     }
@@ -2079,13 +2168,14 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                count_images_in_slide,
+                extract_images_from_slide,
+            )
+
             try:
                 from gaia.llm import (  # pylint: disable=import-outside-toplevel
                     VLMClient,
-                )
-                from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
-                    count_images_in_slide,
-                    extract_images_from_slide,
                 )
 
                 if self.config.vlm_model is None:
@@ -2133,6 +2223,9 @@ class RAGSDK:
 
             pages_data = []
             vlm_slides_count = 0
+            # Slides whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             total_images_processed = 0
 
             for i, slide in enumerate(prs.slides, 1):
@@ -2161,6 +2254,15 @@ class RAGSDK:
                         self.log.debug(
                             "count_images_in_slide failed on slide %d: %s", i, e
                         )
+                elif unavailable:
+                    try:
+                        if count_images_in_slide(slide)[0]:
+                            unread_image_pages += 1
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 4: Extract from images if present
                 image_texts = []
@@ -2266,6 +2368,7 @@ class RAGSDK:
                 "num_slides": total_slides,
                 "vlm_slides": vlm_slides_count,
                 "total_images": total_images_processed,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,
                 "vlm_available": vlm_available,
                 "pptx_status": "readable",
@@ -2962,6 +3065,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pdf_metadata))
             # Carry the degraded-page report up. Dropping it here is what made
             # "which pages are incomplete" a log line nobody could act on.
             metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
@@ -2976,6 +3080,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_slides
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pptx_metadata))
             return text, metadata
 
         # Image files (read by the vision model)
@@ -4031,6 +4136,12 @@ These positions indicate where to split the text."""
             if replacing:
                 # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
+            elif self.unread_images_readable(file_path):
+                replacing = True
+                self.log.info(
+                    f"{file_path} left images unread and the vision model is up; "
+                    "re-indexing to read them"
+                )
 
         with self._state_lock:
             # Check if already indexed
@@ -4067,6 +4178,11 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
+        if content_key.endswith("_notfound"):
+            # PDF, DOCX, XLSX and PPTX are opened by their own libraries, so
+            # extraction can succeed on a file we could not hash. Caching that
+            # under the path-only key would serve the first version forever.
+            return self._document_unhashable(stats, file_path)
         cache_path = self._cache_of_same_bytes(
             self._get_cache_path(file_path, content_key), content_key
         )
@@ -4081,6 +4197,9 @@ These positions indicate where to split the text."""
                 cached_chunks = cached_data["chunks"]
                 cached_full_text = cached_data.get("full_text", "")
                 cached_metadata = cached_data.get("metadata", {})
+
+                if self._images_readable_now(cached_metadata):
+                    raise _ImagesReadableNow()
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache
@@ -4112,7 +4231,9 @@ These positions indicate where to split the text."""
                 )
 
                 with self._state_lock:
-                    if self._indexed_from(file_path, content_key):
+                    if self._indexed_from(
+                        file_path, content_key
+                    ) and not self._left_images_unread(file_path):
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
@@ -4209,6 +4330,11 @@ These positions indicate where to split the text."""
                 stats["num_pages"] = cached_metadata.get("num_pages")
                 stats["vlm_pages"] = cached_metadata.get("vlm_pages")
                 stats["total_images"] = cached_metadata.get("total_images")
+                if cached_metadata.get("unread_image_pages"):
+                    stats["unread_image_pages"] = cached_metadata["unread_image_pages"]
+                    stats["unread_images_note"] = self._unread_images_note(
+                        cached_metadata["unread_image_pages"]
+                    )
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
@@ -4221,6 +4347,15 @@ These positions indicate where to split the text."""
                 return stats
             except (IndexingStopped, LeaseWaitCancelled):
                 raise
+            except _ImagesReadableNow:
+                self.log.info(
+                    f"Re-extracting {file_path}: its images were not read while the "
+                    "vision model was unavailable, and it is available now"
+                )
+                if self.config.show_stats:
+                    print(
+                        "  🖼️  Vision model is available now: reading this file's images"
+                    )
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
@@ -4264,6 +4399,11 @@ These positions indicate where to split the text."""
                 stats["vlm_pages"] = file_metadata["vlm_pages"]
             if file_metadata.get("total_images"):
                 stats["total_images"] = file_metadata["total_images"]
+            if file_metadata.get("unread_image_pages"):
+                stats["unread_image_pages"] = file_metadata["unread_image_pages"]
+                stats["unread_images_note"] = self._unread_images_note(
+                    file_metadata["unread_image_pages"]
+                )
 
             if not text.strip():
                 error_msg = (
@@ -4293,7 +4433,9 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if self._indexed_from(file_path, content_key):
+                if self._indexed_from(
+                    file_path, content_key
+                ) and not self._left_images_unread(file_path):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
@@ -4483,6 +4625,22 @@ These positions indicate where to split the text."""
         stats["error_type"] = "file_locked"
         return stats
 
+    def _document_unhashable(
+        self, stats: Dict[str, Any], file_path: str
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose bytes could not be read to hash."""
+        message = (
+            f"Could not read {Path(file_path).name} to check its contents, so it "
+            "was not indexed. It may be missing, unreadable, or outside the "
+            "folders GAIA is allowed to read. Fix that and index it again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.warning(message)
+        stats["error"] = message
+        stats["error_type"] = "file_unreadable"
+        return stats
+
     def _index_failed(
         self, stats: Dict[str, Any], file_path: str, e: Exception
     ) -> Dict[str, Any]:
@@ -4627,12 +4785,25 @@ These positions indicate where to split the text."""
         chunks = snapshot["retrieved_chunks"]
         scores = snapshot["scores"]
 
+        duplicates = snapshot.get("duplicate_indices") or [[] for _ in chunks]
+
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk_idx, chunk, score) in enumerate(
-            zip(snapshot["retrieved_indices"], chunks, scores)
+        for i, (chunk_idx, chunk, score, copies) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores, duplicates)
         ):
             source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
+            # Every file holding this exact text, the best match first.
+            source_paths = list(
+                dict.fromkeys(
+                    path
+                    for path in (
+                        snapshot["chunk_to_file"].get(idx, "unknown")
+                        for idx in [chunk_idx, *copies]
+                    )
+                    if path != "unknown"
+                )
+            )
 
             metadata.append(
                 {
@@ -4643,6 +4814,8 @@ These positions indicate where to split the text."""
                         else "unknown"
                     ),
                     "source_path": source_file,
+                    "source_files": [Path(path).name for path in source_paths],
+                    "source_paths": source_paths,
                     "relevance_score": float(score),
                     "chunk_length": len(chunk),
                     "estimated_tokens": len(chunk) // 4,  # Rough token estimate
@@ -4674,21 +4847,39 @@ These positions indicate where to split the text."""
         k = min(self.config.max_chunks, len(chunks_snapshot))
         if self.config.show_stats:
             print(f"  🎯 Finding {k} most relevant chunks...")
-        # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
-
-        retrieved_indices = []
-        retrieved_chunks = []
-        scores = []
-        for idx, dist in zip(indices[0], distances[0]):
-            idx = int(idx)
-            # FAISS can surface stale or invalid positions relative to the
-            # captured chunk snapshot; skip anything outside the snapshot.
-            if idx < 0 or idx >= len(chunks_snapshot):
-                continue
-            retrieved_indices.append(idx)
-            retrieved_chunks.append(chunks_snapshot[idx])
-            scores.append(1.0 / (1.0 + float(dist)))
+        # A document indexed under two names would fill the top k with copies,
+        # so identical chunks count once: fetch more until k distinct remain.
+        fetch = k
+        while True:
+            # pylint: disable=no-value-for-parameter
+            distances, indices = index_snapshot.search(
+                query_embedding.astype("float32"), fetch
+            )
+            retrieved_indices = []
+            retrieved_chunks = []
+            scores = []
+            duplicate_indices: List[List[int]] = []
+            position: Dict[str, int] = {}
+            for idx, dist in zip(indices[0], distances[0]):
+                idx = int(idx)
+                # FAISS can surface stale or invalid positions relative to the
+                # captured chunk snapshot; skip anything outside the snapshot.
+                if idx < 0 or idx >= len(chunks_snapshot):
+                    continue
+                chunk = chunks_snapshot[idx]
+                if chunk in position:
+                    duplicate_indices[position[chunk]].append(idx)
+                    continue
+                if len(retrieved_chunks) == k:
+                    continue
+                position[chunk] = len(retrieved_chunks)
+                retrieved_indices.append(idx)
+                retrieved_chunks.append(chunk)
+                scores.append(1.0 / (1.0 + float(dist)))
+                duplicate_indices.append([])
+            if len(retrieved_chunks) == k or fetch >= len(chunks_snapshot):
+                break
+            fetch = min(len(chunks_snapshot), fetch * 2)
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
@@ -4702,6 +4893,8 @@ These positions indicate where to split the text."""
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
         snapshot["scores"] = scores
+        # Other positions holding each retrieved chunk's exact text.
+        snapshot["duplicate_indices"] = duplicate_indices
         return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
@@ -4755,11 +4948,7 @@ Answer:"""
         if include_metadata and chunk_metadata:
             # Get unique source files
             source_files = list(
-                set(
-                    m["source_file"]
-                    for m in chunk_metadata
-                    if m["source_file"] != "unknown"
-                )
+                set(name for m in chunk_metadata for name in m["source_files"])
             )
 
             query_metadata = {
@@ -4920,6 +5109,9 @@ def quick_rag(pdf_path: str, question: str, **kwargs) -> str:
 
     config = RAGConfig(**kwargs)
     rag = RAGSDK(config)
+    # Naming the file is the grant to read it, as in AgentSDK._index_named_document.
+    if "allowed_paths" not in kwargs and os.path.isfile(pdf_path):
+        rag.path_validator.add_allowed_path(pdf_path)
 
     result = rag.index_document(pdf_path)
     if not result.get("success"):
