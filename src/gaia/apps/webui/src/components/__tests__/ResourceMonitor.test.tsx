@@ -124,6 +124,22 @@ describe('ResourceMonitor', () => {
         expect(screen.queryByRole('status')).toBeNull();
     });
 
+    it('shows the GPU and says why when only the NPU cannot be read, as on an older Linux kernel', async () => {
+        responses = [json({
+            ...USAGE,
+            devices: [USAGE.devices![0]],
+            npus_error: 'its driver reports usage only on Linux 7.1 or later, with the AMD PMF driver loaded',
+        })];
+        render(<ResourceMonitor onClose={() => {}} />);
+        await screen.findByText('4.70 GHz');
+        expect(tile('GPU')).toHaveTextContent('14%');
+        expect(tile('NPU')).toHaveTextContent(/^NPUUnavailable$/);
+        expect(tile('NPU')).toHaveAttribute(
+            'title',
+            "NPU usage can't be read on this PC: its driver reports usage only on Linux 7.1 or later, with the AMD PMF driver loaded",
+        );
+    });
+
     it('says it is reading until the first sample is in', async () => {
         responses = [json({ interval_ms: 1000, ready: false, devices: [] })];
         render(<ResourceMonitor onClose={() => {}} />);
