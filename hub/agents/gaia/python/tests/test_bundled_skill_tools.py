@@ -162,6 +162,36 @@ def test_the_calendar_skill_asks_before_every_change_on_the_flagship(
         assert flagship.unload_skill("calendar")
 
 
+def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
+    flagship, tmp_path
+):
+    """The drafting and sending tools stay off the list until the skill loads;
+    then every send, draft edit and draft deletion waits for a person, and a
+    new draft or a draft listing does not."""
+    gated = (
+        "send_now",
+        "send_draft",
+        "reply_to_message",
+        "forward_message",
+        "update_draft",
+        "discard_draft",
+    )
+    assert flagship.BUNDLES_SEND_EMAIL_SKILL
+    assert not any(n.startswith("send-email/") for n in flagship._tools_registry)
+    assert not set(gated) & flagship.confirmation_required_tools()
+
+    flagship.load_skill(
+        "send-email", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in gated:
+            assert flagship._tool_requires_confirmation(f"send-email/{name}", {})
+        for name in ("create_draft", "list_drafts"):
+            assert not flagship._tool_requires_confirmation(f"send-email/{name}", {})
+    finally:
+        assert flagship.unload_skill("send-email")
+
+
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
     """A skill's scripts/ file is on disk at <skill directory>/scripts/<file>.
 

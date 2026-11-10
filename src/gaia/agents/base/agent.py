@@ -43,7 +43,12 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -7757,7 +7762,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, RESOLVED_PATH_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -7861,9 +7873,11 @@ Do NOT wrap conversational replies in JSON.
             }
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above. So is a call
-        # only a person may approve.
+        # only a person may approve, or one approved on its exact text.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
+            prompt_args.get(RISK_NOTE_ARG)
+            or prompt_args.get(NEEDS_PERSON_ARG)
+            or prompt_args.get(EXACT_TEXT_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
@@ -7894,6 +7908,11 @@ Do NOT wrap conversational replies in JSON.
             ):
                 note_decision(tool_name, bool(approved))
             if not approved:
+                # What a preflight prepared for this prompt must not outlive a no.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:
