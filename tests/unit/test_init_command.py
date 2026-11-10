@@ -2615,8 +2615,8 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
     make `gaia init --profile sd/rag/vlm/minimal/all` hard-fail, since none
     of those agents are in the hub index (#2358 review finding).
 
-    `chat` is on this list: the `gaia-agent-chat` wheel is not a catalog
-    agent, so asking the Hub for it could only ever no-op. Its completion
+    `chat` is on this list: there is no chat agent package (#6103), so
+    asking the Hub for it could only ever no-op. Its completion
     message says no chat agent is installed and names `gaia hub install gaia`
     -- see ``TestPrintCompletionHeadlineGate``. `npu` is not: it installs the
     flagship (#2972).
@@ -2643,7 +2643,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
                 mock_install.assert_not_called()
 
     def test_chat_is_not_a_hub_install_target(self):
-        """The publish workflow for `gaia-agent-chat` is gone, so a profile
+        """There is no chat agent package to publish (#6103), so a profile
         that asked the Hub for `chat` would wait on a publish that can never
         land."""
         from gaia.installer.init_command import HUB_INSTALL_AGENTS, INIT_PROFILES
