@@ -2522,11 +2522,10 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows dated in this period (optional).
-                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
-                    day, or range ('2025-01 to 2025-06'). Else an error.
-                    Date cells may hold the same forms; a quarter cell is kept
-                    when its whole quarter is inside the range.
+                date_range: Rows dated in this period (optional): quarter
+                    ('2025-Q1', "Q1'25"), year, month, day, or range
+                    ('2025-01 to 2025-06'). Cells may use these forms. Else an
+                    error.
                 sheet: Workbook sheet to analyze (optional; default the sheet
                     the workbook opens on). Ignored for CSV/TSV.
 
