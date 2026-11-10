@@ -203,6 +203,28 @@ def test_a_missing_override_directory_names_the_override(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "url", ["http://evil.example/x", "HTTP://evil.example/x", "ftp://x/y", "evil/x"]
+)
+def test_an_override_that_is_not_https_or_file_is_refused_before_fetching(
+    monkeypatch, url
+):
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, url)
+
+    def fetcher(*_a, **_k):
+        raise AssertionError("must not fetch")
+
+    with pytest.raises(prerelease.PrereleaseFlagshipError, match="https:// or file://"):
+        prerelease.flagship_source("gaia", fetcher=fetcher, core_version=RC_CORE)
+
+
+def test_a_non_https_override_is_ignored_by_a_final_core(monkeypatch):
+    monkeypatch.setenv(prerelease.ASSETS_URL_ENV, "http://evil.example/x")
+    assert (
+        prerelease.flagship_source("gaia", fetcher=None, core_version="0.25.0") is None
+    )
+
+
+@pytest.mark.parametrize(
     "mutate, why",
     [
         (lambda r: r.update(releaseTag="v0.25.0-rc2"), "belongs to"),

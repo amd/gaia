@@ -113,6 +113,12 @@ def flagship_source(
         return None
 
     override = os.environ.get(ASSETS_URL_ENV, "").strip().rstrip("/")
+    if override and not override.startswith(("https://", "file://")):
+        raise PrereleaseFlagshipError(
+            f"{ASSETS_URL_ENV}={override!r} must be an https:// or file:// URL; "
+            f"over plain http the release file and its checksums could both be "
+            f"swapped in transit. Fix or unset {ASSETS_URL_ENV}."
+        )
     base_url = override or f"{RELEASES_DOWNLOAD_URL}/{tag}"
     url = f"{base_url}/{RELEASE_MANIFEST_NAME}"
     page = (
