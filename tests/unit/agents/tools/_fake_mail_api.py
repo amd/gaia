@@ -44,6 +44,7 @@ class Mail:
         *,
         sender: str,
         to: str = USER,
+        cc: str = "",
         subject: str = "Subject",
         body: str = "",
         age_days: float = 1,
@@ -55,6 +56,7 @@ class Mail:
         self.thread = thread
         self.sender = sender
         self.to = to
+        self.cc = cc
         self.subject = subject
         self.body = body
         self.ms = int(NOW_MS - age_days * DAY_MS)
@@ -97,6 +99,17 @@ class FakeGmailApi:
                     {"name": "Subject", "value": m.subject},
                     {"name": "From", "value": m.sender},
                     {"name": "To", "value": m.to},
+                    {"name": "Cc", "value": m.cc},
+                    *(
+                        [{"name": "Auto-Submitted", "value": "auto-replied"}]
+                        if "AUTO_REPLY" in m.labels
+                        else []
+                    ),
+                    *(
+                        [{"name": "X-Autoreply", "value": "yes"}]
+                        if "X_AUTOREPLY" in m.labels
+                        else []
+                    ),
                 ],
                 "body": {"size": len(m.body), "data": _b64(m.body)},
             },
@@ -165,13 +178,25 @@ class FakeGraphApi:
             "subject": m.subject,
             "from": addr(m.sender),
             "toRecipients": [addr(t) for t in m.to.split(",") if t.strip()],
-            "ccRecipients": [],
+            "ccRecipients": [addr(t) for t in m.cc.split(",") if t.strip()],
             "receivedDateTime": _iso(m.ms),
             "isRead": True,
             "isDraft": m.draft,
             "flag": {"flagStatus": "notFlagged"},
             "categories": [],
             "bodyPreview": m.body[:80],
+            "internetMessageHeaders": (
+                (
+                    [{"name": "Auto-Submitted", "value": "auto-replied"}]
+                    if "AUTO_REPLY" in m.labels
+                    else []
+                )
+                + (
+                    [{"name": "X-Autoreply", "value": "yes"}]
+                    if "X_AUTOREPLY" in m.labels
+                    else []
+                )
+            ),
             "body": {"contentType": "html" if m.html else "text", "content": m.body},
         }
 

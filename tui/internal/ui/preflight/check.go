@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -240,7 +239,7 @@ func simplyNotRunning(err error) bool {
 // lemonadeElsewhere reports whether LEMONADE_BASE_URL points at another
 // machine. That setup is the user's own, so the gate starts nothing for it.
 func lemonadeElsewhere() bool {
-	base := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv))
+	base := gaiaLemonade.EnvBaseURL()
 	return base != "" && !isLoopback(base)
 }
 
@@ -999,8 +998,8 @@ const emailAgentGrantID = "installed:email"
 // union; only the daemon's forward-out mint narrows to what it enforces.
 var connectScopes = map[string][]string{
 	"google": {
-		// catalog/google.py default_scopes
-		"openid", "email", "profile",
+		// providers/google.py GOOGLE_IDENTITY_SCOPES (the catalog's default_scopes)
+		"openid", "https://www.googleapis.com/auth/userinfo.email",
 		// gaia_agent_email.scopes.ALL_SCOPES (GMAIL_SCOPES + CALENDAR_SCOPES)
 		"https://www.googleapis.com/auth/gmail.modify",
 		"https://www.googleapis.com/auth/gmail.send",

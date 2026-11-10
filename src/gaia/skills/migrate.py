@@ -20,22 +20,27 @@ Two invariants hold for every migration:
 1. **The result lands ``experimental``**, whatever tier the source claimed —
    the same trust-reset ``gaia skill import`` applies
    (:func:`~gaia.skills.format.reset_security_tier`).
-2. **A skill needing a local capability is refused, never downgraded.** v1
-   bridges instruction-only and connector-backed skills; a source that shells
-   out (``requires.bins``) or reads config files (``requires.config``) maps onto
-   ``shell`` / ``filesystem``, which have no enforcement until the Phase 2
-   sandbox (`#1019 <https://github.com/amd/gaia/issues/1019>`_). Such a skill is
+2. **A skill needing a local capability is refused, never downgraded.** A
+   source that shells out (``requires.bins``) or reads config files
+   (``requires.config``) maps onto ``shell:execute:<bin>`` /
+   ``filesystem:read:<path>``. Neither fits the ``experimental`` ceiling (and
+   ``filesystem`` has no enforcement until the Phase 2 sandbox,
+   `#2863 <https://github.com/amd/gaia/issues/2863>`_), so such a skill is
    reported **unmigratable with the reason** rather than quietly stripped of the
    permission to make the migration "succeed".
 
 Migration never writes an invalid skill: the output is round-tripped through
-:func:`~gaia.skills.format.parse_skill` before it is offered for install.
+:func:`~gaia.skills.format.parse_skill` before it is offered for install, and
+:func:`install_migrated` lands it through
+:func:`~gaia.skills.capture.import_bundle` — the same gates, audit, and
+``skill-lock.json`` entry ``gaia skill import`` gives a skill.
 """
 
 from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -59,9 +64,9 @@ from gaia.skills.format import (
     reset_security_tier,
     split_frontmatter,
 )
-from gaia.skills.lock import forget_skill
 from gaia.skills.naming import skill_directory
 from gaia.skills.permissions import refuse_unbridged_permissions
+from gaia.skills.tiers import enforce_tier_ceiling
 
 log = get_logger(__name__)
 
@@ -816,11 +821,15 @@ def migrate_text(
     if previous_tier != skill.security_tier:
         outcome.claimed_tier = previous_tier
 
-    # v1 accepts instruction-only and connector-bridged skills. A mapped local
-    # capability is refused with the runtime's own message — not stripped to
-    # make the migration look like it worked.
+    # A mapped capability the landing tier cannot hold is refused with the
+    # runtime's own message — not stripped to make the migration look like it
+    # worked. These are the checks import runs, so the dry run reports them.
+    permissions = skill.parsed_permissions()
     try:
-        refuse_unbridged_permissions(skill.parsed_permissions(), skill_name=skill.name)
+        refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        enforce_tier_ceiling(
+            permissions, tier=skill.security_tier, skill_name=skill.name
+        )
     except SkillPermissionError as exc:
         outcome.blockers.append(f"{exc}")
         return outcome
@@ -901,20 +910,36 @@ def install_migrated(
     destination_root: Path,
     *,
     force: bool = False,
+    allow_experimental: bool = False,
     copy_support_files: bool = True,
 ) -> Path:
-    """Write a migrated skill into ``destination_root/<name>/``.
+    """Land a migrated skill in ``destination_root/<name>/`` the way import does.
+
+    The converted ``SKILL.md`` and the source's support files are staged, then
+    handed to :func:`~gaia.skills.capture.import_bundle`: the same tier ceiling,
+    symlink refusal, static audit, ``--allow-experimental`` rule for code, and
+    ``skill-lock.json`` entry (``source: migrated``, with a content digest).
 
     Args:
         outcome: A migrated outcome. Must have ``migrated`` true.
         destination_root: Usually ``SkillManager().user_root``.
         force: Replace an existing installed skill of the same name.
+        allow_experimental: Consent to land a skill that ships code
+            (``tools.py`` or ``scripts/``); instruction-only skills need none.
         copy_support_files: Also copy the source's non-``SKILL.md`` files, so
             scripts and templates the instructions reference still resolve.
 
     Returns:
         The directory the skill was written to.
+
+    Raises:
+        SkillValidationError: not migrated, or the name is taken without ``force``.
+        SkillPermissionError: a permission sits above the ``experimental`` ceiling.
+        SkillInstallError: the skill ships code and ``allow_experimental`` is unset.
+        SkillCaptureError: symlinks in the source, or an audit BLOCK.
     """
+    from gaia.skills.capture import SOURCE_MIGRATED, _refuse_symlinks, import_bundle
+
     if not outcome.migrated or outcome.skill is None:
         raise SkillValidationError(
             f"Refusing to install '{outcome.name}': it was not migrated "
@@ -922,6 +947,7 @@ def install_migrated(
         )
 
     skill = outcome.skill
+    destination_root = Path(destination_root)
     # skill.name came out of a foreign vendor's manifest; --force rmtrees this
     # path, so it is validated as a bare name inside the root before it is used.
     target = skill_directory(
@@ -946,24 +972,33 @@ def install_migrated(
                 f"Skill '{skill.name}' is already installed at {target}. Pass --force "
                 "to replace it, or --name to install under a different name."
             )
-        shutil.rmtree(target)
-        # A migrated skill has no hub provenance; leaving the replaced install's
-        # lock entry behind would describe bytes that no longer exist.
-        forget_skill(Path(destination_root), skill.name)
-    target.mkdir(parents=True)
 
-    if copy_support_files and source_dir is not None:
-        for entry in sorted(source_dir.iterdir()):
-            if entry.name == SKILL_FILENAME:
-                continue
-            destination = target / entry.name
-            if entry.is_dir():
-                shutil.copytree(entry, destination)
-            else:
-                shutil.copy2(entry, destination)
+    with tempfile.TemporaryDirectory(prefix="gaia-skill-migrate-") as tmp:
+        staged = Path(tmp) / skill.name
+        if copy_support_files and source_dir is not None:
+            # Staging copies follow links, so refuse them here, before the copy.
+            _refuse_symlinks(source_dir, name=skill.name, action="Migration")
+            shutil.copytree(
+                source_dir,
+                staged,
+                ignore=lambda directory, names: (
+                    [SKILL_FILENAME] if Path(directory) == source_dir else []
+                ),
+            )
+        else:
+            staged.mkdir()
+        skill.write(staged / SKILL_FILENAME)
 
-    skill.write(target / SKILL_FILENAME)
-    return target
+        result = import_bundle(
+            staged,
+            origin=str(outcome.source),
+            name=skill.name,
+            force=force,
+            allow_experimental=allow_experimental,
+            destination_root=destination_root,
+            source=SOURCE_MIGRATED,
+        )
+    return result.path
 
 
 def format_report(outcomes: Sequence[MigrationOutcome]) -> str:

@@ -3,9 +3,11 @@
 
 """Coverage for the binaries installer/scripts/install.{sh,ps1} download.
 
-The terminal hub (`gaia-tui`) comes from the GitHub release, verified against
-the release's ``gaia-tui-SHA256SUMS.txt``; the flagship agent comes from the
-Agent Hub, verified against its manifest. Two layers, because a static check
+The frozen ``gaia`` and the terminal hub (`gaia-tui`) come from the GitHub
+release, verified against its ``gaia-core-SHA256SUMS.txt`` and
+``gaia-tui-SHA256SUMS.txt``; the flagship agent comes from the Agent Hub,
+verified against its manifest. Neither script installs Python or a PyPI
+package. Two layers, because a static check
 alone is what once let these scripts ship pointing at a channel nothing
 published to:
 
@@ -29,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 from pathlib import Path
 
@@ -42,6 +45,9 @@ INSTALL_PS1 = SCRIPTS_DIR / "install.ps1"
 PUBLISH_YML = REPO_ROOT / ".github" / "workflows" / "publish.yml"
 FLAGSHIP_LOCK = REPO_ROOT / "hub" / "agents" / "gaia" / "npm" / "binaries.lock.json"
 SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
+CORE_SUMS_FILE = "gaia-core-SHA256SUMS.txt"
+# Every platform build_core.yml can freeze; install.ps1 takes win32-x64 on Arm too.
+CORE_PLATFORMS = ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64")
 
 # uname -m value -> (Agent Hub arch segment, GOARCH segment of the release asset).
 UNAME_ARCH = {
@@ -149,8 +155,16 @@ def test_publish_checksums_exactly_the_six_binaries_it_builds():
     assert set(listed.group(1).split()) == _publish_tui_assets()
     assert 'sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt' in step["run"]
     assert "exit 1" in step["run"]
-    # The final and the RC release steps both attach release-assets/*.
-    assert PUBLISH_YML.read_text(encoding="utf-8").count("release-assets/*") >= 2
+    # The final and RC release steps now pass every discovered asset to the
+    # resumable helper rather than relying on a shell wildcard.
+    release_step = next(
+        s
+        for s in job["steps"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert "find release-assets dist -type f -print0" in release_step["run"]
+    assert 'assets+=(--asset "$asset")' in release_step["run"]
+    assert "release-assets/*" not in PUBLISH_YML.read_text(encoding="utf-8")
 
 
 def test_publish_windows_binaries_carry_icon_and_unprefixed_version():
@@ -221,88 +235,106 @@ def test_binary_is_installed_as_gaia_tui(sh_text, ps1_text):
     Python-owned daemon; a Go binary named `gaia` would find itself."""
     assert '"$GAIA_BIN/gaia-tui"' in sh_text
     # PowerShell installs through a shared helper, so the leaf name is passed
-    # as -DestName and joined to $GAIA_BIN inside it.
+    # as -DestName and joined to -DestDir, $GAIA_BIN by default, inside it.
     assert '-DestName "gaia-tui.exe"' in ps1_text
-    assert "$GAIA_BIN\\$DestName" in ps1_text
-    assert '"$GAIA_BIN/gaia"' not in sh_text
+    assert "[string]$DestDir = $GAIA_BIN" in ps1_text
+    assert "$DestDir\\$DestName" in ps1_text
+    assert '"$GAIA_BIN/gaia"' not in _shell_function_body(sh_text, "install_tui")
     assert '-DestName "gaia.exe"' not in ps1_text
 
 
 def test_path_registration_covers_the_terminal_hub_bin_dir(sh_text, ps1_text):
     """Registering only the venv left gaia-tui installed but unreachable."""
-    assert "$GAIA_VENV/bin:$GAIA_BIN" in sh_text
-    assert '@("$GAIA_VENV\\Scripts", $GAIA_BIN)' in ps1_text
+    body = _shell_function_body(sh_text, "add_to_path")
+    assert 'path_export="export PATH=\\"\\$PATH:$GAIA_BIN\\""' in body
+    assert 'PATH="$PATH:$GAIA_BIN"' in body
+    body = _ps1_function_body(ps1_text, "Get-UpdatedPath")
+    assert "$added = @($GAIA_BIN)" in body
 
 
-# ── the core install carries the daemon extras ─────────────────────────────
-
-
-SPEC_VAR = {"sh": '"$GAIA_PACKAGE_SPEC"', "ps1": "$PackageSpec"}
-
-
-def _core_call_sites(text: str, script: str) -> list[str]:
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if "uv pip install" in line and SPEC_VAR[script] in line
+def test_ps1_puts_only_gaia_bin_on_path(ps1_text):
+    """The venv's Scripts holds python.exe and pip.exe; on PATH they shadow
+    the user's own Python."""
+    # The venv is named only to take it out, or to warn against adding it.
+    update = _ps1_function_body(ps1_text, "Get-UpdatedPath")
+    assert [ln.strip() for ln in update.splitlines() if "$GAIA_VENV" in ln] == [
+        '$legacy = Get-NormalizedPathEntry "$GAIA_VENV\\Scripts"'
     ]
+    add = _ps1_function_body(ps1_text, "Add-ToPath")
+    venv_lines = [ln for ln in add.splitlines() if "$GAIA_VENV" in ln]
+    assert venv_lines and all(
+        "Do not add" in ln or "Removed" in ln for ln in venv_lines
+    ), venv_lines
+
+
+def test_ps1_copies_exactly_the_packages_console_scripts(ps1_text):
+    """$GAIA_BIN is the only directory on PATH, so every console script the
+    package ships must be copied there or it becomes unreachable."""
+    match = re.search(r"^\$GAIA_COMMANDS = @\(([^)]*)\)\r?$", ps1_text, re.MULTILINE)
+    assert match, "$GAIA_COMMANDS not found in install.ps1"
+    listed = set(re.findall(r'"([\w-]+)"', match.group(1)))
+    setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    block = re.search(r'"console_scripts": \[(.*?)\]', setup_py, re.DOTALL)
+    assert block, "console_scripts not found in setup.py"
+    shipped = set(re.findall(r'"([\w-]+) = ', block.group(1)))
+    assert shipped and listed == shipped
+
+
+def test_ps1_installs_gaia_before_it_edits_path(ps1_text):
+    """A failed install must leave the old PATH, which still reaches `gaia`."""
+    main = _ps1_function_body(ps1_text, "Main")
+    assert main.index("Install-Core") < main.index("Add-ToPath")
+
+
+def test_sh_links_exactly_the_packages_console_scripts(sh_text):
+    """$GAIA_BIN is the only directory on PATH (#6603), so every console
+    script the package ships must be linked there or it becomes unreachable."""
+    match = re.search(r'^GAIA_COMMANDS="([^"]+)"$', sh_text, re.MULTILINE)
+    assert match, "GAIA_COMMANDS not found in install.sh"
+    setup_py = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
+    block = re.search(r'"console_scripts": \[(.*?)\]', setup_py, re.DOTALL)
+    assert block, "console_scripts not found in setup.py"
+    shipped = set(re.findall(r'"([\w-]+) = ', block.group(1)))
+    assert shipped and set(match.group(1).split()) == shipped
+
+
+# ── gaia is the frozen build from the release, never a Python install ──────
+
+
+def _code_lines(text: str) -> list[str]:
+    return [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
 
 
 @pytest.mark.parametrize("script", ["sh", "ps1"])
-def test_every_core_install_requests_the_daemon_extras(sh_text, ps1_text, script):
-    """gaia-tui is useless without `gaia daemon`, which bare amd-gaia can't run.
-
-    Both the fresh-install and the `--upgrade` call site install the one spec
-    the pin resolver builds, and every spec it can build must carry [api];
-    dropping it leaves a core that refuses to start the daemon
-    (fastapi/uvicorn/psutil missing).
-    """
+def test_neither_installer_installs_python_or_a_pypi_package(sh_text, ps1_text, script):
+    """The apps run binaries only; a pip or uv install here is the PyPI install
+    the user's PC must never get."""
     text = sh_text if script == "sh" else ps1_text
-    call_sites = _core_call_sites(text, script)
-    assert len(call_sites) == 2, (
-        f"expected the fresh-install and --upgrade pip call sites in "
-        f"install.{script}; found {len(call_sites)}: {call_sites}"
-    )
-    # Any other line installing amd-gaia directly would bypass the pin.
-    direct = [
-        line.strip()
-        for line in text.splitlines()
-        if "uv pip install" in line and "amd-gaia" in line
+    hits = [
+        ln.strip()
+        for ln in _code_lines(text)
+        if re.search(
+            r"\buv\b|pip install|astral\.sh|amd-gaia\[|\bvenv\b(?!\\Scripts)", ln
+        )
+        and "GAIA_VENV" not in ln
     ]
-    assert not direct, direct
-    specs = re.findall(r'"(amd-gaia[^"]*)"', text)
-    assert specs, f"install.{script} names no amd-gaia spec"
-    bare = [spec for spec in specs if not spec.startswith("amd-gaia[api]")]
-    assert not bare, (
-        f"install.{script} builds an amd-gaia spec without the [api] extra — the "
-        "daemon needs fastapi/uvicorn/psutil and no `gaia init` profile "
-        f"supplies them: {bare}"
-    )
+    assert not hits, f"install.{script} still installs Python: {hits}"
 
 
-@pytest.mark.parametrize("script", ["sh", "ps1"])
-def test_every_core_install_compiles_bytecode(sh_text, ps1_text, script):
-    """uv skips bytecode compilation by default, so the first daemon start
-    compiled all of GAIA and overran its health wait on a fresh install."""
-    text = sh_text if script == "sh" else ps1_text
-    call_sites = _core_call_sites(text, script)
-    assert call_sites
-    missing = [line for line in call_sites if "--compile-bytecode" not in line]
-    assert not missing, f"install.{script} skips bytecode compilation: {missing}"
+def test_both_installers_verify_gaia_against_the_release_checksums(sh_text, ps1_text):
+    assert f'CORE_SUMS_FILE="{CORE_SUMS_FILE}"' in sh_text
+    body = _shell_function_body(sh_text, "install_core")
+    assert "download_and_verify" in body and "$CORE_SUMS_FILE" in body
+    assert f'$CORE_SUMS_FILE = "{CORE_SUMS_FILE}"' in ps1_text
+    body = _ps1_function_body(ps1_text, "Install-Core")
+    assert "-SumsName $CORE_SUMS_FILE" in body and "Install-VerifiedBinary" in body
 
 
-def test_every_ps1_uv_call_trusts_the_windows_certificate_store(ps1_text):
-    """Behind a TLS-inspecting proxy, uv's bundled roots reject the proxy's
-    certificate, so the Python download in `uv venv` failed on a fresh PC with
-    `invalid peer certificate: UnknownIssuer` and the install stopped there."""
-    uv_calls = [
-        line.strip()
-        for line in ps1_text.splitlines()
-        if re.match(r"\s*& uv (venv|pip)\b", line)
-    ]
-    assert len(uv_calls) == 3, uv_calls
-    missing = [line for line in uv_calls if "--native-tls" not in line]
-    assert not missing, f"uv call(s) without --native-tls: {missing}"
+def test_publish_attaches_the_gaia_the_installers_fetch():
+    text = PUBLISH_YML.read_text(encoding="utf-8")
+    assert CORE_SUMS_FILE in text
+    for platform in ("win32-x64", "darwin-arm64", "linux-x64"):
+        assert platform in text
 
 
 # ── macOS is no longer gated out ───────────────────────────────────────────
@@ -615,6 +647,28 @@ def _make_handler(root: Path, state: dict):
     return Handler
 
 
+def _core_tarball(path: Path, tag: str) -> None:
+    """A release's frozen gaia, shaped like build_core.yml's tarball.
+
+    Its `gaia` hands its arguments to this Python, so it reads manifests with
+    `-c` the way the frozen one does.
+    """
+    staged = path.parent / f"{path.name}.d"
+    (staged / "_internal").mkdir(parents=True, exist_ok=True)
+    (staged / "_internal" / "marker").write_text(tag, encoding="utf-8")
+    gaia = staged / "gaia"
+    gaia.write_text(
+        f'#!/bin/sh\n# core {tag}\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+        encoding="utf-8",
+    )
+    gaia.chmod(0o755)
+    (staged / "gaia.exe").write_text(f"core {tag}", encoding="utf-8")
+    with tarfile.open(path, "w:gz") as tar:
+        for item in ("gaia", "gaia.exe", "_internal"):
+            tar.add(staged / item, arcname=item)
+    shutil.rmtree(staged)
+
+
 @pytest.fixture
 def fake_hub(tmp_path):
     """Serve GitHub-release-shaped terminal binaries and Agent-Hub-shaped
@@ -634,6 +688,7 @@ def fake_hub(tmp_path):
         sums_style="text",
         omit_sums_file=False,
         raw_sums=None,
+        core_digest_overrides=None,
     ):
         tag_dir = root / "releases" / "download" / tag
         tag_dir.mkdir(parents=True, exist_ok=True)
@@ -655,6 +710,15 @@ def fake_hub(tmp_path):
             sums.write_text(raw_sums(lines), encoding="utf-8")
         else:
             sums.write_text("".join(lines), encoding="utf-8")
+        core_lines = []
+        for key in CORE_PLATFORMS:
+            name = f"gaia-core-{key}.tar.gz"
+            _core_tarball(tag_dir / name, tag)
+            digest = (core_digest_overrides or {}).get(
+                key, hashlib.sha256((tag_dir / name).read_bytes()).hexdigest()
+            )
+            core_lines.append(f"{digest}  {name}\n")
+        (tag_dir / CORE_SUMS_FILE).write_text("".join(core_lines), encoding="utf-8")
 
     def rc_agent(tag=RC_TAG, digest_overrides=None, platforms=None):
         """Stage a candidate's frozen agent + gaia-agent-release.json, the
@@ -748,6 +812,7 @@ def fake_hub(tmp_path):
         base = state["base"]
 
     fake = Fake()
+    fake.root = root
     fake.release = release
     fake.publish = publish
     fake.rc_agent = rc_agent
@@ -911,6 +976,117 @@ def test_install_tui_fails_when_github_is_unreachable(tmp_path):
     assert not installed.exists()
 
 
+# ── functional: install_core puts the release's frozen gaia in place ───────
+
+
+def _run_install_core(tmp_path, base_url, extra=""):
+    result, home = _run_sh_function(
+        tmp_path,
+        f"DOWNLOAD_CMD=curl; resolve_release_tag && install_core && link_gaia_commands{extra}",
+        _channel_env(base_url),
+    )
+    return result, home / ".gaia"
+
+
+@posix_only
+@needs_curl
+def test_install_core_installs_the_releases_gaia_and_links_it(tmp_path, fake_hub):
+    result, gaia_home = _run_install_core(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"# core {RELEASE_TAG}" in (gaia_home / "core" / "gaia").read_text(
+        encoding="utf-8"
+    )
+    assert (gaia_home / "core" / "_internal" / "marker").is_file()
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert os.readlink(gaia_home / "bin" / name) == str(gaia_home / "core" / "gaia")
+    assert not (gaia_home / "venv").exists()
+
+
+@posix_only
+@needs_curl
+def test_install_core_installs_nothing_on_a_checksum_mismatch(tmp_path, fake_hub):
+    fake_hub.release(core_digest_overrides={k: "d" * 64 for k in CORE_PLATFORMS})
+
+    result, gaia_home = _run_install_core(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout + result.stderr
+    assert not (gaia_home / "core").exists()
+
+
+@posix_only
+@needs_curl
+def test_a_release_without_gaia_is_refused(tmp_path, fake_hub):
+    """A release from before GAIA shipped as a binary has no checksums for it."""
+    (fake_hub.root / "releases" / "download" / RELEASE_TAG / CORE_SUMS_FILE).unlink()
+
+    result, gaia_home = _run_install_core(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Could not fetch the GAIA checksums" in result.stdout
+    assert not (gaia_home / "core").exists()
+
+
+# ── functional: GAIA_CLI_ONLY, for a package that already owns the binaries ──
+
+_MAIN_STEPS = (
+    "detect_environment",
+    "check_download_tool",
+    "resolve_pin",
+    "resolve_release_tag",
+    "install_core",
+    "link_gaia_commands",
+    "add_to_path",
+    "install_tui",
+    "install_flagship_agent",
+)
+
+
+def _run_main_with_stubbed_steps(tmp_path, cli_only):
+    stubs = "; ".join(f'{step}() {{ echo "STEP {step}"; }}' for step in _MAIN_STEPS)
+    return _run_sh_function(
+        tmp_path, f"{stubs}; main", {"GAIA_CLI_ONLY": cli_only}, shell="dash"
+    )[0]
+
+
+def _steps_run(result):
+    return [
+        line.split(" ", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith("STEP ")
+    ]
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_cli_only_installs_the_cli_and_leaves_the_packaged_binaries(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS[:-2])
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+def test_without_cli_only_main_still_installs_everything(tmp_path):
+    result = _run_main_with_stubbed_steps(tmp_path, "")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _steps_run(result) == list(_MAIN_STEPS)
+
+
+@posix_only
+@pytest.mark.skipif(shutil.which("dash") is None, reason="needs dash")
+@pytest.mark.parametrize("value", ["true", "yes", "0", "2"])
+def test_a_bad_cli_only_value_is_refused_before_anything_installs(tmp_path, value):
+    result = _run_main_with_stubbed_steps(tmp_path, value)
+
+    assert result.returncode != 0
+    assert "GAIA_CLI_ONLY" in result.stdout + result.stderr
+    assert _steps_run(result) == []
+
+
 # ── functional: the flagship sidecar is optional, but never unverified ──────
 #
 # The whole point of the sidecar step is that it can fail without taking a
@@ -922,8 +1098,8 @@ def _run_bootstrap(tmp_path, base_url):
     """Run install_tui then install_flagship_agent, as main() does."""
     result, home = _run_sh_function(
         tmp_path,
-        "DOWNLOAD_CMD=curl; install_tui; install_flagship_agent; "
-        'echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
+        "DOWNLOAD_CMD=curl; resolve_release_tag; install_core; install_tui; "
+        'install_flagship_agent; echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
         _channel_env(base_url),
     )
     bin_dir = home / ".gaia" / "bin"
@@ -1121,10 +1297,10 @@ def test_ps1_a_tampered_agent_fails_the_install(tmp_path, fake_hub):
 
 
 PIN_CASES = [
-    ("", "", "amd-gaia[api]"),
-    ("v0.25.0", "final", "amd-gaia[api]==0.25.0"),
-    ("v0.25.1-rc2", "rc", "amd-gaia[api]==0.25.1rc2"),
-    ("v1.10.20-rc13", "rc", "amd-gaia[api]==1.10.20rc13"),
+    ("", ""),
+    ("v0.25.0", "final"),
+    ("v0.25.1-rc2", "rc"),
+    ("v1.10.20-rc13", "rc"),
 ]
 BAD_PINS = [
     "0.25.0",
@@ -1144,16 +1320,13 @@ def _sh_with_tag(tmp_path, base_url, snippet, tag):
 
 
 @posix_only
-@pytest.mark.parametrize("tag,kind,spec", PIN_CASES)
-def test_sh_pins_the_core_to_the_tag(tmp_path, tag, kind, spec):
+@pytest.mark.parametrize("tag,kind", PIN_CASES)
+def test_sh_pins_the_install_to_the_tag(tmp_path, tag, kind):
     result, _ = _sh_with_tag(
-        tmp_path,
-        "http://127.0.0.1:1",
-        'resolve_pin; echo "KIND=$PIN_KIND SPEC=$GAIA_PACKAGE_SPEC"',
-        tag,
+        tmp_path, "http://127.0.0.1:1", 'resolve_pin; echo "KIND=$PIN_KIND"', tag
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"KIND={kind} SPEC={spec}" in result.stdout
+    assert f"KIND={kind}" in result.stdout
 
 
 @posix_only
@@ -1172,8 +1345,8 @@ def _rc_bootstrap_sh(tmp_path, base_url):
     result, home = _sh_with_tag(
         tmp_path,
         base_url,
-        "DOWNLOAD_CMD=curl; resolve_pin; install_tui; install_flagship_agent; "
-        'echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
+        "DOWNLOAD_CMD=curl; resolve_pin; resolve_release_tag; install_core; "
+        'install_tui; install_flagship_agent; echo "FLAGSHIP_INSTALLED=${FLAGSHIP_INSTALLED:-0}"',
         RC_TAG,
     )
     bin_dir = home / ".gaia" / "bin"
@@ -1265,16 +1438,16 @@ def test_latest_redirecting_to_something_other_than_a_tag_is_refused(
 
 
 @needs_powershell
-@pytest.mark.parametrize("tag,kind,spec", PIN_CASES)
-def test_ps1_pins_the_core_to_the_tag(tmp_path, tag, kind, spec):
+@pytest.mark.parametrize("tag,kind", PIN_CASES)
+def test_ps1_pins_the_install_to_the_tag(tmp_path, tag, kind):
     result, _ = _run_ps1(
         tmp_path,
         "http://127.0.0.1:1",
-        '$p = Resolve-Pin; Write-Host "KIND=$($p.Kind) SPEC=$($p.Spec)"',
+        '$p = Resolve-Pin; Write-Host "KIND=$($p.Kind)"',
         tag=tag,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"KIND={kind} SPEC={spec}" in result.stdout
+    assert f"KIND={kind}" in result.stdout
 
 
 @needs_powershell
@@ -1335,7 +1508,7 @@ def test_ps1_refuses_a_release_without_its_checksum_file(tmp_path, fake_hub):
     result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
 
     assert result.returncode != 0
-    assert "Could not fetch the GAIA Terminal UI checksums" in result.stdout
+    assert f"Could not fetch {SUMS_FILE} for" in result.stdout
     assert "still be uploading" in result.stdout
     assert not bin_dir.exists()
 
@@ -1381,6 +1554,28 @@ def _rc_files(home):
     return sorted(p.name for p in home.iterdir() if p.name.startswith("."))
 
 
+# What each installer generation appended; {h} is the home directory.
+_LEGACY_BLOCK = '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/venv/bin:{h}/.gaia/bin"\n'
+_VENV_ONLY_BLOCK = (
+    '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/venv/bin"\n'
+)
+_CURRENT_BLOCK = '\n# Added by GAIA installer\nexport PATH="$PATH:{h}/.gaia/bin"\n'
+_USER_TEXT = (
+    "# my settings\n"
+    "alias ll='ls -l'\n"
+    'export PATH="$HOME/tools:$PATH"\n'
+    "# a note about /opt/x/.gaia/venv/bin stays\n"
+)
+
+
+def _home_with(tmp_path, files):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    for name, text in files.items():
+        (home / name).write_text(text.format(h=home), encoding="utf-8")
+    return home
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
 def test_add_to_path_writes_the_zsh_rc_and_is_idempotent(tmp_path):
     result, home = _run_sh_function(
@@ -1391,7 +1586,7 @@ def test_add_to_path_writes_the_zsh_rc_and_is_idempotent(tmp_path):
 
     rc = home / ".zshrc"
     first = rc.read_text(encoding="utf-8")
-    assert ".gaia/venv/bin" in first and ".gaia/bin" in first
+    assert first == _CURRENT_BLOCK.format(h=home)
 
     result, _ = _run_sh_function(
         tmp_path, "OS_NAME=Darwin; add_to_path", {"SHELL": "/bin/zsh"}
@@ -1417,20 +1612,104 @@ def test_add_to_path_does_not_shadow_an_existing_profile_on_macos(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
-def test_add_to_path_upgrades_a_pre_existing_venv_only_export(tmp_path):
-    """Older installs wrote a venv-only export; a line-exact idempotency check
-    would leave the terminal hub off PATH forever."""
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".zshrc").write_text(
-        f'export PATH="$PATH:{home}/.gaia/venv/bin"\n', encoding="utf-8"
-    )
+def test_add_to_path_rewrites_the_legacy_venv_line_in_place(tmp_path):
+    """#6603: the old line put the venv's python3 on PATH. It is rewritten
+    where it stands; everything around it is kept byte for byte."""
+    home = _home_with(tmp_path, {".bashrc": _USER_TEXT + _LEGACY_BLOCK + "set -o vi\n"})
+    expected = (_USER_TEXT + _CURRENT_BLOCK + "set -o vi\n").format(h=home)
 
-    result, home = _run_sh_function(
+    for _ in range(2):
+        result, _ = _run_sh_function(
+            tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/bash"}
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (home / ".bashrc").read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_rewrites_a_pre_0_23_venv_only_export(tmp_path):
+    """The oldest installs wrote the venv alone, without the terminal hub's
+    directory."""
+    home = _home_with(tmp_path, {".zshrc": _USER_TEXT + _VENV_ONLY_BLOCK})
+
+    result, _ = _run_sh_function(
         tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ".gaia/bin" in (home / ".zshrc").read_text(encoding="utf-8")
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_collapses_stacked_installer_blocks(tmp_path):
+    """A pre-0.23 install followed by a later one left two blocks; both
+    rewrite to the same line, so only the first is kept."""
+    home = _home_with(
+        tmp_path, {".zshrc": _USER_TEXT + _VENV_ONLY_BLOCK + _LEGACY_BLOCK}
+    )
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_migrates_rc_files_another_shell_wrote(tmp_path):
+    """A user who installed under sh and now runs zsh still has the old line
+    in ~/.profile; it is rewritten though zsh never appends there."""
+    home = _home_with(tmp_path, {".profile": _USER_TEXT + _LEGACY_BLOCK})
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".profile").read_text(encoding="utf-8") == (
+        _USER_TEXT + _CURRENT_BLOCK
+    ).format(h=home)
+    assert (home / ".zshrc").read_text(encoding="utf-8") == _CURRENT_BLOCK.format(
+        h=home
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_rewrites_through_a_symlinked_rc_file(tmp_path):
+    """Dotfile managers symlink ~/.bashrc; the edit lands in the target and
+    keeps the link and the file's mode."""
+    home = _home_with(tmp_path, {})
+    target = tmp_path / "dotfiles-bashrc"
+    target.write_text((_USER_TEXT + _LEGACY_BLOCK).format(h=home), encoding="utf-8")
+    target.chmod(0o600)
+    (home / ".bashrc").symlink_to(target)
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/bash"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".bashrc").is_symlink()
+    assert target.read_text(encoding="utf-8") == (_USER_TEXT + _CURRENT_BLOCK).format(
+        h=home
+    )
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_add_to_path_leaves_a_hand_written_line_alone(tmp_path):
+    """Only the exact lines the installer wrote are rewritten."""
+    hand = 'export PATH="{h}/.gaia/venv/bin:{h}/.gaia/bin:$PATH"\n'
+    home = _home_with(tmp_path, {".zshrc": _USER_TEXT + hand})
+
+    result, _ = _run_sh_function(
+        tmp_path, "OS_NAME=Linux; add_to_path", {"SHELL": "/bin/zsh"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / ".zshrc").read_text(encoding="utf-8") == (_USER_TEXT + hand).format(
+        h=home
+    )
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
@@ -1441,7 +1720,123 @@ def test_add_to_path_does_not_write_a_file_an_unknown_shell_ignores(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert _rc_files(home) == []
-    assert "Add these two directories to your PATH by hand" in result.stdout
+    assert "Add this directory to your PATH by hand" in result.stdout
+    assert f"fish_add_path --append {home}/.gaia/bin" in result.stdout
+    # The venv is named only to warn against adding it.
+    venv_lines = [ln for ln in result.stdout.splitlines() if ".gaia/venv/bin" in ln]
+    assert venv_lines and all("Do not add" in ln for ln in venv_lines)
+
+
+# ── functional: link_gaia_commands and the PATH a new shell gets ───────────
+
+
+def _fake_core(home):
+    core = home / ".gaia" / "core"
+    core.mkdir(parents=True)
+    gaia = core / "gaia"
+    gaia.write_text("#!/bin/sh\necho core-gaia\n", encoding="utf-8")
+    gaia.chmod(0o755)
+    return gaia
+
+
+def _fake_venv(home, names):
+    venv_bin = home / ".gaia" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    for name in names:
+        exe = venv_bin / name
+        exe.write_text(f"#!/bin/sh\necho venv-{name}\n", encoding="utf-8")
+        exe.chmod(0o755)
+    return venv_bin
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_links_only_gaias_commands(tmp_path):
+    home = _home_with(tmp_path, {})
+    gaia = _fake_core(home)
+    gaia_bin = home / ".gaia" / "bin"
+    gaia_bin.mkdir()
+    (gaia_bin / "gaia-tui").write_text("tui", encoding="utf-8")
+    # A stale link from an earlier run is replaced.
+    (gaia_bin / "gaia").symlink_to(tmp_path / "elsewhere")
+
+    for _ in range(2):
+        result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert sorted(p.name for p in gaia_bin.iterdir()) == [
+        "gaia",
+        "gaia-cli",
+        "gaia-mcp",
+        "gaia-tui",
+    ]
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert os.readlink(gaia_bin / name) == str(gaia)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_fails_when_gaia_is_missing(tmp_path):
+    _home_with(tmp_path, {})
+
+    result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+    assert result.returncode != 0
+    assert "core/gaia is missing" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+def test_link_gaia_commands_never_replaces_a_real_file(tmp_path):
+    home = _home_with(tmp_path, {})
+    _fake_core(home)
+    gaia_bin = home / ".gaia" / "bin"
+    gaia_bin.mkdir()
+    (gaia_bin / "gaia").write_text("mine", encoding="utf-8")
+
+    result, _ = _run_sh_function(tmp_path, "link_gaia_commands")
+    assert result.returncode != 0
+    assert "not a link GAIA made" in result.stdout
+    assert (gaia_bin / "gaia").read_text(encoding="utf-8") == "mine"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
+@pytest.mark.parametrize("rc_text", ["", _LEGACY_BLOCK], ids=["fresh", "upgrade"])
+def test_a_new_shell_finds_gaia_but_not_the_venvs_python(tmp_path, rc_text):
+    """Source the rc file as a new shell does: `gaia` runs through
+    ~/.gaia/bin, and python3 and pip are not GAIA's."""
+    home = _home_with(tmp_path, {".bashrc": _USER_TEXT + rc_text})
+    _fake_core(home)
+    # An earlier install's venv: its python3 and pip must not reach PATH.
+    _fake_venv(home, ("gaia", "python3", "pip"))
+
+    result, _ = _run_sh_function(
+        tmp_path,
+        "OS_NAME=Linux; link_gaia_commands && add_to_path",
+        {"SHELL": "/bin/bash"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    probe = subprocess.run(
+        [
+            "sh",
+            "-c",
+            '. "$HOME/.bashrc"; gaia; '
+            "for c in gaia gaia-cli gaia-mcp python3 pip; do "
+            'command -v "$c" || echo "none:$c"; done',
+        ],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    lines = probe.stdout.splitlines()
+    gaia_bin = home / ".gaia" / "bin"
+    assert lines[:4] == [
+        "core-gaia",
+        f"{gaia_bin}/gaia",
+        f"{gaia_bin}/gaia-cli",
+        f"{gaia_bin}/gaia-mcp",
+    ]
+    assert len(lines) == 6
+    assert not any(".gaia" in found for found in lines[4:]), lines
 
 
 # ── functional: install.ps1's Add-ToPath against a scratch registry key ────
@@ -1531,11 +1926,7 @@ def test_ps1_add_to_path_keeps_unexpanded_entries(tmp_path, scratch_env_key):
     assert kind == winreg.REG_EXPAND_SZ
     entries = value.split(";")
     assert entries[:2] == [r"%USERPROFILE%\tools", r"%LOCALAPPDATA%\other"]
-    profile = tmp_path / "profile"
-    assert entries[2:] == [
-        str(profile / ".gaia" / "venv" / "Scripts"),
-        str(profile / ".gaia" / "bin"),
-    ]
+    assert entries[2:] == [str(tmp_path / "profile" / ".gaia" / "bin")]
 
 
 @needs_windows_registry
@@ -1559,7 +1950,7 @@ def test_ps1_add_to_path_recognises_an_unexpanded_gaia_entry(tmp_path, scratch_e
     """An entry written with %USERPROFILE% names the same directory."""
     import winreg
 
-    seeded = r"%USERPROFILE%\.gaia\venv\Scripts;%USERPROFILE%\.gaia\bin\;"
+    seeded = r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\bin\;"
     _seed_user_path(scratch_env_key, seeded, winreg.REG_EXPAND_SZ)
 
     result = _run_add_to_path(tmp_path, scratch_env_key, times=2)
@@ -1577,7 +1968,7 @@ def test_ps1_add_to_path_is_idempotent(tmp_path, scratch_env_key):
     _run_add_to_path(tmp_path, scratch_env_key, times=2)
 
     value, _ = _read_user_path(scratch_env_key)
-    assert len(value.split(";")) == 3
+    assert len(value.split(";")) == 2
 
 
 @needs_windows_registry
@@ -1597,4 +1988,174 @@ def test_ps1_add_to_path_a_failed_broadcast_still_reports_the_saved_path(
     assert "PATH saved, but Windows could not be notified" in result.stdout
     assert "Add-Type blocked" in result.stdout
     value, _ = _read_user_path(scratch_env_key)
-    assert len(value.split(";")) == 3
+    assert len(value.split(";")) == 2
+
+
+@needs_windows_registry
+def test_ps1_add_to_path_moves_an_earlier_install_off_the_venv(
+    tmp_path, scratch_env_key
+):
+    """An install from before this fix had the venv's Scripts on PATH; a
+    re-run takes it off, keeps every other entry as written, and tells
+    Windows so new terminals pick it up."""
+    import winreg
+
+    seeded = (
+        r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\venv\Scripts;"
+        r"%USERPROFILE%\.gaia\bin;D:\py\venv\Scripts"
+    )
+    _seed_user_path(scratch_env_key, seeded, winreg.REG_EXPAND_SZ)
+
+    first = _run_add_to_path(
+        tmp_path, scratch_env_key, broadcast="Write-Host 'BROADCAST'"
+    )
+    assert "so your own python and pip come first again" in first.stdout
+    assert "BROADCAST" in first.stdout
+    assert _read_user_path(scratch_env_key) == (
+        r"%USERPROFILE%\tools;%USERPROFILE%\.gaia\bin;D:\py\venv\Scripts",
+        winreg.REG_EXPAND_SZ,
+    )
+
+    second = _run_add_to_path(
+        tmp_path, scratch_env_key, broadcast="Write-Host 'BROADCAST'"
+    )
+    assert "GAIA is already in PATH" in second.stdout
+    assert "BROADCAST" not in second.stdout
+
+
+# ── functional: Get-UpdatedPath on plain strings, no registry ──────────────
+
+
+def _updated_paths(tmp_path, currents):
+    """Run install.ps1's Get-UpdatedPath on each string; return its results."""
+    cases = ", ".join("'" + c.replace("'", "''") + "'" for c in currents)
+    snippet = (
+        '$GAIA_BIN = "$GAIA_HOME\\bin"\n'
+        f"$out = @(@({cases}) | ForEach-Object {{ Get-UpdatedPath -Current $_ }})\n"
+        "Write-Output ('JSON:' + (ConvertTo-Json -InputObject $out -Compress))\n"
+    )
+    result, _ = _run_ps1(tmp_path, "http://127.0.0.1:1", snippet)
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = next(ln for ln in result.stdout.splitlines() if ln.startswith("JSON:"))
+    return json.loads(line[len("JSON:") :])
+
+
+@needs_powershell
+def test_get_updated_path_cases(tmp_path):
+    gaia_bin = f"{tmp_path / 'profile'}\\.gaia\\bin"
+    venv = r"%USERPROFILE%\.gaia\venv\Scripts"
+    cases = [
+        # (current, expected value, added, removed)
+        (r"C:\tools;%LOCALAPPDATA%\x", rf"C:\tools;%LOCALAPPDATA%\x;{gaia_bin}", 1, 0),
+        # 0.23 up to this fix: venv and bin.
+        (
+            rf"C:\tools;{venv};%USERPROFILE%\.gaia\bin",
+            r"C:\tools;%USERPROFILE%\.gaia\bin",
+            0,
+            1,
+        ),
+        # Pre-0.23: the venv alone, quoted, with a trailing slash, twice.
+        (rf'"{venv}\";C:\tools;{venv.upper()}', rf"C:\tools;{gaia_bin}", 1, 2),
+        # Look-alikes and other venvs are the user's.
+        (
+            rf"{venv}2;D:\py\venv\Scripts",
+            rf"{venv}2;D:\py\venv\Scripts;{gaia_bin}",
+            1,
+            0,
+        ),
+        # Already current; empty elements are dropped, never kept as ".".
+        (rf"C:\tools;;{gaia_bin}\;", "C:\\tools;" + gaia_bin + "\\", 0, 0),
+        ("", gaia_bin, 1, 0),
+    ]
+
+    results = _updated_paths(tmp_path, [c[0] for c in cases])
+
+    for (current, value, added, removed), got in zip(cases, results):
+        assert got == {
+            "Value": value,
+            "Added": bool(added),
+            "Removed": removed,
+        }, current
+
+
+# ── functional: Install-Core puts the release's frozen gaia in $GAIA_BIN ────
+
+
+def _install_core(tmp_path, base_url, extra=""):
+    snippet = '$GAIA_BIN = "$GAIA_HOME\\bin"\nInstall-Core\n' + extra
+    result, _ = _run_ps1(tmp_path, base_url, snippet)
+    return result, tmp_path / "profile" / ".gaia" / "bin"
+
+
+@needs_powershell
+@pytest.mark.skipif(sys.platform != "win32", reason="needs Windows' own tar.exe")
+def test_install_core_puts_gaia_and_its_commands_in_gaia_bin(tmp_path, fake_hub):
+    gaia_bin = tmp_path / "profile" / ".gaia" / "bin"
+    gaia_bin.mkdir(parents=True)
+    (gaia_bin / "gaia-tui.exe").write_bytes(b"tui")
+    (gaia_bin / "_internal").mkdir()
+    (gaia_bin / "_internal" / "stale").write_text("old", encoding="utf-8")
+
+    result, _ = _install_core(tmp_path, fake_hub.base)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert sorted(p.name for p in gaia_bin.iterdir()) == [
+        "_internal",
+        "gaia-cli.exe",
+        "gaia-mcp.exe",
+        "gaia-tui.exe",
+        "gaia.exe",
+    ]
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert (gaia_bin / f"{name}.exe").read_text(encoding="utf-8") == (
+            f"core {RELEASE_TAG}"
+        )
+    assert sorted(p.name for p in (gaia_bin / "_internal").iterdir()) == ["marker"]
+    assert not (tmp_path / "profile" / ".gaia" / "venv").exists()
+
+
+@needs_powershell
+def test_install_core_installs_nothing_on_a_checksum_mismatch_ps1(tmp_path, fake_hub):
+    fake_hub.release(core_digest_overrides={"win32-x64": "d" * 64})
+
+    result, gaia_bin = _install_core(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout
+    assert not (gaia_bin / "gaia.exe").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or _PS_EXE is None, reason="resolves .exe on PATH"
+)
+@pytest.mark.parametrize("legacy", [False, True], ids=["fresh", "upgrade"])
+def test_a_new_terminal_finds_gaia_but_not_the_venvs_python(tmp_path, legacy, fake_hub):
+    """Resolve commands on the PATH install.ps1 computes, as a new terminal
+    would: `gaia` is the frozen one in ~\\.gaia\\bin; python and pip are not GAIA's."""
+    # An earlier install's venv, whose PATH entry an upgrade takes out.
+    scripts = tmp_path / "profile" / ".gaia" / "venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    for name in ("gaia", "python", "pip"):
+        (scripts / f"{name}.exe").write_bytes(f"launcher-{name}".encode())
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    current = f"{system};{scripts}" if legacy else system
+    extra = (
+        f"$env:PATH = (Get-UpdatedPath -Current '{current}').Value\n"
+        "foreach ($c in 'gaia', 'gaia-cli', 'gaia-mcp', 'python', 'pip') {\n"
+        '  $found = Get-Command "$c.exe" -CommandType Application '
+        "-ErrorAction SilentlyContinue | Select-Object -First 1\n"
+        "  Write-Output \"RESOLVED:$c=$(if ($found) { $found.Source } else { 'none' })\"\n"
+        "}\n"
+    )
+    result, gaia_bin = _install_core(tmp_path, fake_hub.base, extra)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    resolved = dict(
+        ln[len("RESOLVED:") :].split("=", 1)
+        for ln in result.stdout.splitlines()
+        if ln.startswith("RESOLVED:")
+    )
+    for name in ("gaia", "gaia-cli", "gaia-mcp"):
+        assert resolved[name].lower() == str(gaia_bin / f"{name}.exe").lower()
+    for name in ("python", "pip"):
+        assert ".gaia" not in resolved[name], resolved

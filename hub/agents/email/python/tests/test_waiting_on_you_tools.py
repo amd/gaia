@@ -68,7 +68,6 @@ from gaia_agent_email.tools.waiting_on_you_tools import (  # noqa: E402
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 USER_EMAIL = "user@example.com"
@@ -426,7 +425,9 @@ class TestMeetingSignalGating:
         # is_meeting_request=False, confidence="high" — a confident
         # NEGATIVE. Gating on confidence alone would wrongly treat this as
         # a positive.
-        detection = detect_meeting_request_heuristic("", "Just a normal update, nothing scheduled.")
+        detection = detect_meeting_request_heuristic(
+            "", "Just a normal update, nothing scheduled."
+        )
         assert detection.is_meeting_request is False
         assert detection.confidence == "high"
         assert (
@@ -473,7 +474,10 @@ class TestAdversarialRegressions:
 
     @pytest.mark.parametrize(
         "record_id",
-        ["1677f2af-ab08-4d57-8d58-967228dc89a0", "5f720d3d-a91f-47b5-a5c7-4edbef57cc9c"],
+        [
+            "1677f2af-ab08-4d57-8d58-967228dc89a0",
+            "5f720d3d-a91f-47b5-a5c7-4edbef57cc9c",
+        ],
     )
     def test_regression_corpus_entry_does_not_qualify(self, record_id):
         rec = _load_corpus_record(record_id)
@@ -552,7 +556,9 @@ class TestAlreadyReplied:
         # After the user replies, a NEW inbound message arrives — the
         # thread should qualify again (latest message is inbound again).
         gmail = _backend(
-            _inbound("r1", thread_id="t1", age_days=6, body="Could you help with this?"),
+            _inbound(
+                "r1", thread_id="t1", age_days=6, body="Could you help with this?"
+            ),
             _outbound("s1", thread_id="t1", age_days=5),
             _inbound(
                 "r2",
@@ -747,7 +753,9 @@ class TestReadOnly:
 # ---------------------------------------------------------------------------
 
 
-def _inbound_real_now(msg_id: str, *, thread_id: str, age_days: float, **kwargs) -> Dict[str, Any]:
+def _inbound_real_now(
+    msg_id: str, *, thread_id: str, age_days: float, **kwargs
+) -> Dict[str, Any]:
     import time as _time
 
     real_now_ms = int(_time.time() * 1000)
@@ -760,7 +768,9 @@ def _inbound_real_now(msg_id: str, *, thread_id: str, age_days: float, **kwargs)
     )
 
 
-def _outbound_real_now(msg_id: str, *, thread_id: str, age_days: float, **kwargs) -> Dict[str, Any]:
+def _outbound_real_now(
+    msg_id: str, *, thread_id: str, age_days: float, **kwargs
+) -> Dict[str, Any]:
     import time as _time
 
     real_now_ms = int(_time.time() * 1000)

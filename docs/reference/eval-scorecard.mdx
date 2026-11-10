@@ -53,7 +53,7 @@ The flagship's scorecard is built from **`gaia eval agent --agent-type gaia`** r
 - **Reported secondaries (weight 0):** `avg_score_normalized` (the judge's 0–10 rubric mean ÷ 10) and one `<category>_pass_rate` per category. `aggregate.value` stays `round(100 × judged_pass_rate, 2)`, recomputable from the displayed components.
 - **Environment stamps:** `gaia_commit`, the agent `model`, `ctx_size` (#1892), the hardware class, and `eval_model` (the Claude driver/judge — recorded because it drives the scenarios, not just scores them).
 
-Bars + the enforce switch live in `tests/fixtures/gaia/quality_gate_thresholds.json` (with a perf sibling). The quality manifest ships **`enforce: true`** with deliberately loose absolute floors (judged pass rate ≥ 0.60, avg score ≥ 5.0), so a breach fails the build; the perf sibling ships `enforce: false` until the first self-hosted-runner baseline calibrates it. Expect the quality bars to be retuned after that first Gemma run rather than assumed correct. CI: `test_gaia_agent_eval.yml` (dispatch only; the gaia_* categories run on release and RC tags in `eval_flagship.yml`), `gaia_scorecard_refresh.yml` (dispatch-only card refresh with the same basis guards as email's), and, in `release_agent_gaia.yml`, the `scorecard-gate` release gate plus the `gaia-eval` subset, which reports only: publishing never waits on it, and a run that does not pass files an `eval-failure` issue, which a later passing release on the same major.minor line closes.
+Bars + the enforce switch live in `tests/fixtures/gaia/quality_gate_thresholds.json` (with a perf sibling). The quality manifest ships **`enforce: true`** with deliberately loose absolute floors (judged pass rate ≥ 0.60, avg score ≥ 5.0), so a breach fails the build; the perf sibling ships `enforce: false` until the first self-hosted-runner baseline calibrates it. Expect the quality bars to be retuned after that first Gemma run rather than assumed correct. CI: `test_gaia_agent_eval.yml` (dispatch only; the gaia_* categories run on release and RC tags in `eval_flagship.yml`), `gaia_scorecard_refresh.yml` (dispatch-only card refresh with the same basis guards as email's), and, in `release_agent_gaia.yml`, the `scorecard-gate` release gate plus the `gaia-eval` subset, which reports only: publishing never waits on it. It compares against the flagship baseline (`tests/fixtures/eval_baselines/gaia-flagship/`) and files the agent's one `eval-failure` issue only on a breached quality bar or a stable smoke-set scenario gone PASS→FAIL. A run that measured nothing files nothing and says why in its summary, and a later clean, complete run closes the issue.
 
 ## File format
 
@@ -256,6 +256,9 @@ The resulting scorecard has `inherited_from: "0.2.4"` and identical `results` an
 For a **minor or major bump**, `carry_forward()` raises `ValueError` with a "re-run" message. Run the eval fresh and generate a new scorecard:
 
 ```bash
+# synthetic_inbox.mbox and ground_truth.json are generated, not committed
+python tests/fixtures/email/generate_mbox.py
+
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
 GAIA_AGENT_TOOL_TIMEOUT=1800 \
 PYTHONPATH="$(pwd)" \
@@ -264,6 +267,7 @@ gaia eval benchmark \
   --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
   --ground-truth tests/fixtures/email/ground_truth.json \
   --limit 220 \
+  --ctx-size 16384 \
   --output-dir /tmp/email-eval
 
 PYTHONPATH="$(pwd)" \
@@ -273,6 +277,11 @@ python hub/agents/email/python/packaging/gen_scorecard.py \
 ```
 
 This writes `hub/agents/email/npm/SCORECARD.md` in place.
+
+Pass the same `--ctx-size` as the committed card's `ctx_size`, or the new card is not
+comparable to it. If the triage prompt outgrows that window, the benchmark exits 1 with
+`Context overflow, not a quality result` and the token counts. It does not write a
+scorecard with 0% accuracy.
 
 ## Release gate
 

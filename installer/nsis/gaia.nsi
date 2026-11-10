@@ -96,10 +96,10 @@ InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "${ASSET_DIR}\installer-sidebar.bmp"
 
 !define MUI_WELCOMEPAGE_TITLE "Install ${PRODUCT_NAME} ${GAIA_VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "This installs the GAIA terminal UI and the GAIA agent for your user account only — no administrator rights needed.$\r$\n$\r$\nThe language model server (Lemonade) and the models are not included. Run 'gaia init' once after this finishes to set those up.$\r$\n$\r$\nClose any GAIA terminal windows before continuing."
+!define MUI_WELCOMEPAGE_TEXT "This installs the GAIA terminal UI and the GAIA agent for your user account only — no administrator rights needed.$\r$\n$\r$\nThe language model server (Lemonade) and the models are not included. Open GAIA (gaia-tui) after this finishes: on first launch it sets those up and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead.$\r$\n$\r$\nClose any GAIA terminal windows before continuing."
 
 !define MUI_FINISHPAGE_TITLE "${PRODUCT_NAME} is installed"
-!define MUI_FINISHPAGE_TEXT "Open a NEW terminal window (PATH changes do not reach terminals that are already open) and run:$\r$\n$\r$\n    gaia-tui$\r$\n$\r$\nIf GAIA reports that Lemonade is missing, run 'gaia init' to install it and pull a model."
+!define MUI_FINISHPAGE_TEXT "Open a NEW terminal window (PATH changes do not reach terminals that are already open) and run:$\r$\n$\r$\n    gaia-tui$\r$\n$\r$\nOn first launch GAIA sets up Lemonade and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\gaia-tui.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT_NAME} now"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"

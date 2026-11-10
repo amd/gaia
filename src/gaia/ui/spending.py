@@ -7,7 +7,8 @@ Prices are list prices from the one rate card GAIA keeps
 (:mod:`gaia.eval.bench.metering`), so the price shown before a model is picked,
 the cost recorded after a turn, and the turn's own estimate all agree. A model
 with no card has an unknown price: it is shown as unknown and counted apart,
-never as $0.
+never as $0. A priced turn whose usage never came back (a stopped answer) is
+counted apart the same way, as unreported rather than unpriced.
 
 The limit applies to Agent UI chats. Once this month's known spending reaches
 it, a cloud turn is refused with how to go on, until the user raises the limit
@@ -139,15 +140,19 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
                 "turns": 0,
                 "usd": 0.0,
                 "unpriced_turns": 0,
+                "unreported_turns": 0,
             },
         )
         entry["turns"] += 1
-        if r["usd"] is None:
+        if r["usd"] is not None:
+            entry["usd"] += r["usd"]
+        elif price_card(r["model"]) is None:
             entry["unpriced_turns"] += 1
         else:
-            entry["usd"] += r["usd"]
+            entry["unreported_turns"] += 1
     total = sum(e["usd"] for e in by_model.values())
     unpriced = sum(e["unpriced_turns"] for e in by_model.values())
+    unreported = sum(e["unreported_turns"] for e in by_model.values())
     limit = get_limit(db)
     allowed = db.get_setting(ALLOWED_MONTH_SETTING) == month
     if limit is None:
@@ -163,9 +168,95 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
         "total_usd": round(total, 4),
         "turns": len(rows),
         "unpriced_turns": unpriced,
+        "unreported_turns": unreported,
         "limit_usd": limit,
         "state": state,
         "by_model": sorted(by_model.values(), key=lambda e: -e["usd"]),
+        "price_source": PRICE_SOURCE,
+    }
+
+
+def _parse_instant(text: str) -> dt.datetime:
+    """An ISO timestamp as an aware datetime; a naive one is UTC, as SQLite writes it."""
+    value = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
+def _answered_at(answer: Dict[str, Any]) -> dt.datetime:
+    try:
+        return _parse_instant(answer["created_at"])
+    except (TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"Message {answer['message_id']} in chat {answer['session_id']} has an "
+            f"unreadable time {answer['created_at']!r}; inspect the messages table "
+            "in the chat database."
+        ) from e
+
+
+def _cloud_answers(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The answers a cloud model gave; a local answer cost nothing and is left out."""
+    return [
+        r for r in rows if r["cost"].get("kind") == "estimate" or r["remote"] is True
+    ]
+
+
+def _totals(answers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    priced = [a["cost"]["usd"] for a in answers if a["cost"].get("kind") == "estimate"]
+    return {
+        "usd": round(sum(priced), 6),
+        "answers": len(answers),
+        # Stopped or unpriced answers are counted apart, never as $0.
+        "unpriced_answers": len(answers) - len(priced),
+    }
+
+
+def chat_spend(
+    db, session_id: str, model_id: Optional[str], since: str
+) -> Dict[str, Any]:
+    """What this chat's cloud answers cost, and every chat's since *since*.
+
+    *since* is the start of the viewer's local day as an ISO instant, so "today"
+    follows the user's clock. Costs are the ones each answer's details show.
+    ``paid`` says whether *model_id* is a priced cloud model, the only time the
+    composer shows spending.
+    """
+    try:
+        start = _parse_instant(since)
+    except ValueError as e:
+        raise ValueError(
+            f"'since' must be an ISO timestamp such as 2026-11-05T08:00:00Z, got {since!r}."
+        ) from e
+    start_utc = start.astimezone(dt.timezone.utc)
+    # Sorted by instant: old and new timestamp formats don't sort together as text.
+    chat = sorted(
+        _cloud_answers(db.answer_costs(session_id=session_id)), key=_answered_at
+    )
+    today = [
+        a
+        for a in _cloud_answers(db.answer_costs(since_day=start_utc.date().isoformat()))
+        if _answered_at(a) >= start_utc
+    ]
+    return {
+        "paid": bool(model_id) and price_card(model_id) is not None,
+        "model": model_id,
+        "chat": {
+            **_totals(chat),
+            "items": [
+                {
+                    "message_id": a["message_id"],
+                    "created_at": a["created_at"],
+                    "model": a["model"],
+                    "kind": a["cost"].get("kind"),
+                    "usd": a["cost"].get("usd"),
+                }
+                for a in chat
+            ],
+        },
+        "today": {
+            **_totals(today),
+            "chats": len({a["session_id"] for a in today}),
+            "since": start_utc.isoformat(),
+        },
         "price_source": PRICE_SOURCE,
     }
 

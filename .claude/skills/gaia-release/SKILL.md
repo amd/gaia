@@ -139,10 +139,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    ## Full Changelog
 
-   **N commits** since v<previous>:
-
-   - `<sha>` — <subject>
-   - ...
+   **N commits** since v<previous>. The PR links above are the changelog; do not paste a raw `<sha> — <subject>` dump.
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
@@ -222,11 +219,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - the Agent UI's `package.json` and lockfile (formerly `bump-ui-version.mjs`);
    - the Terminal UI's hub manifest `version` (`hub/components/terminal-hub/gaia-agent.yaml`). Its six raw binaries publish to the Agent Hub R2 catalog because the flagship's `binaries.lock.json` pins them there, and `release_components.yml` gates the tag against the manifest. R2 paths are immutable, so a mismatch **fails the release** by design. `hub/components/agent-ui/` is no longer published and needs no bump;
    - the `docs.json` navbar label, `v<version> · Lemonade <LEMONADE_VERSION>`. It can lag `LEMONADE_VERSION`, because Lemonade bumps land outside release PRs;
-   - the flagship and chat agents' `amd-gaia>=` floors and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
+   - the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core the flagship's npm `README.md` and `SKILL.md` quote.
 
    Two consequences of the floors moving. The flagship's next `npm/CHANGELOG.md` entry must quote the new minimum (``Python CLI <version>+ on `PATH` ``): `test_npm_doc_min_version.py` reads the first such line, and the stamp never edits a past entry. And the floors live in files the flagship binary is frozen from, so a final needs a flagship release cut from this commit (Phase 3, step 4).
 
-   It leaves the flagship and chat agents' own versions alone: they follow their own sources until they join core's (#5172). Two `HELD` lines, the chat agent's `__init__.py` and the flagship npm lockfile's root version, are known drift held for the same reason. They print but don't fail.
+   It leaves the flagship agent's own version alone: it follows its own source until it joins core's (#5172).
 
 6. **Bump the Terminal UI's `min_gaia_version` by hand** to `<version>`. It is not stamped. It needs
    daemon host API v1.1, which no release before this one ships — so the release it
@@ -259,7 +256,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    after the notes passed the Python validator (see the escaping rule in step 3). Its error is
    misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
    docs.json navigation but the file does not exist` — the file exists, it just never parsed.
-   Pre-existing parse errors under `docs/plans/` and `docs/superpowers/` are reported but
+   Pre-existing parse errors under `docs/plans/` are reported but
    non-fatal; leave them alone.
 
 ### Gate 1 — show the user the draft
@@ -381,6 +378,17 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    **AppImage smoke jobs (`appimage-distro-matrix`, `appimage-userns-restricted`) are the most flaky** — `appimage-userns-restricted` has a 300s `state: ready` poll (raised from 90s to cover a first-run model download). On real failure, **stop** and fix root cause; on transient flake (timeout-only, no logic error), `gh run rerun $RUN_ID --failed` is acceptable.
 
+6. **Check the last RC's findings are fixed or deferred.** rc4 shipped rc3's bugs because their fix PRs (#6544–#6547, #6554) were still open when it was tagged. An open fix PR is not a fix. Skip the second query for `-rc1`.
+   ```bash
+   MS=$(gh api repos/amd/gaia/milestones --jq '.[] | select(.title | test("^v<version>( |$)")) | .title')
+   gh issue list --repo amd/gaia --milestone "$MS" --state open --limit 200
+   PREV=$(git tag --list 'v<version>-rc*' --sort=-v:refname | head -n 1)
+   # Bugs filed since the last RC without a milestone (#6540, #6551 slipped through this way)
+   gh issue list --repo amd/gaia --state open --label bug --limit 200 \
+     --search "no:milestone created:>=$(git log -1 --format=%cs "$PREV")"
+   ```
+   Each one is merged and closed, or moved to a later milestone with a comment giving the reason. Release-test findings carry the milestone because the testing skill's issue template files them with it.
+
 ### Gate 3 — green run on the merged commit
 
 Required before continuing:
@@ -388,6 +396,7 @@ Required before continuing:
 - `__version__` matches the target.
 - `validate_release_notes.py` passes.
 - For a final, `check_flagship_release.py` passes.
+- No open issue in the release milestone, and no unmilestoned bug since the last RC, unless deferred with a reason.
 - Build Installers run on the merged commit is **green** (not yellow, not "mostly green except smoke tests").
 
 Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the **merged SHA** (`$MERGED_SHA`). Ask: **"Pre-tag verification green on `<sha>` (release PR #N). Push tag `v<version>`?"** — the SHA and PR number being in the question text means Phase 4 can re-derive them even if the user resumes in a fresh shell.
@@ -406,11 +415,11 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | Installers (Windows setup, `.pkg`, `.deb`/`.rpm`) | built and attached by `publish.yml`, around the flagship the lock pins; no approval beyond `approve-publish` | built and attached by `publish.yml`, around the RC's own flagship |
 | `release_components.yml` | publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them, behind the `agent-publish` approval; attaches nothing on a tag | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
-| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
-| `release` branch, release-notes bot | run | skipped |
+| Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub. Inside the run, before the pre-release exists, every frozen core's real-engine check installs it from the run's artifacts (`build_core.yml` `flagship: artifact`, `GAIA_RC_FLAGSHIP_URL`), so the desktop installers wait for `rc-flagship` |
+| `release` branch, post-release notes check (`claude.yml` `release-notes`) | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
-`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. Every tag, RC or final, carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm` with `gaia-installers-SHA256SUMS.txt` — for an RC named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm`: `publish.yml`'s `tui-installers` builds them (around the RC's own flagship, or for a final the one the lock pins), `approve-publish` refuses to publish unless every leg installed cleanly, and `github-release-installers` attaches them. Inside, an RC's `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). Every tag also carries the one-step Windows setup (`gaia-<npm version>-win-x64-setup.exe`, built by `publish.yml`'s `windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup leaves it off the release and turns the run red via `windows-setup-missing`. None of the installer jobs takes an environment, so a final's installers never wait on `release_components.yml`'s `agent-publish` approval.
+`version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. Every tag, RC or final, carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm` with `gaia-installers-SHA256SUMS.txt` — for an RC named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm`: `publish.yml`'s `tui-installers` builds them (around the RC's own flagship, or for a final the one the lock pins), `approve-publish` refuses to publish unless every leg installed cleanly, and `github-release-installers` attaches them. Inside, an RC's `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). Every tag also carries the one-step Windows setup (`gaia-<npm version>-win-x64-setup.exe`, built by `publish.yml`'s `windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup turns the run red via `windows-setup-missing`: a final publishes nothing until it passes, and an RC ships without it and says so in its notes. `release-assets-complete` then reads the published release and fails the run, naming each file, if a promised installer is not on it (`util/check_release_assets.py`). `release_components.yml` no longer attaches anything on a tag, so a green publish run is what proves a complete release. None of the installer jobs takes an environment, so a final's installers never wait on `release_components.yml`'s `agent-publish` approval.
 
 ### Steps
 
@@ -428,7 +437,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds pass; `ci-green` only reports CI on an RC (warnings, never a block). Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -482,9 +491,18 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    gh run list --repo amd/gaia --workflow publish.yml --limit 3
    ```
 
-   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
+   The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → release-assets-complete + redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
-   `ci-green` requires a passing run of `lint.yml`, `test_unit.yml` and `test_gaia_cli_linux.yml` on the tagged commit (`util/check_release_ci.py`). Most main commits have none (the next merge cancels their runs), so it dispatches the missing ones against the tag and waits up to ~80 min alongside the builds. A red one stops the release before anything publishes.
+   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it does depends on the tag, and that file is the only list:
+
+   | | Blocks publishing | Reported only (job summary + warning) |
+   |---|---|---|
+   | **RC** `vX.Y.Z-rcN` (`RC_REPORTED`) | nothing — tests never hold a candidate | `lint.yml`; the Linux and import-floor jobs of `test_unit.yml`; its macOS, Windows and offline-integration jobs; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; the Windows and Linux jobs of `test_npu_agent_chat.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`, `FINAL_ADVISORY`) | every job of `lint.yml`, `test_unit.yml` (from a dispatched or nightly run only: push and merge-queue runs select tests, so the gate dispatches one), `test_gaia_cli_linux.yml`; the Windows job of `test_npu_agent_chat.yml` (an agent turn on the NPU); plus `release_train_dryrun.yml` | the Linux job of `test_npu_agent_chat.yml`, read once with no dispatch or wait, until the Linux Strix Halo runners lock enough memory for the NPU model (#6764) |
+
+   On an RC the gate reads each check once, with no dispatch and no wait, writes each one's state (passed / failed / still running / no run on this commit) to the job summary with a `::warning::` for each that is not green, and exits 0; `approve-publish` does not need `ci-green` on an RC either. What still holds an RC is its own build and the smoke tests of those artifacts (`build-pypi`, `build-npm`, `build-desktop-installers` with its installer smoke jobs, `rc-flagship`, `tui-installers-complete`). The two source-tree test runs inside the build (`build-npm`'s backend pytest and the installers' custom-agent MCP harness) run on finals only. Evals never gate (`eval_flagship.yml` reports separately).
+
+   On a final, most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. An RC's warnings are the final's blockers, except the Linux NPU row, so fix them before tagging the final.
 
 ---
 
@@ -530,6 +548,8 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
 
+   **Then bring the Full Changelog up to the tag.** The notes are written before the tag, so they cannot list the notes commit itself or anything merged after it. `claude.yml`'s `release-notes` job runs once the final publishes and only reads: it fails, and files one issue keyed `release-notes/v<version>`, when `docs/releases/v<version>.mdx` is missing at the tag or the published body's `**N commits**` (or its listed lines) disagrees with `git log <previous-final>..v<version>`. It never writes notes, bumps `version.py`, pushes, or edits the release. To clear it: regenerate the list against the tag with the Phase 1 recipe, merge that in a PR, run `gh release edit v<version> --repo amd/gaia --notes-file <body>` with the corrected body, and re-run the job; a green run closes the issue.
+
 3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — reuse the `What's New` bullets near-verbatim plus any Bug Fix worth surfacing. Same *Notes format* rules apply: bullets, plain, factual, no emoji.
 
    **The template and format rules live in**
@@ -541,6 +561,39 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 ### Gate 6 — present, do not auto-post
 
 Show the user the smoke-test output, the artifact list, and the drafted Discord announcement in a fenced markdown block. Ask: **"Post the announcement to Discord?"** Wait for explicit yes — Discord posting is human-only (Claude does not have Discord access here, and announcements are visible to all users).
+
+---
+
+## Phase 7 — Watch the release, and recover if it is broken
+
+**Goal:** catch a bad release while few users have it, and stop it spreading.
+
+### Watch (first 24 hours)
+
+1. Check new issues: `gh issue list --repo amd/gaia --search "v<version>" --state open --limit 30` (also search `v<version>-rc`, since an RC-channel user reports against the RC tag), and the Discord support channel if the user relays it. Two reports of the same install or startup failure is a bad release.
+2. Re-run the Phase 6 smoke test on a clean machine (or a clean `uv venv`) and the one-line installer, not only on the machine that built the release.
+
+### Shipped but broken — contain first, then fix forward
+
+Never delete the tag, the GitHub release, or a PyPI/npm version: other machines already hold them. Contain in this order, and ask the user before each step (all are visible to every user):
+
+1. **Stop the Electron auto-updater from offering it.** With no R2 feed configured, the updater takes the highest-versioned non-draft GitHub release that carries this platform's `latest*.yml`. It skips pre-releases only for installs that have not opted into release candidates, and it ignores GitHub's `Latest` badge. Demote the release, then remove its update manifests so prerelease-channel installs stop seeing it too:
+   ```bash
+   gh release edit v<bad> --repo amd/gaia --prerelease --latest=false
+   gh release edit v<previous-good> --repo amd/gaia --latest   # for the releases page, not the updater
+   gh release delete-asset v<bad> latest.yml --repo amd/gaia --yes   # repeat for latest-mac.yml, latest-linux*.yml
+   ```
+   The installers stay downloadable, so this still follows "never delete the release or tag". Machines that already updated need the in-app rollback to a previous release, or the fixed version.
+2. **Stop `pip install amd-gaia` resolving to it.** Yank the version on PyPI (project page, Manage, Releases, Yank, with a reason). A yanked version still installs when pinned exactly; it stops being the default.
+3. **Stop `npm install @amd-gaia/agent-ui` resolving to it.** Point `latest` back and deprecate the bad version:
+   ```bash
+   npm dist-tag add @amd-gaia/agent-ui@<previous-good> latest
+   npm deprecate @amd-gaia/agent-ui@<bad> "Broken release, use <fixed-or-previous-good>"
+   ```
+4. **Say so.** Add a `## Known Issues` entry to `docs/releases/v<bad>.mdx` linking the tracking issue, and post a short notice wherever the original announcement went.
+5. **Fix forward** as the next patch through Phases 1 to 6, with an RC (Phase 3.5) for anything that reached users through the installer path.
+
+Npm versions cannot be re-published with different bytes (see Notes), so a fix is always a new version.
 
 ---
 
@@ -560,5 +613,6 @@ Do not bundle two phases into one user prompt. The gates exist for review.
 - The argument-passing convention is the *target tag*, not the previous tag. If the user says "release v0.17.5", that is what gets created — the previous tag is the newest final tag (Phase 1 step 1's `PREV`) — never an `-rcN` tag, or the notes would cover only the changes since the candidate.
 - Hotfix releases (`v0.15.4.1`) follow the same flow; the `validate_release_notes.py` check accepts the four-part form.
 - Release candidates are `v<version>-rcN` only (Phase 3.5). There is no RC form of a four-part hotfix tag.
-- Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and migration notes if breaking. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
+- Minor/major releases (`v0.18.0`, `v1.0.0`) need a richer notes structure — a "Highlights" block, the `pip install` instructions, and — when anything is breaking — a mandatory migration section under `## Breaking Changes` saying what to change, old form to new, per item. The skeleton above is patch-shaped; expand for non-patch releases by mirroring the prior minor/major release notes.
+- Supply chain: PyPI artifacts are Sigstore-signed and `@amd-gaia/agent-ui` is published with npm `--provenance` (`publish.yml`). No SBOM or SLSA provenance is produced for the PyPI or Electron artifacts, so do not claim one in release notes.
 - If the publish run fails partway through (e.g. PyPI publishes but npm doesn't), do **not** delete the tag and start over. Resolve the failing job, rerun only that job (`gh run rerun <run-id> --failed`), and let the rest of the pipeline complete idempotently. The tag is the source of truth — preserve it. Every npm publish (`publish.yml` and the `release_agent_*.yml` agent releases) goes through `util/npm_publish_once.py`, so a re-run skips a version npm already holds with the same bytes and fails loudly if npm holds different bytes under it — that version can never be corrected; ship a new one.

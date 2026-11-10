@@ -12,7 +12,7 @@
  *      ('rtl' mirrors the layout), and `showEnglishInBrackets`.
  *   3. Import it and add it to `LOCALES` below.
  * The Settings > General language list and `<html lang dir>` pick it up; no
- * component changes.
+ * component changes. `jsx/` styles the bracketed English of any such language.
  *
  * A new string goes into `locales/en.ts` first, then into every other locale.
  */
@@ -113,14 +113,15 @@ export function translate(code: string, key: MessageKey, params?: Params): strin
 /**
  * A line `build` assembles from several messages, written once per language and
  * bracketed once: "فهرس المستندات، استعلم في ملف (Indexed documents, queried file)",
- * not a bracket after every piece.
+ * not a bracket after every piece. `build` also gets the language it is writing, so a
+ * time or date in the English half can be English too.
  */
-export function compose(code: string, build: (say: Say) => string): string {
+export function compose(code: string, build: (say: Say, code: string) => string): string {
     const locale = getLocale(code);
     const rtl = locale.meta.dir === 'rtl';
-    const own = build((key, params) => fill(locale, key, params, rtl));
+    const own = build((key, params) => fill(locale, key, params, rtl), code);
     if (!locale.meta.showEnglishInBrackets || locale === en) return own;
-    const english = build((key, params) => fill(en, key, params, rtl));
+    const english = build((key, params) => fill(en, key, params, rtl), en.meta.code);
     if (own === english) return own;
     return `${isolate(own, locale.meta.dir)}${BRACKET_JOIN}${isolate(`(${english})`, 'ltr')}`;
 }
@@ -143,6 +144,49 @@ const BRACKET_JOIN = ' ';
 export function bracketParts(label: string): string[] {
     const at = label.indexOf(`${PDI}${BRACKET_JOIN}${LRI}(`);
     return at < 0 ? [label] : [label.slice(0, at + 1), label.slice(at + 1 + BRACKET_JOIN.length)];
+}
+
+export interface GlossPart {
+    readonly text: string;
+    readonly gloss: boolean;
+}
+
+/** Where the isolate opened at `start` closes; a name inside the English nests its own. */
+function isolateEnd(text: string, start: number): number {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+        const c = text[i];
+        if (c === LRI || c === RLI || c === FSI) depth++;
+        else if (c === PDI && --depth === 0) return i;
+    }
+    return -1;
+}
+
+/**
+ * `text` split around each "(<English>)" half of a bracketed label, isolates kept
+ * so bidi order doesn't change; null when it holds none. `text` may be that half
+ * alone, as `bracketParts` hands it to a renderer.
+ */
+export function glossParts(text: string): GlossPart[] | null {
+    const opening = `${LRI}(`;
+    const joined = `${PDI}${BRACKET_JOIN}${opening}`;
+    const parts: GlossPart[] = [];
+    let done = 0;
+    let from = text.startsWith(opening) ? -1 : 0;
+    for (;;) {
+        const at = from < 0 ? -1 : text.indexOf(joined, from);
+        if (from >= 0 && at < 0) break;
+        const start = from < 0 ? 0 : at + 1 + BRACKET_JOIN.length;
+        const end = isolateEnd(text, start);
+        if (end < 0) break;
+        if (start > done) parts.push({ text: text.slice(done, start), gloss: false });
+        parts.push({ text: text.slice(start, end + 1), gloss: true });
+        done = end + 1;
+        from = end;
+    }
+    if (parts.length === 0) return null;
+    if (done < text.length) parts.push({ text: text.slice(done), gloss: false });
+    return parts;
 }
 
 /** The `.one` / `.other` half of a plural message, by the English rule. */

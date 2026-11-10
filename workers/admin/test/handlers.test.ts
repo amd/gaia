@@ -1,7 +1,15 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Endpoint tests against real SQLite: the SQL, the joins and the response shape the pages rely on.
+
+import { describe, expect, it } from "vitest";
+import { handleApi } from "../src/api";
+import { insertMany, writeAtomic } from "../src/collector";
+import { memoryD1 } from "./d1";
+
 const DAY = 86_400_000;
-// Use a fixed reference date to avoid timing-dependent test failures
-const FIXED_REFERENCE_DATE = new Date('2024-01-01T00:00:00.000Z').getTime();
-const iso = (daysAgo: number) => new Date(FIXED_REFERENCE_DATE - daysAgo * DAY).toISOString();
+const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY).toISOString();
 const day = (daysAgo: number) => iso(daysAgo).slice(0, 10);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const get = async (db: D1Database, path: string, q = ""): Promise<any> =>

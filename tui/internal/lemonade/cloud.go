@@ -160,9 +160,9 @@ type Model struct {
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
 
 // Window is the context window to show: the provider's for a cloud model, the
-// configured one for a local model. Older Lemonade lists only ContextLength.
+// configured one for a local model.
 func (m Model) Window() int {
-	if m.Cloud() && m.MaxContextWindow > 0 {
+	if m.Cloud() {
 		return m.MaxContextWindow
 	}
 	return m.ContextLength
@@ -254,7 +254,8 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		case 401, 403:
 			return fmt.Errorf("Authentication was rejected. Check the Lemonade or provider credential and retry")
 		case 404:
-			return fmt.Errorf("Cloud setup is unavailable. Update Lemonade to 11.8.1 or later and retry")
+			return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
+				"the oldest version GAIA supports. %s", MinExternalVersion, UpgradeHint)
 		case 409:
 			return fmt.Errorf("Lemonade has an environment key for this provider. It takes precedence; the pasted key was not saved. Leave the key blank to use it")
 		default:
@@ -284,14 +285,17 @@ func (c *Client) Models(ctx context.Context, provider string) ([]Model, error) {
 	}
 	var out []Model
 	for _, m := range reply.Data {
-		chat := true
+		labeledChat, other := false, false
 		for _, label := range m.Labels {
 			switch label {
 			case "embeddings", "image", "reranker", "audio", "tts", "stt":
-				chat = false
+				other = true
+			case "chat":
+				labeledChat = true
 			}
 		}
-		if !chat || m.ID == "" {
+		// `chat` wins, as in isChatModel: FLM omni models are labeled `chat` and `audio`.
+		if (other && !labeledChat) || m.ID == "" {
 			continue
 		}
 		if provider == "local" {

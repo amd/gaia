@@ -55,6 +55,47 @@ def test_a_daemon_whose_install_is_gone_is_out_of_date(tmp_path):
     assert why and "is gone" in why
 
 
+def test_the_desktop_app_replaces_a_daemon_from_its_old_venv(tmp_path, monkeypatch):
+    # The venv the previous app built stays on disk, so its version.py still
+    # matches; to the frozen app it is another release all the same.
+    path = _version_file(tmp_path, '__version__ = "0.25.3"\n')
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    why = runs_replaced_install(_inst(gaia_version="0.25.3", version_file=str(path)))
+    assert why == "it runs GAIA 0.25.3, and this app ships 0.25.4"
+
+
+def test_the_desktop_app_keeps_its_own_daemon(tmp_path, monkeypatch):
+    gone = tmp_path / "_internal" / "gaia" / "version.py"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    assert (
+        runs_replaced_install(_inst(gaia_version="0.25.4", version_file=str(gone)))
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "theirs, ours, replaced",
+    [
+        ("0.25.3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4rc4", True),
+        ("", "0.25.4", True),
+        ("0.25.5", "0.25.4", False),
+        ("0.25.4", "0.25.4rc4", False),
+    ],
+)
+def test_a_frozen_gaia_replaces_only_an_older_daemon(
+    tmp_path, monkeypatch, theirs, ours, replaced
+):
+    # Two installs of different releases would otherwise restart each other's daemon.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", ours)
+    why = runs_replaced_install(_inst(gaia_version=theirs, version_file=""))
+    assert bool(why) is replaced
+
+
 def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
     monkeypatch.setattr(instance.paths, "instance_path", lambda: tmp_path / "i.json")
     monkeypatch.setattr(instance.paths, "ensure_host_dir", lambda: None)
@@ -272,6 +313,29 @@ def test_a_daemon_that_cannot_be_asked_to_stop_says_what_to_run(running, monkeyp
     with pytest.raises(DaemonError, match="gaia daemon restart"):
         client.start_or_attach(timeout=1)
     assert calls["spawned"] == 0
+
+
+def test_replacing_before_a_server_swap_ignores_busy(running, monkeypatch):
+    """The swap cuts the work off anyway, and the old daemon would undo it."""
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "the GAIA terminal app is still using it"
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+
+    why = client.replace_outdated_daemon()
+
+    assert "0.25.1" in why
+    assert calls == {"shutdown": [4242], "spawned": 0}
+
+
+def test_replacing_leaves_a_current_or_missing_daemon(running, monkeypatch):
+    state, calls, _path = running
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+    assert client.replace_outdated_daemon() is None
+
+    state["inst"] = None
+    assert client.replace_outdated_daemon() is None
+    assert calls == {"shutdown": [], "spawned": 0}
 
 
 class _Response:

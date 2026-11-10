@@ -3,9 +3,8 @@
 """CORE + bundle definitions for the ChatAgent tool loader (#1449).
 
 One ``DOC_*`` / ``FULL_*`` pair per profile that supports dynamic tool loading,
-wired together by :data:`PROFILE_TOOL_CONFIGS`. CORE is the small always-on set
-(cap- and eviction-exempt); bundles are cohesion groups pulled in whole when any
-member is semantically matched.
+wired together by :data:`PROFILE_TOOL_CONFIGS`. CORE is the list every session starts on;
+bundles group the rest, so a new tool forces a conscious decision.
 
 A profile's ``CORE`` ∪ all its bundle members must equal that profile's registry
 **exactly**. The drift guard is the CI test
@@ -25,13 +24,12 @@ from typing import Dict, FrozenSet, List
 
 from gaia.agents.base.tool_loader import ToolBundle
 
-# Always-on set (11 tools): memory v2, file-read + RAG-query entry points, loop
+# Always-on set (12 tools): memory v2, file-read + RAG-query entry points, loop
 # control, and the Part-2 escape hatch. The design sketch listed a "finish" tool,
 # dropped here — turn completion is protocol-level in GAIA, there is no such
-# registry tool. ``load_tools`` (#1450) is CORE-only — never in a bundle — so it
-# renders in both the text prompt and the native ``tools=`` schema every active
-# turn, cap- and eviction-exempt, giving native models a way back to any tool a
-# semantic miss didn't surface.
+# registry tool. ``search_tools`` is CORE-only — never in a bundle — so it renders
+# in both the text prompt and the native ``tools=`` schema every turn, giving
+# models a way to any tool retrieval didn't surface.
 DOC_CORE_TOOLS = frozenset(
     {
         # memory v2 — persistent recall is always relevant
@@ -39,6 +37,7 @@ DOC_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # file-read + RAG-query entry points — the doc profile's reason to exist
         "read_file",
@@ -47,8 +46,8 @@ DOC_CORE_TOOLS = frozenset(
         # loop control — autonomous-turn signalling
         "set_loop_state",
         "request_user_input",
-        # escape hatch (#1450) — always-on explicit tool loader for native models
-        "load_tools",
+        # finds any tool or skill the list lacks
+        "search_tools",
         "read_tool_output",
     }
 )
@@ -175,6 +174,7 @@ DOC_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -190,15 +190,15 @@ DOC_BUNDLES = [
 
 # -- "full" profile (the flagship GaiaAgent) ---------------------------------
 #
-# Same contract as the DOC_* pair above, sized for the ``full`` registry: 66
+# Same contract as the DOC_* pair above, sized for the ``full`` registry: 67
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (16 tools). Deliberately a smaller share of the registry than
+# Always-on set (27 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
-# runs), the ``load_tools`` escape hatch, ``read_tool_output`` to page
+# runs), ``search_tools`` to reach the rest, ``read_tool_output`` to page
 # through a result that was cut short, ``load_skill`` for the skill
 # catalogue, two universal entry points -- ``read_file`` and
 # ``query_documents`` -- that answer "what is in this file / what do my
@@ -206,10 +206,8 @@ DOC_BUNDLES = [
 # rather than guessed, and the two file-edit tools. Editing is
 # always on because semantic selection cannot rank it: on explicit edit
 # requests the edit tools lost the dynamic slots to unrelated bundles (#3752).
-# Everything else, shell and the web included, is a bundle: it arrives when the
-# turn asks for it. ``query_documents`` is a bundle member too, so a
-# document-shaped turn pulls its whole cohort in with it; the ``file_edit``
-# cohort is now entirely CORE.
+# The rest of the set is what real sessions call most. Everything else is a
+# bundle, reached by the session's one move to the full list.
 FULL_CORE_TOOLS = frozenset(
     {
         # memory v2 -- persistent recall is always relevant
@@ -217,6 +215,7 @@ FULL_CORE_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         # universal entry points
         "read_file",
@@ -231,18 +230,30 @@ FULL_CORE_TOOLS = frozenset(
         "set_loop_state",
         "request_user_input",
         "sleep",
-        # escape hatch (#1450)
-        "load_tools",
+        # finds any tool or skill the list lacks
+        "search_tools",
         "read_tool_output",
         # the skill catalogue (#3764) tells the model to call this even when
         # the skills bundle was not selected.
         "load_skill",
+        # the next most-called tools in the eval baseline: core alone covered 41%
+        # of calls, these bring it to 77%, and a turn that needs none of the rest
+        # never pays for them
+        "query_specific_file",
+        "index_document",
+        "summarize_document",
+        "analyze_data_file",
+        "find_files",
+        "search_file",
+        "browse_directory",
+        "search_web",
+        "fetch_page",
+        "run_shell_command",
     }
 )
 
 # Cohesion groups covering the rest of the full-profile registry. Same
-# <=6-member rule as DOC_BUNDLES so one pull-in cannot exhaust the dynamic-slot
-# budget (see GaiaAgentConfig.dynamic_tools_max).
+# bundle per concern, as in DOC_BUNDLES.
 FULL_BUNDLES = [
     ToolBundle(
         name="rag_query",
@@ -506,6 +517,7 @@ FULL_BUNDLES = [
                 "recall",
                 "update_memory",
                 "forget",
+                "forget_everything",
                 "search_past_conversations",
             }
         ),
@@ -555,7 +567,7 @@ FULL_BUNDLES = [
     # index_document and summarize_document ride along on purpose. They live in
     # the rag bundles too, but a recording turn does not reliably select those,
     # and without them in reach the model pulled chunks with query_documents and
-    # asked the user what to dig into instead of summarizing. The four tools are
+    # asked the user what to dig into instead of summarizing. These tools are
     # one pipeline; they have to arrive together.
     ToolBundle(
         name="media_transcription",
@@ -563,17 +575,21 @@ FULL_BUNDLES = [
             {
                 "transcribe_media",
                 "refine_transcript",
+                "analyze_transcript",
+                "export_transcript",
                 "index_document",
                 "summarize_document",
             }
         ),
         description=(
             "Transcribe speech from an audio or video recording (mp4, mkv, "
-            "mov, m4a, mp3, wav) into a text transcript, then correct "
-            "mis-hearings and label the speakers — meetings, calls, "
-            "interviews, voice memos. Use for any request to transcribe, "
-            "summarize, take notes on, or pull action items out of a "
-            "recording."
+            "mov, m4a, mp3, wav) or a video link such as a YouTube URL into a "
+            "timestamped text transcript, then "
+            "label the speakers, list everything of a kind with timestamps, "
+            "or write subtitles — meetings, calls, interviews, voice memos, "
+            "lectures, workshops, tutorials, podcasts. Use for any request to "
+            "transcribe, summarize, take notes on, or pull action items or a "
+            "structured list out of a recording."
         ),
     ),
 ]
@@ -618,6 +634,7 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "recall",
         "update_memory",
         "forget",
+        "forget_everything",
         "search_past_conversations",
         "index_codebase",
         "search_code_index",

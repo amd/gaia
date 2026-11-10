@@ -6,18 +6,27 @@ import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSqu
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
-import type { Schedule, ScheduleResult, ParsedSchedule } from '../types';
+import type { Schedule, ScheduleResult, ParsedSchedule, ScheduleDescription } from '../types';
 import { parseScheduleInput } from '../services/api';
+import { isMessageKey, stripIsolates, type MessageKey, type Say } from '../i18n/registry';
+import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import './ScheduleManager.css';
 
 /** How long the Delete button waits for its "Confirm?" click. */
 export const CONFIRM_DELETE_MS = 8000;
 
-/** Format an ISO date string to a relative or short time. */
-function formatTime(iso: string | null, now?: Date): string {
-    if (!iso) return 'never';
+const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
+    active: 'schedules.status.active',
+    paused: 'schedules.status.paused',
+    cancelled: 'schedules.status.cancelled',
+};
+
+/** Format an ISO date string to a relative or short time; `locale` formats dates (undefined: the PC's). */
+function formatTime(iso: string | null, say: Say, now?: Date, locale?: string): string {
+    if (!iso) return say('schedules.time.never');
     const d = new Date(iso);
     const current = now || new Date();
     const diffMs = current.getTime() - d.getTime();
@@ -26,29 +35,29 @@ function formatTime(iso: string | null, now?: Date): string {
     if (diffSecs < 0) {
         // Future time
         const futureSecs = Math.abs(diffSecs);
-        if (futureSecs < 60) return `in ${futureSecs}s`;
+        if (futureSecs < 60) return say('schedules.time.inSeconds', { n: futureSecs });
         const futureMins = Math.floor(futureSecs / 60);
-        if (futureMins < 60) return `in ${futureMins}m`;
+        if (futureMins < 60) return say('schedules.time.inMinutes', { n: futureMins });
         const hrs = Math.floor(futureMins / 60);
-        if (hrs < 24) return `in ${hrs}h`;
-        return `in ${Math.floor(hrs / 24)}d`;
+        if (hrs < 24) return say('schedules.time.inHours', { n: hrs });
+        return say('schedules.time.inDays', { n: Math.floor(hrs / 24) });
     }
-    if (diffSecs < 60) return 'just now';
+    if (diffSecs < 60) return say('time.justNow');
     const mins = Math.floor(diffSecs / 60);
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 60) return say('time.minutesAgo', { n: mins });
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    if (hrs < 24) return say('time.hoursAgo', { n: hrs });
+    return d.toLocaleDateString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 /** Next run as the user's local clock time, plus how far away it is. */
-export function formatNextRun(iso: string | null, now?: Date): string {
-    if (!iso) return 'never';
-    const relative = formatTime(iso, now);
+export function formatNextRun(iso: string | null, now?: Date, say: Say = tEn.bare, locale?: string): string {
+    if (!iso) return say('schedules.time.never');
+    const relative = formatTime(iso, say, now, locale);
     const d = new Date(iso);
     if (d.getTime() <= (now || new Date()).getTime()) return relative;
-    const clock = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    return `${clock} (${relative})`;
+    const clock = d.toLocaleString(locale, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return say('schedules.time.clockIn', { clock, relative });
 }
 
 /** Returns true if the ISO timestamp is less than 60 seconds in the future. */
@@ -58,34 +67,88 @@ function isCountdownRange(iso: string | null): boolean {
     return diffMs > 0 && diffMs < 60000;
 }
 
-/** Format "HH:MM" to "H:MM AM/PM". */
-function formatTimeOfDay(time: string): string {
-    const [h, m] = time.split(':').map(Number);
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+/** A clock time as the UI language writes it, 12h or 24h. */
+function formatClock(t: Translate, hour: number, minute = 0): string {
+    const at = new Date(2000, 0, 1, hour, minute);
+    return new Intl.DateTimeFormat(dateLocale(t), { hour: 'numeric', minute: '2-digit' }).format(at);
 }
 
-/** Format hour number to "H AM/PM". */
-function formatHour(h: number): string {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    return `${h12} ${ampm}`;
+function formatTimeOfDay(time: string, t: Translate): string {
+    const [h, m] = time.split(':').map(Number);
+    return formatClock(t, h, m);
+}
+
+/** `base.<CLDR plural form>` for `n` in the UI language; null when that form has no message. */
+function countedKey(base: string, n: number, t: Translate): MessageKey | null {
+    const key = `${base}.${new Intl.PluralRules(t.locale).select(n)}`;
+    return isMessageKey(key) ? key : null;
+}
+
+const isWeekdays = (days: number[]) => days.length === 5 && days.every((d) => d < 5);
+const isWeekends = (days: number[]) => days.length === 2 && days.includes(5) && days.includes(6);
+
+/** Days after an interval or window: "weekdays", "Monday, Wednesday". */
+function dayPhrase(days: number[], t: Translate, say: Say): string | null {
+    if (isWeekdays(days)) return say('schedules.desc.days.weekdays');
+    if (isWeekends(days)) return say('schedules.desc.days.weekends');
+    if (days.length === 7) return say('schedules.desc.days.every');
+    const key = countedKey('schedules.desc.dayList', days.length, t);
+    if (!key) return null;
+    const names = days.map((d) => say(`schedules.dayName.${d}` as MessageKey)).join(say('schedules.desc.dayJoin'));
+    return say(key, { days: names });
+}
+
+/**
+ * One language's wording of `parts`; null when a shape has no wording here.
+ * `t` picks the plural form (the UI language's), `clock` writes the times.
+ */
+function schedulePhrase(parts: ScheduleDescription, t: Translate, say: Say, clock: Translate): string | null {
+    const { kind, count, unit, days, time, start_hour, end_hour } = parts;
+    const at = (when: string) => (time ? say('schedules.desc.at', { when, time: formatTimeOfDay(time, clock) }) : when);
+    if (kind === 'every' || kind === 'window') {
+        const key = count && unit ? countedKey(`schedules.span.${unit}`, count, t) : null;
+        const on = days ? dayPhrase(days, t, say) : undefined;
+        if (!key || on === null) return null;
+        const span = say(key, { n: count! });
+        if (kind === 'every') {
+            return on ? say('schedules.desc.everyOn', { span, days: on }) : say('schedules.desc.every', { span });
+        }
+        if (start_hour == null || end_hour == null) return null;
+        const hours = say('schedules.hours', { start: formatClock(clock, start_hour), end: formatClock(clock, end_hour) });
+        return on ? say('schedules.desc.windowOn', { span, hours, days: on }) : say('schedules.desc.window', { span, hours });
+    }
+    if (kind === 'daily') return time ? at(say('schedules.desc.daily')) : null;
+    if (kind !== 'days' || !days?.length) return null;
+    if (days.length === 7) return at(say('schedules.desc.daily'));
+    if (isWeekdays(days)) return at(say('schedules.desc.weekdays'));
+    if (isWeekends(days)) return at(say('schedules.desc.weekends'));
+    const on = dayPhrase(days, t, say);
+    return on && at(say('schedules.desc.onDays', { days: on }));
+}
+
+/**
+ * When a schedule runs, worded in the UI language from the backend's parts;
+ * null when a shape has no wording here, so the caller shows the English.
+ */
+export function describeSchedule(parts: ScheduleDescription | null | undefined, t: Translate): string | null {
+    if (!parts || schedulePhrase(parts, t, t.bare, t) === null) return null;
+    return t.compose((say, code) => schedulePhrase(parts, t, say, translator(code)) ?? '');
 }
 
 /** Format days_of_week array to human string. */
-function formatDays(days: number[]): string {
-    const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    if (days.length === 5 && !days.includes(5) && !days.includes(6)) return 'Weekdays';
-    if (days.length === 2 && days.includes(5) && days.includes(6)) return 'Weekends';
-    if (days.length === 7) return 'Every day';
-    return days.map(d => names[d]).join(', ');
+function formatDays(days: number[], say: Say): string {
+    if (days.length === 5 && !days.includes(5) && !days.includes(6)) return say('schedules.days.weekdays');
+    if (days.length === 2 && days.includes(5) && days.includes(6)) return say('schedules.days.weekends');
+    if (days.length === 7) return say('schedules.days.every');
+    return days.map((d) => say(`schedules.day.${d}` as MessageKey)).join(say('schedules.days.join'));
 }
 
 function ScheduleCard({ schedule }: { schedule: Schedule }) {
+    const t = useT();
     const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
+    const described = describeSchedule(schedule.description_parts, t);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const clearConfirmTimer = useCallback(() => {
@@ -177,58 +240,60 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             onClick={() => selectSchedule(isSelected ? null : schedule.name)}
         >
             <div className="schedule-card-header">
-                <span className="schedule-card-name">{schedule.name}</span>
-                <span className={`schedule-card-status ${schedule.status}`}>{schedule.status}</span>
+                <span className="schedule-card-name" dir="auto">{schedule.name}</span>
+                <span className={`schedule-card-status ${schedule.status}`}>{t(STATUS_LABEL[schedule.status])}</span>
             </div>
-            <div className="schedule-card-prompt">{schedule.prompt}</div>
+            <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
             <div className="schedule-card-meta">
-                <span title={schedule.description}><Clock size={11} /> {schedule.description}</span>
-                <span>Runs: {schedule.run_count}</span>
-                {schedule.error_count > 0 && <span>Errors: {schedule.error_count}</span>}
-                <span>Last: {formatTime(schedule.last_run_at)}</span>
-                <span>Next: {formatNextRun(schedule.next_run_at, now)}</span>
+                <span title={stripIsolates(described ?? schedule.description)}><Clock size={11} /> {described ?? <bdi>{schedule.description}</bdi>}</span>
+                <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
+                {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
+                <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
+                <span>{t.compose((say) => say('schedules.card.next', { when: formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
             </div>
             {schedule.last_error && (
-                <div className="schedule-card-error">Last run failed: {schedule.last_error}</div>
+                <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
             )}
             <div className="schedule-card-actions">
                 {schedule.session_id && (
-                    <button className="btn-sm chat" onClick={handleOpenChat} title="Open chat session">
-                        <MessageSquare size={11} /> Open Chat
+                    <button className="btn-sm chat" onClick={handleOpenChat} title={t('schedules.card.openChatTitle')}>
+                        <MessageSquare size={11} /> {t('schedules.card.openChat')}
                     </button>
                 )}
                 <button
                     className="btn-sm"
                     onClick={handleRunNow}
                     disabled={schedule.running}
-                    title="Run it once now, to try it. Its next scheduled run stays as it is."
+                    title={t('schedules.card.runNowTitle')}
                 >
-                    <Zap size={11} /> {schedule.running ? 'Running…' : 'Run now'}
+                    <Zap size={11} /> {t(schedule.running ? 'schedules.card.running' : 'schedules.card.runNow')}
                 </button>
-                <button className="btn-sm" onClick={handleToggleStatus} title={schedule.status === 'active' ? 'Pause' : 'Resume'}>
-                    {schedule.status === 'active' ? <><Pause size={11} /> Pause</> : <><Play size={11} /> Resume</>}
+                <button className="btn-sm" onClick={handleToggleStatus} title={t(schedule.status === 'active' ? 'schedules.card.pause' : 'schedules.card.resume')}>
+                    {schedule.status === 'active'
+                        ? <><Pause size={11} /> {t('schedules.card.pause')}</>
+                        : <><Play size={11} /> {t('schedules.card.resume')}</>}
                 </button>
-                <button className={`btn-sm danger`} onClick={handleDelete} title="Delete">
-                    <Trash2 size={11} /> {confirmDelete ? 'Confirm?' : 'Delete'}
+                <button className={`btn-sm danger`} onClick={handleDelete} title={t('schedules.card.delete')}>
+                    <Trash2 size={11} /> {t(confirmDelete ? 'schedules.card.confirmDelete' : 'schedules.card.delete')}
                 </button>
             </div>
 
             {isSelected && (
                 <div className="schedule-results">
-                    <h4>Execution history</h4>
+                    <h4>{t('schedules.history')}</h4>
                     {resultsLoading ? (
-                        <p className="schedule-results-empty">Loading...</p>
+                        <p className="schedule-results-empty">{t('schedules.historyLoading')}</p>
                     ) : results.length === 0 ? (
-                        <p className="schedule-results-empty">No executions yet</p>
+                        <p className="schedule-results-empty">{t('schedules.historyEmpty')}</p>
                     ) : (
                         <div className="schedule-results-list">
                             {results.map((r) => (
                                 <div key={r.id} className="schedule-result-item">
-                                    <div className="schedule-result-time">{formatTime(r.executed_at)}</div>
+                                    <div className="schedule-result-time">{t.compose((say) => formatTime(r.executed_at, say, undefined, dateLocale(t)))}</div>
                                     {r.error ? (
-                                        <div className="schedule-result-content schedule-result-error">{r.error}</div>
+                                        <div className="schedule-result-content schedule-result-error"><bdi>{r.error}</bdi></div>
                                     ) : (
-                                        <div className="schedule-result-content">{r.result || '(no output)'}</div>
+                                        <div className="schedule-result-content">{r.result ? <bdi>{r.result}</bdi> : t('schedules.noOutput')}</div>
                                     )}
                                 </div>
                             ))}
@@ -241,12 +306,14 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 }
 
 export function ScheduleManager() {
+    const t = useT();
     const { setShowSchedules } = useChatStore();
     const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
 
     // Create form state
     const [showCreate, setShowCreate] = useState(false);
@@ -319,19 +386,18 @@ export function ScheduleManager() {
             setShowCreate(false);
             log.ui.info(`Schedule "${scheduleName}" created`);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Failed to create schedule';
-            setFormError(msg);
+            setFormError(err instanceof Error ? err.message : t('schedules.createFailed'));
         } finally {
             setCreating(false);
         }
-    }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule]);
+    }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule, t]);
 
     return (
-        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label="Scheduled tasks">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label={t('schedules.title')}>
             <div className="modal-panel schedule-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Scheduled tasks</h3>
-                    <button className="btn-icon" onClick={() => setShowSchedules(false)} aria-label="Close schedule manager">
+                    <h3>{t('schedules.title')}</h3>
+                    <button className="btn-icon" onClick={() => setShowSchedules(false)} aria-label={t('schedules.close')}>
                         <X size={18} />
                     </button>
                 </div>
@@ -341,17 +407,17 @@ export function ScheduleManager() {
                     <section className="schedule-section">
                         {!showCreate ? (
                             <button className="btn-primary" onClick={() => setShowCreate(true)}>
-                                <Plus size={14} /> New schedule
+                                <Plus size={14} /> {t('schedules.new')}
                             </button>
                         ) : (
                             <div className="schedule-create-form">
                                 {/* NL input */}
                                 <div className="schedule-field">
-                                    <label className="schedule-field-label" htmlFor={scheduleFieldId}>When to run</label>
+                                    <label className="schedule-field-label" htmlFor={scheduleFieldId}>{t('schedules.when')}</label>
                                     <textarea
                                         id={scheduleFieldId}
                                         className="schedule-nl-input"
-                                        placeholder={'Describe your schedule in natural language...\nExamples: "every 30m", "daily at 9pm", "every hour from 8am to 6pm on weekdays"'}
+                                        placeholder={t.bare('schedules.whenPlaceholder')}
                                         value={nlInput}
                                         onChange={(e) => setNlInput(e.target.value)}
                                         aria-invalid={scheduleRejected}
@@ -368,37 +434,39 @@ export function ScheduleManager() {
                                         aria-live="polite"
                                     >
                                         {parsing ? (
-                                            <span className="schedule-parsed-loading">Parsing...</span>
+                                            <span className="schedule-parsed-loading">{t('schedules.parsing')}</span>
                                         ) : parsed ? (
                                             <>
                                                 {parsed.valid ? (
-                                                    <div className="schedule-parsed-description">{parsed.description}</div>
+                                                    <div className="schedule-parsed-description">
+                                                        {describeSchedule(parsed.description_parts, t) ?? <bdi>{parsed.description}</bdi>}
+                                                    </div>
                                                 ) : (
                                                     <div id={scheduleErrorId}>
-                                                        <div className="schedule-parsed-description">GAIA didn't understand that schedule.</div>
-                                                        <div className="schedule-parsed-hint">{parsed.description}</div>
+                                                        <div className="schedule-parsed-description">{t('schedules.notUnderstood')}</div>
+                                                        <div className="schedule-parsed-hint"><bdi>{parsed.description}</bdi></div>
                                                     </div>
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        Next run: {new Date(parsed.next_run_at).toLocaleString()}
+                                                        {t('schedules.nextRun', { when: new Date(parsed.next_run_at).toLocaleString(dateLocale(t)) })}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (
                                                     <div className="schedule-parsed-details">
                                                         {parsed.time_of_day && (
                                                             <span className="schedule-parsed-tag">
-                                                                <Clock size={10} /> {formatTimeOfDay(parsed.time_of_day)}
+                                                                <Clock size={10} /> {formatTimeOfDay(parsed.time_of_day, t)}
                                                             </span>
                                                         )}
                                                         {parsed.start_hour != null && parsed.end_hour != null && (
                                                             <span className="schedule-parsed-tag">
-                                                                <Clock size={10} /> {formatHour(parsed.start_hour)} - {formatHour(parsed.end_hour)}
+                                                                <Clock size={10} /> {t.compose((say, code) => say('schedules.hours', { start: formatClock(translator(code), parsed.start_hour!), end: formatClock(translator(code), parsed.end_hour!) }))}
                                                             </span>
                                                         )}
                                                         {parsed.days_of_week && (
                                                             <span className="schedule-parsed-tag">
-                                                                {formatDays(parsed.days_of_week)}
+                                                                {t.compose((say) => formatDays(parsed.days_of_week!, say))}
                                                             </span>
                                                         )}
                                                     </div>
@@ -410,12 +478,12 @@ export function ScheduleManager() {
 
                                 {/* Name and prompt fields - always shown */}
                                 <div className="schedule-field">
-                                    <label className="schedule-field-label" htmlFor={nameFieldId}>Name</label>
+                                    <label className="schedule-field-label" htmlFor={nameFieldId}>{t('schedules.name')}</label>
                                     <div className="schedule-form-row">
                                         <input
                                             id={nameFieldId}
                                             type="text"
-                                            placeholder="Schedule name (e.g. daily-summary)"
+                                            placeholder={t('schedules.namePlaceholder')}
                                             value={scheduleName}
                                             onChange={(e) => setScheduleName(e.target.value)}
                                             className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
@@ -423,23 +491,23 @@ export function ScheduleManager() {
                                     </div>
                                 </div>
                                 <div className="schedule-field">
-                                    <label className="schedule-field-label" htmlFor={promptFieldId}>Prompt</label>
+                                    <label className="schedule-field-label" htmlFor={promptFieldId}>{t('schedules.prompt')}</label>
                                     <textarea
                                         id={promptFieldId}
                                         className={`schedule-prompt-input ${!schedulePrompt.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}`}
-                                        placeholder="Prompt to execute on each run..."
+                                        placeholder={t('schedules.promptPlaceholder')}
                                         value={schedulePrompt}
                                         onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
                                 </div>
 
-                                {formError && <p className="schedule-form-error">{formError}</p>}
+                                {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}
                                 <div className="schedule-create-actions">
                                     <button className="btn-secondary" onClick={() => { setShowCreate(false); setFormError(null); setParsed(null); setNlInput(''); setScheduleName(''); setSchedulePrompt(''); }}>
-                                        Cancel
+                                        {t('schedules.cancel')}
                                     </button>
                                     <button className="btn-primary" onClick={handleCreate} disabled={!canCreate || creating}>
-                                        {creating ? 'Creating...' : 'Create Schedule'}
+                                        {t(creating ? 'schedules.creating' : 'schedules.create')}
                                     </button>
                                 </div>
                             </div>
@@ -448,21 +516,21 @@ export function ScheduleManager() {
 
                     {/* Schedule list */}
                     <section className="schedule-section">
-                        <h4>Active schedules</h4>
+                        <h4>{t('schedules.list')}</h4>
                         {actionError && (
                             <div className="schedule-action-error" role="alert">
-                                <span>{actionError}</span>
-                                <button className="btn-icon" onClick={dismissActionError} aria-label="Dismiss error">
+                                <span><bdi>{actionError}</bdi></span>
+                                <button className="btn-icon" onClick={dismissActionError} aria-label={t('schedules.dismissError')}>
                                     <X size={14} />
                                 </button>
                             </div>
                         )}
                         {loading ? (
-                            <p className="schedule-empty">Loading schedules...</p>
+                            <p className="schedule-empty">{t('schedules.loading')}</p>
                         ) : error ? (
-                            <p className="schedule-empty">{error}</p>
+                            <p className="schedule-empty">{t('schedules.loadFailed')}</p>
                         ) : schedules.length === 0 ? (
-                            <p className="schedule-empty">No scheduled tasks yet. Create one to get started.</p>
+                            <p className="schedule-empty">{t('schedules.empty')}</p>
                         ) : (
                             <div className="schedule-list">
                                 {schedules.map((s) => (

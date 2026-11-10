@@ -26,16 +26,32 @@ Related config the workflows depend on:
 
 ## 1. `claude.yml` — "Claude AI Assistant" (the main, reactive one)
 
-Reacts to issue/PR activity. Six jobs:
+Reacts to issue/PR activity. The main jobs:
 
 | Job | Fires when | What it does |
 |-----|-----------|--------------|
 | **pr-review** | PR opened / reopened / marked ready | Full diff review (works on fork PRs too) |
-| **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight Sonnet re-check; flags only *new* regressions, silent otherwise |
-| **issue-handler** | New issue opened, or `@claude` in an issue/PR comment | Conversational reply |
+| **pr-rereview** | New commits pushed to a PR (`synchronize`) | Lightweight Sonnet re-check; flags *new* regressions and unfixed Request changes findings, silent otherwise |
+| **conversation-gate** | A maintainer's (OWNER / MEMBER / COLLABORATOR) comment without `@claude` | Cheap check: is the thread labelled `claude`, or an issue where the comment directly follows a Claude reply, and has the gate passed fewer than 3 follow-ups there in the last hour? Outsiders, the thread's own author included, bots, and edits never pass it; they reach Claude through a new issue or `@claude` |
+| **issue-handler** | New issue opened, a new (not edited) comment with `@claude`, or a follow-up `conversation-gate` let through | Conversational reply, posted by the workflow with a hidden marker so the gate can recognise it. Mentions and follow-ups queue separately per thread, so a follow-up never displaces a mention, and a burst of either collapses into one reply. On a follow-up it replies only when it adds something (an answer to its own question, a doc link, a correction) and otherwise stays silent |
 | **pr-comment** | Review comment left on a PR | Responds (non-fork PRs only — GitHub hides secrets from forks on this event) |
-| **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened) | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps |
-| **release-notes** | "Publish Release" workflow succeeds on a `v*` tag | Generates GH release notes + docs, bumps version, updates `docs.json` |
+| **auto-fix** | Issue gets the `bug` label (or a bug issue is reopened), or a dispatch: from issue-triage when it labels a new issue `bug`, or from an audit for a new auto-fixable issue. Both dispatch because a label added with `GITHUB_TOKEN` starts no workflow | Attempts the fix: creates branch, opens a PR (draft + manual test plan if it can't self-validate), comments on the issue with test steps. Skips an issue that already has an open fix PR. Every run writes its outcome (PR, proposal, decline, failure) to the job summary, and a run that claims a PR it didn't open, or reports nothing, fails and comments on the issue. A run that fails after Claude started, or abandons the fix (`FAILED`), also labels the issue `needs-human` so a maintainer can filter for it |
+| **release-notes** | "Publish Release" workflow succeeds on a final tag (not an RC) | Read-only check, no Claude: fails and files one issue per tag when the tag lacks `docs/releases/<tag>.mdx` or the published body's commit count disagrees with git. Never writes notes, bumps the version, pushes, or edits the release |
+
+Every review also searches for sibling paths on PRs of 200+ changed lines, applies the
+known bug classes in `scripts/audit/missed_bug_classes.md` (base-branch copy), and checks
+for documentation drift.
+
+`pr-review-verdict.yml` turns the review into a commit status, `PR review verdict`. It fails
+while the latest review says Request changes, and a reply does not clear it. It clears when a
+push passes re-review or a maintainer adds the `review-override` label. It blocks a merge
+only if branch protection requires that status.
+
+It reads the verdict from the `review-verdict` artifact the review run uploads, never from
+comment text, and only a review that finished on the pinned model records one. A re-review
+that never finished leaves the status pending. The label counts only when a person with
+write, maintain or admin access added it last. A PR opened by `GITHUB_TOKEN` (auto-fix) gets
+no review and no status until a human pushes to it or changes a label.
 
 ## 2. `claude-run.yml` — reusable runner (not triggered directly)
 
@@ -69,8 +85,8 @@ whole-codebase sweep when the last successful one is over 8 days old (every thir
 out one **read-only** Claude job per dimension — **correctness (the "fail loudly" rule), docs,
 tests, features** — then files **one issue per defect**, labelled `weekly-audit`, deduplicated
 against the whole open backlog. The run summary goes to the job summary, not an issue.
-**Human-gated**: reports findings only; a maintainer adds the `bug` label to hand one to the
-auto-fix job.
+New issues marked auto-fixable go straight to the auto-fix job, up to 5 a run, and a human
+reviews the PR it opens. Others wait for a maintainer to add the `bug` label.
 
 ## 5. `claude-security-audit.yml` — proactive security review
 
@@ -122,7 +138,7 @@ How each workflow asks:
 
 | Where | How |
 |-------|-----|
-| Single-job workflows (auto-fix, release notes, Lemonade bump, patch release, skill review, the evals) | The [`claude-credential`](https://github.com/amd/gaia/blob/main/.github/actions/claude-credential/action.yml) action probes with a one-word prompt and reports a label (`primary`, `secondary`, or `none` when neither token is set and `ANTHROPIC_API_KEY` is used). The workflow picks the secret by that label, so no token is written to an output. |
+| Single-job workflows (auto-fix, Lemonade bump, patch release, skill review, the evals) | The [`claude-credential`](https://github.com/amd/gaia/blob/main/.github/actions/claude-credential/action.yml) action probes with a one-word prompt and reports a label (`primary`, `secondary`, or `none` when neither token is set and `ANTHROPIC_API_KEY` is used). The workflow picks the secret by that label, so no token is written to an output. |
 | The three audits | Their gate job runs the action once and exports the label; every lens and synthesis job reads it. |
 | `claude-run.yml` (reviews, replies, triage) | Inline: it runs on the primary and, if refused with quota wording before reaching a model, once more on the secondary. A run that reached the model is never retried, because replies post through `gh` mid-run and could post twice. It cannot use the action, because it checks out fork code and a local action would be read from that checkout. |
 | `gaia eval agent` (long eval lanes) | Starts on the probed account with the other as `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`. If the first runs out mid-run, the runner switches once, re-runs the scenario that was cut off, and prints `[ACCOUNT SWITCH]`. |

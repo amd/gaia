@@ -34,11 +34,12 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.email_sidecar.errors import (  # noqa: E402
+from gaia.daemon.sidecars.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
+from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
 from gaia.ui.turn_summary import TurnLedger  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -737,13 +738,8 @@ class TestSidecarHTTPErrorDetail:
         assert agent_errors[0]["content"] == detail
 
     def test_connection_shaped_http_error_detail_gains_hint(self, monkeypatch):
-        from gaia.llm import lemonade_launcher
-
-        start = "To start it now, run: gaia lemonade embedded start"
         monkeypatch.setattr(
-            lemonade_launcher,
-            "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: True
         )
         handler = _FakeHandler()
         detail = "502 local LLM triage failed: connection refused"
@@ -756,8 +752,50 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == (
-            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_SERVER_DOWN_HINT}"
         )
+        assert "gaia " not in agent_errors[0]["content"]
+
+    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+        from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
+
+        handler = _FakeHandler()
+        detail = (
+            "GAIA's AI engine couldn't start: lemond timed out. Sending the "
+            f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
+        )
+        self._assert_left_alone(detail)
+
+    def test_a_detail_that_already_says_to_resend_gains_no_hint(self):
+        self._assert_left_alone(
+            "The local model server at localhost:13305 isn't answering (connection "
+            "refused). Start the model server, then send the message again."
+        )
+
+    def test_a_server_the_user_runs_gets_its_start_instruction(self, monkeypatch):
+        from gaia.llm import lemonade_launcher
+
+        start = "Start the Lemonade app from Applications, then retry."
+        monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
+        monkeypatch.setattr(
+            lemonade_launcher,
+            "describe_start_hint",
+            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+        )
+        detail = "local LLM triage failed: connection refused"
+        content = relay._augment_error_detail(detail)
+        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+
+    def _assert_left_alone(self, detail):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == detail
 
     def test_404_http_error_still_shows_version_upgrade_message(self):
         handler = _FakeHandler()

@@ -20,7 +20,7 @@ from gaia.ui.models import SystemStatus, ChatRequest, SessionResponse, DocumentR
 **See also:** [User Guide](/guides/agent-ui) | [Agent SDK](/sdk/sdks/chat) | [API Specification](/spec/agent-ui-server)
 
 <Warning>
-  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Qwen3.5-35B-A3B-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
+  **Tested Configuration:** The Agent UI has been tested on **AMD Ryzen AI MAX+ 395** with **Gemma-4-E4B-it-GGUF**. Other configurations are not officially verified. See the [User Guide](/guides/agent-ui) for full details and how to report issues on other hardware.
 </Warning>
 
 ---
@@ -184,6 +184,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
@@ -510,18 +513,20 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "version": "2026.41.1",
       "chat_model": {
         "name": "Qwen3.6-35B-A3B-GGUF",
+        "model_type": "llm",
         "recipe": "llamacpp",
         "device": "gpu",
         "backend": "vulkan",
         "backend_source": "lemonade_default",
         "ctx_size": 65536
       },
-      "embedding_model": { "name": "embeddinggemma-300m-GGUF", "backend": "vulkan", "...": "..." },
+      "embedding_model": { "name": "embeddinggemma-300m-GGUF", "model_type": "embedding", "backend": "vulkan", "...": "..." },
+      "loaded_models": [
+        { "name": "kokoro-v1", "model_type": "tts", "backend": "cpu", "ctx_size": null }
+      ],
       "default_backend": "vulkan",
       "available_backends": [
-        { "name": "vulkan", "state": "installed" },
-        { "name": "rocm", "state": "installable" },
-        { "name": "cpu", "state": "installed" }
+        { "name": "vulkan", "state": "installed" }
       ],
       "preferred_backend": null,
       "system_info_error": null
@@ -531,10 +536,46 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Description |
     |-------|-------------|
     | `owner` | `gaia` (GAIA's own Lemonade), `user` (another Lemonade on this PC), or `remote` |
-    | `backend` | `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
+    | `chat_model` / `embedding_model` | The selected loaded chat and embedding model, respectively; each has the loaded-model shape below or is `null` |
+    | `loaded_models` | Other loaded models, excluding only the selected chat and embedding entries. This can include additional embedding models, vision, speech, transcription, reranking, image, or 3D models. |
+    | `model_type` | Lemonade's type for a loaded model, such as `llm`, `embedding`, `vision`, `tts`, `transcription`, `reranking`, or `3d`; `null` when Lemonade did not report it |
+    | `backend` | What a loaded model actually runs on: `vulkan`, `rocm`, `metal`, `cpu`, `npu`, `remote` (a cloud model), or `null` when Lemonade did not say |
     | `backend_source` | `requested` (named by the load), `launch` (read from the llama-server path), or `lemonade_default` |
-    | `available_backends` | llama.cpp backends Lemonade can run here; `unsupported` ones are never listed |
-    | `preferred_backend` | The saved choice; `null` means Auto |
+    | `available_backends` | llama.cpp backends GAIA has tested that Lemonade can run here (today only `vulkan`); `unsupported` ones are never listed |
+    | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
+  </Accordion>
+
+  <Accordion title="GET /api/system/resources">
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead. On Linux an AMD NPU is read through its `amdxdna` driver, which reports usage on Linux 7.1 and later with the AMD PMF driver loaded; an NPU that can't be read is reported in `npus_error`.
+
+    On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
+
+    **Response:**
+    ```json
+    {
+      "interval_ms": 1000,
+      "ready": true,
+      "cpu": { "percent": 20.4, "ghz": 4.7, "history": [18.2, 20.4] },
+      "memory": { "used_bytes": 48318382080, "total_bytes": 68289282048, "percent": 70.8, "history": [70.5, 70.8] },
+      "devices": [
+        { "id": "0x00000000_0x0000d938", "name": "AMD Radeon(TM) 8060S Graphics", "kind": "gpu", "percent": 14.0, "memory_used_bytes": 32212254720, "history": [12.0, 14.0] },
+        { "id": "0x00000000_0x0000f994", "name": "NPU Compute Accelerator Device", "kind": "npu", "percent": 0.0, "memory_used_bytes": 12261240832, "history": [0.0, 0.0] }
+      ],
+      "networks": [
+        { "id": "net_0006008007000000", "name": "Ethernet 3", "description": "Realtek Gaming 2.5GbE Family Controller", "kind": "ethernet", "send_bps": 52008, "recv_bps": 47055, "send_history": [68447, 52008], "recv_history": [60059, 47055] }
+      ]
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `cpu.ghz` | Current clock speed, or `null` when the OS doesn't report it |
+    | `memory.used_bytes` | Total less available, as Task Manager's "In use" |
+    | `devices[].kind` | `gpu` or `npu` |
+    | `devices[].memory_used_bytes` | Dedicated plus shared memory the device holds, or `null` when not reported |
+    | `networks[].kind` | `ethernet`, `wifi`, or `network` when the OS doesn't say which |
+    | `networks[].send_bps`, `recv_bps` | Bits per second over the last interval; the histories are the same per sample |
+    | `devices_error`, `networks_error` | Why GPUs and NPUs, or network adapters, can't be read while CPU and memory still can (for example, no GPU counters in a VM); `null` otherwise. That list is then empty |
   </Accordion>
 
   <Accordion title="PUT /api/system/model-server/backend">
@@ -542,10 +583,10 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     **Request:**
     ```json
-    { "backend": "rocm" }
+    { "backend": "vulkan" }
     ```
 
-    `backend` is `auto` or one of the names in `available_backends`. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend is not available on this machine, `503` when Lemonade is not answering.
+    `backend` is one of the names in `available_backends`, or `auto` to clear the saved choice. Returns the refreshed `GET /api/system/model-server` body. `400` when the backend isn't one GAIA has tested or this machine can't run it, `503` when Lemonade is not answering.
   </Accordion>
 
   <Accordion title="POST /api/system/load-model">
@@ -562,7 +603,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
-    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to the window a chat on that model asks for: its `MODELS` entry sized to this PC's memory, or `GAIA_CTX_SIZE` when set. The response reports the size used. |
     | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
@@ -580,13 +621,14 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/download-model">
-    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
+    Trigger downloading a model via the Lemonade server. Returns `202` immediately; the download proceeds in the background. Poll `GET /api/system/status` to detect when the model becomes available. Downloads leave the active model unchanged by default. Set `force` to `true` to re-download even if the file already exists (repairs corrupted or incomplete downloads).
 
     **Request:**
     ```json
     {
       "model_name": "Qwen3.5-35B-A3B-GGUF",
-      "force": false
+      "force": false,
+      "load_after": false
     }
     ```
 
@@ -594,6 +636,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes, at the same window `load-model` defaults to. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
@@ -602,6 +645,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model": "Qwen3.5-35B-A3B-GGUF"
     }
     ```
+
+    **Response (400):** the model cannot be pulled — it is hosted on a gateway (no weights to download), it is a `user.` model GAIA has no checkpoint and recipe for and Lemonade doesn't list either, or Lemonade's model list couldn't be read to check such a model (`detail` asks the user to try again). A `user.` model Lemonade already lists is pulled by name instead. `detail` says which case applies, and for an unknown model tells the user to add it from its Hugging Face link: **Settings > Model > Add a model from Hugging Face** in the Agent UI, or `/provider` → **Local** → `ctrl+a` in the terminal app. The Agent UI shows `detail` next to the Download button that was pressed.
   </Accordion>
 
   <Accordion title="GET /api/system/work-in-progress">
@@ -635,7 +680,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens, and with `?fresh=true` when the user presses **Try again** on a picked model that failed to load. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. A fresh request (a model pick, or `?fresh=true`) skips the 30 s debounce, and one made while a warm-up runs starts as soon as that one ends. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -766,11 +811,12 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="DELETE /api/sessions/{session_id}">
-    Delete a session and all its messages (cascading delete). If a chat turn is running on the session, it is stopped and the request returns once that turn has finished.
+    Delete a session and all its messages (cascading delete), and its conversation turns and tool history in memory. Facts learned from it are kept. If a chat turn is running on the session, it is stopped and the request returns once that turn has finished. If the memory rows can't be removed, it returns **500** and the session is left in place, so the delete can be retried.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/messages">
-    Get messages for a session, ordered oldest first.
+    Get messages for a session, ordered oldest first. Each message carries `stopped`:
+    true when the person stopped the answer, kept across restarts.
 
     **Query params:** `limit` (default 100), `offset` (default 0)
 
@@ -963,6 +1009,40 @@ Deleting a chat deletes its copies.
     past the new limits. Turns older than the time limit go first, then the
     oldest until the total fits. The size limit never removes the newest turn.
   </Accordion>
+
+  <Accordion title="GET /api/speech/settings">
+    The read-aloud voice, speed and auto-read choice, with every voice offered:
+    `{"voice": "af_bella", "speed": 100, "auto": false, "min_speed": 50,
+    "max_speed": 200, "voices": [{"id": "af_bella", "name": "Bella",
+    "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
+    `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
+    `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
+    the TUI reads too.
+  </Accordion>
+
+  <Accordion title="PUT /api/speech/settings">
+    Save any of `voice` (a Kokoro voice id), `speed` (50–200) and `auto`; the
+    others keep their value. **422** names an unknown voice or a speed out of
+    range, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="GET /api/speech/model">
+    Whether Lemonade has the `kokoro-v1` voice model on disk:
+    `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
+    its first read so it can say the model is downloading. **503** when
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+  </Accordion>
+
+  <Accordion title="POST /api/speech">
+    Speak `text` (1–1000 characters) through Lemonade's `kokoro-v1` model and
+    return a 16-bit mono `audio/wav`, in the saved voice and speed unless the
+    body names `voice` or `speed`. Downloads the model on first use, which the
+    app announces after `GET /api/speech/model`. **422** for
+    empty or over-long text or a bad voice or speed, **503** when Lemonade is
+    unreachable, **502** when Lemonade can't make the speech; each `detail`
+    says why. The app splits a long reply into pieces and plays them back to
+    back.
+  </Accordion>
 </AccordionGroup>
 
 ### Chat
@@ -1055,7 +1135,7 @@ Deleting a chat deletes its copies.
 
     | Event type | Fields | Description |
     |------------|--------|-------------|
-    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. |
+    | `done` | `message_id` (int), `content` (string), `turn_summary` (object, optional), `failed` (bool, optional), `failure` (string, optional) | Signals the end of the stream. `message_id` is the database ID of the saved assistant message. `content` is the full response text. `turn_summary` is the turn's sources and data flow (below); it is also saved with the message and returned by the messages endpoint. `failed` marks a turn a model failure ended, and `content` then says why. `failure` names a cause the app can fix: `model_server_down` when the local model server took no connection (cloud models go through it too). |
 
     **Example stream** showing a typical multi-step interaction:
     ```
@@ -1084,7 +1164,7 @@ Deleting a chat deletes its copies.
     | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
-    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), or `unknown`. |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), or `unreported` (the model is priced but no usage came back, such as a stopped answer). |
     | `error` | Set, with the rest empty, when the summary could not be built. |
 
     **Non-streaming response:**
@@ -1198,7 +1278,7 @@ Deleting a chat deletes its copies.
     `prefill_tokens_per_second`, `generation_tokens_per_second`, `tokens_in`,
     `tokens_new`, `tokens_cached` (reused from the server's prompt cache),
     `tokens_out`, `tool_calls`, `loads` and `cost` (`local` at $0, a cloud
-    `estimate` at list price, or `unknown`). `totals` sums the chat. `now` is
+    `estimate` at list price, `unknown`, or `unreported` when a priced model sent no usage). `totals` sums the chat. `now` is
     the model as Lemonade reports it: `provider` (`local`, a cloud provider,
     or `unknown`), `device`, `backend`, `ctx_size`, `weights_gb`,
     `kv_cache_gb` and `free_gb`. `latest_message_id` is the newest answer, so
@@ -1360,6 +1440,34 @@ Deleting a chat deletes its copies.
     file indexed for Q&A.
   </Accordion>
 
+  <Accordion title="Recording progress events">
+    Long recording work streams `status` events with `"phase": "recording"`. `stage` is
+    a position in download, decode, transcribe, voices, prepare, analyze. `state` is 0
+    running, 1 done or 2 skipped. `percent` and `eta_seconds` are present once known;
+    both are estimates until a part of the recording finishes. `message` is an English
+    line for clients that draw no stages.
+
+    During analysis, each section that finishes also sends `"phase": "recording_found"`,
+    so a client can show results before the whole recording is read:
+
+    ```json
+    {"type": "status", "status": "working", "phase": "recording_found",
+     "message": "Section 1 of 3: 2 found", "section": 1, "sections": 3,
+     "start": "00:00", "end": "03:31", "summary": "...",
+     "items": [{"title": "...", "start": "00:21", "seconds": 21.0}]}
+    ```
+
+    Sections overlap, so an item near a seam can arrive in two of them; the finished
+    report merges it. Sections reused from an interrupted run arrive first.
+  </Accordion>
+  <Accordion title="POST /api/files/upload-media">
+    Save an audio or video recording as a chat attachment, for the agent to
+    transcribe. The request body is the raw file, streamed straight to disk, and
+    the `name` query parameter carries its file name. Returns **400** for a type
+    that is not a recording or an empty body, **413** past 64 GB, and **507** when
+    the drive lacks room. GAIA removes these copies after 14 days.
+  </Accordion>
+
   <Accordion title="GET /api/files/browse">
     Browse filesystem contents. Returns entries under a directory with size,
     mtime, and type metadata.
@@ -1380,6 +1488,14 @@ Deleting a chat deletes its copies.
 
   <Accordion title="GET /api/files/image">
     Stream an image file from the filesystem for display in the UI.
+  </Accordion>
+
+  <Accordion title="GET /api/media/{kind}/{name}">
+    Serve an image (`kind=image`) or audio file (`kind=audio`) GAIA generated,
+    for the chat's inline `image` and `audio` cards. `name` must be one plain
+    file name sitting directly in the generation tools' output folder
+    (`~/.gaia/cache/sd/images` or `~/.gaia/cache/audio/generations`); paths,
+    `..`, symlinks and other suffixes get a 404.
   </Accordion>
 </AccordionGroup>
 
@@ -1437,10 +1553,10 @@ of that router's connector types.
   </Accordion>
 </AccordionGroup>
 
-### Session environment and outputs
+### Session environment, outputs and agent info
 
-What one chat may reach and what it produced, behind the session panel's
-Environment and Outputs sections. Folder and internet changes are stored with
+What one chat may reach, what it produced, and which tools and skills its agent
+has, behind the session panel's Environment, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -1468,11 +1584,13 @@ agent at once, so they take effect on its next step.
     otherwise. A chat that had a folder removed while its agent ran in process
     stops its turns once the agent is relayed, since the sidecar can't be kept
     out of a removed folder; start a new chat. `internet_enforced` covers the
-    internet switch: it is true in process and for a relayed GAIA agent (for
-    one older than contract 2.23, the Agent UI refuses an internet-off turn
-    with an update message instead of sending it), and false for an agent
-    that keeps its own network rules (the email agent), where the internet
-    endpoint refuses changes with **409**.
+    internet switch. It means GAIA applies its recognised-operation filter in
+    process or for a relayed GAIA agent; it is **not a firewall** and does not
+    stop skill tools, scripts or commands whose network destination GAIA cannot
+    inspect. For an agent older than contract 2.23, the Agent UI refuses an
+    internet-off turn with an update message instead of sending it. It is
+    false for an agent that keeps its own network rules (the email agent),
+    where the internet endpoint refuses changes with **409**.
   </Accordion>
 
   <Accordion title="POST /api/sessions/{session_id}/environment/folders">
@@ -1533,6 +1651,53 @@ agent at once, so they take effect on its next step.
     summary (`turn_summary.outputs`) and the undo snapshots, so it survives a
     restart.
   </Accordion>
+
+  <Accordion title="GET /api/sessions/{session_id}/capabilities">
+    The tools this chat's agent can call and the skills it has loaded, behind
+    the session panel's Agent info and Skills sections:
+
+    ```json
+    {
+      "session_id": "...",
+      "agent_type": "gaia",
+      "tools": [
+        {"name": "query_documents", "description": "Search the indexed documents ...", "category": "rag"},
+        {"name": "mcp_github_list_issues", "description": "[MCP:github] List issues ...", "category": "mcp"}
+      ],
+      "skills": [
+        {"name": "gaia-voice", "how": "always"},
+        {"name": "analyze-recording", "how": "auto"}
+      ]
+    }
+    ```
+
+    `skills` is in load order. `how` is `model` (the model called
+    `load_skill`), `auto` (GAIA loaded it when the model called one of its
+    [`loads_with`](/spec/agent-skills#skills-that-load-with-their-tools)
+    tools) or `always` (the agent loads it at startup). It is `null` for an
+    agent that runs as its own process, which doesn't report its skills.
+
+    Read from the agent the chat talks to: the one GAIA keeps for the chat
+    between turns, or, for an agent that runs as its own process (the Hub
+    GAIA agent), that agent's own session through the daemon (agent contract
+    2.27 or later). Skills loaded in earlier turns and connector tools are
+    included. `description` is the text the model is given. `category` is the
+    [`KNOWN_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+    name of the mixin that defines the tool (`rag`, `file_io`, `shell`, ...),
+    `mcp`, `skill`, or `agent` for a tool the agent class defines itself.
+
+    It never answers with an empty list in place of an error:
+
+    | Status | When |
+    |--------|------|
+    | 404 | No such chat |
+    | 409 | The chat's agent isn't running: no message yet, or GAIA restarted or switched the chat's model or agent since its last answer. It starts with the next message. |
+    | 502 | A relayed agent failed to answer, or sent a list with a malformed entry or the same tool twice |
+    | 503 | A relayed agent couldn't be started, or can't list its tools (older than contract 2.27, or the email agent) |
+
+    The SDK call behind it is `Agent.describe_tools()`, which returns the
+    same `{name, description, category}` list for any agent.
+  </Accordion>
 </AccordionGroup>
 
 ### Tunnel
@@ -1552,7 +1717,11 @@ Used to reach the UI from a phone.
   <Accordion title="GET /api/tunnel/status">
     Current tunnel status — active/inactive, public URL, provider, uptime, and
     `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
-    authenticated request through the tunnel, or null.
+    authenticated request through the tunnel, or null. When ngrok is not
+    installed, `reason` is `"ngrok_not_installed"` and `installCommands` lists
+    this OS's install commands (empty where none is known); `error` still
+    carries the same instructions as text. Both `start` and `status` return
+    this shape.
   </Accordion>
 </AccordionGroup>
 
@@ -1659,7 +1828,9 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. A file that can't be read is a **422** whose
+    enqueues it for indexing. Content already in the library returns the
+    existing document; if that document's stored file is gone, the new copy
+    takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do.
@@ -2025,8 +2196,13 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/all">
-    Permanently delete all knowledge, tool history, and conversation data.
-    Irreversible.
+    Permanently delete all knowledge, tool history, and conversation data,
+    then scrub the deleted text from the database file. Irreversible. Learned
+    procedures and skill deltas are kept. Open chats stop using the erased
+    memories from their next message. If
+    another open GAIA window keeps the file from being scrubbed, the data is
+    still deleted but the call returns 500 with a message saying so; close the
+    other windows and call it again.
   </Accordion>
 
   <Accordion title="POST /api/memory/reinitialize">
@@ -2054,9 +2230,9 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
-    Store approved discovery findings from the onboarding wizard. Items are
-    validated as knowledge creates, so a disallowed category 422s the whole
-    batch before anything is written.
+    Store the discovery findings a user approved in the memory dashboard's
+    discovery review. Items are validated as knowledge creates, so a disallowed
+    category 422s the whole batch before anything is written.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-inference">
@@ -2149,7 +2325,10 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/test">
-    Run the connector's health check.
+    Run the connector's health check and return `{"ok": bool, "detail": str}`.
+    An OAuth connector refreshes its token. An `mcp_server` connector starts
+    the server once and reports whether it started; a server that only checks
+    its key on a tool call still passes with a bad key.
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">
@@ -2242,15 +2421,15 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/approve">
-    Approve an agent-inferred goal for autonomous execution.
+    Approve an agent-inferred goal for autonomous execution. Only a goal in `pending_approval` can be approved; approving an already-queued goal just returns it, marked approved. Any other state returns 409, so a rejected, cancelled or finished goal is never re-queued.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/reject">
-    Reject an agent-inferred goal.
+    Reject an agent-inferred goal. Only a goal in `pending_approval` can be rejected; rejecting an already-rejected goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/cancel">
-    Cancel a queued or in-progress goal.
+    Cancel a queued or in-progress goal; cancelling an already-cancelled goal just returns it. Any other state returns 409.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/status">
@@ -2268,7 +2447,7 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
 
 ### Schedules
 
-Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected — [#1019](https://github.com/amd/gaia/issues/1019)).
+Recurring prompts run on a cron-like interval — see [`gaia schedule`](/reference/cli#schedule) for the CLI equivalent. The scheduler runs *prompts* only; it cannot yet run a *skill* directly (`gaia schedule add --skill` is rejected).
 
 <AccordionGroup>
   <Accordion title="GET /api/schedules">
@@ -2279,7 +2458,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   <Accordion title="POST /api/schedules">
     Create a scheduled task from a name, interval, and prompt. An optional
     `timezone` (IANA name, e.g. `America/Los_Angeles`) sets the zone its times
-    are in; it defaults to the server PC's zone. An unknown zone returns 400.
+    are in; it defaults to the server PC's zone. An unknown zone returns 400,
+    and so does a name that contains `/`.
   </Accordion>
 
   <Accordion title="POST /api/schedules/parse">
@@ -2341,9 +2521,17 @@ First-run hardware scan (issues #1726, #1727).
 ### Setup
 
 First-run setup. The Agent UI asks and runs the same `gaia init` the TUI does,
-so the two can never disagree about whether GAIA is set up.
+so the two can never disagree about whether GAIA is set up. The daemon serves
+these same handlers to the TUI under `/daemon/v1/setup/` (`plan`, `chat-model`,
+`models/skip`, `models/download`, `models/remove`, `run`, `status`, `cancel`),
+behind the daemon token instead of the `X-Gaia-UI` header, so both apps read one
+plan and make one set of choices.
 
 <AccordionGroup>
+  Error `detail` strings are fixed messages that say what failed and what to
+  do; the underlying error is written to the Agent UI server log, never sent
+  in a response.
+
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
@@ -2372,26 +2560,142 @@ so the two can never disagree about whether GAIA is set up.
     its downloads aren't GAIA's. Loads and downloads
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
+
+    Each `catalog` entry says `support` (`verified`, `untested`, or null for an
+    optional model), `reads_images`, `feature_tier` and `source`. `components`
+    lists what setup fetches besides the models, `backends` what Lemonade
+    reports for this PC, and `vision_model` the user's vision pick.
+
+    The same plan also carries what the model picker needs: `catalog` (every
+    model the user can pick, with `roles`, `purpose`, `if_skipped`, `size_gb`
+    left to download, `downloaded`, `recommended`, `selected`, `skipped`,
+    `chat_choice`, `gaia_model` (GAIA's own model, not one only this
+    Lemonade has), and `fits` with `need_gb` / `capacity_gb` / `fit_reason`;
+    every `*_gb` field is decimal GB; the memory figures are converted from
+    the GiB Lemonade reports, the same way `/api/gpu-memory` converts them, so
+    the two read the same number for the same PC),
+    `disk` (`path`, `free_gb`, `source`), `disk_warning`, and `skipped_models`.
+    `npu` says whether this PC has an NPU (`present`), whether a model can run
+    on it now (`ready`), and what stops it (`problems`, each `code`, `title`,
+    `fix` and `params`); while it isn't ready, the NPU model's `fit_code` is
+    `npu`. `gaia init --plan --json` prints the same object; its
+    [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 
   <Accordion title="POST /api/setup/chat-model">
-    Pick setup's chat model before it starts. Body: `{"model_id": "..."}`, one
-    of the default chat models. Picking the recommendation clears
-    `default_model`, so setup keeps its own pick; any other is saved as
-    `default_model`. Returns the new plan. **422** when the model isn't one of
-    setup's, won't fit this PC, or the model server isn't running yet.
+    Pick the chat model. Body: `{"model_id": "...", "acknowledge_no_fit":
+    false}`: any chat model GAIA knows, or one already downloaded in Lemonade,
+    FLM included. Picking the recommendation clears `default_model`, so setup
+    keeps its own pick; any other is saved as `default_model`. Returns the new
+    plan. **409** with `detail` `{"code": "no_fit", "message", "need_gb",
+    "capacity_gb", "acknowledge": "acknowledge_no_fit"}` when it may not fit
+    this PC; send it again with that field set to use it anyway. **422** when
+    the model isn't a chat model GAIA or the server knows; **503** when the
+    model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/recheck">
+    Reads the NPU's setup afresh, after the user fixed something, instead of
+    the 30-second cached reading. Returns the new plan. **403** without
+    `X-Gaia-UI: 1`.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/npu/memlock-fix">
+    Linux only. Raises the locked-memory limit FastFlowLM needs, for every
+    user on the PC, behind the desktop's own administrator prompt (`pkexec`).
+    It takes effect after a restart. Returns the new plan. **403** over mobile
+    access or from another computer; **409** with `detail` `{"code",
+    "message"}` when the prompt was closed (`cancelled`), not answered
+    (`timeout`) or couldn't be shown (`not_authorized`); **422** on a PC that
+    isn't Linux (`not_linux`) or has no polkit (`no_pkexec`); **500**
+    (`failed`) otherwise. The [NPU guide](/guides/npu) has the steps to do it
+    by hand.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/vision-model">
+    Pick the model that reads images. Body: `{"model_id": "..."}`, or `null` for
+    GAIA's choice: the chat model when it reads images, otherwise Gemma 4 E4B.
+    Saved as `vision_model`. Returns the new plan. **422** when the model can't
+    read images.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/needs/{job}">
+    Whether a job needs a model that isn't on this PC. `job` is `chat`, `vision`,
+    `embedding`, `speech`, `voice` or `image_creation`. Returns `{"job",
+    "needed", "model": {"id", "name", "size_gb", "source"}, "disk_free_gb"}`.
+    `needed` is false when the model is here, chat runs in the cloud, or the
+    model server isn't answering. **422** for any other `job`.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/report">
+    Write a troubleshooting report for a bug report: setup's record (its last
+    run, the plan and every stage's full log) saved as `setup-report.json` in
+    GAIA's home, bundled with GAIA's logs and a system snapshot by `gaia
+    diagnostics`, with secret environment variables redacted; logs go in as they are. Returns `{"name", "path", "size_bytes"}`.
+    **500** naming the cause when the bundle can't be written.
+  </Accordion>
+
+  <Accordion title="GET /api/setup/report/{name}">
+    The report `POST /api/setup/report` wrote, as `application/gzip`. Only a
+    `diagnostics-<YYYYMMDD>-<HHMMSS>.tgz` in GAIA's home is served; anything
+    else is **404**.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/skip">
+    Body: `{"model_id": "...", "skipped": true}`. Adds one of setup's models to
+    `skipped_models`, or takes it off with `false`; setup and `gaia init` then
+    leave it out. Returns the new plan, whose `if_skipped` says what stops
+    working. **422** for a model setup doesn't download.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/download">
+    Download one model now: Retry, Resume, or one skipped at setup. Body:
+    `{"model_id": "...", "acknowledge_low_disk": false, "keep_trying":
+    false}`. Takes it off `skipped_models`; Lemonade resumes a partial file.
+    Follow it with `/api/setup/status`. **202** when started. **409** with a
+    `low_disk` `detail` (below) when the drive is too small, or when setup or
+    that model is already downloading. **422** for a model neither GAIA nor
+    the server knows; **503** when the model server isn't running yet.
+  </Accordion>
+
+  <Accordion title="POST /api/setup/models/remove">
+    Body: `{"model_id": "..."}`. Deletes that model from Lemonade, on request
+    only, and adds it to `skipped_models` so setup doesn't download it again.
+    Returns the new plan plus `freed_gb`. **409** while it is downloading;
+    **422** when it isn't downloaded; **503** when the model server isn't
+    running yet.
   </Accordion>
 
   <Accordion title="POST /api/setup/run">
     Start `gaia init --profile gaia --yes` in the background; follow it with
     `/api/setup/status`. Body: `{"skip_chat_model": false, "gaia_lemonade":
-    false}`; `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up
-    and saves GAIA's own server instead of the user's. **409** when setup is
-    already running, or `gaia_lemonade` is asked while `LEMONADE_BASE_URL`
-    picks the server.
+    false, "acknowledge_low_disk": false, "keep_trying": false,
+    "extra_models": [], "server_only": false}`;
+    `gaia_lemonade` runs `gaia init --gaia-lemonade`, which sets up and saves
+    GAIA's own server instead of the user's. When `LEMONADE_BASE_URL` picks the
+    server, it first saves that value as `lemonade_env_url_ignored`, so GAIA
+    ignores the variable until it changes. `keep_trying` waits out a dropped
+    connection for up to two minutes before a model fails. `extra_models`
+    pulls models the user ticked beside the plan's (`--download-model`), and
+    counts them in the disk check; a model nobody has is a **422**.
+    `server_only` starts the model server and stops there (`--skip-models`,
+    no load check), so a cold PC can choose its models against the server
+    before anything downloads; it takes no `extra_models` and skips the disk
+    check, and its status carries `server_only: true`. **409** when setup
+    is already running. **409** with `detail` `{"code": "low_disk", "message",
+    "need_gb", "free_gb", "free_up_gb", "path", "drop", "acknowledge":
+    "acknowledge_low_disk"}` when the selected models need more disk than is
+    free; `drop` names the one model whose skip makes it fit, when there is
+    one. Send it again with `acknowledge_low_disk` to download anyway.
   </Accordion>
 
   <Accordion title="GET /api/setup/status">
+    `components` maps each piece besides the models to `active`, `done` or
+    `failed`. `component_kinds` says why a failed piece failed, when setup
+    knows: `transient` (a timeout, dropped connection or server error, so
+    running setup again may fix it) or `other`. `tests` holds the Test step's rows: `job`, `subject`, `state`,
+    `error`, `kind` (`memory`, `stuck`, `broken`) and `seconds`.
+
     The running (or last) setup: `state` (`running`, `verifying`, `ready`,
     `failed`, `cancelled`, or `idle` when none has run), the three steps with
     their status, progress `text`, `percent` and `size` (e.g. `"1.20 GB of
@@ -2401,15 +2705,103 @@ so the two can never disagree about whether GAIA is set up.
     Server" rather than an install. When that server isn't answering, `error`
     says so in one sentence and `problem` carries the next steps: `start` (how
     to start it on this PC, or null), `use_gaia` (setup can switch to GAIA's
-    own), and `switch_hint` (set when `LEMONADE_BASE_URL` picks the server, so
-    only unsetting it switches). The raw error stays in the output lines.
+    own, also over a `LEMONADE_BASE_URL`), and `env_url` (the `LEMONADE_BASE_URL`
+    value that picked the server, which switching ignores from then on, or null).
+    The raw error stays in the output lines.
     `gaia_lemonade` is true for a run switching to GAIA's own, so a retry
-    keeps switching.
+    keeps switching. `model_failed` is true when a model's download failed in
+    this run: its row already says why, so the run's own `error` adds nothing.
+
+    `models` has one row per model of the run or of a single download: `id`,
+    `roles`, `state` (`queued`, `downloading`, `verifying`, `ready`,
+    `failed`, `skipped`, `cancelled`, or `unchecked`: downloaded, but the run
+    stopped before its load check, so the model is kept and the next run
+    checks it), `bytes_done`, `bytes_total`, `speed_bps`, `eta_s`, `error`,
+    `error_kind` (`network`, `disk_full`, `lemonade`, or `verify` for a model
+    that downloaded but failed its load check), `can_retry`, `retrying_until` (Unix time, while a
+    `keep_trying` wait runs), and `downloaded_before_gb` for a resumed
+    download. `overall` sums them: `bytes_done`, `bytes_total`, `speed_bps`,
+    `eta_s`, `percent`, `failed` (rows in `failed` only). With only a single download and no run,
+    `state` is `idle` and `models` still reports it.
   </Accordion>
 
   <Accordion title="POST /api/setup/cancel">
-    Stop a running setup. Anything already downloaded is kept. Returns
+    Stop a running setup, or one model's download with `{"model_id": "..."}`.
+    Finished models and partial files are kept, so a later run or
+    `/api/setup/models/download` continues from where it stopped. Returns
     `{"cancelled": bool}`.
+  </Accordion>
+</AccordionGroup>
+
+### GPU memory
+
+How an AMD integrated GPU (Strix Halo, Ryzen AI) shares memory with the CPU,
+which models a bigger share would fit, and changing it. See
+[Give the GPU more memory](/guides/ai-providers#give-the-gpu-more-memory). The
+TUI reads the same answers from the daemon at `/daemon/v1/gpu-memory`. Every
+route needs the `X-Gaia-UI: 1` header (**403** without it) and returns the
+status below, read fresh. **503** when the model server doesn't answer, since
+the split is read from it. Every `*_gb` field, in requests and responses, is
+decimal GB (10^9 bytes), converted from the GiB Lemonade reports. The one
+exception is `guided_value`, the value the steps ask the user to enter: 4 KiB
+pages for `ttm.pages_limit` on Linux, and on Windows the number AMD Software
+shows (it counts GiB and labels them GB). Front-ends should show `gpu_gb`
+for a target and `guided_value` as the value to enter, not a preset's
+`setting_gb`. Every preset and `fits_at_setting_gb` is a raise that apply and
+`pending` accept. With nothing to offer above the current setting (and no
+`setting_gb` asked for), `guided_steps` is empty and `guided_value` is null.
+
+<AccordionGroup>
+  <Accordion title="GET /api/gpu-memory">
+    `applies` (an integrated AMD GPU on a local server; else only
+    `hidden_reason`, `os`, `method: "unsupported"` and `method_reason`),
+    `show_in_setup` (a bigger share fits a default chat model), `total_gb`,
+    `gpu_gb` (what models can use on the GPU, Windows' shared memory
+    included), `cpu_gb` (what the GPU can never use; `gpu_gb + cpu_gb =
+    total_gb`), `setting` (`name`, `current_gb`, `min_gb`, `max_gb`;
+    the GPU memory limit on Linux, Variable Graphics Memory on Windows),
+    `reserve_gb` (16: no preset or allowed value leaves `cpu_gb` below it), `method` (`apply` or `guided`) with
+    `method_reason`, `presets` (`setting_gb`, `gpu_gb`, `unlocks`),
+    `recommended_setting_gb`, `models` (`id`, `need_gb`, `default`,
+    `fits_now`, `fits_at_setting_gb`), `pending` (`setting_gb`,
+    `previous_setting_gb`, `source`, `state`: `restart_required`,
+    `took_effect` or `not_applied`), `revert` (`available`,
+    `previous_setting_gb`), `guided_steps` and `guided_value`. A model gains
+    from a bigger share when it has `fits_now: false` and a
+    `fits_at_setting_gb` (exactly the models some preset `unlocks`). Show the
+    step only when such a model is ticked, is the chosen chat model, or is a
+    `default` model the user hasn't unticked or passed over for a chat model
+    of their own. Setup can't tick that default model on a cold start because
+    it doesn't fit yet. **Query:** `setting_gb` renders
+    `guided_steps` for that value (**422** outside `min_gb`–`max_gb`).
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/apply">
+    Linux only. Body: `{"setting_gb": 96, "confirm": true}`. Asks for
+    administrator permission through pkexec, writes the limit, and records the
+    previous one for undo. Takes effect after a restart; GAIA never restarts
+    the PC. **400** without `confirm`; **403** from another computer or over
+    mobile access, or when permission isn't given; **409** when the method
+    is `guided` or the value is already set; **422** when it would leave the
+    CPU less than 16 GB; **500** when the root step fails.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/revert">
+    Body: `{"confirm": true}`. Puts back the setting GAIA replaced, after a
+    restart. **409** when GAIA has no record of a change, or the record holds
+    anything but GPU memory settings. Same **400**/**403** as apply.
+  </Accordion>
+
+  <Accordion title="POST /api/gpu-memory/pending">
+    Body: `{"setting_gb": 64}`. Records a value the user is setting by hand
+    (`guided`), so after the restart `pending.state` says whether it took
+    effect, judged from a fresh reading. **409** where GAIA can apply it
+    itself; **422** out of range.
+  </Accordion>
+
+  <Accordion title="DELETE /api/gpu-memory/pending">
+    Stops reporting the pending change ("Keep current"). Changes nothing on
+    the PC, and keeps what undo needs.
   </Accordion>
 </AccordionGroup>
 
@@ -2423,7 +2815,9 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
   <Accordion title="GET /api/lemonade/target">
     The server GAIA uses now and who chose it: `mode` (`gaia` or `external`),
     `saved_mode` (`null` until someone chooses), `source`, `base_url`,
-    `saved_base_url`, `api_key_stored`, `env_override` (a warning when
+    `saved_base_url`, `api_key_stored`, `env_url_ignored` (the
+    `LEMONADE_BASE_URL` value GAIA's own was chosen over in setup, while the
+    variable still holds it), `env_override` (a warning when
     `LEMONADE_BASE_URL` overrides the setting), `gaia_installed`, `offer` (no
     choice saved and the environment isn't choosing, so the UI should offer the
     switch), and `what_gaia_does`. **409** when the config is unreadable or the
@@ -2444,7 +2838,11 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     Switch servers. Body: `{"mode": "gaia" | "external", "base_url": "...",
     "api_key": "..."}`; the URL and key are only for `external`. Nothing is
     saved unless the user's server checks out. A running daemon is told to
-    stop (or start) GAIA's own server, and cached agents are dropped. Returns
+    stop (or start) GAIA's own server, and cached agents are dropped. When
+    `LEMONADE_BASE_URL` picks the server, `gaia` also saves that value as
+    `lemonade_env_url_ignored`; if GAIA's own isn't installed yet nothing
+    starts and `gaia_installed` is false, so the Agent UI opens setup to
+    install it. Returns
     the `GET` shape plus `daemon`. **422** when the server can't be used
     (`detail.message`, `detail.status`), including `status: "not_installed"`
     when switching from the user's server to GAIA's own before it is
@@ -2609,7 +3007,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `last_provider` in `~/.gaia/config.json` (other keys are kept). Body:
     `{"model": "fireworks.glm-5p3-flash"}`. **409** when the model cannot run
     now; **503** while the local model server is still starting. A successful
-    pick clears this run's restore notice.
+    pick clears this run's restore notice. Picking a local model also starts a
+    fresh warm-up (see `POST /api/system/warm-up`), so the model loads before
+    the next message; follow it with `GET /api/system/warm-up`.
   </Accordion>
 </AccordionGroup>
 
@@ -2634,9 +3034,25 @@ model with no known price reads as unknown, never $0. Cloud models from
     This month's cloud chat turns in the Agent UI at list price, without cache
     discounts. A turn that fails or is stopped before it answers isn't counted,
     so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
-    known price, counted apart), `by_model`, `limit_usd`, and `state`
+    known price, counted apart), `unreported_turns` (turns on a priced model that
+    sent no usage, such as a stopped answer, also counted apart), `by_model` (each
+    entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
+  </Accordion>
+
+  <Accordion title="GET /api/spending/chat/{session_id}">
+    Takes `since` and `model` as query parameters.
+    What one chat's cloud answers cost, and every chat's answers since `since`
+    (an ISO instant: the start of the viewer's local day). Sums the cost each
+    answer's turn summary saved, cache discounts included; answers on this PC
+    are left out. `paid` is true when `model` has a known cloud price, the only
+    time the composer shows it. `chat` carries `usd`, `answers`,
+    `unpriced_answers` (stopped or unpriced answers, counted apart, never as
+    $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per
+    answer); `today` carries `usd`, `answers`, `unpriced_answers` and `chats`.
+    **404** for an unknown chat, **422** when `since` isn't an ISO timestamp,
+    **500** when a saved answer's summary is unreadable.
   </Accordion>
 
   <Accordion title="PUT /api/spending/limit">
@@ -2780,7 +3196,7 @@ CREATE TABLE sessions (
     title TEXT NOT NULL DEFAULT 'New Chat',
     created_at TEXT,
     updated_at TEXT,
-    model TEXT NOT NULL DEFAULT 'Qwen3.5-35B-A3B-GGUF',
+    model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
     system_prompt TEXT
 );
 
@@ -2937,7 +3353,7 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |
 # "web" | "full") — there is no `system_prompt` config field.
 config = ChatAgentConfig(
-    model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
+    model_id=session.get("model", "Gemma-4-E4B-it-GGUF"),
     prompt_profile="doc",
     allowed_paths=["/path/to/files"],
 )

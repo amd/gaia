@@ -10,14 +10,18 @@ Provides lightweight web browsing tools using requests + BeautifulSoup
 search the web, and download files for local analysis.
 """
 
+import bisect
 import json
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from urllib.parse import urlsplit
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
@@ -31,12 +35,25 @@ FIND_CONTEXT_CHARS = 300
 
 #: Text this short means the page renders its content with JavaScript.
 _NEAR_EMPTY_CHARS = 200
+
+#: Do not suggest link extraction for the one incidental link most articles have.
+_LINK_HINT_MINIMUM = 3
+
 _NEAR_EMPTY_NOTE = (
     "\n\n[Almost no text on this page: its content is probably rendered by "
     "JavaScript, which fetch_page does not run. Open it with a real-browser tool "
     "if you have one; otherwise try another source, or report the value as not "
     "found.]"
 )
+
+
+class _DownloadRefused(ValueError):
+    """The destination screen refused the file before anything was written."""
+
+
+def _download_refusal(reason: str) -> Dict[str, Any]:
+    """A download the write policy stopped before it ran."""
+    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
 
 def _download_denied(validator, dest_path: Path) -> str:
@@ -161,20 +178,228 @@ def _search_unavailable_result(
     }
 
 
+#: Appended to a result's title line; the Agent UI strips it from source titles.
+PRIMARY_SOURCE_MARKER = " [primary source]"
+
+#: Hosts whose first path segment is the owner and second is the repository.
+_REPO_HOSTS = frozenset(
+    {"github.com", "gitlab.com", "codeberg.org", "bitbucket.org", "huggingface.co"}
+)
+
+#: Package registries, keyed by host, with the path prefix before the name.
+_REGISTRY_PREFIXES = {
+    "pypi.org": ("project",),
+    "npmjs.com": ("package",),
+    "crates.io": ("crates",),
+    "rubygems.org": ("gems",),
+    "nuget.org": ("packages",),
+    "pkg.go.dev": (),
+    "sourceforge.net": ("projects",),
+}
+
+#: Query words that describe the question, not the thing it is about.
+_GENERIC_QUERY_WORDS = frozenset(
+    {
+        "about",
+        "best",
+        "build",
+        "changelog",
+        "check",
+        "cite",
+        "current",
+        "docs",
+        "documentation",
+        "download",
+        "free",
+        "from",
+        "guide",
+        "install",
+        "latest",
+        "news",
+        "newest",
+        "notes",
+        "number",
+        "official",
+        "online",
+        "page",
+        "recent",
+        "release",
+        "released",
+        "releases",
+        "server",
+        "site",
+        "software",
+        "stable",
+        "that",
+        "this",
+        "today",
+        "tutorial",
+        "update",
+        "updates",
+        "used",
+        "version",
+        "versions",
+        "website",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+    }
+)
+
+_RELEASE_QUERY_WORDS = frozenset(
+    {"version", "versions", "release", "releases", "released", "changelog"}
+)
+
+_RELEASE_PRIMARY_NOTE = (
+    "This is a version or release question. Open the project's own releases, "
+    "changelog or download page with fetch_page (results marked [primary "
+    "source] come from the project itself) and answer from that page, not "
+    "from a search snippet."
+)
+
+_RELEASE_NO_PRIMARY_NOTE = (
+    "None of these results comes from the project itself (its own site, "
+    "repository or package registry). News articles and aggregators often lag "
+    "behind the newest release, so do not answer from them: search again for "
+    "the project's releases page (for example '<project> releases github') or "
+    "fetch it directly, then cite that page."
+)
+
+
+def _query_words(query: str) -> List[str]:
+    return re.findall(r"[a-z0-9]+", query.lower())
+
+
+def _project_words(query: str) -> frozenset:
+    """Query words distinctive enough to name the subject's own domain."""
+    return frozenset(
+        w
+        for w in _query_words(query)
+        if len(w) >= 4 and not w.isdigit() and w not in _GENERIC_QUERY_WORDS
+    )
+
+
+def _is_release_query(query: str) -> bool:
+    return not _RELEASE_QUERY_WORDS.isdisjoint(_query_words(query))
+
+
+def _is_primary_source(url: str, project_words: frozenset) -> bool:
+    """True when *url* is the subject's own site, repository or package page."""
+    if not project_words:
+        return False
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    segments = [s for s in parts.path.lower().split("/") if s]
+    if host in _REPO_HOSTS:
+        # The owner names the project, or the repository is exactly its name:
+        # someone's "climate-memes" repo is not climate's own page.
+        if not segments:
+            return False
+        owner = set(segments[0].split("-"))
+        repo = segments[1] if len(segments) > 1 else ""
+        return not project_words.isdisjoint(owner) or repo in project_words
+    if host in _REGISTRY_PREFIXES:
+        prefix = _REGISTRY_PREFIXES[host]
+        if segments[: len(prefix)] != list(prefix) or len(segments) <= len(prefix):
+            return False
+        name = segments[len(prefix)]
+        return not project_words.isdisjoint(re.split(r"[-_.]", name))
+    # Whole label parts only, so "realpython.com" is not python's own site.
+    labels = host.split(".")[:-1]
+    words = {w for label in labels for w in label.split("-")}
+    return not project_words.isdisjoint(words)
+
+
+def _rank_by_source(
+    results: List[Dict[str, str]], query: str
+) -> List[Tuple[Dict[str, str], bool]]:
+    """Results paired with their primary flag, primary sources first."""
+    words = _project_words(query)
+    flagged = [(r, _is_primary_source(r.get("url", ""), words)) for r in results]
+    return sorted(flagged, key=lambda pair: not pair[1])
+
+
+def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Merge overlapping ``(start, end)`` character windows."""
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _find_spans(text: str, term: str) -> List[Tuple[int, int]]:
-    """Merged ``(start, end)`` windows around every case-insensitive match of *term*."""
+    """Merged windows around each case-insensitive exact match of *term*."""
     spans: List[Tuple[int, int]] = []
     haystack, needle = text.lower(), term.lower()
     at = haystack.find(needle)
     while at != -1:
-        start = max(0, at - FIND_CONTEXT_CHARS)
-        end = min(len(text), at + len(needle) + FIND_CONTEXT_CHARS)
-        if spans and start <= spans[-1][1]:
-            spans[-1] = (spans[-1][0], end)
-        else:
-            spans.append((start, end))
+        spans.append(
+            (
+                max(0, at - FIND_CONTEXT_CHARS),
+                min(len(text), at + len(needle) + FIND_CONTEXT_CHARS),
+            )
+        )
         at = haystack.find(needle, at + len(needle))
-    return spans
+    return _merge_spans(spans)
+
+
+def _find_all_words_spans(text: str, term: str) -> List[Tuple[int, int]]:
+    """Windows containing every distinct word in multi-word *term*.
+
+    This is deliberately a fallback for a failed exact phrase search.  It does
+    not claim that the words are adjacent or that the phrase occurs verbatim;
+    it gives the agent a passage to inspect when a page separates a query such
+    as ``Sunday Pier 9`` across a table or sentence.
+    """
+    # Only a phrase splits: "$1,299" must not match "1" and "299" separately.
+    if len(term.split()) < 2:
+        return []
+    words = list(dict.fromkeys(re.findall(r"\w+", term.lower())))
+    if len(words) < 2:
+        return []
+    # One named group per word: a case-folded match ("ſ" for "s") need not
+    # lower() back to the word it matched.
+    pattern = re.compile(
+        r"\b(?:"
+        + "|".join(f"(?P<w{i}>{re.escape(word)})" for i, word in enumerate(words))
+        + r")\b",
+        re.IGNORECASE,
+    )
+    starts: List[List[int]] = [[] for _ in words]
+    ends: List[List[int]] = [[] for _ in words]
+    for match in pattern.finditer(text):
+        index = int(match.lastgroup[1:])
+        starts[index].append(match.start())
+        ends[index].append(match.end())
+    if any(not found for found in starts):
+        return []
+
+    # Bisect, not a scan per anchor: common words on a long page would make
+    # this quadratic and stall the tool call. The window is two-sided, so the
+    # page may list the words in any order ("Pier 9 ... on Sunday").
+    window = FIND_CONTEXT_CHARS * 2
+    spans = []
+    for anchor in starts[0]:
+        first = last = anchor
+        for word_starts, word_ends in zip(starts, ends):
+            at = bisect.bisect_left(word_starts, anchor - window)
+            if at == len(word_starts) or word_starts[at] > anchor + window:
+                break
+            first = min(first, word_starts[at])
+            last = max(last, word_ends[at])
+        else:
+            spans.append(
+                (
+                    max(0, first - FIND_CONTEXT_CHARS),
+                    min(len(text), last + FIND_CONTEXT_CHARS),
+                )
+            )
+    return _merge_spans(spans)
 
 
 def text_window(
@@ -194,16 +419,34 @@ def text_window(
             for start, end in _find_spans(text, term)
             if end > offset
         ]
+        fallback = False
+        if not spans:
+            # Exact phrase matching misses ordinary page layouts such as a
+            # timetable that keeps ``Sunday`` and ``Pier 9`` in separate cells.
+            # Return a clearly labelled all-words passage before suggesting the
+            # page lacks the answer.
+            spans = [
+                (max(start, offset), end)
+                for start, end in _find_all_words_spans(text, term)
+                if end > offset
+            ]
+            fallback = bool(spans)
         if not spans:
             where = f"after character {offset:,} of" if offset else "in"
             return (
-                f"[No occurrence of {term!r} {where} the page's {total:,} characters "
-                "of text. Do not infer it; try another word, another page, or "
-                "report it as not found.]"
+                f"[No exact occurrence of {term!r} {where} the page's {total:,} "
+                "characters of text, and its words were not found together nearby. "
+                "Do not infer an answer from this miss. Try one distinctive word, "
+                "read on with offset, or inspect links before reporting it as not found.]"
             )
         parts, used = [], 0
         for number, (start, end) in enumerate(spans):
-            label = f"[at character {start:,}]\n"
+            label = (
+                f"[Exact phrase {term!r} was not found; this passage contains all "
+                f"of its words near character {start:,}]\n"
+                if fallback
+                else f"[at character {start:,}]\n"
+            )
             if parts and used + len(label) + end - start > max_length:
                 return "\n\n".join(parts) + (
                     f"\n\n[{len(spans) - number} more passage(s) match {term!r}. "
@@ -314,8 +557,10 @@ class BrowserToolsMixin:
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
+                from gaia.web.client import fetch_error_text
+
                 logger.error(f"Error fetching {url}: {e}")
-                return f"Error fetching page: {e}"
+                return f"Error fetching page: {fetch_error_text(e)}"
 
             content_type = response.headers.get("Content-Type", "")
 
@@ -401,9 +646,20 @@ class BrowserToolsMixin:
             else:  # text (default)
                 text = mixin._web_client.extract_text(soup, max_length=None)
                 header = f"Page: {title}\nURL: {url}\nLength: {len(text):,} chars\n\n"
+                links = mixin._web_client.extract_links(soup, url)
+                links_hint = ""
+                if len(links) >= _LINK_HINT_MINIMUM:
+                    links_hint = (
+                        f"\n\n[{len(links)} links on this page. Call "
+                        f"fetch_page({url!r}, extract='links') to inspect and follow them.]"
+                    )
                 if len(text.strip()) < _NEAR_EMPTY_CHARS:
-                    return header + text + _NEAR_EMPTY_NOTE
-                return header + text_window(text, url, max_length, offset, find)
+                    return header + text + _NEAR_EMPTY_NOTE + links_hint
+                return (
+                    header
+                    + text_window(text, url, max_length, offset, find)
+                    + links_hint
+                )
 
         @tool(atomic=True)
         def search_web(
@@ -413,7 +669,11 @@ class BrowserToolsMixin:
             """Search the web and return results with titles, URLs, and snippets.
 
             Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
-            brief descriptions. Use fetch_page to read the full content of any result.
+            brief descriptions. Use fetch_page to read the full content of any
+            result. For a version or release question, the project's own site,
+            repository or package page is listed first and marked [primary
+            source]: fetch its releases or changelog page and answer from it,
+            since snippets and news articles go stale.
 
             Args:
                 query: Search query string
@@ -472,13 +732,27 @@ class BrowserToolsMixin:
             lines = [f'Web search results for: "{query}"', ""]
             if source_note:
                 lines[1:1] = [source_note]
-            for i, result in enumerate(results, 1):
-                lines.append(f"{i}. {result['title']}")
+            # Only release questions: on everyday searches a shared word
+            # ("boston" in boston.com) does not make a site the subject's own.
+            release_query = _is_release_query(query)
+            ranked = (
+                _rank_by_source(results, query)
+                if release_query
+                else [(r, False) for r in results]
+            )
+            for i, (result, primary) in enumerate(ranked, 1):
+                marker = PRIMARY_SOURCE_MARKER if primary else ""
+                lines.append(f"{i}. {result['title']}{marker}")
                 lines.append(f"   {result['url']}")
                 if result.get("snippet"):
                     lines.append(f"   {result['snippet']}")
                 lines.append("")
 
+            if release_query:
+                any_primary = any(primary for _, primary in ranked)
+                lines.append(
+                    _RELEASE_PRIMARY_NOTE if any_primary else _RELEASE_NO_PRIMARY_NOTE
+                )
             lines.append("Use fetch_page(url) to read the full content of any result.")
             return "\n".join(lines)
 
@@ -487,7 +761,7 @@ class BrowserToolsMixin:
             url: str,
             save_to: str = "~/Downloads",
             filename: str = None,
-        ) -> str:
+        ) -> Union[str, Dict[str, Any]]:
             """Download a file from a URL to the local filesystem.
 
             Downloads the file and saves it locally. Useful for getting documents,
@@ -514,7 +788,7 @@ class BrowserToolsMixin:
                 resolved_dir = str(Path(save_to).expanduser().resolve())
                 is_blocked, reason = validator.is_write_blocked(resolved_dir)
                 if is_blocked:
-                    return f"Error: {reason}"
+                    return _download_refusal(reason)
 
             # WebClient calls this with the final file path before creating
             # anything, so a refusal leaves the filesystem untouched.
@@ -522,7 +796,7 @@ class BrowserToolsMixin:
                 if validator:
                     is_blocked, reason = validator.is_write_blocked(str(dest_path))
                     if is_blocked:
-                        raise ValueError(
+                        raise _DownloadRefused(
                             f"Downloaded file blocked by security policy: {reason}"
                         )
                     # Ask about the folder when it can be granted whole, so one
@@ -532,7 +806,7 @@ class BrowserToolsMixin:
                     if validator.grant_refusal_reason(str(target)):
                         target = dest_path
                     if not validator.is_path_allowed(str(target), prompt_user=True):
-                        raise ValueError(_download_denied(validator, dest_path))
+                        raise _DownloadRefused(_download_denied(validator, dest_path))
                 before_change(dest_path, "download_file")
 
             try:
@@ -542,6 +816,8 @@ class BrowserToolsMixin:
                     filename=filename,
                     on_path_resolved=_screen_destination,
                 )
+            except _DownloadRefused as e:
+                return _download_refusal(str(e))
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:

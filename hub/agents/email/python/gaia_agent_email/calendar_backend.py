@@ -22,12 +22,11 @@ from typing import (
 )
 
 import httpx
-
-from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
 from gaia_agent_email.google_errors import (
     access_not_configured_message,
     access_not_configured_url,
 )
+from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
 
 from gaia.connectors.api import get_access_token_sync
 from gaia.connectors.errors import ConnectorsError

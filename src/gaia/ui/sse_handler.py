@@ -39,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
 )
+from gaia.llm.reasoning import THINK_CLOSE, THINK_OPEN, has_lone_close
 from gaia.ui import scripted_user
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
@@ -47,7 +48,9 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.generated_media import is_remote_or_device_path
 from gaia.ui.turn_summary import TurnLedger, search_hits
+from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
     JsonStringStreamDecoder,
     extract_json_string_field,
@@ -59,10 +62,21 @@ logger = logging.getLogger(__name__)
 _SUMMARY_CHAR_CAP = 300
 #: How much of an MCP tool's text output a tool row carries.
 _MCP_OUTPUT_CHAR_CAP = 16_000
+#: Most diff lines an edit's ``diff`` card carries; the rest is counted, not sent.
+_DIFF_CARD_MAX_LINES = 400
+#: Most characters it carries, so one huge line (a minified file) stays bounded.
+_DIFF_CARD_MAX_CHARS = 64_000
 
 #: Result keys naming a file the tool wrote; kept on the summary view a
 #: relayed result is reduced to.
-RESULT_PATH_KEYS = ("file_path", "image_path")
+RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
+
+#: Generated media file types that a client may later open through an explicit
+#: card action.  Keep this intentionally narrow: a successful tool result is
+#: not enough to turn an arbitrary local file into a launchable UI payload.
+MEDIA_OUTPUT_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".flac"}
+)
 
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
@@ -561,6 +575,8 @@ class SSEOutputHandler(OutputHandler):
         self._in_thinking = False  # True while inside a <think>...</think> block
         # Part of the open <think> block already went out.
         self._thinking_streamed = False
+        # This reply has shown a think tag, so a later </think> is not lone.
+        self._reply_saw_think = False
         self._json_filtered = False  # True after a JSON block was suppressed; used to eat trailing } artifacts
         # Where the brace scan of a still-open envelope stopped, and the head of
         # the buffer it scanned: a long tool call is scanned once, not per token.
@@ -644,11 +660,14 @@ class SSEOutputHandler(OutputHandler):
         self._turn_metrics: Optional[Dict[str, Any]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
+        self._turn_failure: Optional[str] = None
         # The answer this turn already put on the wire. A transport that ends
         # the turn on it cancels the run, so the run reads it back from here.
         self.delivered_answer: str = ""
         # What this turn's tools used, wrote and contacted, for the side rail.
         self.turn_ledger = TurnLedger()
+        # The diff print_diff drew for the call in flight; its result carries it.
+        self._pending_diff_card: Optional[Dict[str, Any]] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -666,6 +685,11 @@ class SSEOutputHandler(OutputHandler):
             self._text_since_tool = ""
         elif etype == "answer":
             self._text_since_tool = ""
+        elif etype in ("thinking", "status") and event.get("retracts_answer"):
+            # The text shown since the last tool was reasoning, or a reply that
+            # was cut off; either way it is not commentary.
+            self._text_since_tool = ""
+            self._shown_fence, self._shown_line_start = None, True
         self.event_queue.put(event)
 
     def _fence_at(self, unshown: str) -> "tuple[Optional[str], bool]":
@@ -678,6 +702,7 @@ class SSEOutputHandler(OutputHandler):
         self._shown_line_start = True
         self._raw_line_start = True
         self._call_progress_next = 0.0
+        self._reply_saw_think = False
 
     def _elapsed(self) -> float:
         if self._start_time is None:
@@ -805,6 +830,7 @@ class SSEOutputHandler(OutputHandler):
 
     def print_tool_usage(self, tool_name: str):
         self.record_tool_started(tool_name)
+        self._pending_diff_card = None
         # Prefer an explicit display label from the tool registry; fall back
         # to the legacy description map in this module when none is provided.
         detail_label = get_tool_display_label(tool_name) or _tool_description(tool_name)
@@ -817,6 +843,9 @@ class SSEOutputHandler(OutputHandler):
         }
         event.update(_mcp_identity(tool_name))
         self._emit(event)
+
+    def print_skill_use(self, name: str, loaded: List[str], how: str):
+        self._emit({"type": "skill_use", "skill": name, "how": how, "loaded": loaded})
 
     def print_tool_complete(self):
         self._tool_start_time = None  # Reset in case tool_result was skipped
@@ -892,6 +921,8 @@ class SSEOutputHandler(OutputHandler):
             for key in RESULT_PATH_KEYS:
                 if isinstance(data.get(key), str):
                     event[key] = data[key]
+            if isinstance(data.get("num_chunks"), int):
+                event["num_chunks"] = data["num_chunks"]
         # The summary drops the hits a relayed turn's sources are made of.
         if self._last_tool_name == "search_web" and isinstance(data, str):
             event["sources"] = search_hits(data)
@@ -956,7 +987,7 @@ class SSEOutputHandler(OutputHandler):
                             {
                                 "id": c.get("chunk_id", 0),
                                 "source": (
-                                    Path(c["source_file"]).name
+                                    display_file_name(c["source_file"])
                                     if c.get("source_file")
                                     else None
                                 ),
@@ -990,8 +1021,36 @@ class SSEOutputHandler(OutputHandler):
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
+        elif self._pending_diff_card is not None:
+            # ChatView and step persistence read a card from ``data``.
+            event["result_data"] = self._pending_diff_card
+            event["data"] = self._pending_diff_card
+            event["render"] = "diff"
+        self._pending_diff_card = None
 
         self._emit(event)
+
+    def print_diff(self, diff: str, filename: str) -> None:
+        """Attach a ``diff`` card to the result of the call that made the change.
+
+        Called by the write tools after the bytes are on disk; the card rides
+        the call's own ``tool_result`` so it lands under that tool row.
+        """
+        lines = diff.splitlines()
+        card: Dict[str, Any] = {"title": filename, "unified": diff}
+        if len(lines) > _DIFF_CARD_MAX_LINES:
+            card["unified"] = "\n".join(lines[:_DIFF_CARD_MAX_LINES])
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_LINES} of {len(lines)} diff lines."
+            )
+        if len(card["unified"]) > _DIFF_CARD_MAX_CHARS:
+            card["unified"] = card["unified"][:_DIFF_CARD_MAX_CHARS]
+            card["note"] = (
+                f"Showing the first {_DIFF_CARD_MAX_CHARS:,} characters of the diff."
+            )
+        self._pending_diff_card = card
 
     # === Status Messages ===
 
@@ -1049,6 +1108,18 @@ class SSEOutputHandler(OutputHandler):
     def report_progress(self, message: str):
         self._emit({"type": "status", "status": "working", "message": message})
 
+    def restart_answer(self, message: str) -> None:
+        self.delivered_answer = ""
+        self._emit(
+            {
+                "type": "status",
+                "status": "warning",
+                "phase": "answer_restart",
+                "message": message,
+                "retracts_answer": True,
+            }
+        )
+
     def report_phase(self, phase: str, message: str, **counts: int):
         self._emit(
             {
@@ -1073,6 +1144,21 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
+        # Media-producing tools return a verified local path.  The client gets
+        # it through a typed card rather than scraping a model-written path out
+        # of prose, so opening it cannot become an agent-output execution sink.
+        "generate_image": "media",
+        "generate_music": "media",
+        "generate_sound_effect": "media",
+        "text_to_speech": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1102,6 +1188,8 @@ class SSEOutputHandler(OutputHandler):
             envelope = parsed
         else:
             return None
+        if lang == "media":
+            return self._media_card_payload(envelope)
         if not envelope.get("ok"):
             return None
         inner = envelope.get("data")
@@ -1109,15 +1197,75 @@ class SSEOutputHandler(OutputHandler):
             return None
         return inner
 
+    @staticmethod
+    def _media_card_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return a typed card only for a verified media file this tool wrote.
+
+        The terminal must never open a path copied from model prose or from an
+        unrelated tool's payload.  The render map admits only media producers;
+        this second check requires their successful, absolute, regular-file
+        output before the path crosses the wire as an actionable card.
+        """
+        if envelope.get("status") != "success":
+            return None
+        path_key = next(
+            (
+                key
+                for key in ("image_path", "audio_path", "file_path")
+                if isinstance(envelope.get(key), str) and envelope[key].strip()
+            ),
+            None,
+        )
+        if path_key is None:
+            return None
+        # Judged on the string first: stat-ing a UNC path reaches out to the share.
+        if is_remote_or_device_path(envelope[path_key]):
+            return None
+        path = Path(envelope[path_key]).expanduser()
+        if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        if not path.is_file():
+            return None
+        image = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        media_type = "image" if image else "audio"
+        payload: Dict[str, Any] = {
+            "kind": "media",
+            "path": str(path),
+            "media_type": media_type,
+            "size_bytes": stat.st_size,
+            # A relayed turn reaches the Agent UI as this payload alone; its
+            # inline image/audio card and Outputs read the tool's own keys.
+            "status": "success",
+            path_key: str(path),
+        }
+        for key in (
+            "model",
+            "size",
+            "steps",
+            "voice",
+            "format",
+            "duration_seconds",
+            "duration_requested",
+            "generation_time_s",
+        ):
+            if envelope.get(key) is not None:
+                payload[key] = envelope[key]
+        return payload
+
     # === Completion Methods ===
 
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
 
-    def mark_turn_failed(self) -> None:
+    def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
         self._turn_failed = True
+        self._turn_failure = failure
 
     def print_final_answer(
         self,
@@ -1192,6 +1340,9 @@ class SSEOutputHandler(OutputHandler):
         if self._turn_failed:
             self._turn_failed = False
             event["failed"] = True
+            if self._turn_failure:
+                event["failure"] = self._turn_failure
+            self._turn_failure = None
         self.delivered_answer = event["content"] or ""
         self._emit(event)
 
@@ -1554,7 +1705,13 @@ class SSEOutputHandler(OutputHandler):
             ):
                 self._envelope_scan = None  # a cancelled stream left it behind
             while self._in_thinking or (
-                self._envelope_scan is None and "<think>" in self._stream_buffer
+                self._envelope_scan is None
+                and (
+                    THINK_OPEN in self._stream_buffer
+                    or (
+                        not self._reply_saw_think and THINK_CLOSE in self._stream_buffer
+                    )
+                )
             ):
                 if self._in_thinking:
                     # We're inside a thinking block — look for closing tag
@@ -1585,10 +1742,17 @@ class SSEOutputHandler(OutputHandler):
                             self._thinking_streamed = True
                         self._stream_buffer = ""
                         return
+                elif not self._reply_saw_think and has_lone_close(self._stream_buffer):
+                    head, _, self._stream_buffer = self._stream_buffer.partition(
+                        THINK_CLOSE
+                    )
+                    self._retract_as_reasoning(head)
+                    continue
                 else:
                     # Not in thinking — look for opening tag
                     open_idx = self._stream_buffer.find("<think>")
                     if open_idx >= 0:
+                        self._reply_saw_think = True
                         # Emit any text before <think> as regular content,
                         # stripping thought/tool-call JSON artifacts that the
                         # model sometimes outputs before its think block.
@@ -1780,6 +1944,23 @@ class SSEOutputHandler(OutputHandler):
         if end_of_stream:
             self._answer_stream = None
 
+    def _retract_as_reasoning(self, head: str) -> None:
+        """A lone ``</think>`` ended reasoning that streamed as answer text.
+
+        Everything shown since the last tool call, plus *head*, goes to the
+        thinking step; ``retracts_answer`` tells the consumer to drop it from
+        the answer it has drawn so far.
+        """
+        self._reply_saw_think = True
+        shown = self._text_since_tool
+        reasoning = (shown + head).strip()
+        if not reasoning:
+            return
+        event: Dict[str, Any] = {"type": "thinking", "content": reasoning}
+        if shown:
+            event["retracts_answer"] = True
+        self._emit(event)
+
     def _emit_answer_text(self, text: str) -> None:
         if text:
             self.delivered_answer = (self.delivered_answer or "") + text
@@ -1831,6 +2012,7 @@ class SSEOutputHandler(OutputHandler):
         """
         if timeout is _USE_HANDLER_TIMEOUT:
             timeout = self.confirm_timeout_seconds
+        self._answered_prompt = None
         noted, self._noted_call = self._noted_call, None
         call_args = noted[1] if noted is not None and noted[0] == tool_name else None
 
@@ -2014,6 +2196,8 @@ class SSEOutputHandler(OutputHandler):
         result = self._confirm_result
         timed_out = self._confirm_timed_out
         self._clear_pending_confirmation()
+        if not timed_out:
+            self.note_prompt_answered(tool_name)
         if timed_out:
             # The client's own clock ran out and it said so: a timeout, never
             # "the user denied it".
@@ -2387,7 +2571,7 @@ class SSEOutputHandler(OutputHandler):
         active relay run to answer (already finished, or never one) so the
         caller can 404 rather than report an accepted answer nothing reads.
         Any sidecar rejection (e.g. the question is no longer pending)
-        propagates as :class:`~gaia.ui.email_sidecar.errors.SidecarError` —
+        propagates as :class:`~gaia.daemon.sidecars.errors.SidecarError` —
         never swallowed.
         """
         proxy = self.active_relay_proxy
@@ -2655,7 +2839,8 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         if data.get("already_indexed"):
             return f"Already indexed ({chunks} chunks)"
         if filename:
-            return f"Indexed {filename} ({chunks} chunks)"
+            shown = upload_original_name(filename) or filename
+            return f"Indexed {shown} ({chunks} chunks)"
         return f"Indexed document ({chunks} chunks)"
 
     # File read results
@@ -2695,7 +2880,10 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
     # Status-based results
     if "status" in data:
         status = data["status"]
-        msg = data.get("message", data.get("error", data.get("display_message", "")))
+        # Written for the user; message may be written for the model.
+        if data.get("display_message"):
+            return str(data["display_message"])[:200]
+        msg = data.get("message", data.get("error", ""))
         if msg:
             return f"{status}: {str(msg)[:200]}"
         # A bare "success" tells the user nothing. Report what came back

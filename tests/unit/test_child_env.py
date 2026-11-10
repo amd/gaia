@@ -240,13 +240,14 @@ def _import_gaia_in(cwd, extra_env):
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in ("GAIA_NO_DOTENV", "FROM_DOTENV")
+        if k.upper() not in ("GAIA_NO_DOTENV", "ANTHROPIC_API_KEY")
     }
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     env.update(extra_env)
     code = (
-        "import os, gaia.cli, gaia.env; "
-        "print(os.environ.get('FROM_DOTENV', '<unset>'), gaia.env.dotenv_disabled())"
+        "import gaia.cli, gaia.env; "
+        "print(gaia.env.credential('ANTHROPIC_API_KEY') or '<unset>', "
+        "gaia.env.dotenv_disabled())"
     )
     proc = subprocess.run(
         [sys.executable, "-c", code],
@@ -263,7 +264,7 @@ def _import_gaia_in(cwd, extra_env):
 
 @pytest.fixture
 def dotenv_dir(tmp_path):
-    (tmp_path / ".env").write_text("FROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=loaded\n")
     return tmp_path
 
 
@@ -277,13 +278,13 @@ def test_gaia_no_dotenv_skips_dotenv(dotenv_dir):
 
 
 def test_a_dotenv_file_cannot_set_gaia_no_dotenv(tmp_path):
-    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=1\nFROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=1\nANTHROPIC_API_KEY=loaded\n")
 
     assert _import_gaia_in(tmp_path, {}) == "loaded False"
 
 
 def test_a_dotenv_file_cannot_clear_gaia_no_dotenv(tmp_path):
-    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=0\nFROM_DOTENV=loaded\n")
+    (tmp_path / ".env").write_text("GAIA_NO_DOTENV=0\nANTHROPIC_API_KEY=loaded\n")
 
     assert _import_gaia_in(tmp_path, {"GAIA_NO_DOTENV": "1"}) == "<unset> True"
 
@@ -319,3 +320,62 @@ def test_load_dotenv_is_only_called_from_gaia_env():
         "Call gaia.env.load_env() instead of load_dotenv() so GAIA_NO_DOTENV "
         f"is honored: {offenders}"
     )
+
+
+class TestFrozenLoaderPaths:
+    """A frozen GAIA on Linux must not hand its bundled libraries to its children."""
+
+    @pytest.fixture
+    def frozen_linux(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+
+    def test_restores_the_users_library_path(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        env = gaia_env.child_env()
+        assert env["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+        assert "LD_LIBRARY_PATH_ORIG" not in env
+        # A gaia the child starts sets up its own bundle instead of reusing ours.
+        assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+    def test_drops_the_bundle_path_when_the_user_had_none(
+        self, frozen_linux, monkeypatch
+    ):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        assert "LD_LIBRARY_PATH" not in gaia_env.child_env()
+
+    def test_a_relaunch_of_this_bundle_keeps_it(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        env = gaia_env.child_env(same_bundle=True)
+        assert env["LD_LIBRARY_PATH"] == "/bundle"
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+        assert env["LD_LIBRARY_PATH_ORIG"] == "/opt/rocm/lib"
+
+    def test_an_explicit_path_still_wins(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+        env = gaia_env.child_env({"LD_LIBRARY_PATH": "/caller"})
+        assert env["LD_LIBRARY_PATH"] == "/caller"
+
+    def test_source_runs_keep_the_path(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/rocm/lib")
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32"])
+    def test_other_platforms_keep_the_users_values(self, monkeypatch, platform):
+        """PyInstaller only rewrites the path on Linux; elsewhere it is the user's."""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/x")
+        monkeypatch.setenv("DYLD_LIBRARY_PATH", "/opt/y")
+        monkeypatch.setenv("LIBPATH", "C:/vs/lib")
+        env = gaia_env.child_env()
+        assert (env["LD_LIBRARY_PATH"], env["DYLD_LIBRARY_PATH"], env["LIBPATH"]) == (
+            "/opt/x",
+            "/opt/y",
+            "C:/vs/lib",
+        )

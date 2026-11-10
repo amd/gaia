@@ -116,6 +116,7 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/starter-skills",
+                      "guides/building-skills",
                       "guides/custom-agent",
                       "guides/composing-skills"
                     ]
@@ -125,7 +126,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }
@@ -139,6 +139,10 @@
                   "connectors/microsoft",
                   "connectors/github",
                   "connectors/tavily",
+                  "connectors/git",
+                  "connectors/memory",
+                  "connectors/slack",
+                  "connectors/discord",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -459,6 +463,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.26.0",
               "releases/v0.25.4",
               "releases/v0.25.3",
               "releases/v0.25.2",
@@ -525,7 +530,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.4 \u00b7 Lemonade 2026.44.1",
+        "label": "v0.26.0 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {

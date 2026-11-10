@@ -30,7 +30,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
 - `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
-- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), and for folders no approval may open
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
 - Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
@@ -95,7 +95,8 @@ allowed-paths rule as an argument, on every segment.
 
 Refused by name are the loader and hook variables — anything that changes
 *which* binary runs or what code one loads: `PATH`, `SHELL`, `ENV`, `IFS`,
-`PAGER`/`EDITOR`/`VISUAL`, and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
+`PAGER`/`EDITOR`/`VISUAL`, `MORE` (macOS `more` is `less` and reads its options
+from it), and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
 `PYTEST_*`, `BASH_*`, `NODE_*`, `PERL*`, `RUBY*`, `LESS*`, `JAVA*`, `PS*`
 families. Names match case-insensitively, because Windows matches environment
 names that way. An assignment with no command after it, and one in front of
@@ -424,6 +425,18 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+Membership is by name, and a read-only name says nothing about its flags, so the
+flags that write, change system state, or run something are inspected per
+pipeline segment and sent to the prompt (`TIER_CONFIRM`) instead of running
+unasked: `find -exec`/`-delete`/`-fprint*`, `sort -o`/`--compress-program`, a
+second `uniq` operand, `wmic /output`/`/append`/`/record`, `date -s` or a date
+operand (Windows `date /t` only prints, so it still runs), `sysctl -w`/`-p`/`-f`/`--system`/`name=value`, `hostname NAME`/`-F`/`-b`,
+`ipconfig /release`/`/renew`/`/flushdns`/`/registerdns`/`/setclassid`, `file -C`,
+`less`/`more` `-o`/`-O`/`-k`/`--log-file`/`--lesskey-*`/`+command` (a `+N` or `+G`
+line jump still runs), and `arch` with any argument. Short-flag clusters are read
+letter by letter, so `-0C` is `-0 -C`. `date`, `sysctl`, `hostname` and `ipconfig`
+accept only their known read-only options, so an unknown flag also asks.
+
 ### Bypass Permissions
 
 Off by default. Turned on only by the flagship sidecar's `--full-access`
@@ -445,8 +458,9 @@ DEVELOPER_COMMANDS = frozenset({
 })   # "rm" deliberately excluded
 ```
 
-`git` is in the set, so its binary policy's outright refusals — push, reset,
-rebase — do not apply under bypass. That drops a tripwire, not a boundary:
+`git` is in the set, so the binary policy that holds `git push`, `git reset` and
+`git rebase` does not apply under bypass. Without bypass those commands ask once
+instead of failing. That drops a tripwire, not a boundary:
 `python` and `make` reach git by shelling out regardless. Leaving it out would
 also have made bypass *stricter* than the default tier, where git's read-only
 floor still runs `git status`.

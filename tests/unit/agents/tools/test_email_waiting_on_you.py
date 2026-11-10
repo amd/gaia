@@ -11,6 +11,7 @@ positive is re-run against both providers.
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -134,10 +135,15 @@ def test_manufactured_corroboration_never_qualifies(api, prior):
 
 
 def _thread(
-    latest_body, *, prior=(SUBSTANTIVE,), sender="Alice <alice@example.com>", **kw
+    latest_body,
+    *,
+    prior=(SUBSTANTIVE,),
+    sender="Alice <alice@example.com>",
+    kickoff="Kickoff.",
+    **kw,
 ):
     addr = waiting.sender_address(sender)
-    mails = [Mail("a0", "t1", sender=sender, body="Kickoff.", age_days=20)]
+    mails = [Mail("a0", "t1", sender=sender, body=kickoff, age_days=20)]
     for i, body in enumerate(prior):
         mails.append(outbound(f"s{i}", "t1", to=addr, body=body, age_days=10 - i))
     mails.append(Mail("r1", "t1", sender=sender, body=latest_body, age_days=3, **kw))
@@ -168,6 +174,241 @@ def test_an_html_body_is_read_as_text():
     )
     out = _scan(FakeGraphApi, _thread(body, html=True))
     assert len(out["waiting_on_you"]) == 1
+
+
+def test_an_auto_reply_header_is_not_a_waiting_request(api):
+    mails = _thread("Could you please confirm?", labels=["INBOX", "AUTO_REPLY"])
+    assert _scan(api, mails)["waiting_on_you"] == []
+
+
+OLD_ASK = "Could you please confirm the numbers?"
+
+
+def _asks(api, body, **kw):
+    out = _scan(api, _thread(body, kickoff=OLD_ASK, **kw))
+    return [i["message_id"] for i in out["waiting_on_you"]]
+
+
+def test_a_quoted_old_ask_is_not_a_new_request(api):
+    body = f"Thanks for the update.\n\nOn Monday Alice wrote:\n{OLD_ASK}"
+    assert _asks(api, body) == []
+
+
+def test_a_cc_only_request_is_not_assigned_to_the_user(api):
+    mails = _thread(
+        "Could you please confirm?",
+        to="Owner <owner@example.com>",
+        cc=f"Me <{USER}>",
+    )
+    assert _scan(api, mails)["waiting_on_you"] == []
+
+
+_GMAIL_HTML_QUOTE = (
+    '<div dir="ltr">Thanks for the update.</div><br><div class="gmail_quote">'
+    '<div dir="ltr" class="gmail_attr">On Mon, Alice wrote:<br></div>'
+    "<blockquote>Could you please confirm the numbers?</blockquote></div>"
+)
+_OUTLOOK_HTML_QUOTE = (
+    "<html><body><div>Thanks for the update.</div>"
+    '<div id="appendonsend"></div><hr style="display:inline-block;width:98%">'
+    '<div id="divRplyFwdMsg" dir="ltr"><b>From:</b> Alice<br><b>Sent:</b> Monday'
+    "</div><div>Could you please confirm the numbers?</div></body></html>"
+)
+
+
+@pytest.mark.parametrize("body", [_GMAIL_HTML_QUOTE, _OUTLOOK_HTML_QUOTE])
+def test_an_html_quoted_old_ask_is_not_a_new_request(api, body):
+    assert _asks(api, body, html=True) == []
+
+
+@pytest.mark.parametrize("body", [_GMAIL_HTML_QUOTE, _OUTLOOK_HTML_QUOTE])
+def test_an_html_new_ask_above_a_quote_still_qualifies(api, body):
+    body = body.replace("Thanks for the update.", "Could you send the deck?")
+    assert _asks(api, body, html=True) == ["r1"]
+
+
+# --------------------------------------------------------------------------
+# an answer written below or inside a quote is new text, not quoted history
+# --------------------------------------------------------------------------
+
+
+def test_a_bottom_posted_plain_text_ask_qualifies(api):
+    body = f"On Monday Alice wrote:\n> {OLD_ASK}\n\nCould you send the deck too?"
+    assert _asks(api, body) == ["r1"]
+
+
+def test_an_inline_plain_text_ask_under_the_attribution_qualifies(api):
+    body = (
+        f"On Monday Alice wrote:\n> {OLD_ASK}\nDone. Could you send the deck?"
+        "\n> Thanks.\n"
+    )
+    assert _asks(api, body) == ["r1"]
+
+
+def test_an_html_ask_after_a_blockquote_qualifies(api):
+    body = (
+        '<div class="gmail_quote"><div class="gmail_attr">On Mon, Alice wrote:'
+        f"</div><blockquote>{OLD_ASK}</blockquote></div>"
+        "<div>Done. Could you send the deck?</div>"
+    )
+    assert _asks(api, body, html=True) == ["r1"]
+
+
+def test_an_html_ask_between_two_blockquotes_qualifies(api):
+    body = (
+        f"<blockquote>{OLD_ASK}</blockquote><p>Could you send the deck?</p>"
+        "<blockquote><blockquote>Kickoff.</blockquote></blockquote>"
+    )
+    assert _asks(api, body, html=True) == ["r1"]
+
+
+def test_an_inline_answer_inside_outlooks_quoted_section_qualifies(api):
+    body = (
+        '<div>See inline.</div><div id="appendonsend"></div><hr>'
+        '<div id="divRplyFwdMsg"><b>From:</b> Alice<br><b>Sent:</b> Monday<br>'
+        f"<b>Subject:</b> Numbers</div><div>{OLD_ASK}</div>"
+        '<div style="color:red">Could you send the deck by Friday?</div>'
+    )
+    assert _asks(api, body, html=True) == ["r1"]
+
+
+def test_an_unclosed_blockquote_hides_the_rest(api):
+    body = f"<p>Thanks.</p><blockquote><p>{OLD_ASK}</p>"
+    assert _asks(api, body, html=True) == []
+
+
+def _parse_seconds(body):
+    message = {"body": body, "body_content_type": "html"}
+    started = time.perf_counter()
+    waiting.new_text(message, waiting.quoted_lines([message]))
+    waiting.strip_quoted_text(body.replace("<", "a"))
+    return time.perf_counter() - started
+
+
+# A builder's divisor scales its input: 1 is full size, _SHRINK a fraction.
+_SHRINK = 8
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda d: "<" * (300_000 // d) + "\nFrom: x" * (25_000 // d),
+        lambda d: "<" + "appendonsend " * (40_000 // d),
+        lambda d: "<" + "divRplyFwdMsg moz-cite-prefix " * (17_000 // d),
+        lambda d: "<blockquote " * (40_000 // d),
+        lambda d: "<br " * (120_000 // d),
+        lambda d: ("<div id=appendonsend>" + "<" * 20) * (12_000 // d),
+    ],
+    ids=[
+        "unclosed-and-headers",
+        "marker-run",
+        "mixed-markers",
+        "blockquote-run",
+        "break-run",
+        "marker-tags-and-unclosed",
+    ],
+)
+def test_large_malformed_html_and_header_lines_stay_fast(build):
+    # Timed against the same input at 1/8 size, so runner speed cancels out:
+    # linear work grows ~8x, quadratic ~64x.
+    small, large = build(_SHRINK), build(1)
+    best_small = best_large = float("inf")
+    for _ in range(3):
+        best_small = min(best_small, _parse_seconds(small))
+        best_large = min(best_large, _parse_seconds(large))
+        if best_large < 3 * _SHRINK * best_small:
+            break
+    assert best_large < 3 * _SHRINK * best_small, (
+        f"{len(large):,} chars took {best_large:.3f}s, "
+        f"{best_large / best_small:.0f}x the {best_small:.4f}s for 1/{_SHRINK} "
+        f"of it; linear parsing would be ~{_SHRINK}x"
+    )
+    assert best_large < 15, f"{len(large):,} chars took {best_large:.1f}s"
+
+
+def test_an_outlook_plain_text_header_block_is_not_a_new_request(api):
+    body = (
+        "Thanks, noted.\n\n________________________________\nFrom: Alice\n"
+        f"Sent: Monday, October 26, 2026 9:00 AM\nTo: Me\n{OLD_ASK}"
+    )
+    assert _asks(api, body) == []
+
+
+def test_a_from_line_without_a_sent_line_is_not_a_quote(api):
+    body = "From: the finance team side, could you please confirm the numbers?"
+    assert len(_scan(api, _thread(body))["waiting_on_you"]) == 1
+
+
+def test_quote_stripping_keeps_the_new_text_line_breaks():
+    body = "Hi,\nCould you confirm?\n> old line\nOn Monday Alice wrote:\nolder ask"
+    stripped = waiting.strip_quoted_text(body, {"older ask"})
+    assert stripped == "Hi,\nCould you confirm?"
+
+
+def test_a_meeting_time_on_its_own_line_still_qualifies(api):
+    out = _scan(api, _thread("Free to meet\nThursday?"))
+    assert out["waiting_on_you"][0]["signal"] == "meeting_time"
+
+
+def test_a_new_ask_above_a_quoted_reply_still_qualifies(api):
+    body = "Could you send the deck?\n\nOn Monday Alice wrote:\nThanks for the update."
+    out = _scan(api, _thread(body))
+    assert [i["message_id"] for i in out["waiting_on_you"]] == ["r1"]
+
+
+def test_a_chevron_quoted_ask_is_not_a_new_request(api):
+    body = "Thanks, noted.\n> Could you please confirm the numbers?"
+    assert _scan(api, _thread(body))["waiting_on_you"] == []
+
+
+def test_an_outlook_original_message_block_is_not_a_new_request(api):
+    body = f"Thanks, noted.\n\n-----Original Message-----\nFrom: Bob\n{OLD_ASK}"
+    assert _asks(api, body) == []
+
+
+def test_a_user_on_both_to_and_cc_is_still_asked(api):
+    mails = _thread("Could you please confirm?", cc=f"Me <{USER}>")
+    assert len(_scan(api, mails)["waiting_on_you"]) == 1
+
+
+def test_a_user_in_cc_beside_a_differently_cased_to_is_still_asked(api):
+    mails = _thread("Could you please confirm?", to=USER.upper())
+    mails[-1].cc = f"Me <{USER}>"
+    assert len(_scan(api, mails)["waiting_on_you"]) == 1
+
+
+@pytest.mark.parametrize(
+    "auto_submitted, x_autoreply, expected",
+    [
+        ("no", "", False),
+        (" No ", "", False),
+        ("", "", False),
+        ("", "no", False),
+        ("auto-replied", "", True),
+        ("Auto-Generated", "", True),
+        ("", "YES", True),
+        ("", " true ", True),
+    ],
+)
+def test_auto_reply_headers_follow_rfc_3834(auto_submitted, x_autoreply, expected):
+    message = {"auto_submitted": auto_submitted, "x_autoreply": x_autoreply}
+    assert waiting.is_auto_reply(message) is expected
+
+
+def test_graph_reads_auto_reply_headers_case_insensitively():
+    from gaia.agents.tools._email import graph
+
+    summary = graph.message_summary(
+        {
+            "id": "m1",
+            "internetMessageHeaders": [
+                {"name": "AUTO-SUBMITTED", "value": "auto-replied"},
+                {"name": None, "value": "ignored"},
+            ],
+        }
+    )
+    assert summary["auto_submitted"] == "auto-replied"
+    assert summary["x_autoreply"] == ""
 
 
 # --------------------------------------------------------------------------

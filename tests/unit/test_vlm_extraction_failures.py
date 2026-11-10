@@ -24,6 +24,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 from gaia.llm.vlm_client import VLMClient, VLMExtractionError
 
 
@@ -200,6 +201,71 @@ class TestToolCallersReportAnError:
         assert result["status"] == "error"
         assert "description" not in result
 
+    @pytest.mark.parametrize(
+        "focus",
+        ["composition", "colors", "mood", "details", "all"],
+    )
+    def test_analyze_image_accepts_each_documented_focus(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus
+        host.vlm_client.extract_from_image.assert_called_once()
+
+    def test_analyze_image_rejects_unknown_focus_before_reading_the_file(
+        self, tmp_path
+    ):
+        missing = tmp_path / "missing.png"
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(missing), focus="faces")
+
+        assert result == {
+            "status": "error",
+            "error": (
+                "Unknown focus 'faces'. Use one of: all, colors, composition, "
+                "details, mood; for a specific question about text, faces, or "
+                "an object, call answer_question_about_image."
+            ),
+        }
+        host.vlm_client.extract_from_image.assert_not_called()
+
+    @pytest.mark.parametrize("focus", [" Colors ", "MOOD", "details	"])
+    def test_analyze_image_normalizes_case_and_whitespace(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "success"
+        assert result["focus"] == focus.strip().lower()
+
+    @pytest.mark.parametrize(
+        "focus", ["", "   ", "text", "all colors", "colour", None, 3, ["all"]]
+    )
+    def test_analyze_image_rejects_near_misses_and_non_strings(self, tmp_path, focus):
+        image = tmp_path / "chart.png"
+        image.write_bytes(b"not-really-a-png")
+        host = self._mixin("description")
+
+        result = host._analyze_image(str(image), focus=focus)
+
+        assert result["status"] == "error"
+        assert "Unknown focus" in result["error"]
+        host.vlm_client.extract_from_image.assert_not_called()
+
+    def test_documented_focus_lists_match_the_accepted_set(self):
+        from gaia.vlm.mixin import IMAGE_ANALYSIS_FOCUSES, VLMToolsMixin
+
+        guidelines = VLMToolsMixin.get_base_vlm_guidelines()
+        for focus in IMAGE_ANALYSIS_FOCUSES:
+            assert focus in guidelines
+
     def test_answer_question_reports_an_error_envelope(self, tmp_path):
         image = tmp_path / "chart.png"
         image.write_bytes(b"not-really-a-png")
@@ -289,14 +355,13 @@ class TestMissingVisionModelPreflight:
 
         message = str(excinfo.value)
         assert "5.56 GB" in message
-        assert "Settings → Model" in message
-        assert "`gaia download --agent vlm`" in message
-        assert "gaia init" not in message
+        assert VISION_DOWNLOAD_HINT in message
+        assert "`" not in message and "gaia " not in message
         assert (excinfo.value.page_num, excinfo.value.image_num) == (3, 2)
         vlm.client.list_models.assert_called_once_with(show_all=True)
         vlm.client.chat_completions.assert_not_called()
 
-    def test_the_cli_hint_is_only_offered_for_a_model_it_downloads(self, vlm):
+    def test_a_model_with_no_size_names_none(self, vlm):
         vlm.vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
         vlm.client.list_models.return_value = _catalog(
             {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": False}
@@ -305,7 +370,7 @@ class TestMissingVisionModelPreflight:
         with pytest.raises(VLMExtractionError) as excinfo:
             vlm.extract_from_image(b"fake-png")
 
-        assert "gaia download" not in str(excinfo.value)
+        assert VISION_DOWNLOAD_HINT in str(excinfo.value)
         assert "GB)" not in str(excinfo.value)
         vlm.client.chat_completions.assert_not_called()
 

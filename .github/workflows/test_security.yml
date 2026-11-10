@@ -22,7 +22,7 @@ on:
       - 'hub/agents/gaia/python/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'src/gaia/agents/**'
       - 'src/gaia/rag/**'

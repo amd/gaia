@@ -15,6 +15,10 @@ import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
+import { RenderCard } from '../render/RenderCard';
+// The real tool_result an in-process agent streams for an approved edit;
+// test_edit_diff_card.py pins it to what /chat/send actually sends.
+import inProcessEditDiff from './fixtures/inprocess-edit-diff-tool-result.json';
 
 vi.mock('../../services/api');
 
@@ -217,6 +221,80 @@ describe('ChatView streaming cards (#2108)', () => {
         }
     });
 
+    it('a finished turn keeps its live confirmation card beside the saved tool card', async () => {
+        vi.useFakeTimers();
+        try {
+            await driveSend();
+            act(() => {
+                capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'pre_scan_inbox' } as unknown as StreamEvent);
+            });
+            act(() => {
+                capturedCallbacks!.onAgentEvent(toolResultWithRender);
+            });
+            act(() => {
+                capturedCallbacks!.onAgentEvent({
+                    type: 'needs_confirmation', action: 'Send reply', summary: 'To: pat',
+                } as unknown as StreamEvent);
+            });
+
+            mockedApi.getMessages.mockResolvedValue({
+                messages: [
+                    {
+                        id: 11,
+                        session_id: SESSION.id,
+                        role: 'assistant',
+                        content: 'Here is your inbox summary.',
+                        created_at: '2026-07-16T00:00:01.000Z',
+                        rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'pre_scan_inbox', active: false, render: 'email_pre_scan', data: preScanPayload },
+                        ],
+                    } as never,
+                ],
+                total: 1,
+            });
+            act(() => {
+                capturedCallbacks!.onDone({ type: 'done', content: 'Here is your inbox summary.' } as unknown as StreamEvent);
+            });
+            act(() => {
+                vi.advanceTimersByTime(400);
+            });
+            await act(async () => {});
+
+            const assistantMsg = useChatStore.getState().messages.find((m) => m.role === 'assistant');
+            expect(assistantMsg?.cards?.map((c) => c.render)).toEqual(['email_pre_scan', 'needs_confirmation']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a reloaded chat draws the cards its saved tool steps made', async () => {
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                {
+                    id: 21,
+                    session_id: SESSION.id,
+                    role: 'assistant',
+                    content: 'Enjoy.',
+                    created_at: '2026-07-16T00:00:01.000Z',
+                    rag_sources: null,
+                    agent_steps: [
+                        { id: 1, type: 'tool', tool: 'search_documents', active: false },
+                        { id: 2, type: 'tool', tool: 'pre_scan_inbox', active: false, render: 'email_pre_scan', data: preScanPayload },
+                    ],
+                } as never,
+            ],
+            total: 1,
+        });
+
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {});
+
+        const assistantMsg = useChatStore.getState().messages.find((m) => m.id === 21);
+        expect(assistantMsg?.cards).toEqual([{ render: 'email_pre_scan', data: preScanPayload }]);
+        expect(screen.getByText('Server down')).toBeInTheDocument();
+    });
+
     it('Stop transfers in-flight cards onto the stopped message', async () => {
         vi.useFakeTimers();
         try {
@@ -293,5 +371,39 @@ describe('ChatView streaming cards (#2108)', () => {
         });
 
         expect(useChatStore.getState().cards).toEqual([]);
+    });
+});
+
+describe('approved edit diff card from an in-process agent (#3710)', () => {
+    const diffEvent = inProcessEditDiff as unknown as StreamEvent;
+
+    it('RenderCard draws the event payload as a diff', () => {
+        const { container } = render(
+            <RenderCard render={inProcessEditDiff.render} data={inProcessEditDiff.data} />
+        );
+
+        expect(screen.queryByText('Card failed to render')).toBeNull();
+        expect(screen.queryByText(/Invalid diff payload/)).toBeNull();
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((l) => l.textContent);
+        expect(lines).toContain('-alpha');
+        expect(lines).toContain('+beta');
+    });
+
+    it('ChatView mounts the diff card from the streamed tool_result', async () => {
+        await driveSend();
+
+        act(() => {
+            capturedCallbacks!.onAgentEvent({ type: 'tool_start', tool: 'edit_file' } as unknown as StreamEvent);
+        });
+        act(() => {
+            capturedCallbacks!.onAgentEvent(diffEvent);
+        });
+
+        const cards = useChatStore.getState().cards;
+        expect(cards).toHaveLength(1);
+        expect(cards[0]).toEqual({ render: 'diff', data: inProcessEditDiff.data });
+        expect(screen.queryByText('Card failed to render')).toBeNull();
+        const lines = Array.from(document.querySelectorAll('.render-diff__line')).map((l) => l.textContent);
+        expect(lines).toContain('+beta');
     });
 });

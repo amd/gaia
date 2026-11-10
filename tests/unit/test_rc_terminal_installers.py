@@ -164,12 +164,17 @@ def test_the_final_release_job_steps(publish):
         "Extract release notes",
         "Download TUI binaries",
         "Checksum TUI binaries",
+        "Download the gaia core builds",
+        "Attach and checksum the gaia core",
         "Download the combined Windows setup",
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
-        "Create GitHub Release",
+        "Check every desktop installer is attached",
+        "actions/setup-python@v7",
+        "Check the update manifests name only attached files",
+        "Create GitHub Release with bounded rate-limit retry",
     ]
 
 
@@ -185,7 +190,11 @@ def test_a_final_attaches_every_installer_from_publish_without_approval(publish)
     ):
         job = publish[job_id]
         assert "environment" not in job, f"{job_id} waits on an environment"
-        assert IS_RC not in job.get("if", ""), f"{job_id} runs for an RC only"
+        # github-release excuses an RC its setup, which is not running only on one.
+        condition = job.get("if", "").replace(
+            f"({IS_RC} || needs.windows-setup.outputs.ok == 'true')", ""
+        )
+        assert IS_RC not in condition, f"{job_id} runs for an RC only"
     # approve-publish is the final's one approval; pypi and npm are the OIDC
     # trusted-publisher environments, which carry no reviewers.
     gated = sorted(j for j, job in publish.items() if "environment" in job)

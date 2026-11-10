@@ -88,6 +88,7 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    keychain_auth=None,
     clock=None,
     lemonade=None,
     lemonade_owner=None,
@@ -315,6 +316,14 @@ def create_app(
     from gaia.daemon.provider_key_routes import build_provider_key_router
 
     app.include_router(build_provider_key_router(token))
+    # The TUI's GPU memory step; the Agent UI serves the same under /api/gpu-memory.
+    from gaia.daemon.gpu_memory_routes import build_gpu_memory_router
+
+    app.include_router(build_gpu_memory_router(token))
+    # The TUI's model setup; the Agent UI serves the same under /api/setup.
+    from gaia.daemon.setup_routes import build_setup_router
+
+    app.include_router(build_setup_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
@@ -348,6 +357,10 @@ def create_app(
 
         install_custody_exception_handler(app)
         app.include_router(build_custody_router(custody_auth, custody_store))
+        if keychain_auth is not None:
+            from gaia.daemon.custody.keychain_routes import build_keychain_router
+
+            app.include_router(build_keychain_router(keychain_auth))
     elif custody_auth is not None or custody_store is not None:
         raise ValueError(
             "create_app requires custody_auth AND custody_store together to "

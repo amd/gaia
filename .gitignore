@@ -204,18 +204,17 @@ atlassian_config.json
 
 # version files
 version.txt
-installer/version.nsh
 
 # Installer files
 installer/**.exe
 release_info.json
 
-# Lemonade MSI downloaded at build time (issue #774)
-installer/lemonade-server-minimal.msi
+# Binaries the desktop build fetches into its extraResources
+src/gaia/apps/webui/build/vendor/
+src/gaia/apps/webui/build/core/
 
 # version
 version.txt
-**/version.nsh
 **/.gaia_servers.json
 **/agent_output_*.json
 
@@ -300,7 +299,8 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /labels.txt
 # Per-run gaia eval fixture hub (built by tests/fixtures/gaia/prepare_fixture_hub.py;
 # signed with an ephemeral key that must never be committed)
-tests/fixtures/gaia/fixture_hub/_prepared/
+# (plus its .lock and the .build-*/.old-* folders a run swaps in and out)
+tests/fixtures/gaia/fixture_hub/_prepared*
 eval/results/gaia-local-tui-validation/tui-home/
 
 # Eval RUN OUTPUTS are reproducible artifacts, never PR content: the corpus,

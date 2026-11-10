@@ -31,7 +31,8 @@ from pathlib import Path
 import pytest
 
 from gaia.skills import cli as skills_cli
-from tests.unit.skills_helpers import copy_fixture
+from tests.unit.packaging_helpers import find_source_packages
+from tests.unit.skills_helpers import copy_fixture, write_skill_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -182,6 +183,48 @@ def test_list_filters_by_root(run, skills_dir):
     assert "web-search" not in out
 
 
+@pytest.fixture
+def agent_package(tmp_path):
+    """An agent package laid out as the composing-skills guide builds it."""
+    package = tmp_path / "my_agent"
+    package.mkdir()
+    (package / "agent.py").write_text("", encoding="utf-8")
+    write_skill_dir(
+        package / "skills",
+        "api-compatibility",
+        "---\nname: api-compatibility\n"
+        "description: Check a change for breaking public API edits.\n---\n\n"
+        "Flag removed or renamed public symbols.\n",
+    )
+    return package
+
+
+def test_list_without_agent_dir_misses_bundled_skills(run, agent_package):
+    rc, out, _ = run("list")
+    assert rc == 0
+    assert "api-compatibility" not in out
+
+
+def test_list_agent_dir_discovers_bundled_skills(run, agent_package):
+    rc, out, _ = run("list", "--json", "--agent-dir", str(agent_package))
+    assert rc == 0
+    skills = json.loads(out)["skills"]
+    assert [(s["name"], s["root"]) for s in skills] == [
+        ("api-compatibility", "agent-bundled")
+    ]
+
+
+def test_list_agent_dir_without_skills_folder_is_a_usage_error(run, tmp_path, capsys):
+    bare = tmp_path / "no_skills_agent"
+    bare.mkdir()
+    with pytest.raises(SystemExit) as exc:
+        run("list", "--agent-dir", str(bare))
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert str(bare / "skills") in err
+    assert "agent package directory" in err
+
+
 # ----------------------------------------------------------------------
 # info
 # ----------------------------------------------------------------------
@@ -195,6 +238,17 @@ def test_info_shows_the_manifest(run, skills_dir):
     assert "security tier: verified" in out
     assert "network:read:*.brave.com" in out
     assert "web-search/search_web(query, max_results?)" in out
+
+
+def test_info_agent_dir_finds_a_bundled_skill(run, agent_package):
+    rc, _, err = run("info", "api-compatibility")
+    assert rc == 3
+    assert "No skill named 'api-compatibility'" in err
+
+    rc, out, _ = run("info", "api-compatibility", "--agent-dir", str(agent_package))
+    assert rc == 0
+    assert out.startswith("api-compatibility")
+    assert "root         : agent-bundled" in out
 
 
 def test_info_marks_an_instruction_only_skill(run, skills_dir):
@@ -445,10 +499,7 @@ def test_skills_package_ships_in_the_wheel():
     )
     assert "gaia.skills" in declared
 
-    on_disk = {
-        ".".join(p.parent.relative_to(REPO_ROOT / "src").parts)
-        for p in (REPO_ROOT / "src").rglob("__init__.py")
-    }
+    on_disk = find_source_packages(REPO_ROOT / "src")
     assert on_disk == declared, (
         "src/gaia packages and setup.py's explicit list have drifted; add the new "
         f"package(s) to setup.py: {sorted(on_disk - declared)}"

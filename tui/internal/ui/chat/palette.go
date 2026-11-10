@@ -35,6 +35,8 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
+	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
@@ -42,6 +44,8 @@ var paletteCommands = []paletteCommand{
 	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
+	{"/read-aloud", "Read the last reply aloud; again (or /read-aloud stop) stops it"},
+	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 }

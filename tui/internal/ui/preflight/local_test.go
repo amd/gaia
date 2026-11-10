@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -461,6 +463,130 @@ func TestClaudeCheckStopsBeforeLocalProbesWhenCredentialIsMissing(t *testing.T) 
 	}
 }
 
+func TestMissingCLISetupCheckDoesNotSuggestGaiaInit(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+
+	row := modelRow(localRunner{})
+	if row.State != StateUnknown || row.Disposition != status.DispositionNotify {
+		t.Fatalf("missing CLI state = %+v, want an informational unknown row", row)
+	}
+	if row.Remedy.Command != gaiainit.InstallCommand {
+		t.Fatalf("missing CLI remedy command = %q, want the install command", row.Remedy.Command)
+	}
+	if strings.Contains(row.Remedy.Command, "gaia init") {
+		t.Fatalf("missing CLI remedy command = %q, must not suggest gaia init", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Remedy.Action, "Install the GAIA CLI") {
+		t.Fatalf("missing CLI remedy = %q", row.Remedy.Action)
+	}
+}
+
+// stubCLIInstall makes a missing CLI installable (or not) without the network,
+// and counts the installs.
+func stubCLIInstall(t *testing.T, can bool, install func(io.Writer) error) *int {
+	t.Helper()
+	calls := 0
+	origInstall, origCan := installCLI, canInstallCLI
+	installCLI = func(_ context.Context, out io.Writer) error {
+		calls++
+		return install(out)
+	}
+	canInstallCLI = func() bool { return can }
+	t.Cleanup(func() { installCLI, canInstallCLI = origInstall, origCan })
+	return &calls
+}
+
+// The .pkg, .deb and .rpm install only gaia-tui and gaia-agent, so setup found
+// no CLI and stopped at step 1 (#6659). It now installs the CLI and carries on.
+func TestSetupInstallsAMissingCLIThenRuns(t *testing.T) {
+	stubLemonadeNotInstalled(t, true)
+	installed := false
+	stubGaiaInit(t, func() (string, error) {
+		if !installed {
+			return "", gaiainit.ErrNoCLI
+		}
+		return argsStub(t, 0), nil
+	})
+	calls := stubCLIInstall(t, true, func(out io.Writer) error {
+		fmt.Fprintln(out, "The gaia command is installed")
+		installed = true
+		return nil
+	})
+	var shown []string
+	onProgress := func(p Progress) { shown = append(shown, p.Text) }
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, onProgress)
+
+	if !res.OK() {
+		t.Fatalf("setup with no CLI failed: %+v", res)
+	}
+	if *calls != 1 {
+		t.Errorf("the CLI was installed %d times, want once", *calls)
+	}
+	if args := setupArgs(t, res); !strings.Contains(args, "--skip-models") {
+		t.Errorf("after the CLI install, setup ran %q; want step 1", args)
+	}
+	if len(shown) == 0 || !strings.Contains(shown[0], "Python part") {
+		t.Errorf("the screen never said GAIA was installing its Python part: %q", shown)
+	}
+	if !slices.Contains(res.Log, "The gaia command is installed") {
+		t.Errorf("the installer's output is not in the setup log: %q", res.Log)
+	}
+}
+
+func TestAFailedCLIInstallNamesTheInstallCommand(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+	stubCLIInstall(t, true, func(out io.Writer) error {
+		fmt.Fprintln(out, "Failed to install GAIA package")
+		return errors.New("the installer stopped (exit status 1)")
+	})
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+
+	if res.OK() {
+		t.Fatal("a failed CLI install reported success")
+	}
+	d := res.Diagnosis
+	if d.Command != gaiainit.InstallCommand || d.Where == "" {
+		t.Errorf("a failed CLI install suggests %q (where %q), want the installer", d.Command, d.Where)
+	}
+	if !strings.Contains(d.Cause, "Python part") || !strings.Contains(d.Cause, "exit status 1") {
+		t.Errorf("the cause %q does not say what failed", d.Cause)
+	}
+	if !strings.Contains(d.Remedy, "new terminal") {
+		t.Errorf("remedy %q must send the user to a new terminal", d.Remedy)
+	}
+	if !slices.Contains(res.Log, "Failed to install GAIA package") {
+		t.Errorf("the installer's output is not behind d: %q", res.Log)
+	}
+}
+
+// install.ps1 has no CLI-only mode, so Windows keeps naming the installer.
+func TestSetupWithoutTheCLIOnWindowsNamesTheInstaller(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+	calls := stubCLIInstall(t, false, func(io.Writer) error { return nil })
+
+	for _, kind := range []FixKind{FixInstallServer, FixRunSetup} {
+		d := localRunner{}.Fix(context.Background(), localCfg(), kind, nil).Diagnosis
+		if d.Command != gaiainit.InstallCommand || d.PowerShell != gaiainit.InstallPowerShellCommand {
+			t.Errorf("fix %v suggests %q / %q, want the installers", kind, d.Command, d.PowerShell)
+		}
+		if strings.Contains(d.Command+d.Remedy, "gaia init") || strings.Contains(d.Remedy, "in a terminal") {
+			t.Errorf("fix %v remedy %q points back at the missing CLI", kind, d.Remedy)
+		}
+		// The installer adds gaia to PATH for new shells only, so a re-check here finds nothing.
+		if strings.Contains(d.Remedy, "press r") || !strings.Contains(d.Remedy, "new terminal") {
+			t.Errorf("fix %v remedy %q must send the user to a new terminal", kind, d.Remedy)
+		}
+		if d.Cause == "" || d.Cause[0] < 'A' || d.Cause[0] > 'Z' {
+			t.Errorf("fix %v cause %q must read as a sentence after \"Setup stopped. \"", kind, d.Cause)
+		}
+	}
+	if *calls != 0 {
+		t.Errorf("Windows ran the CLI installer %d times", *calls)
+	}
+}
+
 // Exit 2 is what an installed gaia older than `--check` returns for
 // "unrecognized arguments". Reading it as "not ready" ran a full multi-minute
 // `gaia init` on EVERY launch.
@@ -499,7 +625,7 @@ func TestExitOneMeansSetupIsNeeded(t *testing.T) {
 	if !strings.Contains(row.Remedy.Command, "gaia init") {
 		t.Errorf("remedy command = %q, want a gaia init", row.Remedy.Command)
 	}
-	if row.Step != "download the models (3.5 GB)" {
+	if row.Step != "choose and download the models (3.5 GB)" {
 		t.Errorf("step = %q, want the reported sizes summed", row.Step)
 	}
 }
@@ -556,7 +682,31 @@ func TestExitThreeIsARealFailureNotAStep(t *testing.T) {
 	}
 }
 
+// A model the load check could not fit in free memory is not a broken file:
+// the row says so and asks for memory, never a restart or a download.
+func TestALoadShortOfMemorySaysSo(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return jsonStub(t, 3, chatShortOfMemoryJSON), nil })
+
+	row := modelRow(localRunner{})
+
+	if row.State != StateFailed || row.Optional {
+		t.Fatalf("a chat model short of memory is %s optional=%v, want a real failure", row.State.Word(), row.Optional)
+	}
+	if strings.Contains(row.Line, "will not load") || !strings.Contains(row.Line, "free memory") {
+		t.Errorf("line = %q, want it to name the memory, not a broken model", row.Line)
+	}
+	if !strings.Contains(row.Detail, "enough free memory") {
+		t.Errorf("detail = %q", row.Detail)
+	}
+	if !strings.Contains(row.Remedy.Action, "free memory") || row.Remedy.Command != "" {
+		t.Errorf("remedy = %+v, want to free memory, with no command", row.Remedy)
+	}
+}
+
 const (
+	chatShortOfMemoryJSON = `{"ready": false, "stage": "load", "reasons": ["x"], "models": [` +
+		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, ` +
+		`"error": "Not enough free memory", "kind": "memory"}]}`
 	setupJSON = `{"ready": false, "stage": "setup", "reasons": ["x"], "models": [` +
 		`{"id": "user.embeddinggemma-300m-GGUF", "role": "embedding", "size_gb": 0.3, "loaded": false, "error": null},` +
 		`{"id": "Gemma-4-E4B-it-GGUF", "role": "chat", "size_gb": 3.2, "loaded": false, "error": null}]}`
@@ -909,12 +1059,12 @@ func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
 // A system Lemonade the TUI cannot start itself must not get GAIA's private one
 // started beside it.
 func TestAutoStartLeavesASystemInstallAlone(t *testing.T) {
-	// A legacy CLI install: found, but with no form the TUI may spawn.
-	legacy := fakeHostFor("linux", []string{"lemonade-server"}, nil, map[string]string{})
-	if l := resolveLemonadeWith(legacy); !l.Found || canAutoStart(l) {
+	// A macOS app bundle: found, but with no form the TUI may spawn.
+	appOnly := fakeHostFor("darwin", nil, []string{"/Applications/lemonade-app.app"}, map[string]string{})
+	if l := resolveLemonadeWith(appOnly); !l.Found || canAutoStart(l) {
 		t.Fatalf("fixture is not a found-but-human-only install: %+v", l)
 	}
-	downLemonadeOn(t, legacy)
+	downLemonadeOn(t, appOnly)
 	installEmbedded(t)
 	restore := tryAutoStartLemonade
 	t.Cleanup(func() { tryAutoStartLemonade = restore })
