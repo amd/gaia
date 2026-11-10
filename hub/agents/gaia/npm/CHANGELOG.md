@@ -44,6 +44,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   result arrived as plain data and no card was drawn. Both now carry the card
   type (`guide` or `calculator` for the tools above). A client that has no
   renderer for a key should draw its unknown-card fallback.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 
