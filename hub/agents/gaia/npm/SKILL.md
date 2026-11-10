@@ -345,7 +345,7 @@ The canonical event shapes, as emitted:
 | `token` | `{ type, delta }` — answer text to append |
 | `reasoning` | `{ type, delta, retracts_answer? }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning: drop it from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
-| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`) |
+| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
@@ -597,6 +597,11 @@ The agent is built to host **Agent Skills** (short playbooks loaded into its own
 prompt, mid-session through `load_skill`), and its bundled skill directory is
 the highest-precedence discovery root. Skills can be grouped into named sets,
 but none ship today — see below.
+
+Some bundled skills ship tools as well as a playbook. `guides` and
+`calculators` draw recipe, workout, how-to, checklist, itinerary, tip and loan
+cards; their tools (`guides/show_recipe`, `calculators/show_loan_calculator`, …)
+join the tool list only once the skill loads, so they are not in the 105.
 
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
