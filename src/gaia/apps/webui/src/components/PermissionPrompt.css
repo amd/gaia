@@ -47,6 +47,12 @@
     font-size: 12.5px;
 }
 
+/* Paths and commands keep their spaces exactly: "Team Docs  -  AMD" is not "Team Docs - AMD". */
+.perm-card code,
+.perm-card bdi[dir="ltr"] {
+    white-space: pre-wrap;
+}
+
 .perm-card-timer {
     flex-shrink: 0;
     color: var(--text-muted);

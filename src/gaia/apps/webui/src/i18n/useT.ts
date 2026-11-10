@@ -11,7 +11,7 @@ export interface Translate {
     /** "<label> (<hint>)" for a shortcut or size after a translated label, e.g. "Send (Enter)". */
     hint: (label: string, hint: string) => string;
     /** A line built from several messages, bracketed once; see `compose` in registry.ts. */
-    compose: (build: (say: Say) => string) => string;
+    compose: (build: (say: Say, code: string) => string) => string;
     /** The chosen language only, no English brackets; for connecting words inside a line. */
     bare: (key: MessageKey, params?: Params) => string;
     locale: string;

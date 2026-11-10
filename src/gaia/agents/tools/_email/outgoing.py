@@ -10,6 +10,7 @@ from, read once from the mailbox.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import unicodedata
 from dataclasses import dataclass, replace
@@ -69,6 +70,9 @@ class OutgoingMessage:
     html_alternative: Optional[str] = None
     # The saved draft an edit overwrites. Shown on its prompt, never sent.
     replaces: Optional["OutgoingMessage"] = None
+    # The account it goes out from, shown on the prompt and checked again
+    # before the write. Not part of equality: a fetched draft doesn't carry it.
+    sender: Optional[str] = dataclasses.field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -334,7 +338,8 @@ def _names(recipients: Recipients) -> str:
 
 def render_preview(message: OutgoingMessage) -> str:
     """The message as a person approves it: every recipient, then the whole body."""
-    lines = [f"To: {_names(message.to)}"]
+    lines = [f"From: {_visible_line(message.sender)}"] if message.sender else []
+    lines.append(f"To: {_names(message.to)}")
     if message.cc:
         lines.append(f"Cc: {_names(message.cc)}")
     if message.bcc:

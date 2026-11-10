@@ -1,0 +1,303 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Freeze the GAIA core (`gaia`) into the one-dir executable the apps ship,
+# smoke-test it, and upload it as a `<prefix>gaia-core-<platform>` artifact.
+#
+# Callers pack it so a user's PC never installs a Python package:
+#   build-installers.yml  the desktop app (resources/core)
+#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-tui)
+#   windows_setup.yml     the Windows setup's terminal component
+# Each passes its own artifact_prefix and only the platforms it packs, so two
+# callers in one run never upload the same artifact name. Dispatch it on its
+# own to check that main still freezes.
+#
+# The Linux build runs in a Rocky Linux 9 container (glibc 2.34), like the
+# flagship agent's, so it runs on RHEL 9, Ubuntu 22.04 and Debian 12 too.
+# darwin-x64 and linux-arm64 are best-effort: a caller that finds no artifact
+# for one builds nothing for it.
+
+name: Build GAIA core
+
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: 'Space-separated platforms to freeze: win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
+        required: false
+        type: string
+        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
+      tag:
+        description: 'Release tag; a vX.Y.Z-rcN tag stamps that version, as the installers do'
+        required: false
+        type: string
+        default: ''
+      version:
+        description: 'Release version (X.Y.Z or X.Y.Z-rc.N), for callers that have no tag; an RC stamps it'
+        required: false
+        type: string
+        default: ''
+      ref:
+        description: 'Commit to build; empty checks out the tag, or the caller''s ref'
+        required: false
+        type: string
+        default: ''
+      artifact_prefix:
+        description: 'Prefix for the uploaded artifact names'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Space-separated platforms to freeze'
+        required: false
+        default: 'win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64'
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    name: Freeze core (${{ matrix.key }})
+    runs-on: ${{ matrix.os }}
+    concurrency:
+      group: core-freeze-${{ matrix.key }}-${{ inputs.artifact_prefix }}${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    container: ${{ matrix.container }}
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            key: win32-x64
+            exe: gaia.exe
+            required: true
+          - os: macos-latest
+            key: darwin-arm64
+            exe: gaia
+            required: true
+          - os: macos-26-intel
+            key: darwin-x64
+            exe: gaia
+            required: false
+          - os: ubuntu-latest
+            key: linux-x64
+            exe: gaia
+            required: true
+            container: rockylinux/rockylinux:9
+            glibc_floor: '2.34'
+          # Best-effort: only install.sh fetches it, for Linux on Arm.
+          - os: ubuntu-24.04-arm
+            key: linux-arm64
+            exe: gaia
+            required: false
+            container: rockylinux/rockylinux:9
+            glibc_floor: '2.34'
+    steps:
+      # Job-level `if` can't see the matrix, so each leg checks it was asked for.
+      - name: Is this platform wanted
+        id: want
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          KEY: ${{ matrix.key }}
+        run: |
+          case " ${PLATFORMS} " in
+            *" ${KEY} "*) echo "build=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "build=false" >> "$GITHUB_OUTPUT"; echo "${KEY} was not asked for" ;;
+          esac
+
+      - name: Prepare the glibc-floor container
+        if: steps.want.outputs.build == 'true' && matrix.container
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf install -y --setopt=install_weak_deps=False \
+            python3.12 python3.12-devel git binutils gcc gcc-c++ tar gzip findutils
+          ln -sf /usr/bin/python3.12 /usr/local/bin/python
+          echo "UV_PYTHON_PREFERENCE=only-system" >> "$GITHUB_ENV"
+          echo "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/checkout@v7
+        if: steps.want.outputs.build == 'true'
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+
+      - name: Set up Python
+        if: steps.want.outputs.build == 'true' && !matrix.container
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        if: steps.want.outputs.build == 'true'
+        uses: astral-sh/setup-uv@v7
+
+      # The same stamp the installers get, so `gaia --version` matches the app.
+      - name: Stamp the release-candidate version
+        if: steps.want.outputs.build == 'true' && (contains(inputs.tag, '-rc') || contains(inputs.version, '-rc'))
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # 0.25.4-rc.3 is tagged v0.25.4-rc3.
+          [ -n "${TAG}" ] || TAG="v${VERSION/-rc./-rc}"
+          python util/release_tag.py stamp "${TAG}"
+
+      # freeze.py bundles the built UI so `gaia chat --ui` serves it, and refuses
+      # to build without it. After the stamp: the bundle reads its version from version.py.
+      - name: Set up Node.js
+        if: steps.want.outputs.build == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/gaia/apps/webui/package-lock.json
+
+      - name: Build the Agent UI
+        if: steps.want.outputs.build == 'true'
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          test -f dist/index.html
+
+      # The same packages `pip install amd-gaia[ui]` gives an Agent UI user today.
+      - name: Install the core + PyInstaller (frozen-build env)
+        if: steps.want.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+
+      - name: Freeze
+        if: steps.want.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" installer/core/freeze.py
+
+      - name: Check the build bundles no copyleft code
+        if: steps.want.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/gaia/python/packaging/check_bundle_licenses.py \
+            "installer/core/dist/gaia/${{ matrix.exe }}"
+
+      - name: Check the build runs on glibc ${{ matrix.glibc_floor }}
+        if: steps.want.outputs.build == 'true' && matrix.glibc_floor
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-freeze/bin/python hub/agents/gaia/python/packaging/check_glibc.py \
+            "installer/core/dist/gaia/${{ matrix.exe }}" --max "${{ matrix.glibc_floor }}"
+
+      - name: Smoke-test the frozen core
+        if: steps.want.outputs.build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" installer/core/smoke_test.py "installer/core/dist/gaia/${{ matrix.exe }}"
+
+      # A tarball keeps the executable bits and the symlinks the macOS build has.
+      - name: Pack
+        if: steps.want.outputs.build == 'true'
+        shell: bash
+        run: tar -C installer/core/dist/gaia -czf gaia-core-${{ matrix.key }}.tar.gz .
+
+      - name: Upload
+        if: steps.want.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: gaia-core-${{ matrix.key }}.tar.gz
+          if-no-files-found: error
+
+  # Ubuntu 24.04 is the Linux floor: Lemonade's engine needs glibc 2.38.
+  # The freshly frozen gaia, on the hosts users have, sets up a REAL Lemonade
+  # and answers one chat turn: no fake server, no source install. The freeze
+  # job's smoke test runs with Lemonade unreachable, inside a glibc-floor
+  # container, so it cannot see a library the bundle leaks into lemond.
+  real-engine:
+    name: Real engine (${{ matrix.label }})
+    needs: freeze
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: Windows, os: windows-latest, key: win32-x64, exe: gaia.exe}
+          - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
+          - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
+          - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+    steps:
+      - name: Is this platform wanted
+        id: want
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          KEY: ${{ matrix.key }}
+        run: |
+          case " ${PLATFORMS} " in
+            *" ${KEY} "*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT"; echo "${KEY} was not built" ;;
+          esac
+
+      - name: Prepare the Fedora container
+        if: steps.want.outputs.run == 'true' && matrix.container
+        # What a Fedora desktop has and lemond or its llama.cpp backend link.
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False tar gzip findutils which procps-ng
+          libatomic openssl-libs libdrm libzstd zlib-ng-compat libstdc++ libgomp vulkan-loader
+
+      - uses: actions/checkout@v7
+        if: steps.want.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          sparse-checkout: installer/core/real_engine_check.sh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v8
+        if: steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: ${{ runner.temp }}/core-tgz
+
+      - name: Unpack the frozen gaia
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/core"
+          # Relative paths: GNU tar on Windows reads "C:" as a remote host.
+          cd "${RUNNER_TEMP}"
+          tar -C core -xzf "core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
+
+      - name: Set up and chat through a real Lemonade
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        run: bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
+
+      - uses: actions/upload-artifact@v7
+        if: failure() && steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}real-engine-logs-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/real-engine/gaia-home/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14

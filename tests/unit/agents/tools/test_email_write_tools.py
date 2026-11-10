@@ -12,7 +12,7 @@ import email
 import email.policy
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -221,6 +221,8 @@ def _sent_mime(call):
 
 
 SEND_NOW = {"to": "dana@example.com", "subject": "Hi", "body": "Hello there"}
+# The account line every prompt opens with, from the `mailbox` fixture.
+FROM = "From: me@example.com (Google)\n"
 
 
 # --- the shape ------------------------------------------------------------
@@ -250,7 +252,7 @@ def test_preview_is_what_gmail_receives(mailbox, agent_for):
     )
 
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert shown == (
+    assert shown == FROM + (
         '"Ruiz, Dana" <dana@example.com>'.join(["To: ", ", sam@example.com\n"])
         + "Cc: kit@example.com\nBcc: hidden@example.com\nSubject: Über Q3\n\n"
         + long_body
@@ -458,7 +460,7 @@ def test_injected_email_cannot_send_past_the_gate(mailbox, agent_for):
     assert result["status"] == "denied"
     assert gmail.calls == []
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert shown.startswith("To: attacker@evil.example\n")
+    assert shown.startswith(FROM + "To: attacker@evil.example\n")
 
 
 def test_header_injection_from_a_subject_is_refused(mailbox, agent_for):
@@ -548,7 +550,7 @@ def test_gmail_reply_threads_with_headers(mailbox, agent_for):
     assert mime["To"].addresses[0].display_name == ""
     assert mime["Cc"] is None
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert shown.startswith("To: dana@example.com\n")
+    assert shown.startswith(FROM + "To: dana@example.com\n")
     assert shown.endswith("\n\nConfirmed.")
 
 
@@ -652,7 +654,7 @@ def test_draft_prompt_shows_the_saved_message_not_the_arguments(mailbox, agent_f
     console = _Asked(answer=False)
     agent_for(console, _Gmail())._execute_tool("send_draft", {"draft_id": "d1"})
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert shown == "To: dana@example.com\nSubject: Saved\n\nDraft text"
+    assert shown == FROM + "To: dana@example.com\nSubject: Saved\n\nDraft text"
 
 
 # --- Graph wire shape -----------------------------------------------------
@@ -1045,7 +1047,7 @@ def test_hostile_reply_to_name_never_reaches_the_prompt(mailbox, agent_for):
         "reply_to_message", {"message_id": "msg1", "body": "ok"}
     )
     shown = console.shown[0][1][EXACT_TEXT_ARG]
-    assert shown.startswith("To: evil@evil.com\n")
+    assert shown.startswith(FROM + "To: evil@evil.com\n")
     assert "‮" not in shown
     mime = _sent_mime(gmail.writes("/users/me/messages/send")[0])
     assert mime["To"].addresses[0].display_name == ""
@@ -1081,7 +1083,7 @@ def test_gmail_international_domain_is_sent_and_shown_in_ascii(mailbox, agent_fo
         "send_now", {**SEND_NOW, "to": "Hans <hans@bücher.de>"}
     )
     assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
-        """To: "Hans" <hans@xn--bcher-kva.de>\n"""
+        FROM + """To: "Hans" <hans@xn--bcher-kva.de>\n"""
     )
     raw = _sent_mime(gmail.writes("/users/me/messages/send")[0])
     assert raw["To"].addresses[0].addr_spec == "hans@xn--bcher-kva.de"
@@ -1332,3 +1334,127 @@ def test_graph_international_domain_goes_out_in_ascii(outlook, agent_for):
     )
     sent = graph.calls[0][2]["message"]["toRecipients"][0]["emailAddress"]
     assert sent["address"] == "hans@xn--bcher-kva.de"
+
+
+# --- the account it goes out from -------------------------------------------
+
+
+def test_outlook_prompt_names_the_outlook_account(outlook, agent_for):
+    console = _Asked(answer=False)
+    agent_for(console, _Graph(), OutlookWriteBackend)._execute_tool(
+        "send_now", SEND_NOW
+    )
+    shown = console.shown[0][1][EXACT_TEXT_ARG]
+    assert shown.startswith("From: me@example.com (Microsoft)\nTo: dana@example.com\n")
+
+
+def test_with_both_connected_the_prompt_names_the_one_that_sends(mailbox, agent_for):
+    mailbox["microsoft"] = {
+        "scopes": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+        "grants": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+    }
+    gmail = _Gmail()
+    console = _Asked()
+    out = json.loads(agent_for(console, gmail)._execute_tool("send_now", SEND_NOW))
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(FROM)
+    assert out["sent"] is True
+    assert all(provider == "google" for provider, _ in mailbox["minted"])
+
+
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("send_now", SEND_NOW),
+        ("send_draft", {"draft_id": "d1"}),
+        ("discard_draft", {"draft_id": "d1"}),
+        ("update_draft", {"draft_id": "d1", "body": "New"}),
+    ],
+)
+def test_mailbox_switched_while_asking_sends_nothing(mailbox, agent_for, tool, args):
+    gmail = _Gmail()
+
+    class _SwitchedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            super().confirm_tool_execution(tool_name, tool_args)
+            mailbox["google"] = None
+            mailbox["microsoft"] = {
+                "scopes": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+                "grants": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+            }
+            return True
+
+    out = json.loads(agent_for(_SwitchedWhileAsking(), gmail)._execute_tool(tool, args))
+    assert out["success"] is False
+    assert "nothing was sent or changed" in out["error"]
+    assert out.get("sent") in (False, None)
+    assert gmail.calls == []
+
+
+def test_unrecorded_address_is_named_plainly(mailbox, agent_for, monkeypatch):
+    import gaia.connectors.api as api
+
+    monkeypatch.setattr(
+        api,
+        "get_connection",
+        lambda p: {"scopes": [SCOPE_GMAIL_MODIFY]} if p == "google" else None,
+    )
+    console = _Asked(answer=False)
+    agent_for(console, _Gmail())._execute_tool("send_now", SEND_NOW)
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
+        "From: your Google account (its address was not recorded)\n"
+    )
+
+
+# --- a no, or no answer, never turns into a send ------------------------------
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_declined_message_cannot_be_sent_afterwards_by_a_direct_call(
+    mailbox, agent_for, timed_out
+):
+    gmail = _Gmail()
+    agent = agent_for(_Asked(answer=False, timed_out=timed_out), gmail)
+    agent._execute_tool("send_now", SEND_NOW)
+    assert agent._email_prepared == {}
+    out = json.loads(agent._tools_registry["send_now"]["function"](**SEND_NOW))
+    assert out["success"] is False
+    assert gmail.calls == []
+
+
+def test_retry_and_edit_after_a_no_each_ask_with_their_own_text(mailbox, agent_for):
+    gmail = _Gmail()
+    answers = iter([False, False, True])
+
+    class _Answers(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            super().confirm_tool_execution(tool_name, tool_args)
+            return next(answers)
+
+    console = _Answers()
+    agent = agent_for(console, gmail)
+    agent._execute_tool("send_now", SEND_NOW)
+    agent._execute_tool("send_now", SEND_NOW)
+    edited = {**SEND_NOW, "body": "Edited text"}
+    out = json.loads(agent._execute_tool("send_now", edited))
+    shown = [args[EXACT_TEXT_ARG] for _, args in console.shown]
+    assert len(shown) == 3
+    assert shown[0] == shown[1] and shown[2].endswith("\n\nEdited text")
+    assert out["sent"] is True
+    sent = gmail.writes("/users/me/messages/send")
+    assert len(sent) == 1
+    assert _sent_mime(sent[0]).get_content().strip() == "Edited text"
+
+
+def test_a_yes_to_a_reroute_question_still_shows_the_exact_email(
+    mailbox, agent_for, monkeypatch
+):
+    """Lifting an earlier no is not approval of a message nobody has seen."""
+    gmail = _Gmail()
+    console = _Asked(answer=False)
+    agent = agent_for(console, gmail)
+    agent._denied_effects = MagicMock()
+    monkeypatch.setattr(agent, "_check_denied_effects", lambda *_: (None, True))
+    result = agent._execute_tool("send_now", SEND_NOW)
+    assert result["status"] == "denied"
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(FROM)
+    assert gmail.calls == []

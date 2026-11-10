@@ -447,9 +447,15 @@ def __init__(self, config: Optional[TalkConfig] = None):
     self.show_stats = self.config.show_stats
     self._voice_session_active = False
 
-    # Enable RAG if documents are provided
-    if self.config.rag_documents:
-        self.enable_rag(documents=self.config.rag_documents)
+    # Explicitly requested documents must be available before voice chat starts.
+    if self.config.rag_documents and not self.enable_rag(
+        documents=self.config.rag_documents
+    ):
+        raise RuntimeError(
+            "Could not index the requested documents for voice chat. "
+            "Check the RAG error above and retry. "
+            "See https://amd-gaia.ai/docs/guides/talk#document-qa-with-voice"
+        )
 ```
 
 ### Text Chat
@@ -544,6 +550,11 @@ async for chunk in talk.chat_stream("Tell me a story"):
 ```
 
 ### Example 2: Voice Chat with RAG
+
+Install `amd-gaia[talk,rag]` first. When `rag_documents` is provided, construction
+raises `RuntimeError` if any requested document cannot be indexed, so a voice
+session cannot silently start without its requested context. Explicit calls to
+`enable_rag()` still return a boolean result that callers should check.
 
 ```python
 from gaia.talk.sdk import TalkSDK, TalkConfig
@@ -722,7 +733,7 @@ def enable_rag(self, documents: Optional[list] = None):
     except ImportError:
         self.log.warning(
             "RAG dependencies not available. "
-            'Install with: uv pip install -e ".[rag]"'
+            'Install with: uv pip install "amd-gaia[talk,rag]"'
         )
         return False
     except Exception as e:

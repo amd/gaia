@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -33,6 +34,7 @@ from gaia.agents.base.memory_store import (
     check_memory_content,
     is_about_user,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -948,14 +950,10 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = raw.strip()
-            # Strip <think> blocks from reasoning models
-            import re as _re
-
-            raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+            raw = strip_reasoning(raw)
             if raw.startswith("```"):
-                raw = _re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = _re.sub(r"\s*```$", "", raw).strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
             try:
                 classification = json.loads(raw)
                 relationship = classification.get("relationship", "neutral")
@@ -1400,9 +1398,10 @@ def stream_inference(include_browser: bool = Query(False)):
             from gaia.agents.base.discovery import SystemDiscovery
             from gaia.llm import create_client
             from gaia.llm.lemonade_client import (
-                cloud_model_provider,
+                LemonadeClientError,
                 resolve_default_chat_model,
             )
+            from gaia.ui._chat_helpers import _runs_on_this_pc
 
             discovery = SystemDiscovery()
             sections: list = []
@@ -1543,15 +1542,32 @@ def stream_inference(include_browser: bool = Query(False)):
             # The machine's default chat model, so no second model loads. Never
             # the UI's custom_model: that may be cloud, and this data stays local.
             model = resolve_default_chat_model()
-            if cloud_model_provider(model):
+            try:
+                local = _runs_on_this_pc(model)
+            except LemonadeClientError as e:
+                cid = _log_server_error("inference locality check failed", e)
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Profile inference runs only on a local model, and "
+                            f"GAIA couldn't confirm that '{model}' is one: Lemonade's "
+                            "model list didn't load. Check that Lemonade is running "
+                            f"in Settings > Setup, then try again (id={cid})."
+                        ),
+                    }
+                )
+                yield _sse({"type": "done", "total": 0})
+                return
+            if not local:
                 yield _sse(
                     {
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model is the cloud model '{model}'. Set "
-                            "a local one with `gaia config set default_model "
-                            "<model>` and try again."
+                            f"the default model '{model}' isn't one this PC runs. "
+                            "Open Settings > Setup, press Run setup again and "
+                            "choose a local chat model, then try again."
                         ),
                     }
                 )

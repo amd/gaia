@@ -51,6 +51,7 @@ from gaia.agents.install_hints import (
     gaia_extra_requirements,
     resolve_pip_frontend,
 )
+from gaia.frozen import is_frozen
 from gaia.installer import model_choice
 from gaia.installer._stdin import stdin_is_tty
 from gaia.llm.model_fit import MachineCapacity, format_gb
@@ -363,8 +364,9 @@ def resolve_init_chat_model(
     client, *, reset_corrupt: bool, enforce_fit: bool, profile: str = "gaia"
 ) -> ChatModelChoice:
     """The chat model `gaia init` sets up: the user's ``default_model`` when it
-    is a local Lemonade model, else the largest default that fits this machine
-    (Qwen3.6 35B A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
+    is a local Lemonade model, else the downloaded local model they last
+    chatted on, else the largest default that fits this machine (Qwen3.6 35B
+    A3B wherever a GPU holds it, Gemma 4 E4B everywhere else).
 
     ``--check`` and ``run()`` both go through here so they can never disagree
     about what "set up" means on this machine. ``reset_corrupt`` is run()'s
@@ -382,12 +384,13 @@ def resolve_init_chat_model(
 
     on_npu = profile == "npu"
     try:
-        configured = GaiaConfig.load().default_model
+        config = GaiaConfig.load()
     except GaiaConfigError as e:
         if not reset_corrupt:
             raise
         log.warning("Ignoring corrupt config; gaia init rewrites it: %s", e)
-        configured = None
+        config = None
+    configured = config.default_model if config else None
     # A Claude or cloud default has nothing to download; the local chat model
     # then follows the hardware, and the user's setting is left as it is.
     # `--profile npu` asks for the NPU, so a GPU default does not hold there;
@@ -402,6 +405,9 @@ def resolve_init_chat_model(
         if enforce_fit:
             _refuse_if_it_does_not_fit(client, configured)
         return ChatModelChoice(model_id=configured, user_set=True, skipped=[])
+    in_use = _local_model_in_use(client, config, on_npu)
+    if in_use:
+        return ChatModelChoice(model_id=in_use, user_set=True, skipped=[])
     recommend = recommend_npu_chat_model if on_npu else recommend_default_chat_model
     model_id, skipped, capacity = recommend(client)
     capacity_pick = (
@@ -416,6 +422,22 @@ def resolve_init_chat_model(
         capacity=capacity,
         capacity_pick=capacity_pick,
     )
+
+
+def _local_model_in_use(client, config, on_npu: bool) -> Optional[str]:
+    """The downloaded local model last chatted on, or None.
+
+    Someone who set up on a cloud model and then picked a local one has no
+    local ``default_model``; setup must not then demand the hardware defaults.
+    """
+    from gaia.llm.lemonade_client import cloud_model_provider, runs_on_npu
+
+    model = config.last_model if config else None
+    if not model or config.last_provider != "local" or cloud_model_provider(model):
+        return None
+    if on_npu and not runs_on_npu(model):
+        return None
+    return model if client.check_model_available(model) else None
 
 
 def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
@@ -437,6 +459,7 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
         capacity_from_system_info,
         check_fit,
         npu_capacity,
+        npu_not_ready_reason,
     )
 
     size = None
@@ -457,6 +480,13 @@ def _refuse_if_it_does_not_fit(client, model_id: str) -> None:
                     f"default_model {model_id} runs on an AMD NPU, and Lemonade "
                     "reports none on this PC. Choose a GPU model with `gaia config "
                     "set default_model <id>`, then re-run `gaia init`."
+                )
+            not_ready = npu_not_ready_reason(capacity)
+            if not_ready:
+                raise ModelFitError(
+                    f"default_model {model_id} runs on the NPU. The NPU model "
+                    f"{not_ready}. Then re-run `gaia init`, or choose "
+                    "a GPU model with `gaia config set default_model <id>`."
                 )
         verdict = check_fit(
             float(size), capacity, kv_cache_for(mr, capacity) if mr else 0.0
@@ -527,11 +557,17 @@ def _snapshot_bytes(snapshot: Path) -> Optional[int]:
 def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
     """Bytes of each model Lemonade's store already holds: finished files and
     the ``.partial`` ones an interrupted pull left. None for a model GAIA
-    cannot look up: a store not on this PC, or no known checkpoint."""
+    cannot look up: a store not on this PC, one this user cannot read, or no
+    known checkpoint."""
     from gaia.llm.lemonade_client import _model_ids_match
 
     store = Path(store_path) if store_path else None
-    if store is None or not store.is_dir():
+    try:
+        readable = store is not None and store.is_dir()
+    except OSError as e:
+        log.warning("Cannot read Lemonade's model store %s: %s", store, e)
+        readable = False
+    if not readable:
         return {m: None for m in model_ids}
     catalog = client.list_models(show_all=True).get("data", [])
     found = {}
@@ -545,11 +581,16 @@ def bytes_already_on_disk(client, model_ids, store_path: Optional[str]) -> dict:
             continue
         repo = checkpoint.split(":", 1)[0]
         snapshots = store / ("models--" + repo.replace("/", "--")) / "snapshots"
-        counted = (
-            [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
-            if snapshots.is_dir()
-            else []
-        )
+        try:
+            counted = (
+                [_snapshot_bytes(s) for s in snapshots.iterdir() if s.is_dir()]
+                if snapshots.is_dir()
+                else []
+            )
+        except OSError as e:
+            log.warning("Cannot read Lemonade's model store %s: %s", snapshots, e)
+            found[model_id] = None
+            continue
         found[model_id] = None if None in counted else sum(counted)
     return found
 
@@ -713,7 +754,7 @@ def check_setup_status(
         older = (
             status.version
             if status.running and status.version != embedded.version
-            else None if status.installed else embedded.older_installed_version()
+            else None if status.installed else embedded.other_installed_version()
         )
         if older:
             return SetupStatus(
@@ -877,20 +918,29 @@ def check_setup_status(
 
 
 def _terminal_installer_agent() -> Optional[Path]:
-    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+    """The flagship an installer shipped outside the hub, else None.
 
-    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
-    it from PATH.
+    install.sh / install.ps1 put it in GAIA's bin dir. The terminal packages
+    ship it with the frozen gaia: beside it (Windows setup) or on PATH (.deb,
+    .rpm, .pkg). None of them write a hub sentinel; the TUI runs it from any
+    of these places. A pip install's PATH is not trusted for it.
     """
     from gaia.home import gaia_home
 
     name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
-    path = gaia_home() / "bin" / name
-    if not path.is_file():
-        return None
-    if sys.platform != "win32" and not os.access(path, os.X_OK):
-        return None
-    return path
+    candidates = [gaia_home() / "bin" / name]
+    if is_frozen():
+        candidates.append(Path(sys.executable).parent / name)
+        on_path = shutil.which("gaia-agent")
+        if on_path:
+            candidates.append(Path(on_path))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if sys.platform != "win32" and not os.access(path, os.X_OK):
+            continue
+        return path
+    return None
 
 
 def _agent_ready_for_check(agent_id: str) -> bool:
@@ -1216,6 +1266,13 @@ class _DownloadProgress:
             )
 
 
+def _failure_kind(exc: BaseException) -> str:
+    """``transient`` when running setup again may get past *exc*, else ``other``."""
+    from gaia.hub import prerelease
+
+    return "transient" if prerelease.is_transient_failure(exc) else "other"
+
+
 class InitEvents:
     """``gaia init --progress-json``: one JSON object per stdout line.
 
@@ -1431,7 +1488,8 @@ class InitCommand:
         self._setup_verified = True
         self.skip_models = skip_models
         self.skip_webui_build = skip_webui_build
-        self.skip_pip_extras = skip_pip_extras
+        # The frozen app bundles its packages and has no pip to add more.
+        self.skip_pip_extras = skip_pip_extras or is_frozen()
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -1488,6 +1546,8 @@ class InitCommand:
         self._runtime_failed = False
         # Why the agent could not be checked or installed, for refresh_agent().
         self._agent_problem: Optional[str] = None
+        # "transient" when running setup again may fix _agent_problem, else "other".
+        self._agent_problem_kind = "other"
         # The working agent stayed because the hub couldn't be asked about it.
         self._agent_kept = False
 
@@ -1774,6 +1834,8 @@ class InitCommand:
                 )
                 if not self._install_backend():
                     return self._fail_before_agent(has_hub_agent_check)
+                if self.profile == "npu":
+                    self._offer_memlock_fix_for_npu_profile()
 
             # Any PC with an NPU gets its backend, so the NPU models show up in
             # the model pickers without a separate profile.
@@ -1829,8 +1891,17 @@ class InitCommand:
                     f"Checking {profile_config['agent']} agent installation...",
                 )
                 self._component("agent", "active")
-                self._ensure_hub_agent_installed()
-                self._component("agent", self._agent_component_state())
+                try:
+                    self._ensure_hub_agent_installed()
+                except Exception as exc:  # re-raised; the row first learns its kind
+                    self._component("agent", "failed", kind=_failure_kind(exc))
+                    raise
+                agent_state = self._agent_component_state()
+                self._component(
+                    "agent",
+                    agent_state,
+                    kind=self._agent_problem_kind if agent_state == "failed" else None,
+                )
 
             # Build Agent UI frontend (dev/source installs only). No
             # try/except here: ensure_webui_built() never raises for an
@@ -2328,14 +2399,12 @@ class InitCommand:
         backend will not install still finishes setup — with a warning that
         says the NPU models will not be offered and how to retry.
         """
+        from gaia.llm import npu_linux
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
         try:
-            devices = (
-                LemonadeClient(verbose=self.verbose)
-                .get_system_info()
-                .get("devices", {})
-            )
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+            devices = info.get("devices", {})
         except LemonadeClientError as e:
             self._print_warning(
                 f"Could not ask Lemonade whether this PC has an NPU ({e}), so the "
@@ -2351,10 +2420,82 @@ class InitCommand:
                 "The NPU models will not be offered until Lemonade's NPU backend "
                 "installs. Re-run `gaia init` to retry."
             )
+            return
+        problems = npu_linux.check(info)
+        if self._offer_memlock_fix(problems):
+            problems = npu_linux.check(info)
+        if problems:
+            self._print_warning(
+                "The NPU models will not be offered until this PC is set up to run "
+                "them:"
+            )
+            for problem in problems:
+                self._print_warning(f"  - {problem.title} {problem.fix}")
+            self._print_warning(
+                "See https://amd-gaia.ai/docs/guides/npu#linux, then re-run "
+                "`gaia init`."
+            )
 
-    def _component(self, component: str, state: str) -> None:
-        """Report one piece setup fetches: ``active``, ``done`` or ``failed``."""
-        self.events.emit("component", component=component, state=state)
+    def _offer_memlock_fix_for_npu_profile(self) -> None:
+        """``--profile npu``: offer the locked-memory fix before the NPU model is
+        judged, so the fit check that follows doesn't stop on it unasked."""
+        from gaia.llm import npu_linux
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        # Nobody to ask: the fit check that follows says what is missing.
+        if self.yes or not stdin_is_tty() or not npu_linux._on_linux():
+            return
+        try:
+            info = LemonadeClient(verbose=self.verbose).get_system_info()
+        except LemonadeClientError as e:
+            self._print_warning(
+                f"Could not ask Lemonade about this PC's NPU ({e}), so the "
+                "locked-memory check is skipped. If the NPU model will not load, "
+                "see https://amd-gaia.ai/docs/guides/npu#linux and re-run "
+                "`gaia init --profile npu`."
+            )
+            return
+        self._offer_memlock_fix(npu_linux.check(info))
+
+    def _offer_memlock_fix(self, problems) -> bool:
+        """Raise the locked-memory limit FastFlowLM needs, when someone is here
+        to enter the administrator password. True once it is in place."""
+        from gaia.llm import npu_linux
+
+        wanted = any(
+            p.code == npu_linux.MEMLOCK and dict(p.params).get("fix") == "apply"
+            for p in problems
+        )
+        if not wanted or self.yes or not stdin_is_tty():
+            return False
+        if not self._prompt_yes_no(
+            "The NPU needs an unlimited locked-memory limit. Raise it now? It asks "
+            "for the administrator password, and applies after a restart"
+        ):
+            return False
+        try:
+            npu_linux.apply_memlock_fix()
+        except npu_linux.MemlockFixError as e:
+            self._print_warning(str(e))
+            return False
+        self._print_success(
+            "Locked-memory limit raised. Restart the PC, then the NPU models are "
+            "offered."
+        )
+        return True
+
+    def _component(
+        self, component: str, state: str, kind: Optional[str] = None
+    ) -> None:
+        """Report one piece setup fetches: ``active``, ``done`` or ``failed``.
+
+        A failed piece may carry *kind*: ``transient`` when running setup again
+        may fix it, ``other`` when it can't.
+        """
+        if kind is None:
+            self.events.emit("component", component=component, state=state)
+        else:
+            self.events.emit("component", component=component, state=state, kind=kind)
 
     def _ensure_llamacpp_backend(self) -> bool:
         """Fetch the llama.cpp backend now, not unannounced inside the first load.
@@ -2524,12 +2665,12 @@ class InitCommand:
             )
             if skipped_gemma(self.profile, model_ids):
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+                from gaia.llm.surface_hints import CLI_VISION_DOWNLOAD_HINT
 
                 self._print(
                     f"   Not downloading {DEFAULT_MODEL_NAME}: your "
-                    f"default_model is {self._chat_choice.model_id}. To ask "
-                    "about images, download it (~6 GB) with "
-                    "`gaia download --agent vlm`."
+                    f"default_model is {self._chat_choice.model_id}. "
+                    f"{CLI_VISION_DOWNLOAD_HINT}"
                 )
 
         # A Claude-backed session never calls the local chat LLM — only
@@ -3658,6 +3799,7 @@ class InitCommand:
         except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
             log.debug("Agent Hub catalog fetch failed", exc_info=True)
             self._agent_problem = f"Could not reach {hub_url}: {exc}"
+            self._agent_problem_kind = _failure_kind(exc)
             self._print_error(
                 hub_unreachable_message(
                     agent_id, hub_url, exc, retry=self._flagship_install_command()

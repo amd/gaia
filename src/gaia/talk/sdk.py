@@ -110,6 +110,9 @@ class TalkSDK:
 
         Args:
             config: Configuration options. If None, uses defaults.
+
+        Raises:
+            RuntimeError: A requested RAG document could not be indexed.
         """
         self.config = config or TalkConfig()
         self.log = get_logger(__name__)
@@ -150,9 +153,15 @@ class TalkSDK:
         self.show_stats = self.config.show_stats
         self._voice_session_active = False
 
-        # Enable RAG if documents are provided
-        if self.config.rag_documents:
-            self.enable_rag(documents=self.config.rag_documents)
+        # Explicitly requested documents must be available before voice chat starts.
+        if self.config.rag_documents and not self.enable_rag(
+            documents=self.config.rag_documents
+        ):
+            raise RuntimeError(
+                "Could not index the requested documents for voice chat. "
+                "Check the RAG error above and retry. "
+                "See https://amd-gaia.ai/docs/guides/talk#document-qa-with-voice"
+            )
 
         self.log.info("TalkSDK initialized with AgentSDK integration")
 
@@ -385,7 +394,8 @@ class TalkSDK:
             return enabled
         except ImportError:
             self.log.warning(
-                'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'
+                "RAG dependencies not available. "
+                'Install with: uv pip install "amd-gaia[talk,rag]"'
             )
             return False
         except Exception as e:

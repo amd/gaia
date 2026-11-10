@@ -44,6 +44,9 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "send_now",
             "reply_to_message",
             "forward_message",
+            "get_thread",
+            "list_connected_mailboxes",
+            "list_waiting_on_you",
         }
     ),
     "image_generation": frozenset(

@@ -250,8 +250,23 @@ def memory_reason(need_gb: float, capacity) -> str:
     )
 
 
+#: Why a model doesn't fit: too little memory, no usable NPU, or no backend for its kind.
+FIT_MEMORY, FIT_NPU, FIT_BACKEND = "memory", "npu", "backend"
+
+
+def cant_run_reason(fit: Dict[str, Any]) -> Optional[str]:
+    """Why nothing on this PC can run the model *fit* describes, or None.
+
+    Only a missing NPU or backend counts. A memory shortfall is an estimate
+    the user may accept, so it is never a reason to refuse the model.
+    """
+    if fit.get("fit_code") in (FIT_NPU, FIT_BACKEND):
+        return fit["fit_reason"]
+    return None
+
+
 def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, Any]:
-    """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` for one model.
+    """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` / ``fit_code`` for one model.
 
     Memory only: a model already on disk costs no disk, so disk is judged on
     the whole selection instead (:func:`disk_shortfall`). ``fits`` is None
@@ -267,6 +282,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
         MachineCapacity,
         check_fit,
         npu_capacity,
+        npu_not_ready_reason,
         required_memory_gb,
     )
 
@@ -278,6 +294,7 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
             ),
             "fit_reason": None,
+            "fit_code": None,
         }
     if runs_on_npu(model_id):
         capacity = npu_capacity(capacity)
@@ -288,6 +305,16 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
                 "capacity_gb": None,
                 "fit_reason": "runs on a Ryzen AI NPU, and Lemonade reports none "
                 "on this PC",
+                "fit_code": FIT_NPU,
+            }
+        not_ready = npu_not_ready_reason(capacity)
+        if not_ready:
+            return {
+                "fits": False,
+                "need_gb": None,
+                "capacity_gb": None,
+                "fit_reason": not_ready,
+                "fit_code": FIT_NPU,
             }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
@@ -299,6 +326,31 @@ def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, A
         "need_gb": round(to_decimal_gb(need), 1),
         "capacity_gb": round(to_decimal_gb(capacity.memory_gb), 1),
         "fit_reason": None if verdict.fits else memory_reason(need, capacity),
+        "fit_code": None if verdict.fits else FIT_MEMORY,
+    }
+
+
+def backend_fit(
+    fit: Dict[str, Any], recipe: Optional[str], system_info
+) -> Dict[str, Any]:
+    """*fit* from :func:`memory_fit`, unless no backend for *recipe* runs here.
+
+    Lemonade can see an NPU with room for a model while its FastFlowLM backend
+    can't run on this PC; such a model doesn't fit, whatever its size.
+    *system_info* None (unread) leaves the memory verdict as it is.
+    """
+    from gaia.llm.model_device import NPU_RECIPES, recipe_unavailable_reason
+
+    if system_info is None:
+        return fit
+    reason = recipe_unavailable_reason(recipe, system_info)
+    if reason is None:
+        return fit
+    return {
+        **fit,
+        "fits": False,
+        "fit_reason": reason,
+        "fit_code": FIT_NPU if recipe in NPU_RECIPES else FIT_BACKEND,
     }
 
 
@@ -313,11 +365,11 @@ def _hf_hub_cache() -> Path:
 def _free_gb_at(path: Path) -> Optional[float]:
     """Free GB on the drive holding *path*, which need not exist yet."""
     probe = path
-    while not probe.exists():
-        if probe.parent == probe:
-            return None
-        probe = probe.parent
     try:
+        while not probe.exists():
+            if probe.parent == probe:
+                return None
+            probe = probe.parent
         return shutil.disk_usage(probe).free / 1e9
     except OSError as e:
         log.warning("Could not read free space at %s: %s", probe, e)

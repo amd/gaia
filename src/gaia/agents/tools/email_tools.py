@@ -41,6 +41,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import EXACT_TEXT_ARG, NEEDS_PERSON_ARG
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools._email.errors import MailboxOutcomeUnknown
 from gaia.agents.tools._email.outgoing import (
     OutgoingMessage,
@@ -335,8 +336,8 @@ def _write_scopes(provider: str, operation: str) -> Tuple[str, ...]:
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         raise MailboxError(
-            f"This {name} connection can read mail but not "
-            f"{'send' if operation == OPERATION_SEND else 'draft'} it. Nothing was "
+            f"This {name} connection lacks {' '.join(missing)}, which GAIA needs "
+            f"to {'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing was "
             f"changed. Reconnect {name} in Settings -> Connectors and approve "
             "reading, composing and sending mail, leaving that option ticked on "
             f"{name}'s consent screen. In a terminal: `gaia connectors connect "
@@ -425,11 +426,18 @@ class _MailPreflight:
             message = self._build(**args)
             if self._will_send:
                 message = checked(message)
+            message = dataclasses.replace(
+                message, sender=self._mixin._email_account_label()
+            )
         except Exception as exc:  # surfaced to the model instead of a prompt
             logger.warning("email: %s refused: %s", self._tool_name, exc)
             return {"status": "error", "error": str(exc)}
         self._mixin._email_prepared[_call_key(self._tool_name, args)] = message
         return None
+
+    def forget(self, args: Dict[str, Any]) -> None:
+        """Drop the message a declined or unanswered prompt showed."""
+        self._mixin._email_prepared.pop(_call_key(self._tool_name, args), None)
 
     def prompt_args_of(self, args: Dict[str, Any]) -> Dict[str, Any]:
         key = _call_key(self._tool_name, args)
@@ -636,6 +644,24 @@ class EmailToolsMixin:
 
         return self._new_write_backend(provider, _token)
 
+    def _email_account_label(self) -> str:
+        """The account a write goes through, as its prompt names it."""
+        from gaia.agents.tools._email import fixture
+
+        if fixture.fixture_path():
+            provider, address = GOOGLE_CONNECTOR_ID, fixture.FIXTURE_ADDRESS
+        else:
+            provider = self._resolve_mailbox()[0]
+            address = next(
+                s["account_email"]
+                for s in self._mailbox_states()
+                if s["provider"] == provider
+            )
+        name = _PROVIDER_NAMES[provider]
+        if not address:
+            return f"your {name} account (its address was not recorded)"
+        return f"{address} ({name})"
+
     def _mailbox_states(self) -> List[Dict]:
         """Every mailbox provider's live state, without a network call.
 
@@ -700,6 +726,9 @@ class EmailToolsMixin:
             else:
                 logger.warning("email tool failed during %s: %s", action, exc)
             payload = {"error": str(exc), "action": action, "success": False}
+            if refusal:
+                # A per-turn budget, not a mailbox fault: memory must not learn it.
+                payload.update(NOT_EXECUTED)
             payload.update(extra)
             return json.dumps(payload, indent=2)
 
@@ -1221,6 +1250,18 @@ class EmailToolsMixin:
                 )
             return prepared
 
+        def _approved_writer(operation: str, approved: OutgoingMessage):
+            """The writer, only if it is still the account the prompt showed."""
+            current = mixin._email_account_label()
+            if current != approved.sender:
+                raise RuntimeError(
+                    f"The approval showed the mailbox {approved.sender}, but mail "
+                    f"now goes through {current}, so nothing was sent or changed. "
+                    "Tell the user; call the tool again only if they ask, so the "
+                    "prompt shows the account it will use."
+                )
+            return mixin._email_writer(operation)
+
         def _sent(result: Dict[str, Any], message: OutgoingMessage) -> str:
             return json.dumps(
                 {"success": True, "sent": True, **result, **describe(message)},
@@ -1415,7 +1456,7 @@ class EmailToolsMixin:
                         "bcc": bcc,
                     },
                 )
-                writer = mixin._email_writer(OPERATION_DRAFT)
+                writer = _approved_writer(OPERATION_DRAFT, approved)
                 # The prompt may have waited minutes; don't overwrite newer work.
                 if writer.get_draft(draft_id) != approved.replaces:
                     raise RuntimeError(
@@ -1441,8 +1482,8 @@ class EmailToolsMixin:
                 draft_id: The draft_id from create_draft or list_drafts
             """
             try:
-                _prepared("discard_draft", {"draft_id": draft_id})
-                mixin._email_writer(OPERATION_DRAFT).discard_draft(draft_id)
+                approved = _prepared("discard_draft", {"draft_id": draft_id})
+                _approved_writer(OPERATION_DRAFT, approved).discard_draft(draft_id)
                 return json.dumps({"success": True, "discarded": draft_id}, indent=2)
             except Exception as exc:
                 return _fail(exc, "discard_draft")
@@ -1458,7 +1499,7 @@ class EmailToolsMixin:
             """
             try:
                 approved = _prepared("send_draft", {"draft_id": draft_id})
-                writer = mixin._email_writer(OPERATION_SEND)
+                writer = _approved_writer(OPERATION_SEND, approved)
                 # The prompt may have waited minutes; only what was approved goes.
                 if checked(writer.get_draft(draft_id)) != approved:
                     raise RuntimeError(
@@ -1490,7 +1531,7 @@ class EmailToolsMixin:
             args = {"to": to, "subject": subject, "body": body, "cc": cc, "bcc": bcc}
             try:
                 approved = _prepared("send_now", args)
-                writer = mixin._email_writer(OPERATION_SEND)
+                writer = _approved_writer(OPERATION_SEND, approved)
                 return _sent(writer.send(approved), approved)
             except Exception as exc:
                 return _send_failed(exc, "send_now", args)
@@ -1516,7 +1557,7 @@ class EmailToolsMixin:
             args = {"message_id": message_id, "body": body, "reply_all": reply_all}
             try:
                 approved = _prepared("reply_to_message", args)
-                writer = mixin._email_writer(OPERATION_SEND)
+                writer = _approved_writer(OPERATION_SEND, approved)
                 return _sent(writer.send(approved), approved)
             except Exception as exc:
                 return _send_failed(exc, "reply_to_message", args)
@@ -1550,7 +1591,7 @@ class EmailToolsMixin:
             }
             try:
                 approved = _prepared("forward_message", args)
-                writer = mixin._email_writer(OPERATION_SEND)
+                writer = _approved_writer(OPERATION_SEND, approved)
                 return _sent(writer.send(approved), approved)
             except Exception as exc:
                 return _send_failed(exc, "forward_message", args)

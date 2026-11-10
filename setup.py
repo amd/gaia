@@ -12,8 +12,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
-tkml_version = "5.0.4"
-
 # Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
 # util/list_agent_packages.py for build_agent_package.yml and
 # util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
@@ -96,14 +94,6 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
-        "gaia.eval": [
-            "webapp/*.json",
-            "webapp/*.js",
-            "webapp/*.md",
-            "webapp/public/*.html",
-            "webapp/public/*.css",
-            "webapp/public/*.js",
-        ],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -244,6 +234,11 @@ setup(
         # sys.executable is the .exe rather than an interpreter.
         "diarize": [
             "sherpa-onnx>=1.13,<3",
+        ],
+        # Fetches videos from links. Installed on first use in a source install;
+        # a frozen build has to bundle it, as with diarize above.
+        "media-url": [
+            "yt-dlp>=2025.1.1",
         ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced

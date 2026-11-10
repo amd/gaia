@@ -359,6 +359,7 @@ def test_switching_on_clears_a_saved_claude_model(local_only_on):
 def test_keys_a_running_lemonade_holds_are_taken_back(monkeypatch):
     from gaia.llm import cloud_keys
 
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     calls = []
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: True
@@ -393,6 +394,84 @@ def test_no_lemonade_running_means_no_keys_to_take_back(monkeypatch):
         lambda *a: pytest.fail("Lemonade asked while stopped"),
     )
     assert cloud_keys.drop_runtime_keys() == []
+
+
+OTHERS_URL = "http://127.0.0.1:59986/api/v1"
+
+
+@pytest.fixture
+def lemonade_holding_a_key(tmp_path, monkeypatch):
+    """A Lemonade, any owner, holding a Fireworks key; yields the DELETEs sent."""
+    import responses
+
+    from gaia import config as config_mod
+
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    for name in ("LEMONADE_BASE_URL", "LEMONADE_API_KEY", "GAIA_LEMONADE_EMBEDDED"):
+        monkeypatch.delenv(name, raising=False)
+    held = {"cloud": {"providers": [{"name": "fireworks", "runtime_key_set": True}]}}
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as mock:
+        mock.add(responses.GET, f"{OTHERS_URL}/system-info", json=held)
+        mock.add(responses.DELETE, f"{OTHERS_URL}/cloud/auth/fireworks", json={})
+        yield lambda: [
+            c.request.url for c in mock.calls if c.request.method == "DELETE"
+        ]
+
+
+def test_a_server_named_by_lemonade_base_url_keeps_its_keys(
+    lemonade_holding_a_key, monkeypatch
+):
+    from gaia.llm import cloud_keys
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", OTHERS_URL)
+    assert cloud_keys.users_lemonade_url() == OTHERS_URL
+    assert cloud_keys.drop_runtime_keys() == []
+    assert lemonade_holding_a_key() == []
+
+
+def test_the_saved_external_server_keeps_its_keys(lemonade_holding_a_key):
+    from gaia.config import GaiaConfig
+    from gaia.llm import cloud_keys
+
+    GaiaConfig.save_key("lemonade_mode", "external")
+    GaiaConfig.save_key("lemonade_base_url", OTHERS_URL)
+    assert cloud_keys.users_lemonade_url() == OTHERS_URL
+    assert cloud_keys.drop_runtime_keys() == []
+    assert lemonade_holding_a_key() == []
+
+
+def test_gaias_own_running_lemonade_has_its_keys_taken_back(
+    lemonade_holding_a_key, monkeypatch
+):
+    from gaia.llm import cloud_keys
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: True
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.running_embedded_lemonade_url", lambda: OTHERS_URL
+    )
+    assert cloud_keys.users_lemonade_url() is None
+    assert cloud_keys.drop_runtime_keys() == ["fireworks"]
+    assert lemonade_holding_a_key() == [f"{OTHERS_URL}/cloud/auth/fireworks"]
+
+
+def test_local_only_says_the_users_server_was_left_alone(
+    lemonade_holding_a_key, local_only_on, monkeypatch, capsys
+):
+    from gaia.cli import _handle_network_policy
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", OTHERS_URL)
+    _handle_network_policy("set", "local_ai_only")
+    out = capsys.readouterr().out
+    assert f"Left your Lemonade Server at {OTHERS_URL} as is" in out
+    assert "Removed" not in out
+    assert lemonade_holding_a_key() == []
+    with pytest.raises(CloudDisabledError):
+        local_only.assert_model_permitted(
+            "fireworks.glm-5p3-flash", lambda m: ["cloud"]
+        )
 
 
 @pytest.mark.allow_network  # the bench gateway listens on 127.0.0.1

@@ -158,6 +158,13 @@
     font-size: 13px;
 }
 
+.settings-report {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+}
+
 .settings-ok {
     color: var(--accent-green);
     font-size: 13px;
@@ -725,6 +732,10 @@
     white-space: nowrap;
 }
 
+.model-row-current.is-blocked {
+    color: var(--accent-yellow);
+}
+
 .grant-row {
     display: flex;
     align-items: center;
@@ -826,6 +837,19 @@
     color: var(--text-primary);
     font-size: 14px;
     font-weight: 600;
+}
+
+/* Read aloud: the voice picker with its Preview button beside it. */
+.read-aloud-voice-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.read-aloud-voice-row .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
 }
 
 .settings-setup-status {

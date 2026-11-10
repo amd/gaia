@@ -250,8 +250,9 @@ gaia connectors status
 #  github                          [mcp_server]  configured
 #  brave                           [mcp_server]  not configured
 
-# Test health of a configured connector
-gaia connectors test github
+# Test a configured connector. An MCP server is started once; GitHub checks
+# its token only when a tool runs, so a bad token still passes here.
+gaia connectors test mcp-github
 
 # Per-agent grants (every connector type)
 gaia connectors grants grant google installed:gaia \

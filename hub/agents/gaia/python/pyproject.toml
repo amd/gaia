@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-gaia"
-version = "0.3.3"
+version = "0.3.5"
 description = "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 authors = [{ name = "AMD" }]
 license = "MIT"
@@ -28,7 +28,7 @@ requires-python = ">=3.10"
 # not drag faiss/pypdfium2 in just to import the class. RAG's real dependencies
 # come from `gaia init` into the active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.25.4",
+  "amd-gaia>=0.26.0",
 ]
 
 [project.scripts]

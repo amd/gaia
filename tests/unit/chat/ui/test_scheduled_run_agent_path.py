@@ -7,7 +7,7 @@ A desktop install ships the flagship only as a daemon sidecar binary, so a
 scheduled run that imported the in-process package failed every time with a
 "not installed" message naming an install command that did not work. These
 pin that a scheduled run relays to the sidecar when that is how the flagship
-runs, that a missing flagship points at ``gaia init``, and that a failed run's
+runs, that a missing flagship points at re-running setup, and that a failed run's
 error reaches the schedules API.
 """
 
@@ -316,7 +316,7 @@ def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
 # ── A missing flagship ──────────────────────────────────────────────────────
 
 
-def test_no_flagship_at_all_says_to_run_gaia_init(monkeypatch, db):
+def test_no_flagship_at_all_says_to_run_setup_again(monkeypatch, db):
     registry = AgentRegistry()
     registry._agents.clear()
     monkeypatch.setattr(registry, "refresh_installed", lambda: None)
@@ -326,11 +326,11 @@ def test_no_flagship_at_all_says_to_run_gaia_init(monkeypatch, db):
         server._run_scheduled_prompt(db, "hi")
 
     message = str(exc.value)
-    assert "gaia init" in message
+    assert "Run setup again" in message and "gaia init" not in message
     assert "git+" not in message and "pip install" not in message
 
 
-def test_a_registered_flagship_whose_package_is_gone_says_to_run_gaia_init(
+def test_a_registered_flagship_whose_package_is_gone_says_to_run_setup_again(
     monkeypatch, db
 ):
     registry = SimpleNamespace(
@@ -345,7 +345,7 @@ def test_a_registered_flagship_whose_package_is_gone_says_to_run_gaia_init(
         server._run_scheduled_prompt(db, "hi")
 
     message = str(exc.value)
-    assert "gaia init" in message
+    assert "Run setup again" in message and "gaia init" not in message
     assert "git+" not in message
 
 

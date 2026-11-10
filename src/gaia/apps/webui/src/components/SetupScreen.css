@@ -312,6 +312,20 @@ button.setup-rail-step:hover {
     color: var(--danger);
 }
 
+.setup-content-failure {
+    grid-column: 2 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--danger);
+}
+
+.setup-content-failure pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .setup-content-main,
 .setup-content-side {
     display: flex;
@@ -526,6 +540,14 @@ button.setup-rail-step:hover {
     color: var(--text-secondary);
 }
 
+/* Long translated blocked-provider guidance must share the remaining width with
+   the icon on narrow setup screens; otherwise the English gloss can widen the
+   flex item past the viewport in RTL. */
+.setup-choice > span {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
 .setup-choice:hover {
     background: var(--bg-hover);
 }
@@ -554,6 +576,20 @@ button.setup-rail-step:hover {
 
 .setup-start {
     align-self: flex-start;
+}
+
+/* The blocked provider reason is announced to assistive technology and kept out
+   of the narrow visual layout; the same reason is visible on the disabled choice. */
+.setup-a11y-alert {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .setup-lemonade {

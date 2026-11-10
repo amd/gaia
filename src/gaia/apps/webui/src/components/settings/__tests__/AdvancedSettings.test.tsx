@@ -9,11 +9,14 @@ import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
-const modelActions = vi.hoisted(() => ({ downloadError: null as string | null }));
+const modelActions = vi.hoisted(() => ({
+    downloadError: null as string | null,
+    downloadModel: vi.fn(),
+}));
 vi.mock('../../../hooks/useModelActions', () => ({
     useModelActions: () => ({
         isLoadingModel: false, isDownloadingModel: false, downloadError: modelActions.downloadError,
-        loadModel: vi.fn(), downloadModel: vi.fn(),
+        loadModel: vi.fn(), downloadModel: modelActions.downloadModel,
     }),
 }));
 
@@ -37,6 +40,7 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 beforeEach(() => {
     vi.clearAllMocks();
     modelActions.downloadError = null;
+    modelActions.downloadModel.mockReset();
     useChatStore.getState().setSystemStatus(null);
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
     mockedApi.getLemonadeTarget.mockResolvedValue({
@@ -110,6 +114,26 @@ describe('AdvancedSettings', () => {
         expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
     });
 
+    it('Force Re-download keeps the model in use, and loads the repaired one when none is', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        const { unmount } = render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
+        unmount();
+
+        modelActions.downloadModel.mockReset();
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: null,
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
+    });
+
     it('shows why Download could not start, once', async () => {
         modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
         mockedApi.getSystemStatus.mockResolvedValue(status({
@@ -117,8 +141,10 @@ describe('AdvancedSettings', () => {
             default_model_name: 'user.x', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Download');
+        const download = await screen.findByText('Download');
+        fireEvent.click(download);
 
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(false, undefined, true);
         expect(screen.getAllByText(/Cannot download 'user.x'/)).toHaveLength(1);
     });
 

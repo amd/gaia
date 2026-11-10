@@ -66,3 +66,26 @@ def test_every_feature_names_its_tools():
 def test_full_withholds_nothing_and_compact_withholds_every_feature_tool():
     assert withheld_tools(FULL) == frozenset()
     assert withheld_tools(COMPACT) == frozenset().union(*FEATURE_TOOLS.values())
+
+
+def test_compact_withholds_every_registered_email_tool():
+    assert FEATURE_TOOLS["email"] == frozenset(
+        {
+            "check_mailbox_access",
+            "list_inbox",
+            "search_email",
+            "read_email",
+            "list_mail_folders",
+            "get_thread",
+            "list_connected_mailboxes",
+            "list_waiting_on_you",
+            "list_drafts",
+            "create_draft",
+            "update_draft",
+            "discard_draft",
+            "send_draft",
+            "send_now",
+            "reply_to_message",
+            "forward_message",
+        }
+    )

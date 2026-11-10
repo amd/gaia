@@ -217,6 +217,9 @@ _TRANSIENT_PHRASES = (
     "temporarily unavailable",
     "currently overloaded",
     "server is overloaded",
+    # A llama-server start that crashed (an intermittent Vulkan iGPU fault),
+    # which Lemonade reports as a model_load_error.
+    "llama-server failed to start",
 )
 
 #: libcurl's wording for a transfer that broke at the connection level, as
@@ -252,6 +255,9 @@ _NOT_RETRYABLE_PHRASES = (
     "model_not_found",
     "model not found",
     "does not exist",
+    # Lemonade could not load the model (NPU driver, memory, a bad model).
+    "model_load_error",
+    "model_load_refused",
     # Content filters answer with a verdict on the prompt, not a fault.
     "content_filter",
     "content management policy",

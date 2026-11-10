@@ -140,6 +140,8 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"forget_everything": RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
 	"allow_path_access": RiskWrite,
+	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
+	"trust_project_folder": RiskWrite,
 }
 
 // actionTitles is the question the prompt asks, in words. The tool name is the
@@ -147,28 +149,35 @@ var confirmationRiskTiers = map[string]RiskTier{
 // saying "Run 'run_shell_command' with command=…" asked the same thing twice
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
-	"run_shell_command":   "Run this command?",
-	"run_cli_command":     "Run this command?",
-	"wait_for_condition":  "Poll with this command?",
-	"run_python":          "Run this Python code?",
-	"execute_python_file": "Run this Python file?",
-	"write_file":          "Write this file?",
-	"write_python_file":   "Write this file?",
-	"write_markdown_file": "Write this file?",
-	"edit_file":           "Edit this file?",
-	"edit_python_file":    "Edit this file?",
-	"replace_function":    "Edit this file?",
-	"update_gaia_md":      "Update GAIA.md?",
-	"install_skill":       "Install this skill?",
-	"remove_skill":        "Remove this skill?",
-	"forget_everything":   "Erase all of GAIA's memory?",
-	"allow_path_access":   "Allow access to this location?",
-	"send_now":            "Send this email?",
-	"send_draft":          "Send this email?",
-	"reply_to_message":    "Send this reply?",
-	"forward_message":     "Forward this email?",
-	"discard_draft":       "Delete this draft?",
-	"update_draft":        "Change this draft?",
+	"run_shell_command":    "Run this command?",
+	"run_cli_command":      "Run this command?",
+	"wait_for_condition":   "Poll with this command?",
+	"run_python":           "Run this Python code?",
+	"execute_python_file":  "Run this Python file?",
+	"write_file":           "Write this file?",
+	"write_python_file":    "Write this file?",
+	"write_markdown_file":  "Write this file?",
+	"edit_file":            "Edit this file?",
+	"edit_python_file":     "Edit this file?",
+	"replace_function":     "Edit this file?",
+	"update_gaia_md":       "Update GAIA.md?",
+	"install_skill":        "Install this skill?",
+	"remove_skill":         "Remove this skill?",
+	"forget_everything":    "Erase all of GAIA's memory?",
+	"allow_path_access":    "Allow access to this location?",
+	"trust_project_folder": "Trust this folder's instructions and skills?",
+	"send_now":             "Send this email?",
+	"send_draft":           "Send this email?",
+	"reply_to_message":     "Send this reply?",
+	"forward_message":      "Forward this email?",
+	"discard_draft":        "Delete this draft?",
+	"update_draft":         "Change this draft?",
+}
+
+// approveLabels names what y grants for a prompt whose yes outlasts the call.
+var approveLabels = map[string]string{
+	// Saved for the folder, so later sessions there are not asked again.
+	"trust_project_folder": "trust this folder",
 }
 
 // ActionTitle is the prompt's question for a gated action.
@@ -788,7 +797,11 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // empty scope hides the choice entirely.
 func (m ConfirmationModel) styledKeyHint() string {
 	type choice struct{ key, label string }
-	choices := []choice{{"y", "once"}}
+	approve, ok := approveLabels[m.action]
+	if !ok {
+		approve = "once"
+	}
+	choices := []choice{{"y", approve}}
 	if m.allowAlways() {
 		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
 	}

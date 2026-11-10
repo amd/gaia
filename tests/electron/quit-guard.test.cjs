@@ -280,6 +280,7 @@ describe("quitOnTermSignal", () => {
   // A SIGTERM with setup running used to open "Quit GAIA?" with nobody to answer it (#6579).
   test("SIGTERM quits at once, without the question, even while work is running", async () => {
     const app = new EventEmitter();
+    app.whenReady = () => Promise.resolve();
     const deps = {
       app,
       updater: new EventEmitter(),
@@ -305,18 +306,48 @@ describe("quitOnTermSignal", () => {
     expect(deps.confirm).not.toHaveBeenCalled();
     expect(deps.onQuitting).toHaveBeenCalledTimes(1);
   });
+
+  // Node installs its handler only when a signal goes from no listeners to one;
+  // tests/electron/sigterm-electron.test.mjs proves the effect in real Electron.
+  test("once ready, every SIGTERM listener is dropped and re-added, so Node's handler goes back on top", async () => {
+    let ready;
+    const app = new EventEmitter();
+    app.whenReady = () => new Promise((done) => (ready = done));
+    app.quit = jest.fn();
+    const proc = new EventEmitter();
+    const other = jest.fn();
+    proc.on("SIGTERM", other);
+    const armed = quitOnTermSignal({ proc, app, guard: { allow: jest.fn() }, logger: { log: jest.fn() } });
+    const before = proc.listeners("SIGTERM");
+    const counts = [];
+    proc.on("removeListener", () => counts.push(proc.listenerCount("SIGTERM")));
+
+    ready();
+    await armed;
+
+    expect(counts).toContain(0);
+    expect(proc.listeners("SIGTERM")).toEqual(before);
+    proc.emit("SIGTERM");
+    expect(other).toHaveBeenCalledTimes(1);
+    expect(app.quit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("attachWindowGuards", () => {
   const { EventEmitter } = require("events");
 
-  function setup({ minimizeToTray = true, noticeDue = true, platform = "win32", confirmed = false, quitting = false } = {}) {
+  function setup({ closeAction = "hide", noticeDue = true, platform = "win32", confirmed = false, quitting = false } = {}) {
     const win = new EventEmitter();
     win.hide = jest.fn();
+    // A title-bar close comes from the focused window; minimizing takes focus away.
+    win.isMinimized = jest.fn(() => false);
+    win.isFocused = jest.fn(() => true);
+    win.minimize = jest.fn(() => win.isFocused.mockReturnValue(false));
+    win.on("focus", () => win.isFocused.mockReturnValue(true));
     const app = { quit: jest.fn() };
     const guard = { confirmed, allow: jest.fn() };
     const tray = {
-      minimizeToTray,
+      closeAction,
       closeNoticeDue: noticeDue,
       showCloseNotice: jest.fn(async () => false),
     };
@@ -366,6 +397,65 @@ describe("attachWindowGuards", () => {
     expect(reportNoticeError).toHaveBeenCalledWith(expect.objectContaining({ message: "EACCES" }));
   });
 
+  test("with no tray, a title-bar close minimizes, keeps GAIA running and shows the notice", async () => {
+    const { win, tray, close, app } = setup({ closeAction: "minimize" });
+    const ev = close();
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(win.hide).not.toHaveBeenCalled();
+    await flush();
+    expect(tray.showCloseNotice).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test("the dock's Quit on the window GAIA minimized runs the quit guard", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    close();
+    const ev = close();
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("the dock's Quit on a window the user minimized quits too", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    win.isFocused.mockReturnValue(false);
+    win.isMinimized.mockReturnValue(true);
+    close();
+    expect(win.minimize).not.toHaveBeenCalled();
+    expect(app.quit).toHaveBeenCalledTimes(1);
+  });
+
+  test("a focused window still reported minimized (stale after a Wayland dock restore) minimizes, never quits", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    close();
+    win.isMinimized.mockReturnValue(true);
+    win.isFocused.mockReturnValue(true);
+    close();
+    expect(win.minimize).toHaveBeenCalledTimes(2);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test("a close on a visible window that isn't focused minimizes rather than quit", () => {
+    const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+    win.isFocused.mockReturnValue(false);
+    close();
+    expect(win.minimize).toHaveBeenCalledTimes(1);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  test.each([["restore"], ["focus"], ["show"]])(
+    "once the window is back (%s), closing minimizes it again",
+    (back) => {
+      const { win, close, app } = setup({ closeAction: "minimize", noticeDue: false });
+      close();
+      win.emit(back);
+      close();
+      expect(win.minimize).toHaveBeenCalledTimes(2);
+      expect(app.quit).not.toHaveBeenCalled();
+    }
+  );
+
   test("once shown, the notice isn't asked for again", () => {
     const { tray, close } = setup({ noticeDue: false });
     close();
@@ -373,7 +463,7 @@ describe("attachWindowGuards", () => {
   });
 
   test("with close-to-tray off, closing runs the quit guard and keeps the window", () => {
-    const { win, close, app } = setup({ minimizeToTray: false });
+    const { win, close, app } = setup({ closeAction: "quit" });
     const ev = close();
     expect(ev.preventDefault).toHaveBeenCalled();
     expect(win.hide).not.toHaveBeenCalled();
@@ -381,14 +471,14 @@ describe("attachWindowGuards", () => {
   });
 
   test("once the guard agreed, the window closes", () => {
-    const { close, app } = setup({ minimizeToTray: false, confirmed: true });
+    const { close, app } = setup({ closeAction: "quit", confirmed: true });
     const ev = close();
     expect(ev.preventDefault).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();
   });
 
   test("on macOS closing just closes; the app keeps running", () => {
-    const { close, app } = setup({ minimizeToTray: false, platform: "darwin" });
+    const { close, app } = setup({ closeAction: "quit", platform: "darwin" });
     const ev = close();
     expect(ev.preventDefault).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();

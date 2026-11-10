@@ -227,3 +227,18 @@ def test_the_real_cause_behind_couldnt_reach_is_read_from_the_sidecar_log(tmp_pa
     )
     (line,) = npu.sidecar_request_failures(tmp_path)
     assert "model_load_error" in line and line.startswith("sidecar-51234.log")
+
+
+# ── Console output ──────────────────────────────────────────────────────
+
+
+def test_echoing_non_ascii_output_survives_a_cp1252_console(monkeypatch, capfd):
+    import io
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(
+        sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+    )
+    npu._utf8_stdout()
+    print("✅ Ready → 128K ─────", flush=True)
+    assert "Ready" in raw.getvalue().decode("utf-8")
