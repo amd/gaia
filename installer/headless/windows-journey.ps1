@@ -63,8 +63,24 @@ if ($env:KIND -eq 'install-ps1') {
 }
 $gaiaHome = "$userHome\.gaia"
 
-$tuiDir    = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
-$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+# Setups since #5204 install the terminal under gaia-tui ids; earlier releases,
+# which the journeys may be testing, used the "Terminal Hub" ones. The release
+# under test is whichever layout its setup recorded; before an install and
+# after an uninstall there is none, so those steps check both.
+$tuiLayouts = @(
+    @{ Dir = "$env:LOCALAPPDATA\Programs\gaia-tui"
+       Arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui'
+       Key = 'HKCU:\Software\GAIA\gaia-tui' },
+    @{ Dir = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
+       Arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+       Key = 'HKCU:\Software\GAIA\TerminalHub' }
+)
+$recorded = @($tuiLayouts | Where-Object { Test-Path $_.Key })
+if ($recorded.Count -gt 1) { throw 'the terminal is recorded under both the gaia-tui and the legacy ids' }
+$tuiLayout = if ($recorded.Count -eq 1) { $recorded[0] } else { $tuiLayouts[0] }
+$tuiDir    = $tuiLayout.Dir
+$tuiArp    = $tuiLayout.Arp
+$tuiDirs   = @($tuiLayouts | ForEach-Object { $_.Dir })
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
 $uiArp     = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$uiGuid"
@@ -109,6 +125,14 @@ function Wait-Gone([string]$Path, [int]$Seconds = 120) {
 function Ui-Dir {
     if (-not (Test-Path $uiKey)) { return $null }
     return (Get-ItemProperty -Path $uiKey -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation
+}
+
+# The `gaia` the app runs: the one it ships, or, for a release from before it
+# shipped one (the upgrade row's first install), the venv it built.
+function Backend-Gaia {
+    $dir = Ui-Dir
+    if ($dir -and (Test-Path "$dir\resources\core\gaia.exe")) { return "$dir\resources\core\gaia.exe" }
+    return "$gaiaHome\venv\Scripts\gaia.exe"
 }
 
 function Wants([string]$Component) {
@@ -167,8 +191,8 @@ function Start-AgentUi {
     Write-Host "launched pid $($p.Id)"
 }
 
-# First launch installs the Python backend from PyPI before it can serve, so
-# the bound is generous; the threshold file is what flags it getting slower.
+# A release from before the app shipped its backend installs it from PyPI on
+# first launch, so the bound is generous; the threshold file flags it slowing.
 function Wait-AgentUiHealth {
     $pid0 = [int](Get-Content "$work\app.pid")
     $deadline = (Get-Date).AddMinutes(25)
@@ -193,9 +217,9 @@ function Wait-AgentUiHealth {
         Fail 'the backend did not answer /api/health within 25 min'
     }
     Write-Host "GET /api/health on $port -> ok (service gaia-agent-ui)"
-    $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
+    $got = & (Backend-Gaia) --version 2>&1 | Out-String
     Write-Host "backend gaia --version -> $got"
-    if ($got -notmatch [regex]::Escape($pep440)) { Fail "the backend the app installed is '$got', expected $pep440" }
+    if ($got -notmatch [regex]::Escape($pep440)) { Fail "the backend the app runs is '$got', expected $pep440" }
 }
 
 # First-run setup through the installed app's own UI, which has been talking to
@@ -231,13 +255,13 @@ function Stop-AgentUi {
 # The daemon the backend started outlives the app by design, and keeps the
 # agent sidecar it supervises running, so stop it the way a user would.
 function Stop-Daemon {
-    $gaia = "$gaiaHome\venv\Scripts\gaia.exe"
+    $gaia = Backend-Gaia
     if (-not (Test-Path $gaia)) { Write-Host "no ${gaia}: no backend was installed, so no daemon"; return }
     & $gaia daemon stop
     if ($LASTEXITCODE -ne 0) { Fail "``gaia daemon stop`` exited $LASTEXITCODE" }
 }
 
-# The daemon's Python is the base interpreter, not a path under ~\.gaia.
+# A venv daemon's Python is the base interpreter, not a path under ~\.gaia.
 function Daemon-Processes {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '-m gaia\.daemon' }
 }
@@ -356,7 +380,7 @@ switch ($Step) {
 
     'install' {
         if ($env:KIND -ne 'install-ps1') {
-            if ((Test-Path $tuiDir) -or (Test-Path $uiKey) -or (Test-Path $gaiaHome)) { Fail 'GAIA is already on this runner: it is not clean' }
+            if (($tuiDirs | Where-Object { Test-Path $_ }) -or (Test-Path $uiKey) -or (Test-Path $gaiaHome)) { Fail 'GAIA is already on this runner: it is not clean' }
         }
         switch ($env:KIND) {
             'win-setup' {
@@ -397,25 +421,33 @@ switch ($Step) {
                 $env:HOME = $userHome
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$script' | Invoke-Expression"
                 if ($LASTEXITCODE -ne 0) { Fail "install.ps1 failed (exit $LASTEXITCODE)" }
-                foreach ($f in "$gaiaHome\venv\Scripts\gaia.exe", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
+                foreach ($f in "$gaiaHome\bin\_internal", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
                     if (-not (Test-Path $f)) { Fail "install.ps1 finished but $f is not there" }
                 }
                 # The venv's python.exe must not reach the user's PATH.
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 $entries = @($regPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+                if (Test-Path "$gaiaHome\venv") { Fail "install.ps1 built $gaiaHome\venv; it installs the frozen gaia" }
                 if ($entries -contains "$gaiaHome\venv\Scripts") { Fail "install.ps1 put $gaiaHome\venv\Scripts on the user PATH" }
                 if ($entries -notcontains "$gaiaHome\bin") { Fail "install.ps1 did not put $gaiaHome\bin on the user PATH" }
             }
         }
         if (Wants 'tui') {
             if ($env:KIND -ne 'install-ps1') {
+                # Read after the setup ran: it is what recorded the layout.
+                $recorded = @($tuiLayouts | Where-Object { Test-Path $_.Key })
+                if ($recorded.Count -ne 1) { Fail "the setup recorded the terminal under $($recorded.Count) sets of ids, expected 1" }
+                $tuiDir = $recorded[0].Dir
+                Write-Host "the release under test installed the terminal to $tuiDir"
                 foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
                     if (-not (Test-Path "$tuiDir\$f")) { Fail "$f did not land in $tuiDir" }
                 }
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 if ($regPath -notlike "*$tuiDir*") { Fail "the terminal's folder was not added to the user PATH" }
             }
-        } elseif (Test-Path $tuiDir) { Fail "$tuiDir exists though the terminal was not chosen" }
+        } else {
+            foreach ($d in $tuiDirs) { if (Test-Path $d) { Fail "$d exists though the terminal was not chosen" } }
+        }
         if (Wants 'ui') {
             $dir = Ui-Dir
             if (-not $dir -or -not (Test-Path "$dir\gaia-desktop.exe")) { Fail "the desktop app is not installed (InstallLocation: '$dir')" }
@@ -446,7 +478,7 @@ switch ($Step) {
                 if ($LASTEXITCODE -ne 0) { Fail "$gaiaHome\bin\gaia.exe --version exited $LASTEXITCODE" }
                 if (Select-String -Path "$repo\installer\scripts\install.ps1" -Pattern 'GAIA_RELEASE_TAG' -Quiet) {
                     Check-TuiVersion @($tuiVersion, $version)
-                    $got = & "$gaiaHome\venv\Scripts\gaia.exe" --version 2>&1 | Out-String
+                    $got = & "$gaiaHome\bin\gaia.exe" --version 2>&1 | Out-String
                     if ($got -notmatch [regex]::Escape($pep440)) { Fail "install.ps1 was asked for $($rel.tag) but installed $got" }
                 }
             }
@@ -482,7 +514,7 @@ switch ($Step) {
         Stop-AgentUi
         Stop-Daemon
         $left = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+            $_.ProcessName -eq 'gaia-desktop' -or ($_.Path -and ($_.Path -like "$gaiaHome\venv\*" -or $_.Path -like "*\resources\core\*"))
         }
         if ($left) { Fail "still running after the app was stopped: $(($left | ForEach-Object { "$($_.Id) $($_.Path)" }) -join '; ')" }
     }
@@ -528,12 +560,12 @@ switch ($Step) {
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
             if ($regPath -like "*$gaiaHome*") { $problems += 'the user PATH still names the sandbox .gaia' }
         } else {
-            foreach ($p in $tuiDir, $tuiArp, $uiArp, $uiDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
-                           "$startMenu\GAIA.lnk", "$startMenu\GAIA\GAIA Terminal UI.lnk", $fragment) {
+            foreach ($p in @($tuiLayouts | ForEach-Object { $_.Dir; $_.Arp; $_.Key }) + @($uiArp, $uiDefault, "$desktop\GAIA.lnk", "$desktop\GAIA Terminal UI.lnk",
+                           "$startMenu\GAIA.lnk", "$startMenu\GAIA\GAIA Terminal UI.lnk", $fragment)) {
                 if (Test-Path $p) { $problems += "left behind: $p" }
             }
             $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
-            if ($regPath -like '*Programs\GAIA Terminal Hub*') { $problems += "the terminal's folder is still on the user PATH" }
+            foreach ($d in $tuiDirs) { if ($regPath -like "*$d*") { $problems += "the terminal's folder $d is still on the user PATH" } }
             if (Get-ItemProperty -Path $runKey -Name 'GAIA' -ErrorAction SilentlyContinue) { $problems += 'the desktop app still starts at sign-in (Run key GAIA)' }
             if (Test-Path $uiKey) { Write-Host "::warning::$uiKey survived the uninstall" }
         }

@@ -136,6 +136,29 @@ class TestListConnectors:
         assert "configured" in entry
         assert "description" in entry
 
+    def test_a_failing_summary_is_listed_by_name_as_unavailable(
+        self, ui_api_client, monkeypatch
+    ):
+        from gaia.ui.routers import connectors as router
+
+        real = router._connector_summary
+
+        def summary(connector_id):
+            if connector_id == "google":
+                raise RuntimeError("keyring locked")
+            return real(connector_id)
+
+        monkeypatch.setattr(router, "_connector_summary", summary)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = {e["id"]: e for e in resp.json()["connectors"]}
+        assert rows["google"] == {
+            "id": "google",
+            "display_name": "Google",
+            "error": "unavailable",
+        }
+        assert rows["mcp-test"]["display_name"] == "MCP Test"
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")

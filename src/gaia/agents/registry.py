@@ -467,6 +467,12 @@ def build_model_tiers(full_label: str) -> List[ModelTier]:
     ]
 
 
+def _distribution_version(entry_point: Any) -> Optional[str]:
+    """The version of the installed package *entry_point* comes from, if known."""
+    dist = getattr(entry_point, "dist", None)
+    return dist.version if dist is not None else None
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -513,6 +519,9 @@ class AgentRegistration:
     #: this is how a caller tells "instantiate it here" from "relay to the
     #: daemon" without keeping a second list of agent ids (#4161).
     is_sidecar: bool = False
+    #: The installed package's version for an agent found through an entry
+    #: point (a ``pip install``), so ``gaia agent status`` can show it.
+    version: Optional[str] = None
     category: str = "general"
     tags: List[str] = field(default_factory=list)
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
@@ -793,6 +802,10 @@ class AgentRegistry:
 
         registered = 0
         for entry_point in agent_entry_points:
+            # A leftover gaia-agent-chat install must not take over a retired id.
+            if entry_point.name in self._LEGACY_ID_ALIASES:
+                self._warn_retired_entry_point(entry_point, entry_point.name)
+                continue
             try:
                 registration = self._load_entry_point_registration(entry_point)
             except Exception as exc:
@@ -802,6 +815,10 @@ class AgentRegistry:
                     exc,
                     exc_info=True,
                 )
+                continue
+
+            if registration.id in self._LEGACY_ID_ALIASES:
+                self._warn_retired_entry_point(entry_point, registration.id)
                 continue
 
             if registration.id in self._agents:
@@ -816,6 +833,17 @@ class AgentRegistry:
 
         if registered:
             logger.info("registry: Registered %d entry point agent(s)", registered)
+
+    def _warn_retired_entry_point(self, entry_point: Any, agent_id: str) -> None:
+        dist = getattr(entry_point, "dist", None)
+        logger.warning(
+            "registry: ignoring installed agent %r from %s — that id is "
+            "retired and now opens %r; uninstall the package to clear "
+            "this warning",
+            agent_id,
+            getattr(dist, "name", None) or entry_point.value,
+            self._LEGACY_ID_ALIASES[agent_id],
+        )
 
     def _load_entry_point_registration(
         self, entry_point: importlib.metadata.EntryPoint
@@ -844,6 +872,7 @@ class AgentRegistry:
             registration,
             namespaced_agent_id=namespaced_id,
             source="installed",
+            version=registration.version or _distribution_version(entry_point),
             factory=_wrap_factory_with_namespaced_id(
                 registration.factory, namespaced_id
             ),
@@ -1233,6 +1262,7 @@ class AgentRegistry:
         category: str = "",
         tags: Optional[List[str]] = None,
         icon: str = "",
+        consumes_mcp_servers: bool = False,
     ) -> None:
         """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
 
@@ -1250,6 +1280,8 @@ class AgentRegistry:
         the package's own registration. Without them the UI renders a
         generated "<Name> agent" line and falls back to its generic starter
         prompts — what a hub-installed flagship showed before #4161.
+        *consumes_mcp_servers* likewise comes from the spec; without it the
+        UI shows no switch to let the agent use an MCP connector.
 
         Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
         one) is already registered — protects a real wheel/custom-agent
@@ -1284,6 +1316,7 @@ class AgentRegistry:
                 category=category or "general",
                 tags=list(tags or []),
                 icon=icon,
+                consumes_mcp_servers=consumes_mcp_servers,
             )
         )
         logger.info(

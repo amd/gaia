@@ -86,6 +86,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const { probeTrayHost } = require("./services/tray-host.cjs");
+const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -403,6 +404,9 @@ async function startBackend() {
         PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
           GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
+          // The daemon exits once this is deleted: a Trashed macOS app or a
+          // deleted AppImage runs no uninstall step. An AppImage's exe is a mount.
+          GAIA_APP_PATH: process.env.APPIMAGE || app.getPath("exe"),
         }),
       },
       detached: false,
@@ -1226,6 +1230,15 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  // Before the window: the desktop ties a window to its launcher when it appears.
+  if (app.isPackaged) {
+    try {
+      const launcher = installAppImageLauncher();
+      if (launcher.status === "written") console.log(`[main] Wrote the AppImage launcher ${launcher.entry}`);
+    } catch (err) {
+      console.error(`[main] ${err.message}`);
+    }
+  }
   createWindow();
   initializeServices();
   engineInstall = createEngineInstall({
@@ -1457,6 +1470,7 @@ async function cleanup() {
   shutdownStarted = true;
   backendSupervisor.stop();
   const installStopped = engineInstall ? engineInstall.stop() : null;
+  const updating = app.isPackaged && autoUpdater.installsOnQuit();
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1482,11 +1496,27 @@ async function cleanup() {
   // The install, the agents and the backend stop side by side: each waits out
   // its own grace period, and in series they could overrun the quit's time limit.
   await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
+  if (updating) await stopDaemonForUpdate();
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
+  }
+}
+
+/**
+ * The daemon runs from the app's own files, which the update is about to
+ * replace, and macOS has no installer step that stops it first.
+ */
+async function stopDaemonForUpdate() {
+  const gaia = backendInstaller.findGaiaBin();
+  if (!gaia) return;
+  console.log("Stopping the GAIA daemon before the update replaces its files...");
+  try {
+    await backendInstaller.stopRunningDaemon({ gaiaBin: gaia, timeoutMs: 30000 });
+  } catch (err) {
+    console.error(`[main] Couldn't stop the GAIA daemon before the update: ${err.message}`);
   }
 }
 

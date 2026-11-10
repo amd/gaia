@@ -36,9 +36,9 @@ import {
   skillChangelogKey,
   skillDocKey,
   SKILL_RESERVED_FILENAMES,
-  writeSkillManifest,
+  updateSkillManifest,
 } from "./storage";
-import type { ArtifactInfo, Env, VersionEntry } from "./types";
+import type { ArtifactInfo, Env, SkillManifest, VersionEntry } from "./types";
 
 export async function handleSkillPublish(
   request: Request,
@@ -123,25 +123,33 @@ export async function handleSkillPublish(
 
   // A skill's provenance is its publisher identity (SKILL.md has no `author`
   // field), so ownership compares against the token's publisher.
-  const existing = await readSkillManifest(env.BUCKET, manifest.name);
-  if (existing && existing.author !== publisher.publisher) {
-    throw new HttpError(
-      403,
-      "forbidden_scope",
-      `Skill '${manifest.name}' is owned by publisher '${existing.author}'. A publish ` +
-        `from '${publisher.publisher}' cannot update it.`
-    );
-  }
   // A skill version is one bundle plus the SKILL.md and audit that vouch for it;
   // a second post under the same version would restamp its tier and verdict.
-  if (existing?.versions[manifest.version]) {
-    throw new HttpError(
-      409,
-      "version_exists",
-      `Skill '${manifest.name}@${manifest.version}' is already published and is ` +
-        `immutable. Bump the skill's version to publish a change.`
-    );
+  const assertCanPublish = (current: SkillManifest | null): void => {
+    if (current && current.author !== publisher.publisher) {
+      throw new HttpError(
+        403,
+        "forbidden_scope",
+        `Skill '${manifest.name}' is owned by publisher '${current.author}'. A publish ` +
+          `from '${publisher.publisher}' cannot update it.`
+      );
+    }
+    if (current?.versions[manifest.version]) {
+      throw new HttpError(
+        409,
+        "version_exists",
+        `Skill '${manifest.name}@${manifest.version}' is already published and is ` +
+          `immutable. Bump the skill's version to publish a change.`
+      );
+    }
+  };
+  const existing = await readSkillManifest(env.BUCKET, manifest.name);
+  if (existing?.versions[manifest.version] && existing.author === publisher.publisher) {
+    // A retry whose first attempt committed the manifest but failed writing the
+    // index lands here; re-derive the index so the 409 doesn't leave it stale.
+    await rebuildIndex(env.BUCKET, now, new URL(request.url).origin);
   }
+  assertCanPublish(existing);
 
   const bytes = new Uint8Array(await artifactFile.arrayBuffer());
   const limit = maxBytes(env);
@@ -156,15 +164,10 @@ export async function handleSkillPublish(
     );
   }
 
+  // No head-the-object 409 here: the skill manifest is the record of what is
+  // published (checked above), and an object it doesn't list is the orphan of a
+  // failed publish, which this retry overwrites (#3538).
   const key = skillArtifactKey(manifest.name, manifest.version, filename);
-  if (await env.BUCKET.head(key)) {
-    throw new HttpError(
-      409,
-      "version_exists",
-      `Artifact already exists at ${key} and is immutable. Bump the skill's version ` +
-        `to publish a change.`
-    );
-  }
 
   const sha256 = await sha256Hex(bytes);
   const artifact: ArtifactInfo = {
@@ -206,14 +209,12 @@ export async function handleSkillPublish(
     artifact,
     artifacts: [artifact],
   };
-  const updated = upsertSkillVersion(
-    existing,
-    manifest,
-    publisher.publisher,
-    auditRecord,
-    versionEntry
-  );
-  await writeSkillManifest(env.BUCKET, updated);
+  // The manifest write is the commit point; re-checked against the re-read
+  // manifest so a concurrent publish is merged, not overwritten.
+  const updated = await updateSkillManifest(env.BUCKET, manifest.name, (current) => {
+    assertCanPublish(current);
+    return upsertSkillVersion(current, manifest, publisher.publisher, auditRecord, versionEntry);
+  });
 
   const baseUrl = new URL(request.url).origin;
   const index = await rebuildIndex(env.BUCKET, now, baseUrl);

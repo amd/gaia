@@ -50,7 +50,8 @@ def test_removal_preserves_user_data(tmp_path, action, sudo_user):
     assert not calls.exists(), "Maintainer script invoked per-user cleanup"
     if action == "purge":
         assert "Per-user data remains in ~/.gaia" in result.stdout
-        assert "gaia uninstall --purge" in result.stdout
+        # The app's own gaia is already removed, so it names no command.
+        assert "delete that folder to remove it" in result.stdout
 
 
 def _run_script(

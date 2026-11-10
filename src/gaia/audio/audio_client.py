@@ -52,7 +52,6 @@ class AudioClient:
         enable_tts=True,
         logging_level="INFO",
         use_claude=False,
-        use_chatgpt=False,
         system_prompt=None,
         model=None,
         claude_model=DEFAULT_CLAUDE_MODEL,
@@ -87,10 +86,9 @@ class AudioClient:
         self._stdin_listener = None
         self._voice_loop_error = None
 
-        # Initialize LLM client - factory auto-detects provider from flags
+        # Initialize LLM client - factory picks the provider from use_claude
         self.llm_client = create_client(
             use_claude=use_claude,
-            use_openai=use_chatgpt,
             model=claude_model if use_claude else model,
             base_url=base_url,
             system_prompt=system_prompt,

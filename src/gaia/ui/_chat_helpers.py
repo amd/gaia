@@ -692,13 +692,10 @@ def _title_model_for(session_model: str) -> Optional[str]:
     """
     if not _is_guard_model(session_model):
         return session_model
-    from gaia.llm.lemonade_client import (
-        cloud_model_provider,
-        resolve_default_chat_model,
-    )
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
     title_model = resolve_default_chat_model()
-    if cloud_model_provider(title_model) and not cloud_model_provider(session_model):
+    if _ui_cloud_provider(title_model) and not _ui_cloud_provider(session_model):
         logger.info(
             "Auto-title: %s is a safety classifier and the default model %s is "
             "a cloud model; keeping the chat's title",
@@ -802,7 +799,6 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        cloud_model_provider,
         find_model_requirement,
         no_thinking_kwargs,
     )
@@ -827,7 +823,7 @@ async def _generate_session_title(
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
         mr = find_model_requirement(model_id)
-        local = not cloud_model_provider(model_id)
+        local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
             # llama.cpp ignores the field in a template that has no such switch.
@@ -929,8 +925,6 @@ async def _title_when_model_free(
     base_url: str, model_id: str, user_msg: str, assistant_msg: str, latest_msg: str
 ) -> Optional[str]:
     """:func:`_generate_session_title`, waiting out a model another request holds."""
-    from gaia.llm.lemonade_client import cloud_model_provider
-
     request = dict(
         base_url=base_url,
         model_id=model_id,
@@ -939,7 +933,7 @@ async def _title_when_model_free(
         latest_msg=latest_msg,
     )
     tries = _TITLE_BUSY_TRIES
-    if not cloud_model_provider(model_id) and not await _has_side_slot(
+    if not _ui_cloud_provider(model_id) and not await _has_side_slot(
         base_url, model_id
     ):
         tries = 1
@@ -1039,10 +1033,10 @@ async def _maybe_update_session_title(
     if not title_model:
         return
 
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_lemonade_base_url
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    if at_turn_start and not cloud_model_provider(title_model):
+    if at_turn_start and not _ui_cloud_provider(title_model):
         return
     # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -1327,6 +1321,45 @@ def _ui_cloud_provider(model_id: str) -> str | None:
 
     metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
     return cloud_model_provider(model_id, metadata)
+
+
+def _runs_on_this_pc(model_id: Optional[str]) -> bool:
+    """True only when *model_id* is confirmed to run locally; for data that stays here.
+
+    A model GAIA declares in ``MODELS`` (exact id) is local without a network
+    call. Every other id must pass the Local only rule: each catalog entry it
+    names has a known local recipe, so an unlisted id, a ``collection.*`` router
+    or an id also listed as cloud all count as leaving the PC.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
+    """
+    from gaia.llm.lemonade_client import MODELS, LemonadeClient, LemonadeClientError
+    from gaia.llm.local_only import recipes_confirm_local, recipes_in_catalog
+
+    model_id = (model_id or "").strip()
+    if not model_id or model_id.lower().startswith("claude"):
+        return False
+    if _ui_cloud_provider(model_id):
+        return False
+    if any(req.model_id == model_id for req in MODELS.values()):
+        return True
+
+    def fetch_catalog() -> dict:
+        catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+        data = catalog.get("data") if isinstance(catalog, dict) else None
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            raise LemonadeClientError(
+                "Lemonade's model list came back in an unexpected shape, so GAIA "
+                f"can't confirm '{model_id}' runs on this PC. Restart Lemonade in "
+                "Settings > Setup and try again."
+            )
+        return catalog
+
+    if not recipes_confirm_local(recipes_in_catalog(model_id, {}, fetch_catalog)):
+        return False
+    # Reading the catalog records the cloud ids it lists.
+    return not _ui_cloud_provider(model_id)
 
 
 def session_inference_location(
@@ -1960,7 +1993,6 @@ def _session_agent_kwargs(
     allowed: list,
     session_id: str,
     working_directory: Optional[str] = None,
-    dynamic_tools: bool = False,
     memory_incognito: bool = False,
 ) -> dict:
     """Build the session-scoped ChatAgentConfig fields.
@@ -1974,12 +2006,6 @@ def _session_agent_kwargs(
     identical bundle — this PR's blocker bug was one of them forgetting a
     field.
 
-    ``dynamic_tools`` is the Beta tool-loader toggle (#1798): a valid
-    ``ChatAgentConfig`` field whose effect is only observable on the ``doc``
-    agent (``_maybe_build_tool_loader`` gates on ``prompt_profile == "doc"``).
-    Threading it here is what makes the UI toggle actually apply on the
-    loader-active path.
-
     Unknown kwargs are filtered by each factory (manifest agents via
     ``dataclasses.fields`` / ``AgentManifest``) so this stays safe to pass
     to agents that don't need RAG or a path validator.
@@ -1990,7 +2016,6 @@ def _session_agent_kwargs(
         "allowed_paths": allowed,
         "working_directory": working_directory or _session_working_directory(),
         "ui_session_id": session_id,
-        "dynamic_tools": dynamic_tools,
         "memory_incognito": memory_incognito,
         "surface": "agent_ui",
     }
@@ -2573,10 +2598,10 @@ def _dispatch_sidecar_query(
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.config import GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
@@ -2911,6 +2936,17 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _insert_skill_step(steps: list, step: dict) -> None:
+    """Put a skill step before the running tool call that brought the skill in."""
+    for i in range(len(steps) - 1, -1, -1):
+        if steps[i].get("type") == "tool":
+            if steps[i].get("active"):
+                steps.insert(i, step)
+                return
+            break
+    steps.append(step)
+
+
 def _close_reasoning(steps: list, now_ms: int) -> None:
     """Record how long the reasoning just before the answer ran, on its last piece."""
     run = []
@@ -3146,7 +3182,6 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
 
     from gaia.llm.lemonade_client import (
         _model_ids_match,
-        cloud_model_provider,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
         resolve_lemonade_base_url,
@@ -3179,7 +3214,7 @@ async def _empty_answer_backend_problem(model_id: Optional[str]) -> Optional[str
             f"its health check (HTTP {resp.status_code}). "
             f"{server_down_advice(base_url)}"
         )
-    if not model_id or cloud_model_provider(model_id):
+    if not model_id or _ui_cloud_provider(model_id):
         return None
     loaded = health.get("all_models_loaded") or []
     if any(
@@ -3419,6 +3454,7 @@ def _done_event(
     failed: bool = False,
     failure: Optional[str] = None,
     documents_added: Optional[list] = None,
+    library_notices: Optional[list[str]] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3442,6 +3478,8 @@ def _done_event(
         event["turn_summary"] = turn_summary
     if documents_added:
         event["documents_added"] = documents_added
+    if library_notices:
+        event["library_notices"] = library_notices
     return event
 
 
@@ -3585,7 +3623,6 @@ def _preflight_load(
         from gaia.llm.lemonade_choice import is_users_server
         from gaia.llm.lemonade_client import (
             _model_ids_match,
-            cloud_model_provider,
             lemonade_auth_headers,
             resolve_ctx_size,
             resolve_lemonade_api_key,
@@ -3615,7 +3652,7 @@ def _preflight_load(
             _model_ids_match(m.get("model_name"), model_id)
             and m.get("recipe") == "cloud"
             for m in chat_models
-        ) or cloud_model_provider(model_id, None):
+        ) or _ui_cloud_provider(model_id):
             return
         # The window the agent itself will require; loading smaller makes it reload.
         required_ctx = resolve_ctx_size(model_id)
@@ -3867,10 +3904,6 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
-        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
-        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
-        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-
         session_id = request.session_id
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -4019,7 +4052,6 @@ async def _get_chat_response(
                             allowed=allowed,
                             session_id=session_id,
                             working_directory=working_directory,
-                            dynamic_tools=dynamic_tools,
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
@@ -4314,10 +4346,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             model_id = custom_model
 
-        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
-        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
-        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
-
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
 
@@ -4539,7 +4567,6 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     allowed=allowed,
                                     session_id=session_id,
                                     working_directory=working_directory,
-                                    dynamic_tools=dynamic_tools,
                                     memory_incognito=_memory_off(session, db),
                                 ),
                                 # See the non-streaming path: email-only kwarg,
@@ -4791,7 +4818,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):
                     last_tool_args = event["args"]
-                elif event_type == "tool_result" and not event.get("render"):
+                elif event_type == "tool_result" and (
+                    not event.get("render") or event["render"] == "media"
+                ):
+                    if event.get("render") == "media":
+                        # "media" is the terminal's card, as on the relay path;
+                        # the Agent UI draws its own image/audio card below.
+                        event = {
+                            k: v
+                            for k, v in event.items()
+                            if k not in ("render", "data")
+                        }
                     card = media_card(event, last_tool_args)
                     if card is not None:
                         # A relayed result's summary-view ``data`` gives way to
@@ -4877,6 +4914,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "mcpServerLabel": event.get("mcp_server_label"),
                             "mcpTool": event.get("mcp_tool"),
                         }
+                    )
+                elif event_type == "skill_use" and event.get("how") != "model":
+                    # A load_skill call is already its own step.
+                    step_id += 1
+                    _insert_skill_step(
+                        captured_steps,
+                        {
+                            "id": step_id,
+                            "type": "tool",
+                            "label": "Using use_skill",
+                            "tool": "use_skill",
+                            "detail": event.get("skill"),
+                            "narration": f"Using skill: {event.get('skill')}",
+                            "active": False,
+                            "success": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        },
                     )
                 elif event_type == "tool_args" and captured_steps:
                     # Update the last TOOL step (not just last step, since thinking
@@ -5155,7 +5209,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             db, request.session_id, sse_handler
         )
         if library_notices:
-            # One step: consecutive status steps overwrite each other in the chat.
+            # Live status makes the outcome visible before the turn closes; the
+            # same notices travel on `done` and the saved reply for reloads.
             notice = " ".join(library_notices)
             yield _sse({"type": "status", "status": "warning", "message": notice})
 
@@ -5289,6 +5344,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=model_messages,
                 turn_summary=turn_summary,
+                library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
             )
@@ -5324,6 +5380,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     else None
                 ),
                 documents_added=documents_added,
+                library_notices=library_notices,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5391,6 +5448,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
                 )
@@ -5401,6 +5459,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_summary=turn_summary,
                     failed=failed,
                     documents_added=documents_added,
+                    library_notices=library_notices,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)
