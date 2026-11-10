@@ -50,11 +50,7 @@ def file_tools(tmp_path):
 
 
 def _wire(handler):
-    translator = CanonicalTranslator(
-        run_id=None,
-        agent_id="probe",
-        render_tool_map=SSEOutputHandler._RENDER_TOOL_TO_LANG,
-    )
+    translator = CanonicalTranslator(run_id=None, agent_id="probe")
     out = []
     while True:
         try:

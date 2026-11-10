@@ -112,6 +112,14 @@ def _registered_tool_names() -> set:
                     _is_tool_decorator(d) for d in node.decorator_list
                 ):
                     names.add(node.name)
+    # A bundled skill's tools register as ``<skill>/<tool>`` once it loads.
+    for path in (REPO_ROOT / "hub" / "skills").glob("*/tools.py"):
+        tree = ast.parse(path.read_text(errors="replace"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                _is_tool_decorator(d) for d in node.decorator_list
+            ):
+                names.add(f"{path.parent.name}/{node.name}")
     return names | _PROGRAMMATIC_TOOLS
 
 
@@ -644,6 +652,38 @@ class TestCopyIsAgentSpecific:
             handler, {"type": "tool_call", "tool": "search_web"}, GAIA_PROFILE
         )
         assert handler.events[0]["detail"] == "Searching the web"
+
+    @pytest.mark.parametrize(
+        "tool, label",
+        [
+            ("guides/show_recipe", "Showing recipe"),
+            ("guides/show_workout", "Showing workout"),
+            ("guides/show_how_to", "Showing how-to"),
+            ("guides/show_checklist", "Showing checklist"),
+            ("guides/show_itinerary", "Showing itinerary"),
+            ("calculators/show_tip_calculator", "Showing tip calculator"),
+            ("calculators/show_loan_calculator", "Showing loan calculator"),
+        ],
+    )
+    def test_a_card_skill_tool_shows_its_plain_label(self, tool, label):
+        """A skill tool's name carries a slash; humanizing it would show
+        ``guides/show recipe`` in the step list."""
+        handler = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            handler, {"type": "tool_call", "tool": tool}, GAIA_PROFILE
+        )
+        assert handler.events[0]["detail"] == label
+
+    def test_every_card_skill_tool_has_a_relay_label(self):
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        card_tools = {
+            tool
+            for tool in SSEOutputHandler._RENDER_TOOL_TO_LANG
+            if tool.startswith(("guides/", "calculators/"))
+        }
+        assert card_tools
+        assert card_tools <= set(GAIA_PROFILE.tool_labels)
 
     def test_unlisted_tool_humanizes_rather_than_showing_a_raw_name(self):
         handler = _FakeSSEHandler()

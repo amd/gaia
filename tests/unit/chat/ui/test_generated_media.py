@@ -521,9 +521,7 @@ def test_a_relayed_flagship_media_result_still_draws_the_inline_card(gaia_dir):
         for e in iter(sidecar.event_queue.get_nowait, None)
         if e.get("type") == "tool_result"
     )
-    translator = CanonicalTranslator(
-        run_id="r", agent_id="gaia", render_tool_map={"generate_music": "media"}
-    )
+    translator = CanonicalTranslator(run_id="r", agent_id="gaia")
     translator.translate({"type": "tool_start", "tool": "generate_music"})
     canonical = next(
         e for e in translator.translate(result) if e["type"] == "tool_result"
@@ -653,3 +651,120 @@ def test_module_reads_the_config_dir_at_call_time(tmp_path, monkeypatch):
     monkeypatch.setattr(gaia_config, "GAIA_CONFIG_DIR", tmp_path / "b")
     assert generated_media.media_dir("audio") != first
     assert os.path.basename(first) == "generations"
+
+
+# ── In-process: the terminal's "media" card gives way to the inline one ──────
+
+
+class _MediaAgent:
+    """Cached agent that runs one media tool on the turn's real handler."""
+
+    def __init__(self, tool, result):
+        self.model_id = "M-GGUF"
+        self.conversation_history = []
+        self.indexed_files = set()
+        self._cancel_event = None
+        self.console = None
+        self._session_id = None
+        self._tool = tool
+        self._result = result
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, message):
+        from gaia.ui import _chat_helpers as helpers
+
+        handler = helpers._active_sse_handlers.get(self._session_id)
+        handler.print_tool_usage(self._tool)
+        handler.pretty_print_json({"prompt": "rain on a tin roof"}, "Arguments")
+        handler.pretty_print_json(self._result, "Result")
+        handler.print_tool_complete()
+        answer = "Here it is."
+        return {
+            "result": answer,
+            "model_messages": [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": answer},
+            ],
+        }
+
+
+def _png(path: Path) -> Path:
+    path.write_bytes(PNG)
+    return path
+
+
+@pytest.mark.parametrize(
+    "tool,key,kind,make",
+    [
+        (
+            "generate_image",
+            "image_path",
+            "image",
+            lambda: _png(media_dir("image") / "rain_SD-Turbo_1.png"),
+        ),
+        (
+            "generate_music",
+            "audio_path",
+            "audio",
+            lambda: _wav(media_dir("audio") / "music_9.wav", seconds=2.0),
+        ),
+    ],
+)
+def test_in_process_media_result_streams_and_reopens_as_inline_card(
+    gaia_dir, tool, key, kind, make
+):
+    from unittest.mock import AsyncMock, patch
+
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.run_manager import RunManager
+    from gaia.ui.utils import message_to_response
+
+    path = make()
+    agent = _MediaAgent(tool, {"status": "success", key: str(path)})
+    db = ChatDatabase(":memory:")
+    helpers._agent_cache.clear()
+    streamed = []
+
+    async def _drive(session, request):
+        async for chunk in helpers._stream_chat_response(db, session, request):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    streamed.append(json.loads(line[len("data: ") :]))
+
+    try:
+        with (
+            patch("gaia.ui.run_manager.run_manager", RunManager()),
+            patch.object(helpers, "_agent_registry", None),
+            patch.object(helpers, "_maybe_load_expected_model"),
+            patch.object(helpers, "_maybe_update_session_title", AsyncMock()),
+        ):
+            session = db.create_session(model="M-GGUF", agent_type="chat")
+            agent._session_id = session["id"]
+            helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+            request = ChatRequest(
+                session_id=session["id"], message="make it", stream=True
+            )
+            asyncio.run(asyncio.wait_for(_drive(session, request), timeout=15))
+
+        (result,) = [e for e in streamed if e.get("type") == "tool_result"]
+        assert result["render"] == kind
+        assert result["data"]["src"] == f"/api/media/{kind}/{path.name}"
+        assert result["data"]["caption"] == "rain on a tin roof"
+
+        # Reopening the chat reads the persisted step, not the stream.
+        reopened = [
+            m for m in db.get_messages(session["id"]) if m["role"] == "assistant"
+        ][0]
+        cards = [
+            (s.render, s.data)
+            for s in message_to_response(reopened).agent_steps
+            if s.render
+        ]
+        assert cards == [(kind, result["data"])]
+    finally:
+        helpers._agent_cache.clear()
+        db.close()

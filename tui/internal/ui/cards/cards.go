@@ -2,13 +2,13 @@
 // text.
 //
 // The `/query` SSE contract (docs/spec/agent-ui-query-sse-contract.md §4.2/§4.3)
-// lets a sidecar declare how its result should be drawn with six generic
+// lets a sidecar declare how its result should be drawn with nine generic
 // primitives any agent can emit with no client work. §7 makes the receiving
 // end's obligations explicit: an unknown key degrades to a visible generic card
 // with a raw dump, and a payload that fails its schema says so. A card is never
 // dropped and never blanks the message.
 //
-// Of the six primitives this package draws four. `image` and `audio` cannot be
+// Of the nine primitives this package draws seven. `image` and `audio` cannot be
 // shown or played in a terminal, so they degrade to a caption, the saved path
 // and (for audio) the length.
 package cards
@@ -48,6 +48,10 @@ func Render(renderKey string, data json.RawMessage, width int) string {
 		return renderMedia(data, width)
 	case "diff":
 		return renderDiff(data, width)
+	case "guide":
+		return renderGuide(data, width)
+	case "calculator":
+		return renderCalculator(data, width)
 	default:
 		return renderUnsupported(key, data, width)
 	}
