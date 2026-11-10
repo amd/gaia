@@ -213,11 +213,6 @@ def fetch_many(
     return [p for p in results if p is not None]
 
 
-def source_files(source: str, prefix: str = "") -> List[str]:
-    """Manifest-listed relative paths of ``source`` starting with ``prefix``."""
-    return sorted(r for r in load_manifest()[source]["files"] if r.startswith(prefix))
-
-
 def license_notes(sources: Iterable[str]) -> Dict[str, dict]:
     manifest = load_manifest()
     return {

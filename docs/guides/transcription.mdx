@@ -1,11 +1,11 @@
 ---
-title: "Transcription & Meeting Notes"
-description: "Point the GAIA agent at a recording and get back a speaker-labelled transcript, a brief, and action items — all local."
+title: "Transcription & Recording Analysis"
+description: "Point the GAIA agent at a recording or a video link and get a timestamped transcript, a complete structured list of what it contains, subtitles, and answers to your questions."
 icon: "file-audio"
 ---
 
 <Info>
-  **Source:** [`hub/skills/transcribe-meeting/`](https://github.com/amd/gaia/tree/main/hub/skills/transcribe-meeting) · [`src/gaia/audio/`](https://github.com/amd/gaia/tree/main/src/gaia/audio)
+  **Source:** [`hub/skills/analyze-recording/`](https://github.com/amd/gaia/tree/main/hub/skills/analyze-recording) · [`hub/skills/transcribe-meeting/`](https://github.com/amd/gaia/tree/main/hub/skills/transcribe-meeting) · [`src/gaia/audio/`](https://github.com/amd/gaia/tree/main/src/gaia/audio)
 </Info>
 
 You have a 46-minute recording and you need to know what was decided and who owes
@@ -16,8 +16,60 @@ transcribe C:\recordings\staff-meeting.mp4 and give me the action items
 ```
 
 The agent decodes the file, transcribes it on Lemonade, **saves the transcript to
-disk and tells you the path**, labels who said what, repairs the words the
-recognizer was unsure of, and hands you a brief. Nothing leaves the machine.
+disk and tells you the path**, labels who said what, and hands you a brief.
+Transcription runs on this machine. With a local chat model, nothing leaves it.
+With a cloud model, the transcript text goes to that provider.
+
+Or you have a two-hour class and you want everything in it, with the moment each
+thing happens:
+
+```
+list every recipe in https://www.youtube.com/watch?v=... with the ingredients and cooking time
+```
+
+The agent reads the whole recording in sections and writes a report with one
+entry per recipe, each with its start and end time.
+
+## In the Agent UI
+
+Drop a video or audio file on the chat, or attach it with **+**. The chat shows
+upload progress and then **Ready to transcribe**. Send it with no message to get a
+transcript and summary, or say what you want. You can also paste a video link into
+your message. A link has to point at one video: GAIA refuses playlist and channel pages
+rather than downloading all of them.
+
+While it runs, a card in the chat lists every stage: downloading a link, reading the
+audio, transcribing, separating voices, preparing the transcript and analyzing. The
+running stage has a progress bar, a percentage and the time left. Early estimates come
+from the recording's length and sharpen as parts finish. Press **Stop** at any time.
+Finished work is kept, so asking again continues from where it stopped.
+
+While the recording is analyzed, the same card shows **Found so far**: each section
+already read, with its times, a short summary and what it found, so you can start
+reading before the last section is done. The first section is a third of the usual
+size, so it arrives sooner. Something found twice where two sections overlap shows
+once here, and the finished report merges it.
+
+Recordings go in the chat, not the Document Library. After the transcript exists,
+ask anything about it and the answer quotes the time it was said.
+
+## Supported formats
+
+| Kind | Formats |
+|---|---|
+| Video | mp4, m4v, mov, mkv, webm, avi, wmv, asf, flv, f4v, mpg, mpeg, m2v, mts, m2ts, vob, 3gp, 3g2, ogv, mxf, divx, rm, rmvb |
+| Audio | mp3, wav, flac, aac, m4a, m4b, ogg, oga, opus, wma, aiff, aif, ac3, eac3, dts, mp2, amr, au, caf, mka, spx, ape, wv |
+| Links | YouTube and the other sites yt-dlp has built-in support for, and direct links to media files |
+
+Links must be public: a private, age-restricted or login-only video has to be
+downloaded by you and attached as a file. Only fetch recordings you have the right
+to use.
+
+A `.ts` file attaches as a TypeScript document. To transcribe an MPEG transport
+stream, give the agent its path, or rename it to `.mts`.
+
+Attached and downloaded recordings are working copies. GAIA removes them after
+14 days and keeps the transcripts.
 
 ## What you get
 
@@ -29,8 +81,8 @@ and the file outlives the chat session you ran it in.
   before anything else runs, so a failure in a later stage never costs you the
   expensive part. Plain prose, no speaker labels — acoustic diarization runs
   alongside it and writes a separate timings file that the next stage reads.
-- **`staff-meeting.transcript.md`** — the readable version: mis-hearings
-  corrected and split into speaker turns, opening with a `## Speakers` list.
+- **`staff-meeting.transcript.md`** — the readable version: split into speaker
+  turns with a timestamp on every paragraph, opening with a `## Speakers` list.
   Voices are separated straight from the audio (pyannote + WeSpeaker models,
   running locally), so `Speaker 1` / `Speaker 2` reflect distinct voices, not
   guesswork. The *names* attached to those voices — `Priya Raman` instead of
@@ -39,10 +91,38 @@ and the file outlives the chat session you ran it in.
   [How speakers are separated and named](#how-speakers-are-separated-and-named).
 - **A brief** — Executive Brief, Key Facts, Scope, Action Items, Insights, and
   Risks / Blockers, written by the [`summarize`](/guides/starter-skills) skill.
+- **`staff-meeting.analysis.md`** — when you ask for everything of a kind, a report
+  with an overview and one entry per item. Each entry has its start and end time
+  and the fields you asked for. See
+  [Listing everything in a recording](#listing-everything-in-a-recording).
+- **Subtitles** — ask for `srt` or `vtt` and they land next to the transcript.
 
 The transcript is also indexed, so afterwards you can just ask
 *"what did Priya say about the pricing change?"* and get an answer quoted from
-the recording rather than from the summary of it.
+the recording, with the time it was said.
+
+### Listing everything in a recording
+
+A summary drops things by design. When you want every recipe, every question from
+the audience or every product shown, `analyze_transcript` reads the whole transcript
+in overlapping sections, and the model reports what it finds in each one. GAIA then
+assembles the report in code, so a long list cannot be cut off by a reply limit.
+
+Sections end where the recording changes subject, not wherever the size limit falls.
+Near the limit, GAIA picks the strongest break: a change of topic, measured with the
+local embedding model that memory uses, or else a long pause, the end of a sentence
+or a change of speaker. An agent without that model still splits at pauses and
+sentence ends.
+
+Three things make the result trustworthy:
+
+- **Times are checked.** A reported time has to match a line of the transcript. One
+  that does not is marked `~` and shows the section it came from.
+- **Nothing is filled in from general knowledge.** A field the recording does not
+  address says `not stated`.
+- **A failure does not cost the work.** Each finished section is saved, so running
+  it again continues from where it stopped. Transcribing a long recording resumes
+  the same way, chunk by chunk.
 
 ### Long recordings are summarised in sections, not in one gulp
 
@@ -75,11 +155,13 @@ appears in seconds is a summary of the opening minutes.
     ```bash
     gaia skill import hub/skills/transcribe-meeting
     gaia skill import hub/skills/summarize
+    gaia skill import hub/skills/analyze-recording --allow-experimental
     ```
 
     `import` copies each folder into `~/.gaia/skills/`, where the agent finds
     them by name. `transcribe-meeting` delegates the brief to `summarize`, so
-    install both.
+    install both. `analyze-recording` covers classes, talks and videos, and needs
+    `--allow-experimental` because it ships a script for batch use.
   </Step>
 
   <Step title="Start Lemonade Server">
@@ -107,11 +189,13 @@ appears in seconds is a summary of the opening minutes.
 
 | Stage | What happens |
 |---|---|
-| Decode | ffmpeg extracts audio from the container — mp4, mkv, mov, m4a, mp3, wav. |
+| Fetch | For a link, the audio is saved to `~/.gaia/transcripts/.downloads/`. The link has to resolve to a public address. A direct file link goes through GAIA's own client, which checks every redirect. A site link goes through yt-dlp, limited to the sites it has built-in support for, and yt-dlp's own redirects are not checked. Links are refused while Internet access is off. |
+| Decode | ffmpeg extracts audio from the container. See [Supported formats](#supported-formats). |
 | Transcribe | `transcribe_media` sends the audio to Lemonade's `/api/v1/audio/transcriptions` and writes a plain-text transcript to disk. It then runs acoustic speaker diarization on the same audio — pyannote segmentation + WeSpeaker embedding, both local — and writes who-spoke-when to a timings file alongside. Diarization failing is never fatal: it's logged, and the pipeline carries on without it. |
 | Save | The agent gets back the transcript's **path**, a short preview, duration, and the low-confidence words it flagged — not the transcript text. |
-| Refine | `refine_transcript` reads the file back in sections. Where diarization succeeded, its only job is putting a name to each already-separated voice; where it didn't, it falls back to inferring turns from pauses and content, as before. Either way it fixes mis-hearings it's confident about. Output is a markdown file that states which method attributed the speakers, with a `## Speakers` list and `Name: text` turns — no timestamps. |
+| Refine | `refine_transcript` reads the file back in sections. Where diarization succeeded, its only job is putting a name to each already-separated voice; where it didn't, it falls back to inferring turns from pauses and content, as before. Output is a markdown file that states which method attributed the speakers, with a `## Speakers` list and `[MM:SS] Name: text` paragraphs. |
 | Index + brief | The refined transcript is indexed for Q&A and summarized section by section from the file. |
+| Analyze | `analyze_transcript` builds the structured report described in [Listing everything in a recording](#listing-everything-in-a-recording). |
 
 The raw transcript is written **before** refining or summarizing runs, so a
 failure in a later stage never costs you the expensive part.
@@ -150,9 +234,9 @@ name; speakers with no naming evidence in the conversation stay `Speaker 1`,
 
 ## Transcript
 
-Priya Raman: Let's get started — thanks everyone for joining...
+[00:04] Priya Raman: Let's get started — thanks everyone for joining...
 
-Dan Okafor: Sure, from the platform side...
+[00:31] Dan Okafor: Sure, from the platform side...
 ```
 
 Treat the *names* as best-effort — a confident-looking wrong name is
@@ -177,18 +261,32 @@ method produced it.
   reported one speaker.
 - The clustering that decides speaker *count* when it isn't known is
   threshold-tuned (default `0.65`): `0.50` over-split one recording into 10
-  clusters, `0.75` collapsed the same recording to 2.
+  clusters, `0.75` collapsed the same recording to 2. It can also split one
+  presenter into several voices, so say how many people speak if you know. One
+  speaker skips voice separation and saves minutes.
 
-### Corrections cover the whole transcript, not just the uncertain parts
+### Words the recognizer was unsure of
 
-`transcribe_media` reports the words Whisper itself was least confident about —
-up to 25 of them, though it also tells the agent the true total — as a hint
-about where mistakes are more likely. `refine_transcript` doesn't limit its
-edits to those: it re-reads the *entire* transcript, section by section, and
-is told to fix a mis-hearing only when it's confident, leaving anything
-ambiguous exactly as transcribed. It keeps every point that was made — no
-summarizing or shortening at this stage. Measured on the same 46-minute test
-recording, content retention came out at 99.7%.
+`transcribe_media` reports the words Whisper was least confident about, up to
+25 of them, along with the true total. `refine_transcript` keeps the words
+exactly as they were transcribed. It adds speakers and timestamps, and never
+rewrites what was said, so a mis-hearing stays in the transcript and the agent
+can point it out.
+
+### When Whisper repeats itself
+
+Whisper sometimes gets stuck on one line and repeats it every second until the
+end of the audio, which buries the speech underneath. When a line repeats five
+or more times in a row, even with small changes between copies, GAIA transcribes
+that stretch again from a fresh start, which usually brings back what was said.
+If it still repeats, GAIA keeps one copy, and `transcribe_media` lists the
+missing stretches as `unclear_audio` so the agent can tell you which parts it
+couldn't hear.
+
+Long pauses are what usually start a loop, and Whisper fills them with a
+repeated line, often "Thank you." So GAIA transcribes again only the parts of
+the stretch that have sound. Lines repeated over a silent stretch are removed,
+and a pause is not reported as unclear audio.
 
 ## First run
 
@@ -200,6 +298,7 @@ users never transcribe anything. They arrive on first use instead:
 | ffmpeg | ~80 MB | Installed via winget / brew / apt if it isn't on `PATH`. |
 | Whisper-Large-v3-Turbo | 1.62 GB | Pulled by Lemonade on first transcription. |
 | `sherpa-onnx` + speaker models | ~40 MB + ~33 MB | Installed for diarization on first transcription. Not fatal if it can't — the transcript is still produced, falling back to text-only speaker inference, and the file says which method ran. |
+| `yt-dlp` | ~10 MB | Installed the first time you give GAIA a link. Not included in packaged desktop builds yet: there, download the video and attach the file. |
 
 Each step reports progress rather than sitting on a spinner. If one can't
 complete, it fails with the command that fixes it.
@@ -241,6 +340,18 @@ complete, it fails with the command that fixes it.
     summarize — so this shouldn't need a nudge. If it stops after reporting the
     transcript path, just ask it to continue from that file; each stage tells
     the agent what to call next.
+  </Accordion>
+
+  <Accordion title="A video link would not download">
+    The error quotes the reason. Private, age-restricted and login-only videos
+    cannot be fetched, and neither can live streams, so download the video yourself
+    and attach the file. If the video plays fine in a browser, the site may have
+    changed and yt-dlp needs updating.
+  </Accordion>
+
+  <Accordion title="A run stopped partway">
+    Ask again with the same request. Finished chunks and sections are kept, so it
+    continues from where it stopped instead of starting over.
   </Accordion>
 
   <Accordion title="Names in the speaker list look wrong">

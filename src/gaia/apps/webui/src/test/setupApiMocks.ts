@@ -10,6 +10,7 @@
 import type { MockedObject } from 'vitest';
 import type * as api from '../services/api';
 import type { GpuMemoryStatus, SetupPlan } from '../types';
+import type { ModelServerInfo } from '../types/api.gen';
 import { resetSetupDownloads } from '../stores/setupDownloadsStore';
 
 export const NO_SERVER_PLAN: SetupPlan = {
@@ -37,9 +38,13 @@ export const NO_GPU_SPLIT: GpuMemoryStatus = {
     method_reason: 'This PC’s GPU has its own memory, so there is nothing to split.',
 };
 
+/** A model server that names no backends, so Customize's backend choice has nothing to offer. */
+export const NO_BACKENDS = { reachable: true, available_backends: [], preferred_backend: null, default_backend: null } as unknown as ModelServerInfo;
+
 export function mockSetupApis(mocked: MockedObject<typeof api>): void {
     resetSetupDownloads();
     mocked.getSetupPlan.mockResolvedValue(NO_SERVER_PLAN);
     mocked.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
+    mocked.getModelServer.mockResolvedValue(NO_BACKENDS);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
 }

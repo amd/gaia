@@ -65,7 +65,7 @@ indexes empty text. Photos are turned upright using their EXIF orientation, and
 transparent backgrounds are read as white. A multi-page TIFF is read page by
 page, up to 50 pages; a larger one fails, naming its page count. An animated GIF
 is read from its first frame only.
-The default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
+`RAGConfig.vlm_model` is `None` while the chat model runs on the NPU: images in documents are then skipped with a note, and indexing an image file raises `ImageExtractionError` saying why. Otherwise the default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
 unless you set your own `default_model`; then run
 `lemonade pull Gemma-4-E4B-it-GGUF` to get it. The Agent UI's folder
 indexing skips images, so add them one at a time.
@@ -186,12 +186,20 @@ response = rag.query("How do I contact support?")
 print(response.text)
 ```
 
-**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing.
+**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing. Each question is answered only from the passages retrieved for that question.
 
 Check the `success` field returned by `index_document()`. A failed cache write
 leaves the searchable index unchanged, so retrying does not duplicate chunks.
-Use `reindex_document(path)` after changing a document; if replacement fails,
-the previously indexed version remains available for queries.
+Calling `index_document()` again on a document that changed since it was
+indexed re-indexes it (the result has `reindexed: True`); an unchanged one
+returns `already_indexed: True` without re-embedding. `is_current(path)` tells
+you which without indexing, and `freshness(path)` does so cheaply enough to
+call before every query (it hashes only when the file's size or timestamps
+moved). If replacement fails, the call reports the error and the previously
+indexed version remains available for queries. The agent's document search
+tools run this check themselves, so they never answer from an edited file's
+old text. `reindex_document(path)`, which the file watcher calls, takes the same
+path: searches keep answering from the old version while the new one embeds.
 
 Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
 takes minutes. Pass `progress_callback=lambda done, total: ...` to

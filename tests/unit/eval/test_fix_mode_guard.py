@@ -157,7 +157,7 @@ def _verdict(sid, status):
 
 
 @pytest.fixture
-def loop(tmp_path, monkeypatch):
+def loop(tmp_path, monkeypatch, claude_login):
     scenarios = tmp_path / "scenarios"
     scenarios.mkdir()
     for sid in ("good", "bad"):

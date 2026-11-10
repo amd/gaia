@@ -748,6 +748,8 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             cmd.profile = "minimal"
             cmd.skip_models = True
             cmd.skip_webui_build = False
+            cmd.server_only = False
+            cmd.events = MagicMock()
             cmd.remote = False
             cmd.verbose = False
             cmd.force_reinstall = False

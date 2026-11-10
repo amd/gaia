@@ -31,6 +31,7 @@ def _floor_tuple(version: str) -> tuple[int, ...]:
 def test_agent_module_imports_and_registry_symbol_exists():
     """The exact import chain that crashed fresh installs in #2112."""
     import gaia_agent_chat.agent  # noqa: F401
+
     from gaia.agents.registry import get_embedding_model_for_device
 
     assert callable(get_embedding_model_for_device)

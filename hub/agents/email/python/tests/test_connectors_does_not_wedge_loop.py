@@ -92,7 +92,9 @@ def test_health_still_answers_while_connector_store_is_stuck(monkeypatch):
                 f"blocking the event loop and wedging every other route"
             )
 
-            resp = await asyncio.wait_for(connectors, timeout=_STORE_STALL_SECONDS + 5.0)
+            resp = await asyncio.wait_for(
+                connectors, timeout=_STORE_STALL_SECONDS + 5.0
+            )
             assert resp.status_code == 200
 
     asyncio.run(scenario())

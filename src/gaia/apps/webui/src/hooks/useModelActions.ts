@@ -23,6 +23,8 @@ import {
 export function useModelActions(defaultModelName?: string, contextSize?: number) {
     const [isLoadingModel, setIsLoadingModel] = useState(false);
     const [isDownloadingModel, setIsDownloadingModel] = useState(false);
+    // The server's reason a download could not start, shown next to the button.
+    const [downloadError, setDownloadError] = useState<string | null>(null);
 
     const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const downloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,6 +68,9 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
 
     const modelName = defaultModelName ?? DEFAULT_MODEL_NAME;
 
+    // A refusal was about the old model; don't show it against the new one.
+    useEffect(() => setDownloadError(null), [modelName]);
+
     const loadModel = useCallback(async (name?: string, ctxSize?: number) => {
         const target = name ?? modelName;
         const ctx = ctxSize ?? MIN_CONTEXT_SIZE;
@@ -85,20 +90,28 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
         }
     }, [modelName, contextSize, startPolling]);
 
-    const downloadModel = useCallback(async (force = false, name?: string) => {
-        const target = name ?? modelName;
-        setIsDownloadingModel(true);
-        try {
-            await api.downloadModel(target, force);
-            log.system.info(`Download model triggered: ${target} (force=${force})`);
-            if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
-            downloadTimerRef.current = setTimeout(() => setIsDownloadingModel(false), DOWNLOAD_SPINNER_TIMEOUT_MS);
-            startPolling(target, 'download');
-        } catch (err) {
-            log.system.error('Failed to trigger model download', err);
-            setIsDownloadingModel(false);
-        }
-    }, [modelName, startPolling]);
+    const downloadModel = useCallback(
+        async (force = false, name?: string, loadAfter = false) => {
+            const target = name ?? modelName;
+            setIsDownloadingModel(true);
+            setDownloadError(null);
+            try {
+                await api.downloadModel(target, force, loadAfter);
+                log.system.info(`Download model triggered: ${target} (force=${force})`);
+                if (downloadTimerRef.current) clearTimeout(downloadTimerRef.current);
+                downloadTimerRef.current = setTimeout(
+                    () => setIsDownloadingModel(false),
+                    DOWNLOAD_SPINNER_TIMEOUT_MS,
+                );
+                startPolling(target, 'download');
+            } catch (err) {
+                log.system.error('Failed to trigger model download', err);
+                setDownloadError(err instanceof Error ? err.message : String(err));
+                setIsDownloadingModel(false);
+            }
+        },
+        [modelName, startPolling],
+    );
 
-    return { isLoadingModel, isDownloadingModel, loadModel, downloadModel };
+    return { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel };
 }

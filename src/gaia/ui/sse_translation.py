@@ -77,6 +77,7 @@ from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
+    PROJECT_TRUST_PROMPT_TOOL,
     SCRATCH_ARG,
 )
 from gaia.ui.event_narration import (
@@ -120,6 +121,8 @@ SUMMARY_VIEW_KEYS = (
     "file_path",
     "image_path",
     "audio_path",
+    # How many chunks ``index_document`` stored, for the Document library.
+    "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.
     "sources",
 )
@@ -128,8 +131,9 @@ SUMMARY_VIEW_KEYS = (
 MCP_TOOL_FIELDS = ("mcp_server", "mcp_server_label", "mcp_tool")
 
 #: Counts a ``status`` carrying a ``phase`` may report alongside it: reasoning
-#: words so far, or characters of a tool call's arguments so far.
-_PHASE_COUNT_FIELDS = ("words", "chars")
+#: words so far, characters of a tool call's arguments so far, or where a
+#: recording stands (see ``AudioToolsMixin._report_stage``).
+_PHASE_COUNT_FIELDS = ("words", "chars", "stage", "state", "percent", "eta_seconds")
 
 #: What a ``model_queue`` status carries under ``queue``: where a turn waiting
 #: for the model stands (see ``broker_client.queue_status_event``).
@@ -369,7 +373,12 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
-        out = self._user_status(message)
+        if event.get("retracts_answer"):
+            # Never deduplicated: each one takes back the text since the last.
+            self._last_status = message
+            out = [{"type": "status", "message": message, "retracts_answer": True}]
+        else:
+            out = self._user_status(message)
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase
@@ -393,7 +402,12 @@ class CanonicalTranslator:
         if self._reasoning:
             # Pieces carry their own spacing, so they go out as they came.
             delta = str(event.get("content", ""))
-            return [{"type": "reasoning", "delta": delta}] if delta else []
+            if not delta:
+                return []
+            out: Dict[str, Any] = {"type": "reasoning", "delta": delta}
+            if event.get("retracts_answer"):
+                out["retracts_answer"] = True
+            return [out]
         # Reasoning narration folds to status, NOT token (token is answer text the
         # UI commits to the message). See spec §6.2 / Q1.
         content = str(event.get("content", "")).strip()
@@ -498,6 +512,8 @@ class CanonicalTranslator:
         if event.get("failed"):
             # The answer explains a turn a model failure ended; not a result.
             final["failed"] = True
+            if isinstance(event.get("failure"), str):
+                final["failure"] = event["failure"]
         return [final]
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -629,6 +645,12 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
+    def _on_skill_use(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # A load_skill call already went out as its own tool_call.
+        if event.get("how") == "model" or not event.get("skill"):
+            return []
+        return self._user_status(f"Using skill: {event['skill']}")
+
     def _on_agent_created(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
@@ -653,6 +675,8 @@ class CanonicalTranslator:
             return render_command_summary(tool, args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
+        if tool == PROJECT_TRUST_PROMPT_TOOL and isinstance(args.get("folder"), str):
+            return _project_trust_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
         detail = render_invocation(args)
         if not detail:
@@ -680,6 +704,7 @@ class CanonicalTranslator:
         "user_input_request": _on_user_input_request,
         "tool_confirm_denied": _on_tool_confirm_denied,
         "agent_created": _on_agent_created,
+        "skill_use": _on_skill_use,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 
@@ -693,6 +718,17 @@ def _path_access_question(args: Dict[str, Any]) -> str:
     if kind == "file":
         return f"Allow GAIA to use the file {path} for this session?"
     return f"Allow GAIA to use {path} for this session?"
+
+
+def _project_trust_question(args: Dict[str, Any]) -> str:
+    """The question a ``trust_project_folder`` prompt asks, naming what it would read."""
+    files = args.get("files")
+    shown = ", ".join(str(f) for f in files) if isinstance(files, list) else "its files"
+    return (
+        f"Trust {args['folder']}? GAIA would put {shown} in the model's prompt "
+        "as that project's instructions, now and every time you work in this "
+        "folder. They come from the folder, not from you."
+    )
 
 
 def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:

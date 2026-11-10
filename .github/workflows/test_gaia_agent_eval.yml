@@ -30,14 +30,13 @@
 # crash (CLAUDE.md fail-loudly — report mode softens "measured and worse",
 # never "didn't measure").
 #
-# REGRESSION GATE. Committed per-category baselines are expected under
-# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-gemma-4-e4b). NONE EXIST
-# YET — they are captured by the first full `workflow_dispatch` on this runner
-# (the dev boxes must never start Lemonade). Until then the compare step prints
-# a loud "first adoption — no baseline" notice per category and skips the diff;
-# once a baseline is committed, `gaia eval agent --compare` exit 2 surfaces as
-# a ::warning:: in report mode and fails the build under `enforce: true` (the
-# dispatch input).
+# REGRESSION GATE. Each category compares against the flagship baseline in
+# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-flagship): the same Strix
+# Halo pool, the same Gemma model and the same judge (its meta.json), with a
+# scorecard for every gaia_* category this workflow runs (#5197). A category
+# with no scorecard there prints a loud "no baseline" notice and skips the diff.
+# `gaia eval agent --compare` exit 2 surfaces as a ::warning:: in report mode
+# and fails the build under `enforce: true` (the dispatch input).
 #
 # MEMORY IS ON — a deliberate deviation from every other eval workflow (they
 # set GAIA_MEMORY_DISABLED=1). Persistent memory is core to the flagship
@@ -63,16 +62,15 @@
 # Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
 # backend, so it runs on the ephemeral devlab-dispatch Strix Halo pool. THIS
 # POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
-# default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
-# documents the scar). Each job gets a fresh machine with its own Lemonade, so
-# it must NOT join the `lemonade-eval` slot: that group serialises by name
-# across machines and belongs to the persistent pool (see eval_flagship.yml).
+# default) — do not reintroduce bash. Each job gets a fresh machine with its
+# own Lemonade, so it must NOT join the `lemonade-eval` slot: that group
+# serialises by name across machines and belongs to the persistent pool (see
+# eval_flagship.yml).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
 on:
-  # Manual trigger — the FULL run (all 16 categories, all tiers). This is also
-  # how the first Gemma baselines get captured on the runner.
+  # Manual trigger — the FULL run (all 16 categories, all tiers).
   workflow_dispatch:
     inputs:
       categories:
@@ -157,7 +155,7 @@ env:
   # The checkout is outside this runner's home, so without this every
   # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
+  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
   # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
   FIXTURE_PORT: '8765'
@@ -363,7 +361,7 @@ jobs:
       # repairs the one failure CI can repair (a stale registration), and the
       # --llamacpp-args flag loads it exactly the way gaia.rag.sdk does. On
       # failure, fail in seconds with a pointer — the deeper backend-cache
-      # recovery lives in test_eval_agent_gemma_consolidation.yml; run it (or
+      # recovery lives in eval_flagship.yml (agent-eval preflight); run it (or
       # its documented wipe) on the box rather than duplicating it here.
       - name: Preflight — embedder serves embeddings (memory-on run)
         run: |
@@ -381,7 +379,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in test_eval_agent_gemma_consolidation.yml (its embeddings preflight); run it on the box, then re-run this workflow."
+            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in eval_flagship.yml (its agent-eval embeddings preflight); run it on the box, then re-run this workflow."
             exit 1
           }
 
@@ -404,7 +402,8 @@ jobs:
         timeout-minutes: ${{ github.event_name == 'pull_request' && 300 || 1980 }}
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Blank when the OAuth token is set: the judge adds --bare only with a key.
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           # The other account. The eval moves to it once if the first runs out of
           # quota mid-run, and stops with a partial scorecard if both are out.
@@ -718,10 +717,9 @@ jobs:
             $category = $file.Directory.Name
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
             if (-not (Test-Path $baseline)) {
-              # No baselines exist until the first full workflow_dispatch on
-              # this runner commits them (dev boxes must never start
-              # Lemonade). Loud, per-category, never silent.
-              Write-Host "::notice::${category}: no committed baseline at $baseline - first adoption, comparison skipped. Capture baselines via a full workflow_dispatch run (--save-baseline) and commit them."
+              # A category the flagship baseline does not cover yet (e.g.
+              # gaia_git, gaia_resilience). Loud, per-category, never silent.
+              Write-Host "::notice::${category}: no committed baseline at $baseline, comparison skipped. Copy its scorecard unedited from a full eval_flagship.yml sweep on the Strix Halo pool and commit it there."
               continue
             }
             Write-Host "=================================================================="

@@ -22,7 +22,6 @@ import re
 from pathlib import Path
 
 import pytest
-from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 from gaia.agents.base import project_map, system_context
 from gaia.agents.base.project_map import PlatformQuirks

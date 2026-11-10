@@ -16,8 +16,8 @@
 //              (b) the generated .desktop entry launches with --no-sandbox
 //              (linux.executableArgs), covering the AppArmor-restricted
 //              userns case on Ubuntu 24.04.1+.
-//   - AC4    : asserts bundled uv binary is present, executable, and under
-//              the expected extraResources layout (T3).
+//   - AC4    : asserts the frozen `gaia` core is present, executable, and
+//              starts, under the expected extraResources layout.
 //   - AC3    : asserts the pre-built React dist/ is shipped (no user
 //              `npm run build` required).
 //   - AC9    : asserts no stray .env, sourcemaps, or dotfiles shipped in
@@ -33,11 +33,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  assertUvBinary,
-  backendInstallerPath,
-  bundledUvPath,
-} from "./_helpers/installer-smoke.mjs";
+import { assertCoreBinary, bundledCorePath } from "./_helpers/installer-smoke.mjs";
 
 const { assertTrayLogoPng } = createRequire(import.meta.url)(
   "./_helpers/tray-icon-png.cjs"
@@ -145,24 +141,10 @@ if (!APPIMAGE) {
         );
       });
 
-      // ── AC4 / T3: bundled uv binary present and executable ──────────
-      // Implementation lives in tests/electron/_helpers/installer-smoke.mjs
-      // and is shared with dmg-smoke.test.mjs (issue #941). Two named test
-      // blocks preserved for output stability with prior CI logs.
+      // ── AC4: the frozen core ships and starts ───────────────────────
       const resourcesDir = path.join(squashRoot, "resources");
-      const uvPath = bundledUvPath(resourcesDir, PLATFORM_KEY);
-      const installerPath = backendInstallerPath(import.meta.url);
-
-      test("AC4/T3: bundled uv binary is present under extraResources", () => {
-        // Existence + mode-bit assertions live in assertUvBinary (T3b).
-        // Block kept for CI-log name stability; see _helpers/installer-smoke.mjs.
-        assert.ok(fs.existsSync(uvPath), `expected bundled uv at ${uvPath}`);
-      });
-
-      // Runtime ensureUv() hashes the extracted ELF and rejects any mismatch,
-      // so catch packaging/hash drift at smoke time instead of on user launch.
-      test("AC4/T3b: bundled uv SHA256 matches BUNDLED_UV_SHA256[linux-x64]", () => {
-        assertUvBinary(uvPath, PLATFORM_KEY, installerPath);
+      test("AC4: the frozen gaia core is present, executable, and starts", () => {
+        assertCoreBinary(bundledCorePath(resourcesDir, PLATFORM_KEY), PLATFORM_KEY);
       });
 
       // ── AC3: pre-built React dist/ ships with the AppImage ──────────

@@ -71,7 +71,9 @@ def _parse_tool_payload(content: Any) -> Optional[Dict[str, Any]]:
     return content
 
 
-def _tool_entries(conversation: Optional[List[Dict[str, Any]]]) -> Iterator[Dict[str, Any]]:
+def _tool_entries(
+    conversation: Optional[List[Dict[str, Any]]],
+) -> Iterator[Dict[str, Any]]:
     for entry in conversation or []:
         if isinstance(entry, dict) and entry.get("role") == "tool":
             yield entry
@@ -79,7 +81,9 @@ def _tool_entries(conversation: Optional[List[Dict[str, Any]]]) -> Iterator[Dict
 
 def tools_called_this_turn(conversation: Optional[List[Dict[str, Any]]]) -> List[str]:
     """Names of every tool invoked in this turn's conversation trace."""
-    return [entry.get("name") for entry in _tool_entries(conversation) if entry.get("name")]
+    return [
+        entry.get("name") for entry in _tool_entries(conversation) if entry.get("name")
+    ]
 
 
 def last_tool_payload(
@@ -250,16 +254,16 @@ def find_unlicensed_cross_mailbox_claim(
 # Guard 3 — internal payload scaffolding leaking into prose
 # ---------------------------------------------------------------------------
 
-_SHOWN_TO_USER_MARKER_RE = re.compile(
-    r"\n*\[shown to the user\]\n*", re.IGNORECASE
-)
+_SHOWN_TO_USER_MARKER_RE = re.compile(r"\n*\[shown to the user\]\n*", re.IGNORECASE)
 _ENVELOPE_FIELD_LABEL_RE = re.compile(
     r"\[(?:urgent|actionable|informational|suggested_archives|needs_review"
     r"|preferences_applied|totals|items|coverage|waiting_on_you|action_item"
     r"|meeting_request|mailbox_errors|scan_truncated|degraded)\]\s*",
     re.IGNORECASE,
 )
-_RAW_MESSAGE_ID_RE = re.compile(r"\(id [0-9a-f]{16}\)\s*|\b[0-9a-f]{16}\b", re.IGNORECASE)
+_RAW_MESSAGE_ID_RE = re.compile(
+    r"\(id [0-9a-f]{16}\)\s*|\b[0-9a-f]{16}\b", re.IGNORECASE
+)
 _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 _SCAFFOLDING_CHECKS = (
@@ -344,7 +348,11 @@ def normalize_triage_list(text: str) -> str:
         return text
     out = _INLINE_NUMBERED_ITEM_RE.sub("\n", text)
     out = "\n".join(
-        _ITEM_LINE_EMAIL_RE.sub("", line) if _NUMBERED_ITEM_LINE_RE.match(line) else line
+        (
+            _ITEM_LINE_EMAIL_RE.sub("", line)
+            if _NUMBERED_ITEM_LINE_RE.match(line)
+            else line
+        )
         for line in out.split("\n")
     )
     return out
@@ -364,7 +372,9 @@ _TRIAGE_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
 # ``needs_you.sender`` carries a display name, an address, or both. Only the
 # name is worth a row -- an address renders twice once the markdown renderer
 # turns it into a mailto: link.
-_SENDER_EMAIL_RE = re.compile(r"\s*<?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?")
+_SENDER_EMAIL_RE = re.compile(
+    r"\s*<?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?"
+)
 
 
 def _sender_label(sender: Any) -> str:
@@ -420,7 +430,10 @@ def render_needs_you_list(envelope: Dict[str, Any]) -> str:
             # embellishment, so it survives the rewrite.
             notes = [
                 n
-                for n in (_age_phrase(row.get("age_seconds")), str(row.get("why") or "").strip())
+                for n in (
+                    _age_phrase(row.get("age_seconds")),
+                    str(row.get("why") or "").strip(),
+                )
                 if n
             ]
             suffix = f" ({' · '.join(notes)})" if notes else ""
@@ -502,7 +515,14 @@ def render_suspicious_list(envelope: Dict[str, Any]) -> str:
     for row in items:
         who = _sender_label(row.get("sender"))
         what = str(row.get("subject") or "").strip() or "(no subject)"
-        tags = [t for t, flag in (("phishing", row.get("is_phishing")), ("spam", row.get("is_spam"))) if flag]
+        tags = [
+            t
+            for t, flag in (
+                ("phishing", row.get("is_phishing")),
+                ("spam", row.get("is_spam")),
+            )
+            if flag
+        ]
         why = str(row.get("why") or "").strip()
         notes = [n for n in (", ".join(tags), why) if n]
         suffix = f" ({' · '.join(notes)})" if notes else ""
@@ -522,7 +542,9 @@ def _suspicious_scan_has_coverage_gap(envelope: Dict[str, Any]) -> bool:
     scanned = envelope.get("scanned")
     total_inbox = envelope.get("total_inbox")
     return (
-        isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox
+        isinstance(scanned, int)
+        and isinstance(total_inbox, int)
+        and scanned < total_inbox
     )
 
 
@@ -609,10 +631,16 @@ def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
             continue
         label = provider_label(entry["mailbox"])
         error = str(entry.get("error") or "").strip()
-        clauses.append(f"{label} couldn't be scanned ({error})" if error else f"{label} couldn't be scanned")
+        clauses.append(
+            f"{label} couldn't be scanned ({error})"
+            if error
+            else f"{label} couldn't be scanned"
+        )
     if not clauses:
         return "Part of your mail could not be scanned this time."
-    return "; ".join(clauses) + "; results below are from the rest of your mailboxes only."
+    return (
+        "; ".join(clauses) + "; results below are from the rest of your mailboxes only."
+    )
 
 
 def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
@@ -655,7 +683,11 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
 
     scanned = envelope.get("scanned", 0)
     total_inbox = envelope.get("total_inbox")
-    if isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox:
+    if (
+        isinstance(scanned, int)
+        and isinstance(total_inbox, int)
+        and scanned < total_inbox
+    ):
         coverage = f"{scanned} of {total_inbox} in the inbox scanned"
     else:
         coverage = f"{scanned} messages scanned"

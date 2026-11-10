@@ -92,6 +92,29 @@ def test_daemon_exits_with_the_process_it_is_tied_to(daemon, monkeypatch):
             parent.kill()
 
 
+def test_daemon_exits_once_the_app_that_started_it_is_deleted(
+    daemon, monkeypatch, tmp_path
+):
+    app = tmp_path / "GAIA.AppImage"
+    app.write_text("app", encoding="utf-8")
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(app))
+    inst = daemon()
+    time.sleep(lifetime.CHECK_SECONDS + 1)
+    assert instance.is_live(inst), "exited while its app was installed"
+    app.unlink()
+    assert _exits(inst), "the daemon outlived the app it was started by"
+    assert f"the GAIA app that started it ({app}) was removed" in _log()
+
+
+def test_daemon_refuses_to_start_for_an_app_already_deleted(
+    daemon, monkeypatch, tmp_path
+):
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(tmp_path / "GAIA.AppImage"))
+    with pytest.raises(DaemonError, match="exited early"):
+        daemon()
+    assert "the GAIA app that launched this daemon was removed" in _log()
+
+
 def test_daemon_refuses_a_malformed_exit_with_pid(daemon, monkeypatch):
     monkeypatch.setenv(lifetime.EXIT_WITH_PID_ENV, "not-a-pid")
     with pytest.raises(DaemonError, match="exited early"):

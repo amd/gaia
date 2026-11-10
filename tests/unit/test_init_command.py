@@ -10,7 +10,8 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
-from unittest.mock import MagicMock, mock_open, patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from gaia.installer.lemonade_installer import (
     InstallResult,
@@ -81,34 +82,6 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertEqual(installer.target_version, "10.0.0")
 
     @patch("platform.system")
-    def test_is_platform_supported_windows(self, mock_system):
-        """Test platform support on Windows."""
-        mock_system.return_value = "Windows"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_linux(self, mock_system):
-        """Test platform support on Linux."""
-        mock_system.return_value = "Linux"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_macos(self, mock_system):
-        """Test platform support on macOS."""
-        mock_system.return_value = "Darwin"
-        installer = LemonadeInstaller()
-        self.assertTrue(installer.is_platform_supported())
-
-    @patch("platform.system")
-    def test_is_platform_supported_unknown(self, mock_system):
-        """Test platform support on an unsupported OS."""
-        mock_system.return_value = "FreeBSD"
-        installer = LemonadeInstaller()
-        self.assertFalse(installer.is_platform_supported())
-
-    @patch("platform.system")
     def test_get_download_url_windows(self, mock_system):
         """Test download URL generation for Windows."""
         mock_system.return_value = "Windows"
@@ -124,7 +97,7 @@ class TestLemonadeInstaller(unittest.TestCase):
         installer = LemonadeInstaller(target_version="9.1.4")
         with self.assertRaises(RuntimeError) as ctx:
             installer.get_download_url()
-        self.assertIn("not supported", str(ctx.exception))
+        self.assertIn("only to uninstall it on Windows", str(ctx.exception))
 
     @patch("platform.system")
     def test_get_download_url_windows_minimal(self, mock_system):
@@ -150,36 +123,6 @@ class TestLemonadeInstaller(unittest.TestCase):
         installer = LemonadeInstaller(target_version="9.1.4", minimal=False)
         filename = installer.get_installer_filename()
         self.assertEqual(filename, "lemonade.msi")
-
-    def test_needs_install_not_installed(self):
-        """Test needs_install when not installed."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=False)
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_no_version(self):
-        """Test needs_install when installed but no version."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=True, version=None)
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_older_version(self):
-        """Test needs_install with older version."""
-        installer = LemonadeInstaller(target_version="9.2.0")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertTrue(installer.needs_install(info))
-
-    def test_needs_install_same_version(self):
-        """Test needs_install with same version."""
-        installer = LemonadeInstaller(target_version="9.1.4")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertFalse(installer.needs_install(info))
-
-    def test_needs_install_newer_version(self):
-        """Test needs_install with newer version installed."""
-        installer = LemonadeInstaller(target_version="9.1.0")
-        info = LemonadeInfo(installed=True, version="9.1.4")
-        self.assertFalse(installer.needs_install(info))
 
     @patch("gaia.installer.lemonade_installer.resolve_lemonade")
     def test_check_installation_not_found(self, mock_resolve):
@@ -433,19 +376,17 @@ class TestInitProfiles(unittest.TestCase):
         self.assertEqual(email["agent"], "email")
         self.assertIn("Gemma-4-E4B-it-GGUF", email["models"])
 
-    def test_email_profile_min_version_locksteps_with_agent(self):
-        """The email init profile's min Lemonade version must match the email
-        agent's runtime minimum — readiness (/v1/email/init) and the installer
-        must agree on what 'compatible' means."""
-        from gaia.installer.init_command import INIT_PROFILES
+    def test_email_min_version_locksteps_with_core(self):
+        """The email agent's runtime minimum must match GAIA's floor —
+        readiness (/v1/email/init) and the installer must agree on what
+        'compatible' means."""
+        from gaia.version import LEMONADE_MIN_VERSION
 
         try:
             from gaia_agent_email.version import MIN_LEMONADE_VERSION
         except ImportError:
             self.skipTest("gaia_agent_email (standalone email wheel) not installed")
-        self.assertEqual(
-            INIT_PROFILES["email"]["min_lemonade_version"], MIN_LEMONADE_VERSION
-        )
+        self.assertEqual(LEMONADE_MIN_VERSION, MIN_LEMONADE_VERSION)
 
     def test_email_profile_is_a_cli_choice(self):
         """The init subparser must accept --profile email (argparse choices)."""
@@ -796,14 +737,14 @@ class TestLemonadeReady(unittest.TestCase):
 
     def test_configured_server_is_used_without_installing_anything(self):
         ok, out, client_class = self._run_configured(
-            "http://localhost:13305", health={"status": "ok", "version": "99.0.0"}
+            "http://localhost:13305", health={"status": "ok", "version": "9999.0.0"}
         )
 
         self.assertTrue(ok)
         self.assertEqual(
             client_class.call_args.kwargs["base_url"], "http://localhost:13305/api/v1"
         )
-        self.assertIn("v99.0.0", out)
+        self.assertIn("v9999.0.0", out)
 
     def test_unreachable_configured_server_fails_and_says_how_to_recover(self):
         ok, out, _ = self._run_configured("http://gpu-box:13305", error="refused")
@@ -823,7 +764,7 @@ class TestLemonadeReady(unittest.TestCase):
         self.assertTrue(ok)
         embedded.start.assert_called_once()
 
-    def test_configured_server_below_profile_minimum_is_refused(self):
+    def test_configured_server_below_the_minimum_is_refused(self):
         ok, out, _ = self._run_configured(
             "http://gpu-box:13305", health={"status": "ok", "version": "1.0.0"}
         )
@@ -1102,6 +1043,110 @@ class TestCheckSetupStatus(unittest.TestCase):
         )
         self.start_embedded = start.start()
         self.addCleanup(start.stop)
+        # An installed flagship, recorded where `gaia init` records it; the
+        # agent-missing tests delete it.
+        import tempfile
+
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        os.environ["GAIA_HOME"] = home.name
+        os.environ.pop("GAIA_CONFIG_DIR", None)
+        # A gaia-agent on this machine's PATH would count as installed.
+        path_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(path_dir.cleanup)
+        self.path_dir = Path(path_dir.name)
+        os.environ["PATH"] = path_dir.name
+        self._install_flagship()
+        # The hub, as `gaia init` reads it: a build for this machine unless a
+        # test serves a different one.
+        self.hub_manifest = self._flagship_manifest(
+            ("win32-x64", "linux-x64", "darwin-arm64")
+        )
+        self.hub_fetches = []
+        self.host_key = "win32-x64"
+        from gaia.hub import catalog as hub_catalog
+
+        self.real_fetch_bytes = hub_catalog.fetch_bytes
+        hub = patch("gaia.hub.catalog.fetch_bytes", side_effect=self._serve_hub)
+        hub.start()
+        self.addCleanup(hub.stop)
+        for target in (
+            "gaia.hub.installer.current_platform_key",
+            "gaia.hub.compatibility.current_platform_key",
+        ):
+            host = patch(target, side_effect=lambda *a: self.host_key)
+            host.start()
+            self.addCleanup(host.stop)
+
+    @staticmethod
+    def _flagship_manifest(platform_keys):
+        names = {
+            "win32-x64": "gaia-agent-win32-x64.exe",
+            "linux-x64": "gaia-agent-linux-x64",
+            "darwin-arm64": "gaia-agent-darwin-arm64",
+        }
+        artifacts = [
+            {
+                "filename": names[k],
+                "path": f"agents/gaia/0.3.2/{names[k]}",
+                "size_bytes": 1,
+                "sha256": "ab" * 32,
+            }
+            for k in platform_keys
+        ]
+        return {
+            "id": "gaia",
+            "language": "python",
+            "security_tier": "verified",
+            "latest_version": "0.3.2",
+            "requirements": {"platforms": []},
+            "versions": {
+                "0.3.2": {
+                    "version": "0.3.2",
+                    "artifact": artifacts[0],
+                    "artifacts": artifacts,
+                }
+            },
+        }
+
+    def _serve_hub(self, url, *args, **kwargs):
+        import json
+
+        self.hub_fetches.append(url)
+        if url.startswith("file://"):
+            return self.real_fetch_bytes(url)
+        if isinstance(self.hub_manifest, bytes):
+            return self.hub_manifest
+        if self.hub_manifest is None:
+            from gaia.hub.catalog import CatalogError
+
+            raise CatalogError(f"could not reach {url}")
+        if url.endswith("/agents/gaia/manifest.json"):
+            return json.dumps(self.hub_manifest).encode("utf-8")
+        raise AssertionError(f"the check must download nothing else: {url}")
+
+    @staticmethod
+    def _install_flagship():
+        from gaia.hub import installer as hub_installer
+
+        install_dir = hub_installer.agent_install_dir("gaia")
+        install_dir.mkdir(parents=True, exist_ok=True)
+        hub_installer._write_sentinel(
+            "gaia",
+            "0.3.2",
+            "python",
+            "ab" * 32,
+            install_dir,
+            artifact_kind=hub_installer.ARTIFACT_KIND_BINARY,
+            executable="gaia-agent.exe",
+        )
+        return install_dir / hub_installer.SENTINEL_NAME
+
+    @staticmethod
+    def _remove_flagship():
+        from gaia.hub import installer as hub_installer
+
+        hub_installer._sentinel_path("gaia").unlink()
 
     def test_stopped_server_is_started_through_the_daemon_first(self):
         from gaia.installer.init_command import check_setup_status
@@ -1125,12 +1170,13 @@ class TestCheckSetupStatus(unittest.TestCase):
         )
 
     @staticmethod
-    def _embedded(status):
+    def _embedded(status, older=None):
         from gaia.version import LEMONADE_VERSION
 
         embedded = MagicMock()
         embedded.version = LEMONADE_VERSION
         embedded.status.return_value = status
+        embedded.other_installed_version.return_value = older
         return patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -1181,8 +1227,8 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertIn("pid 77", status.reasons[0])
 
-    def test_older_embedded_version_is_not_ready(self):
-        """init would replace it, so --check must not call it ready."""
+    def test_older_embedded_version_requests_an_upgrade_not_first_run_setup(self):
+        """An app upgrade replaces the embedded server but keeps model data."""
         from gaia.installer.init_command import check_setup_status
 
         running = self._status(
@@ -1192,7 +1238,63 @@ class TestCheckSetupStatus(unittest.TestCase):
             status = check_setup_status(profile="chat")
 
         self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "upgrade")
         self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_new_pin_not_yet_unpacked_while_the_old_one_runs_is_an_upgrade(self):
+        """After a GAIA upgrade the new version's dist dir does not exist yet."""
+        from gaia.installer.init_command import check_setup_status
+
+        running = self._status(
+            installed=False,
+            running=True,
+            version="0.0.1",
+            port=1,
+            pid=2,
+            base_url="http://x/api/v1",
+        )
+        with self._embedded(running):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "upgrade")
+        self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_new_pin_not_unpacked_with_only_an_older_one_on_disk_is_an_upgrade(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status(installed=False), older="0.0.1"):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "upgrade")
+        self.assertIn("v0.0.1", status.reasons[0])
+
+    def test_nothing_on_disk_is_first_run_setup(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self._embedded(self._status(installed=False), older=None):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "setup")
+
+    def test_other_installed_version_reads_other_unpacked_versions(self):
+        import platform
+        import tempfile
+        from pathlib import Path
+
+        from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+        with tempfile.TemporaryDirectory() as home:
+            embedded = EmbeddedLemonade(home=Path(home))
+            self.assertIsNone(embedded.other_installed_version())
+            daemon = "lemond.exe" if platform.system() == "Windows" else "lemond"
+            for version in ("9.2.0", "2026.45.3", embedded.version):
+                d = embedded.root / "dist" / version
+                d.mkdir(parents=True)
+                (d / daemon).write_bytes(b"")
+            # A half-unpacked dir with no daemon does not count.
+            (embedded.root / "dist" / "99.0.0").mkdir()
+            (embedded.root / "dist" / "not-a-version").mkdir()
+            self.assertEqual(embedded.other_installed_version(), "2026.45.3")
 
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status
@@ -1211,6 +1313,510 @@ class TestCheckSetupStatus(unittest.TestCase):
             mock_client_class.call_args.kwargs["base_url"],
             "http://localhost:51234/api/v1",
         )
+
+    AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
+
+    def _check_with_models(self, profile="gaia", have=True, **kwargs):
+        from gaia.installer.init_command import check_setup_status
+
+        with (
+            self._embedded(self._running()),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class,
+        ):
+            client = self._loading_client(mock_client_class)
+            client.check_model_available.return_value = have
+            status = check_setup_status(profile=profile, **kwargs)
+        return status, client
+
+    def test_flagship_models_present_but_agent_missing_is_not_ready(self):
+        """#6571: an existing Lemonade with the models skipped setup, so the
+        agent was never installed and every chat failed."""
+        self._remove_flagship()
+        status, _ = self._check_with_models()
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_installed_flagship_with_models_present_is_ready(self):
+        """An existing user who has the agent is never sent back into setup."""
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(status.reasons, [])
+
+    def test_load_check_reports_the_missing_agent_before_loading_anything(self):
+        """The apps verify with --load; a missing agent must not pass there, and
+        setup is still owed, so minutes of model loads are skipped."""
+        self._remove_flagship()
+        status, client = self._check_with_models(load=True)
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(all(m.downloaded for m in status.models))
+        client._ensure_model_loaded.assert_not_called()
+        client.embeddings.assert_not_called()
+
+    def test_skip_chat_model_still_needs_the_agent(self):
+        """A Claude or cloud chat still runs through the flagship agent."""
+        self._remove_flagship()
+        status, _ = self._check_with_models(skip_chat_model=True)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_missing_models_and_agent_are_both_reasons(self):
+        self._remove_flagship()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertIn(self.AGENT_MISSING, status.reasons)
+        self.assertTrue(any("is not downloaded" in r for r in status.reasons))
+
+    def test_npu_profile_names_its_own_init_command(self):
+        """A bare `gaia init` would switch an npu machine to the default models."""
+        self._remove_flagship()
+        status, _ = self._check_with_models(profile="npu")
+
+        self.assertEqual(
+            status.reasons,
+            ["The GAIA agent is not installed -- run: gaia init --profile npu"],
+        )
+
+    def test_profiles_without_the_flagship_ignore_it(self):
+        self._remove_flagship()
+        for profile in ("chat", "minimal", "rag"):
+            with self.subTest(profile=profile):
+                status, _ = self._check_with_models(profile=profile)
+                self.assertTrue(status.ready, status.reasons)
+
+    def test_an_importable_checkout_package_is_not_an_installed_agent(self):
+        """The apps run the flagship binary; a source checkout's importable
+        gaia_agent package must not stand in for it."""
+        import importlib.util
+
+        self._remove_flagship()
+        real_find_spec = importlib.util.find_spec
+        with patch(
+            "importlib.util.find_spec",
+            side_effect=lambda name, *a: (
+                MagicMock() if name == "gaia_agent" else real_find_spec(name, *a)
+            ),
+        ):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_a_corrupt_sentinel_is_not_an_installed_agent(self):
+        sentinel = self._install_flagship()
+        sentinel.write_text("{not json", encoding="utf-8")
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_a_sentinel_with_an_unsafe_executable_is_not_an_installed_agent(self):
+        import json
+
+        sentinel = self._install_flagship()
+        data = json.loads(sentinel.read_text(encoding="utf-8"))
+        data["executable"] = "..\\..\\evil.exe"
+        sentinel.write_text(json.dumps(data), encoding="utf-8")
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_sentinel_is_read_from_gaia_home_not_the_profile_home(self):
+        """The check and `gaia init` resolve one agents dir, honouring GAIA_HOME."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as elsewhere:
+            os.environ["GAIA_HOME"] = elsewhere
+            status, _ = self._check_with_models()
+            self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+            self._install_flagship()
+            status, _ = self._check_with_models()
+            self.assertTrue(status.ready, status.reasons)
+
+    def test_an_older_server_is_an_upgrade_even_with_no_agent(self):
+        """#6477: an update is not first-run setup, whatever else is missing."""
+        from gaia.installer.init_command import check_setup_status
+
+        self._remove_flagship()
+        older = self._status(running=True, version="10.0.0", port=51234, pid=42)
+        with self._embedded(older):
+            status = check_setup_status(profile="gaia")
+
+        self.assertEqual(status.stage, "upgrade")
+
+    def test_installed_agent_never_asks_the_hub(self):
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(self.hub_fetches, [])
+
+    @staticmethod
+    def _terminal_agent_path():
+        from gaia.home import gaia_home
+
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        return gaia_home() / "bin" / name
+
+    def _install_terminal_agent(self, mode=0o755):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+        path = self._terminal_agent_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\x7fELF")
+        path.chmod(mode)
+        return path
+
+    def test_terminal_installer_agent_is_ready(self):
+        """#6642: install.sh / install.ps1 put the agent in ~/.gaia/bin, not
+        under ~/.gaia/agents, and the TUI runs it from there."""
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(status.reasons, [])
+        self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_never_asks_the_hub(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertEqual(self.hub_fetches, [])
+
+    def test_terminal_installer_agent_still_needs_the_models(self):
+        self._remove_flagship()
+        self._install_terminal_agent()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertFalse(status.agent_missing)
+        self.assertNotIn(self.AGENT_MISSING, status.reasons)
+
+    def _write_agent(self, directory, mode=0o755):
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / name
+        path.write_bytes(b"\x7fELF")
+        path.chmod(mode)
+        return path
+
+    def _frozen_at(self, directory):
+        """Run the check as the frozen gaia in *directory*."""
+        name = "gaia.exe" if sys.platform == "win32" else "gaia"
+        frozen = patch("gaia.installer.init_command.is_frozen", return_value=True)
+        exe = patch.object(sys, "executable", str(directory / name))
+        frozen.start()
+        exe.start()
+        self.addCleanup(frozen.stop)
+        self.addCleanup(exe.stop)
+
+    def test_agent_beside_the_frozen_gaia_is_ready(self):
+        """The Windows setup's terminal component installs gaia.exe and
+        gaia-agent.exe side by side, with no sentinel and nothing in ~/.gaia/bin."""
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._write_agent(Path(install.name))
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready, status.reasons)
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(self.hub_fetches, [])
+
+    def test_agent_on_path_is_ready(self):
+        """The .deb, .rpm and .pkg put gaia-agent in /usr/bin or /usr/local/bin
+        and the frozen gaia under lib/gaia, so only PATH finds the agent."""
+        import tempfile
+
+        self._remove_flagship()
+        self._write_agent(self.path_dir)
+        core = tempfile.TemporaryDirectory()
+        self.addCleanup(core.cleanup)
+        self._frozen_at(Path(core.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready, status.reasons)
+        self.assertFalse(status.agent_missing)
+
+    def test_agent_on_a_pip_install_path_is_not_the_agent(self):
+        """A pip or source gaia: a gaia-agent console script on PATH is not
+        something a GAIA installer shipped."""
+        self._remove_flagship()
+        self._write_agent(self.path_dir)
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_frozen_gaia_with_no_agent_anywhere_still_needs_it(self):
+        """A terminal install whose agent is gone must still send the user to setup."""
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_directory_named_gaia_agent_beside_the_frozen_gaia_is_not_the_agent(self):
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        (Path(install.name) / name).mkdir()
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_agent_beside_a_source_interpreter_is_not_the_agent(self):
+        """From a checkout sys.executable is Python; a stray gaia-agent in its
+        folder is not something an installer shipped."""
+        import tempfile
+
+        self._remove_flagship()
+        venv = tempfile.TemporaryDirectory()
+        self.addCleanup(venv.cleanup)
+        self._write_agent(Path(venv.name))
+        with patch.object(sys, "executable", str(Path(venv.name) / "python")):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    @unittest.skipIf(sys.platform == "win32", "Windows has no exec bit")
+    def test_non_executable_agent_beside_the_frozen_gaia_is_not_the_agent(self):
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._write_agent(Path(install.name), mode=0o644)
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_only_the_tui_in_bin_still_needs_the_agent(self):
+        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        from gaia.home import gaia_home
+
+        self._remove_flagship()
+        bin_dir = gaia_home() / "bin"
+        bin_dir.mkdir(parents=True)
+        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (bin_dir / tui).write_bytes(b"x")
+        self.host_key = "darwin-arm64"
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_a_directory_named_like_the_agent_is_not_the_agent(self):
+        self._remove_flagship()
+        self._terminal_agent_path().mkdir(parents=True)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    @unittest.skipIf(sys.platform == "win32", "Windows has no exec bit")
+    def test_a_non_executable_terminal_agent_is_not_the_agent(self):
+        """A half-written download (no exec bit yet) must not pass as installed."""
+        self._remove_flagship()
+        self._install_terminal_agent(mode=0o644)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def test_terminal_agent_outside_this_gaia_home_does_not_count(self):
+        """An isolated GAIA_HOME never borrows another home's agent."""
+        import os
+        import tempfile
+
+        self._remove_flagship()
+        self._install_terminal_agent()
+        other = tempfile.TemporaryDirectory()
+        self.addCleanup(other.cleanup)
+        os.environ["GAIA_HOME"] = other.name
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+
+    def _on_a_pc_without_a_build(self):
+        self._remove_flagship()
+        self.host_key = "linux-arm64"
+
+    def test_no_agent_build_for_this_pc_is_not_a_setup_loop(self):
+        """init finishes without the agent here, so setup must not be offered
+        again on every launch; the check says why chat is unavailable."""
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready)
+        self.assertIsNone(status.stage)
+        self.assertEqual(status.reasons, [])
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(len(status.warnings), 1)
+        self.assertIn(
+            "No GAIA agent build for this PC (linux-arm64)", status.warnings[0]
+        )
+        self.assertIn("chat isn't available here", status.warnings[0])
+
+    def test_no_agent_build_still_proves_the_models_load(self):
+        self._on_a_pc_without_a_build()
+        status, client = self._check_with_models(load=True)
+
+        self.assertTrue(status.ready)
+        self.assertEqual(len(status.warnings), 1)
+        client._ensure_model_loaded.assert_called_once()
+
+    def test_no_agent_build_does_not_hide_missing_models(self):
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models(have=False)
+
+        self.assertEqual(status.stage, "setup")
+        self.assertFalse(status.agent_missing)
+        self.assertNotIn(self.AGENT_MISSING, status.reasons)
+        self.assertEqual(len(status.warnings), 1)
+
+    def test_a_supported_pc_without_the_agent_still_needs_setup(self):
+        self._remove_flagship()
+        self.host_key = "darwin-arm64"
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+        self.assertEqual(status.warnings, [])
+
+    def test_an_unreachable_hub_reports_the_agent_missing(self):
+        """Not knowing is not "no build": setup then names the hub error."""
+        self._remove_flagship()
+        self.hub_manifest = None
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+        self.assertEqual(len(status.reasons), 1)
+        self.assertTrue(status.reasons[0].startswith(self.AGENT_MISSING))
+        self.assertIn("GAIA_HUB_URL", status.reasons[0])
+
+    def _assert_unreadable_hub_names_its_url(self, status, url):
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "setup")
+        self.assertTrue(status.agent_missing)
+        self.assertFalse(status.no_agent_build)
+        self.assertEqual(len(status.reasons), 1)
+        reason = status.reasons[0]
+        self.assertTrue(reason.startswith(self.AGENT_MISSING), reason)
+        self.assertIn(url, reason)
+        self.assertIn("GAIA_HUB_URL", reason)
+
+    def test_a_captive_portal_page_is_not_a_crash(self):
+        """A 200 that is HTML, not the manifest, must not crash the check."""
+        import os
+
+        os.environ["GAIA_HUB_URL"] = "https://hub.example.test"
+        self._remove_flagship()
+        self.hub_manifest = b"<html><body>Sign in to the Wi-Fi</body></html>"
+        status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(status, "https://hub.example.test")
+
+    def test_a_file_hub_that_is_not_there_is_not_a_crash(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as root:
+            url = (Path(root) / "no-such-hub").as_uri()
+            os.environ["GAIA_HUB_URL"] = url
+            self._remove_flagship()
+            status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(status, url)
+
+    def test_a_malformed_manifest_is_not_a_crash(self):
+        """Valid JSON of the wrong shape (artifacts as a dict) used to crash."""
+        import os
+
+        os.environ["GAIA_HUB_URL"] = "https://hub.example.test"
+        self._remove_flagship()
+        entry = self.hub_manifest["versions"]["0.3.2"]
+        entry["artifacts"] = {a["filename"]: a for a in entry["artifacts"]}
+        status, _ = self._check_with_models()
+
+        self._assert_unreadable_hub_names_its_url(
+            status, "https://hub.example.test/agents/gaia/manifest.json"
+        )
+        self.assertIn("artifacts is dict, not a list", status.reasons[0])
+
+    def test_a_full_disk_is_reported_not_read_as_no_build(self):
+        from gaia.hub import installer as hub_installer
+
+        self._remove_flagship()
+        with patch.object(
+            hub_installer,
+            "no_build_reason",
+            side_effect=hub_installer.DiskSpaceError("Not enough disk space"),
+        ):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.stage, "setup")
+        self.assertIn("Not enough disk space", status.reasons[0])
+
+    def test_no_agent_build_is_flagged_for_the_apps(self):
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.no_agent_build)
+        self.assertTrue(status.to_json()["no_agent_build"])
+
+    def test_no_agent_build_json_keeps_the_exit_code_ready(self):
+        import json
+
+        self._on_a_pc_without_a_build()
+        status, _ = self._check_with_models()
+        payload = json.loads(json.dumps(status.to_json()))
+
+        self.assertTrue(payload["ready"])
+        self.assertFalse(payload["agent_missing"])
+        self.assertEqual(len(payload["warnings"]), 1)
+
+    def test_a_server_that_will_not_answer_outranks_a_missing_agent(self):
+        from gaia.installer.init_command import check_setup_status
+
+        self._remove_flagship()
+        with self._embedded(self._status()):
+            status = check_setup_status(profile="gaia")
+
+        self.assertEqual(status.stage, "server")
 
     def test_configured_url_is_checked_instead_of_the_embedded_server(self):
         import os
@@ -1500,242 +2106,13 @@ class TestInstallPipExtras(unittest.TestCase):
             mock_run.assert_not_called()
 
 
-class TestNeedsInstallConsistency(unittest.TestCase):
-    """LemonadeInstaller.needs_install treats newer versions as installed."""
+class TestDiagnoseLaunchpadOutage(unittest.TestCase):
+    """diagnose_launchpad_outage names a Launchpad outage in apt's output.
 
-    def test_newer_version_needs_no_install(self):
-        """LemonadeInstaller.needs_install returns False for newer versions."""
-        installer = LemonadeInstaller(target_version="9.3.0")
-        info = LemonadeInfo(installed=True, version="9.3.4")
-        self.assertFalse(installer.needs_install(info))
-
-    def test_older_version_needs_install(self):
-        """LemonadeInstaller.needs_install returns True for older versions."""
-        installer = LemonadeInstaller(target_version="9.3.0")
-        info = LemonadeInfo(installed=True, version="9.2.0")
-        self.assertTrue(installer.needs_install(info))
-
-
-class TestInstallViaPpa(unittest.TestCase):
-    """Tests for _install_via_ppa — the Linux PPA-based install path.
-
-    The `os.geteuid` patches carry `create=True` because the attribute is
-    POSIX-only; without it these never reach their assertions on a Windows host.
+    CI's Linux runners install Lemonade from the PPA and use this to tell an
+    upstream outage from a real failure.
     """
 
-    def _make_linux_installer(self):
-        with patch("platform.system", return_value="Linux"):
-            return LemonadeInstaller(target_version="10.2.0")
-
-    def _ok_run(self):
-        result = MagicMock()
-        result.returncode = 0
-        result.stdout = ""
-        result.stderr = ""
-        return result
-
-    def _fail_run(self, stdout="", stderr="error output"):
-        result = MagicMock()
-        result.returncode = 1
-        result.stdout = stdout
-        result.stderr = stderr
-        return result
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_runs_commands_in_order(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """Three subprocess calls in order: add-apt-repository, apt-get update, apt-get install."""
-        import subprocess as _sub
-
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._ok_run()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertTrue(result.success)
-        self.assertEqual(mock_run.call_count, 3)
-
-        calls = mock_run.call_args_list
-        first_cmd = calls[0][0][0]
-        self.assertIn("sudo", first_cmd)
-        self.assertIn("add-apt-repository", first_cmd)
-
-        second_cmd = calls[1][0][0]
-        self.assertIn("apt-get", second_cmd)
-        self.assertIn("update", second_cmd)
-
-        third_cmd = calls[2][0][0]
-        self.assertIn("apt-get", third_cmd)
-        self.assertIn("install", third_cmd)
-        self.assertIn("lemonade-server", third_cmd)
-
-        for call in calls:
-            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_noninteractive_sets_env_and_devnull_stdin(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """non_interactive=True: DEBIAN_FRONTEND=noninteractive and stdin=DEVNULL on all calls."""
-        import subprocess as _sub
-
-        installer = self._make_linux_installer()
-
-        sudo_ok = self._ok_run()
-        install_ok = self._ok_run()
-        mock_run.side_effect = [sudo_ok, install_ok, install_ok, install_ok]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.2.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=True)
-
-        self.assertTrue(result.success)
-        for call in mock_run.call_args_list:
-            self.assertEqual(call[1].get("stdin"), _sub.DEVNULL)
-            env = call[1].get("env", {})
-            if call[0][0] != ["sudo", "-n", "true"]:
-                self.assertEqual(env.get("DEBIAN_FRONTEND"), "noninteractive")
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_sudo_password_required_returns_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """non_interactive+not-root+sudo requires password -> clear error, not timeout."""
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._fail_run(stderr="sudo: a password is required")
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=True)
-
-        self.assertFalse(result.success)
-        self.assertIn("sudo", result.error.lower())
-        self.assertIn("passwordless", result.error.lower())
-        mock_run.assert_called_once()
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_apt_install_failure_returns_actionable_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """apt-get install failure: error names step, stdout+stderr, docs URL."""
-        installer = self._make_linux_installer()
-
-        ok = self._ok_run()
-        fail = self._fail_run(stdout="E: Package not found", stderr="dpkg error")
-        mock_run.side_effect = [ok, ok, fail]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("lemonade-server", result.error)
-        self.assertIn("amd-gaia.ai", result.error)
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_unsupported_distro_returns_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """_check_linux_version returns error string -> early return with that message."""
-        installer = self._make_linux_installer()
-        version_msg = "Requires Ubuntu 24.04+. Detected: Ubuntu 22.04"
-
-        with patch.object(
-            LemonadeInstaller, "_check_linux_version", return_value=version_msg
-        ):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("Ubuntu 22.04", result.error)
-        mock_run.assert_not_called()
-
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data=('ID=fedora\nVERSION_ID="41"\nPRETTY_NAME="Fedora Linux 41"\n'),
-    )
-    def test_check_linux_version_rejects_non_debian_distros_with_manual_remedy(
-        self, mock_os_release
-    ):
-        """Non-Debian systems do not receive an apt command they cannot run."""
-        error = LemonadeInstaller._check_linux_version()
-
-        self.assertIsNotNone(error)
-        self.assertIn("Fedora Linux 41", error)
-        self.assertIn("Lemonade PPA", error)
-        self.assertIn("lemonade-server.ai", error)
-        self.assertIn("LEMONADE_BASE_URL", error)
-
-    @patch(
-        "builtins.open",
-        new_callable=mock_open,
-        read_data=(
-            'ID=pop\nID_LIKE="ubuntu debian"\n'
-            'VERSION_ID="24.04"\nPRETTY_NAME="Pop!_OS 24.04 LTS"\n'
-        ),
-    )
-    def test_check_linux_version_accepts_ubuntu_family_derivative(
-        self, mock_os_release
-    ):
-        """Ubuntu-family derivatives retain the PPA path via ID_LIKE."""
-        assert LemonadeInstaller._check_linux_version() is None
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value=None)
-    @patch("subprocess.run")
-    def test_install_via_ppa_missing_add_apt_repository_clear_error(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """add-apt-repository missing -> error mentions software-properties-common."""
-        installer = self._make_linux_installer()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("software-properties-common", result.error)
-        mock_run.assert_not_called()
-
-    @patch("os.geteuid", return_value=1000, create=True)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_returns_real_version_from_check_installation(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """Returned version comes from check_installation(), not self.target_version."""
-        installer = self._make_linux_installer()
-        mock_run.return_value = self._ok_run()
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            with patch.object(installer, "check_installation") as mock_check:
-                mock_check.return_value = LemonadeInfo(
-                    installed=True, version="10.3.0", path="/usr/bin/lemonade-server"
-                )
-                result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertTrue(result.success)
-        self.assertEqual(result.version, "10.3.0")
-        self.assertNotEqual(result.version, installer.target_version)
-
-    # Log text below is copied verbatim from the GAIA CLI Tests (Linux) runs that
-    # went red during the 2026-09-21 Launchpad outage.
     APT_UPDATE_503 = (
         "Get:1 http://azure.archive.ubuntu.com/ubuntu noble InRelease [256 kB]\n"
         "Err:8 https://ppa.launchpadcontent.net/lemonade-team/stable/ubuntu "
@@ -1757,54 +2134,23 @@ class TestInstallViaPpa(unittest.TestCase):
         "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
     )
 
-    # create=True: os.geteuid does not exist on Windows dev machines.
-    @patch("os.geteuid", create=True, return_value=1000)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_launchpad_index_outage_is_named(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """A 503 on the PPA index stops the install and blames Launchpad, not apt."""
-        installer = self._make_linux_installer()
+    def test_index_outage_blames_launchpad_not_apt(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
-        # apt-get update exits 0 when only *some* indexes fail -- that is the trap.
-        update = self._ok_run()
-        update.stdout = self.APT_UPDATE_503
-        mock_run.side_effect = [self._ok_run(), update]
+        message = diagnose_launchpad_outage(self.APT_UPDATE_503)
+        self.assertIn("Launchpad", message)
+        self.assertIn("503", message)
+        self.assertNotIn("dpkg --configure", message)
 
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
+    def test_key_outage_is_named_without_the_traceback(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
-        self.assertFalse(result.success)
-        self.assertIn("Launchpad", result.error)
-        self.assertIn("503", result.error)
-        # The old message sent users to repair a dpkg state that was never broken.
-        self.assertNotIn("dpkg --configure", result.error)
-        # Negative control: without the check, apt-get install would have run and
-        # failed with "Unable to locate package lemonade-server".
-        self.assertEqual(mock_run.call_count, 2)
+        message = diagnose_launchpad_outage(self.ADD_APT_GPG_500)
+        self.assertIn("Launchpad", message)
+        self.assertIn("signing key", message)
+        self.assertNotIn("Traceback", message)
 
-    # create=True: os.geteuid does not exist on Windows dev machines.
-    @patch("os.geteuid", create=True, return_value=1000)
-    @patch("shutil.which", return_value="/usr/bin/add-apt-repository")
-    @patch("subprocess.run")
-    def test_install_via_ppa_launchpad_key_outage_is_named(
-        self, mock_run, mock_which, mock_geteuid
-    ):
-        """A failed signing-key fetch reports the outage, not a raw Python traceback."""
-        installer = self._make_linux_installer()
-        mock_run.side_effect = [self._fail_run(stderr=self.ADD_APT_GPG_500)]
-
-        with patch.object(LemonadeInstaller, "_check_linux_version", return_value=None):
-            result = installer._install_via_ppa(non_interactive=False)
-
-        self.assertFalse(result.success)
-        self.assertIn("Launchpad", result.error)
-        self.assertIn("signing key", result.error)
-        self.assertNotIn("Traceback", result.error)
-
-    def test_diagnose_launchpad_outage_ignores_unrelated_repositories(self):
-        """Another PPA failing must not be blamed on Launchpad's Lemonade archive."""
+    def test_unrelated_repositories_are_not_blamed_on_launchpad(self):
         from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
         unrelated = (
@@ -1813,34 +2159,6 @@ class TestInstallViaPpa(unittest.TestCase):
         )
         self.assertIsNone(diagnose_launchpad_outage(unrelated))
         self.assertIsNone(diagnose_launchpad_outage("Reading package lists... Done\n"))
-        self.assertIsNotNone(diagnose_launchpad_outage(self.APT_UPDATE_503))
-
-    @patch("platform.system", return_value="Linux")
-    def test_install_dispatches_to_ppa_on_linux(self, mock_system):
-        """install() on Linux calls _install_via_ppa without requiring installer_path."""
-        installer = LemonadeInstaller()
-
-        expected = InstallResult(success=True, version="10.2.0", message="via ppa")
-        with patch.object(
-            installer, "_install_via_ppa", return_value=expected
-        ) as mock_ppa:
-            result = installer.install(silent=True)
-
-        mock_ppa.assert_called_once_with(non_interactive=True)
-        self.assertTrue(result.success)
-
-    @patch("platform.system", return_value="Windows")
-    def test_install_windows_still_requires_installer_path(self, mock_system):
-        """install() on Windows with missing path returns failure immediately."""
-        from pathlib import Path
-
-        installer = LemonadeInstaller()
-        result = installer.install(
-            installer_path=Path("/nonexistent_does_not_exist.msi")
-        )
-
-        self.assertFalse(result.success)
-        self.assertIn("not found", result.error.lower())
 
 
 class TestWaitForMsiMutex(unittest.TestCase):
@@ -2102,10 +2420,10 @@ class TestHubInstallWiringFlagshipProfile(_HubInstallWiringTestBase):
         cmd = self._make_cmd("gaia")
         self._patch_common_steps(cmd)
         with (
-            patch(
-                "gaia.installer.init_command.importlib.util.find_spec",
-                return_value=MagicMock(),  # a real find_spec() result -> importable
-            ),
+            # Only the installed binary counts for the flagship.
+            patch("gaia.hub.installer.read_sentinel", return_value=MagicMock()),
+            patch.object(cmd, "_installed_agent_is_stale", return_value=False),
+            patch("gaia.hub.prerelease.flagship_source", return_value=None),
             patch("gaia.hub.installer.install") as mock_install,
         ):
             rc = cmd.run()
@@ -2896,9 +3214,13 @@ class TestModelSmokeTest:
     def _client(self, message):
         client = MagicMock()
         client.check_model_loaded.return_value = False
-        client.list_models.return_value = {
-            "data": [
-                {"id": "Qwen3.6-35B-A3B-GGUF", "recipe_options": {"ctx_size": 1 << 20}}
+        client.health_check.return_value = {
+            "all_models_loaded": [
+                {
+                    "model_name": "Qwen3.6-35B-A3B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 1 << 20},
+                }
             ]
         }
         client.chat_completions.return_value = {"choices": [{"message": message}]}
@@ -2994,7 +3316,7 @@ class TestHardwareChatModel(unittest.TestCase):
 
     def _client(self, system_info, have=()):
         client = MagicMock()
-        client.health_check.return_value = {"status": "ok", "version": "2026.39.1"}
+        client.health_check.return_value = {"status": "ok", "version": "2026.44.1"}
         client.get_system_info.return_value = system_info
         client.check_model_available.side_effect = lambda m: m in have
         client.ensure_model_downloaded.return_value = True
@@ -3255,25 +3577,6 @@ class TestHardwareChatModel(unittest.TestCase):
         self.assertIn("gaia config set default_model", str(ctx.exception))
         client.ensure_model_downloaded.assert_not_called()
 
-    def test_a_user_default_the_server_cannot_load_is_refused(self):
-        """The default's floor (v11.7.0) is older than the Lemonade gaia init installs, so
-        this refusal path is exercised by a user-configured Flash instead,
-        which still needs llama.cpp's qwen4exp (v2026.39.1+)."""
-        from gaia.config import GaiaConfig
-        from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
-        from gaia.llm.model_fit import ModelFitError
-
-        cfg = GaiaConfig()
-        cfg.default_model = FLASH_OPTION_MODEL_NAME
-        cfg.save()
-        client = self._client(STRIX_HALO_128)
-        client.health_check.return_value = {"status": "ok", "version": "11.9.0"}
-        client.list_models.return_value = {"data": []}
-        from gaia.installer.init_command import resolve_init_chat_model
-
-        with self.assertRaisesRegex(ModelFitError, "--force-reinstall"):
-            resolve_init_chat_model(client, reset_corrupt=True, enforce_fit=True)
-
     def test_a_failed_hardware_request_keeps_gemma_and_still_answers_check(self):
         from gaia.installer.init_command import check_setup_status
         from gaia.llm.lemonade_client import (
@@ -3289,3 +3592,75 @@ class TestHardwareChatModel(unittest.TestCase):
         self.assertFalse(status.ready)
         self.assertTrue(any(DEFAULT_MODEL_NAME in r for r in status.reasons))
         self.assertFalse(any(LARGE_DEFAULT_MODEL_NAME in r for r in status.reasons))
+
+
+class TestNpuProfileMemlockOffer(_HubInstallWiringTestBase):
+    """`gaia init --profile npu` only asks Lemonade about memlock when it can
+    prompt on Linux, and a Lemonade that doesn't answer never aborts setup."""
+
+    def _run_npu(self, *, yes, tty, on_linux, system_info):
+        cmd = self._make_cmd("npu")
+        cmd.yes = yes
+        self._patch_common_steps(cmd)
+        install, sentinel = TestHubInstallWiringFlagshipProfile._sentinel_after_install(
+            self
+        )
+        client = MagicMock()
+        client.get_system_info.side_effect = system_info
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "gaia", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch("gaia.hub.installer.install", side_effect=install) as mock_install,
+            sentinel,
+            patch("gaia.installer.init_command.stdin_is_tty", return_value=tty),
+            patch("gaia.llm.npu_linux._on_linux", return_value=on_linux),
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch.object(cmd, "_prompt_yes_no", return_value=True),
+            patch("gaia.llm.npu_linux.apply_memlock_fix") as applied,
+            patch("sys.stdout", new_callable=io.StringIO) as mock_stdout,
+        ):
+            rc = cmd.run()
+        return rc, client, mock_install, applied, mock_stdout.getvalue()
+
+    def test_non_linux_never_asks_lemonade(self):
+        rc, client, mock_install, applied, _ = self._run_npu(
+            yes=False, tty=True, on_linux=False, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+
+    def test_yes_never_asks_lemonade(self):
+        rc, client, _, applied, _ = self._run_npu(
+            yes=True, tty=True, on_linux=True, system_info=AssertionError
+        )
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_not_called()
+        applied.assert_not_called()
+
+    def test_unreachable_lemonade_warns_and_setup_continues(self):
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        rc, client, mock_install, applied, out = self._run_npu(
+            yes=False,
+            tty=True,
+            on_linux=True,
+            system_info=LemonadeClientError("Request failed: connection refused"),
+        )
+        out = " ".join(out.split())  # Rich wraps long warnings
+        self.assertEqual(rc, 0)
+        client.get_system_info.assert_called_once()
+        applied.assert_not_called()
+        mock_install.assert_called_once_with("gaia", trusted=True)
+        self.assertIn("locked-memory check is skipped", out)
+        self.assertIn("connection refused", out)
+        self.assertNotIn("Unexpected error", out)

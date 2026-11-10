@@ -363,6 +363,8 @@ let downloadEpoch = 0;
 const prefetching = new Map();
 // The user asked for this download, so it may install on quit with auto-update off.
 let installRequested = false;
+// The user chose to restart into the update: the quit runs its installer.
+let installingNow = false;
 // The file was unreadable at launch, so a pin it holds was never loaded.
 let pinUnknown = false;
 let scheduledTimeout = null;
@@ -1185,7 +1187,9 @@ async function revertUpdate() {
 
 /** True for the first few launches after an update landed, the only time a failed start blames it. */
 function _updateIsRecent() {
-  if (_readJsonFile(INSTALL_ATTEMPT_PATH).from) return true;
+  // An attempt from the running version is a failed install, not an update.
+  const { from } = _readJsonFile(INSTALL_ATTEMPT_PATH);
+  if (from && from !== _runningVersion()) return true;
   const launches = _readJsonFile(UPDATE_CONFIG_PATH)[LAUNCHES_SINCE_UPDATE_KEY];
   return Number.isInteger(launches) && launches <= START_FAILURE_REVERT_LAUNCHES;
 }
@@ -1263,6 +1267,12 @@ function _readInstallOutcome() {
     }
   }
   log("error", `GAIA ${attempt.target} didn't install; still on ${attempt.from}`);
+  // Report the failure once: a stale attempt would keep install-on-quit off for good.
+  try {
+    fs.rmSync(INSTALL_ATTEMPT_PATH, { force: true });
+  } catch (err) {
+    log("warn", "Couldn't clear the failed update attempt:", err && err.message);
+  }
 }
 
 /** The quit path's check: a quit can't wait for the async one. */
@@ -1426,6 +1436,7 @@ async function restartToInstall() {
   }
   log("info", "User chose to restart — calling quitAndInstall");
   _recordInstallAttempt();
+  installingNow = true;
   // Silent: the installer wizard would otherwise wait for clicks. Force-run
   // brings the app straight back.
   autoUpdaterRef.quitAndInstall(!wizardNextInstall, true);
@@ -1697,10 +1708,10 @@ function init(mainWindow, options = {}) {
     isBackendPrefetchedRef = options.isBackendPrefetched;
   }
 
-  // Disabled path — short-circuit BEFORE touching any Electron APIs so
-  // this works in plain Node tests where require('electron') returns a
-  // string and the electron-updater singleton throws on access.
+  // Disabled path — short-circuit before electron-updater, whose singleton
+  // throws on access in plain Node tests.
   if (isDisabled()) {
+    _initDisabled();
     setState({ status: STATES.DISABLED });
     log("info", "Auto-updater disabled via GAIA_DISABLE_UPDATE=1");
     return;
@@ -1836,6 +1847,29 @@ function init(mainWindow, options = {}) {
   );
 }
 
+/**
+ * Settings still needs the running version and the disabled status, so record
+ * the one and answer the status request. Plain Node's require("electron") is a
+ * path string, so a missing app or ipcMain leaves the updater as it is.
+ */
+function _initDisabled() {
+  let electron;
+  try {
+    // eslint-disable-next-line global-require
+    electron = require("electron");
+  } catch (err) {
+    log("warn", "Electron unavailable — Settings can't show the running version:", err && err.message);
+    return;
+  }
+  if (!electron || !electron.app || !electron.ipcMain) return;
+  electronApi = { app: electron.app, ipcMain: electron.ipcMain, dialog: electron.dialog, net: electron.net };
+  state.currentVersion = electron.app.getVersion() || null;
+  if (!ipcHandlersRegistered) {
+    electron.ipcMain.handle("gaia:update:get-status", () => getState());
+    ipcHandlersRegistered = true;
+  }
+}
+
 function _onBeforeQuit(event) {
   _refreshPreferences();
   if (state.status !== STATES.DOWNLOADED || !autoUpdaterRef || !autoUpdaterRef.autoInstallOnAppQuit) {
@@ -1850,6 +1884,12 @@ function _onBeforeQuit(event) {
   // The quit guard kept the app open, so nothing is installing.
   if (event && event.defaultPrevented) return;
   _recordInstallAttempt();
+}
+
+/** Whether this quit hands over to an update's installer, which replaces the app's files. */
+function installsOnQuit() {
+  if (!autoUpdaterRef || state.status !== STATES.DOWNLOADED) return false;
+  return installingNow || Boolean(autoUpdaterRef.autoInstallOnAppQuit);
 }
 
 /** Tear down timers and IPC handlers. Safe to call multiple times. */
@@ -1886,6 +1926,7 @@ module.exports = {
   setIncludePrereleases,
   downloadUpdate,
   restartToInstall,
+  installsOnQuit,
   STATES,
   // For tests: init() runs it on a timer.
   _seedInstalledBlockmap,

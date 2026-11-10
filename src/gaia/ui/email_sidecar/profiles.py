@@ -354,9 +354,9 @@ EMAIL_PROFILE = RelayProfile(
         "GAIA and the email agent to the latest version, then try again."
     ),
     memory_upgrade_message=(
-        "The email agent does not support private chats or chats with memory "
-        "turned off yet. Your message was not sent to the email agent. Use "
-        "the GAIA agent for this chat instead."
+        "The installed email agent does not support private chats or chats with "
+        "memory turned off. Your message was not sent to the email agent. Update "
+        "GAIA and the email agent, or use the GAIA agent for this chat instead."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -369,6 +369,9 @@ EMAIL_PROFILE = RelayProfile(
     # 2.12 added /query's session_id (#2829): a follow-up can then name a
     # thread the previous turn showed (#2834).
     min_session_id_api_version=(2, 12),
+    # 2.16 added /query's memory mode. Private and memory-off chats must never
+    # reach an older sidecar that would persist their email-derived memories.
+    min_memory_api_version=(2, 16),
     tools_upgrade_message=(
         "The email agent can't list its tools here. Its tools still work in chat."
     ),
@@ -388,6 +391,7 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "edit_file",
         "remember",
         "forget",
+        "forget_everything",
         "update_memory",
         "execute_python_file",
         "run_python",
@@ -488,11 +492,13 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "check_cli_setup": "Checking a CLI's setup",
     "install_cli": "Installing a CLI",
     "sign_in_cli": "Signing in to a CLI",
-    "load_tools": "Loading tools",
+    "search_tools": "Searching for a tool",
     "request_user_input": "Asking you a question",
     # Media / desktop
     "transcribe_media": "Transcribing recording",
     "refine_transcript": "Refining transcript",
+    "analyze_transcript": "Analyzing transcript",
+    "export_transcript": "Exporting transcript",
     "take_screenshot": "Taking screenshot",
     "generate_image": "Generating image",
     "generate_music": "Generating music",
@@ -520,6 +526,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
+    "forget_everything": "Erasing all memory",
     "update_memory": "Updating memory",
     "recall": "Recalling from memory",
     "search_past_conversations": "Searching past conversations",

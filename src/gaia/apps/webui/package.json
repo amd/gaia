@@ -1,8 +1,9 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.25.4",
+  "version": "0.26.0",
   "type": "module",
   "productName": "GAIA Agent UI",
+  "desktopName": "gaia-desktop.desktop",
   "description": "Chat with the GAIA agent - local and private by default on AMD Ryzen AI, cloud models when you choose them",
   "author": "AMD AI Group",
   "license": "MIT",
@@ -61,6 +62,7 @@
     "test:watch": "vitest",
     "test:visual": "vite build && playwright test -c visual/playwright.config.ts",
     "test:rtl": "vite build && playwright test -c visual/playwright.config.ts rtl --project=light",
+    "test:scroll": "vite build && playwright test -c visual/playwright.config.ts autoscroll --project=light",
     "gen:api-types": "node scripts/gen-api-types.mjs"
   },
   "dependencies": {

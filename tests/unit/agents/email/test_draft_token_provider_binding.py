@@ -43,7 +43,7 @@ except ImportError:
 def client(monkeypatch):
     """TestClient with a fake backend seam for each provider."""
     if app is None:
-        pytest.skip("gaia.api.openai_server not available")
+        pytest.skip("gaia_agent_email.export_openapi not available")
     pytest.importorskip("gaia_agent_email")
     return TestClient(app)
 
@@ -119,7 +119,7 @@ class TestDraftTokenProviderBinding:
     ):
         """draft(provider=microsoft) → token → send → Outlook backend."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         calls, _FG, _FO, _build = fake_backends
 
         # Both mailboxes are "connected" from the provider-count perspective.
@@ -170,7 +170,7 @@ class TestDraftTokenProviderBinding:
     def test_send_with_provider_not_connected_returns_400(self, monkeypatch):
         """Sending via microsoft when only google is connected → 400."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         monkeypatch.setattr(
             email_routes,
             "connected_mailbox_providers",
@@ -204,7 +204,7 @@ class TestDraftTokenProviderBinding:
     def test_single_mailbox_draft_without_provider_unchanged(self, monkeypatch):
         """One connected mailbox, no provider in draft → D2 count logic (unchanged)."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         calls = []
 
         class _FakeGmail:
@@ -312,7 +312,7 @@ class TestSendRequestProviderFallback:
     def test_unbound_token_uses_request_provider(self, monkeypatch):
         """Unbound token + request.provider='microsoft' + both connected → Outlook."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         monkeypatch.setattr(
             email_routes,
             "connected_mailbox_providers",
@@ -337,7 +337,7 @@ class TestSendRequestProviderFallback:
     def test_token_binding_wins_over_request_provider(self, monkeypatch):
         """Token bound to google + request.provider='microsoft' → google wins."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         monkeypatch.setattr(
             email_routes,
             "connected_mailbox_providers",
@@ -362,7 +362,7 @@ class TestSendRequestProviderFallback:
     def test_unbound_token_no_provider_both_connected_still_400(self, monkeypatch):
         """Unbound token + no request.provider + both connected → 400 ambiguous."""
         if app is None:
-            pytest.skip("gaia.api.openai_server not available")
+            pytest.skip("gaia_agent_email.export_openapi not available")
         monkeypatch.setattr(
             email_routes,
             "connected_mailbox_providers",

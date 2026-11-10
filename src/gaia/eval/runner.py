@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -35,20 +34,19 @@ from typing import Optional
 import requests
 import yaml
 
+from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.claude_outage import (
-    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
-    dotenv_only_api_key,
-    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -1182,11 +1180,11 @@ For each turn in the scenario:
      if the turn objective says otherwise.
    - pending_question: answer it in character with answer_question.
    Repeat until the turn is idle. If wait_for_turn times out, call it once more.
-3. Call get_messages(session_id) and judge the LAST assistant message, with its
+3. Call get_messages(session_id, full_replies=True) and judge the LAST assistant message, with its
    tool steps, using the PER-TURN JUDGE INSTRUCTIONS section above
 
 ### Phase 3: Full trace
-After all turns, call get_messages(session_id) for the persisted full trace.
+After all turns, call get_messages(session_id, full_replies=True) for the persisted full trace.
 
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
@@ -1711,6 +1709,10 @@ def preflight_check(backend_url, scenarios=None):
                 )
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+        try:
+            announce(resolve_claude_credential(), role="Claude eval driver")
+        except (ValueError, RuntimeError) as e:
+            errors.append(str(e))
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -2123,51 +2125,19 @@ def run_scripted_scenario(
 _DRIVER_DRAIN_S = 30
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
-
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
-    """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
-
-
-_warned_dotenv_api_key = False
-
-
 def _driver_auth():
     """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
 
-    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
-    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
-    the keychain are never read. So it is used only with a key the operator
-    exported. A key that only a ``.env`` supplied is ignored *and* removed from
-    the child's environment, since the CLI prefers it over OAuth. ``env`` is
-    ``None`` when the child should inherit this process's environment as is.
+    Follows :func:`gaia.eval.claude_credential.resolve_claude_credential`. On
+    the subscription the child loses ``ANTHROPIC_API_KEY``, which the CLI would
+    prefer over OAuth. On a key, ``--bare`` gives a clean subprocess (no hooks,
+    no CLAUDE.md auto-load) and restricts auth to that key. ``env`` is ``None``
+    when the child should inherit this process's environment as is.
     """
-    global _warned_dotenv_api_key  # pylint: disable=global-statement
-    if driver_api_key():
-        return ["--bare"], None
-    if dotenv_only_api_key():
-        if not _warned_dotenv_api_key:
-            _warned_dotenv_api_key = True
-            logger.warning(
-                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
-                "— it would disable your Claude Code login. Export it in the "
-                "shell to drive the eval with that key instead."
-            )
-        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
-    return [], None
+    credential = resolve_claude_credential()
+    announce(credential, role="Claude eval driver")
+    env = credential.cli_env(os.environ)
+    return credential.cli_flags(), (None if env == dict(os.environ) else env)
 
 
 def _run_driver(
@@ -4129,8 +4099,8 @@ def generate_corpus():
 
     The corpus is committed ground truth — the manifest's facts were written
     from these exact files — so nothing here rewrites it. Lists the documents,
-    then raises ``RuntimeError`` when the manifest is absent or names a file
-    that is not on disk.
+    then raises ``RuntimeError`` when the manifest is absent, names a file
+    that is not on disk, or a corpus file on disk is missing from it.
     """
     print("[CORPUS] Validating corpus against manifest.json...")
 
@@ -4178,6 +4148,28 @@ def generate_corpus():
             "the manifest entry if the document was renamed."
         )
     print("[CORPUS] All manifest files present on disk [OK]")
+
+    # And the other way around: a document added to disk without a manifest
+    # entry would score against facts that do not exist for it.
+    undeclared = []
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        declared = {doc.get("filename") for doc in entries}
+        if base.exists():
+            for f in sorted(base.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith(".")
+                    and f.name not in declared
+                ):
+                    undeclared.append(str(f.relative_to(CORPUS_DIR)))
+
+    if undeclared:
+        raise RuntimeError(
+            f"{len(undeclared)} file(s) in {CORPUS_DIR} are not named in "
+            f"{MANIFEST}: {', '.join(undeclared)}. Add a manifest entry for "
+            "them, or remove the files if they were left behind."
+        )
+    print("[CORPUS] All corpus files declared in the manifest [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

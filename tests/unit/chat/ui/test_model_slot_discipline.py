@@ -18,6 +18,7 @@ import threading
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
+import anyio.from_thread
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -356,7 +357,11 @@ def ui(monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", lease)
     app = create_app(db_path=":memory:")
-    return TestClient(app), loads, held, order
+    test_client = TestClient(app)
+    # One event loop for the client's life, without app startup: a per-request
+    # loop cancels the background load task when the request returns.
+    with anyio.from_thread.start_blocking_portal() as test_client.portal:
+        yield test_client, loads, held, order
 
 
 def _wait_for(predicate):

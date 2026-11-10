@@ -234,6 +234,12 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 	if !strings.Contains(chatHelpText, "/model") {
 		t.Error("chat help never mentions /model")
 	}
+	// Dispatched before the switch for the same reason (free-form arguments).
+	for _, want := range []string{"/read-aloud", "/voice"} {
+		if !strings.Contains(chatHelpText, want) {
+			t.Errorf("chat help never mentions %s", want)
+		}
+	}
 
 	// None of these are switch cases either: type-ahead queueing, the
 	// give-up-waiting second Esc, and the mouse wheel are prose, not a case.
