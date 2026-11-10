@@ -379,3 +379,138 @@ def test_large_negative_and_positive_scores_stay_in_retrieval_range():
     }
     _, scores = _rag(client)._rerank_candidates("needle", ["a", "b"], "r")
     assert all(0.0 <= s <= 1.0 for s in scores)
+
+
+# ── The reranker is loaded with an ubatch that fits query + chunk ────────────
+
+
+def _one_reranker(client, model="bge-reranker-v2-m3-GGUF"):
+    client.list_models.return_value = {
+        "data": [{"id": model, "downloaded": True, "labels": ["reranking"]}]
+    }
+    client.is_users_server.return_value = False
+    return client
+
+
+def test_reranker_loads_with_a_2048_token_ubatch_before_the_first_rerank():
+    client = _one_reranker(MagicMock())
+    client.rerank.return_value = {
+        "results": [
+            {"index": 0, "relevance_score": 1.0},
+            {"index": 1, "relevance_score": 2.0},
+        ]
+    }
+    rag, _ = _search_rag(client, ["a", "b"], [0.0, 1.0])
+    rag._search_chunks("needle")
+    rag._search_chunks("needle again")
+    client.load_model.assert_called_once_with(
+        "bge-reranker-v2-m3-GGUF",
+        llamacpp_args="--ubatch-size 2048",
+        save_options=True,
+    )
+    calls = [name for name, _, _ in client.mock_calls]
+    assert calls.index("load_model") < calls.index("rerank")
+
+
+def test_reranker_options_are_not_saved_into_a_server_the_user_runs():
+    client = _one_reranker(MagicMock())
+    client.is_users_server.return_value = True
+    _rag(client)._resolve_reranking_model()
+    assert client.load_model.call_args.kwargs == {
+        "llamacpp_args": "--ubatch-size 2048",
+        "save_options": False,
+    }
+
+
+def test_a_failed_reranker_load_raises_and_is_tried_again_next_search():
+    client = _one_reranker(MagicMock())
+    client.load_model.side_effect = RuntimeError("llama-server failed to start")
+    rag = _rag(client)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="could not load reranker") as err:
+            rag._resolve_reranking_model()
+        assert "llama-server failed to start" in str(err.value)
+        assert "enable_reranking=False" in str(err.value)
+    assert client.load_model.call_count == 2
+    client.rerank.assert_not_called()
+
+
+def test_a_cancelled_reranker_load_stays_a_stop():
+    from gaia.daemon.broker_client import LeaseWaitCancelled
+
+    client = _one_reranker(MagicMock())
+    client.load_model.side_effect = LeaseWaitCancelled("stopped")
+    with pytest.raises(LeaseWaitCancelled):
+        _rag(client)._resolve_reranking_model()
+
+
+def test_no_reranker_load_when_reranking_is_off_or_none_is_downloaded():
+    client = MagicMock()
+    rag, _ = _search_rag(client, ["a", "b"], [0.0, 1.0], enable_reranking=False)
+    rag._search_chunks("needle")
+    client.list_models.return_value = {"data": []}
+    with pytest.raises(RuntimeError, match="no downloaded Lemonade model"):
+        _rag(client)._resolve_reranking_model()
+    client.load_model.assert_not_called()
+
+
+def test_reranker_load_request_shape_sent_to_lemonade(monkeypatch):
+    import json
+
+    import responses
+
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "preferred_llamacpp_backend", lambda: None)
+    monkeypatch.setattr(LemonadeClient, "is_users_server", lambda self: False)
+    monkeypatch.setattr(LemonadeClient, "_check_free_memory", lambda *a: None)
+    base = "http://localhost:13305/api/v1"
+    client = LemonadeClient(base_url=base, verbose=False)
+    entry = {
+        "id": "bge-reranker-v2-m3-GGUF",
+        "recipe": "llamacpp",
+        "downloaded": True,
+        "labels": ["reranking"],
+    }
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
+        rsps.add(responses.GET, f"{base}/models", json={"data": [entry]})
+        rsps.add(responses.POST, f"{base}/load", json={"status": "success"})
+        assert _rag(client)._resolve_reranking_model() == "bge-reranker-v2-m3-GGUF"
+        loads = [
+            json.loads(call.request.body)
+            for call in rsps.calls
+            if call.request.url.endswith("/load")
+        ]
+    assert loads == [
+        {
+            "model_name": "bge-reranker-v2-m3-GGUF",
+            "llamacpp_args": "--ubatch-size 2048",
+            "save_options": True,
+        }
+    ]
+
+
+# ── Catalog entries GAIA cannot read ─────────────────────────────────────────
+
+
+def test_a_model_with_null_labels_is_simply_not_a_reranker():
+    client = MagicMock()
+    client.list_models.return_value = {
+        "data": [
+            {"id": "odd", "downloaded": True, "labels": None},
+            {"id": "r", "downloaded": True, "labels": ["reranking"]},
+        ]
+    }
+    assert _rag(client)._resolve_reranking_model() == "r"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [{"id": "odd", "downloaded": True, "labels": "reranking"}, "not-a-dict"],
+)
+def test_an_unreadable_catalog_entry_raises_the_wrapped_error(entry):
+    client = MagicMock()
+    client.list_models.return_value = {"data": [entry]}
+    with pytest.raises(RuntimeError, match="cannot read"):
+        _rag(client)._resolve_reranking_model()
+    client.load_model.assert_not_called()

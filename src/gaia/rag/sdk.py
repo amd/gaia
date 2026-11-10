@@ -52,6 +52,7 @@ from gaia.llm.lemonade_client import (
     EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    RERANKER_LLAMACPP_ARGS,
     resident_vision_model,
     resolve_default_vision_model,
     vision_off_reason,
@@ -4685,18 +4686,13 @@ These positions indicate where to split the text."""
                 "enable_reranking=False."
             ) from error
         requested = self.config.reranking_model
-        candidates = [
-            item
-            for item in models
-            if item.get("downloaded") is not False
-            and "reranking" in {str(label).lower() for label in item.get("labels", [])}
-        ]
+        candidates = [item for item in models if self._is_downloaded_reranker(item)]
         if requested:
-            self._reranking_model = next(
+            model = next(
                 (item.get("id") for item in candidates if item.get("id") == requested),
                 None,
             )
-            if not self._reranking_model:
+            if not model:
                 raise RuntimeError(
                     f"Reranking is enabled, but reranker {requested!r} is not "
                     "downloaded in Lemonade.\n"
@@ -4704,7 +4700,7 @@ These positions indicate where to split the text."""
                     "Or clear reranking_model, or set enable_reranking=False."
                 )
         elif candidates:
-            self._reranking_model = candidates[0].get("id")
+            model = candidates[0].get("id")
         else:
             raise RuntimeError(
                 "Reranking is enabled, but no downloaded Lemonade model has the "
@@ -4712,8 +4708,44 @@ These positions indicate where to split the text."""
                 f"{self._reranker_download_hint(_SUGGESTED_RERANKER)}\n"
                 "Or set enable_reranking=False."
             )
+        self._load_reranker(model)
+        self._reranking_model = model
         self._reranking_checked = True
-        return self._reranking_model
+        return model
+
+    @staticmethod
+    def _is_downloaded_reranker(item: Any) -> bool:
+        if isinstance(item, dict):
+            labels = item.get("labels")
+            labels = [] if labels is None else labels
+            if isinstance(labels, list):
+                return item.get("downloaded") is not False and "reranking" in {
+                    str(label).lower() for label in labels
+                }
+        raise RuntimeError(
+            "Reranking is enabled, but Lemonade's model list has an entry "
+            f"GAIA cannot read: {item!r}\n"
+            "Update Lemonade Server, or set enable_reranking=False."
+        )
+
+    def _load_reranker(self, model: str) -> None:
+        # llama-server rejects an input longer than its ubatch (default 512).
+        try:
+            self.llm_client.load_model(
+                model,
+                llamacpp_args=RERANKER_LLAMACPP_ARGS,
+                # Saved so Lemonade's own reload after an eviction keeps it too.
+                save_options=not self.llm_client.is_users_server(),
+            )
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Reranking is enabled, but Lemonade could not load reranker "
+                f"{model!r} with {RERANKER_LLAMACPP_ARGS}: {error}\n"
+                "Check the Lemonade Server log, or set enable_reranking=False."
+            ) from error
 
     def _reranker_download_hint(self, model: str) -> str:
         from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
