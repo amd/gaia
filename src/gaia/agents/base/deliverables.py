@@ -695,33 +695,126 @@ _FORMAT_DIRECTIVE = re.compile(
     r"%[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXr%]|\{[\w.\[\]]*(?:![rsa])?(?::[^{}]*)?\}"
 )
 #: Builtins that turn literals into a figure: ``int('9' + '5')``, ``ord('_')``.
-_PY_FOLDERS = {"int", "float", "str", "Decimal", "ord", "chr", "len", "abs", "round"}
+_PY_FOLDERS = {
+    "int",
+    "float",
+    "str",
+    "Decimal",
+    "ord",
+    "chr",
+    "len",
+    "abs",
+    "round",
+    "sum",
+    "max",
+    "min",
+}
 _PY_OPEN_MODULES = {"io", "codecs"}
+#: Calls whose literal arguments pick rows or dates, never a figure the
+#: script outputs: ``head(20)``, ``nlargest(25, ...)``, ``date(2026, 3, 1)``.
+_PY_SELECTORS = {
+    "head",
+    "tail",
+    "nlargest",
+    "nsmallest",
+    "sample",
+    "quantile",
+    "between",
+    "isin",
+    "startswith",
+    "endswith",
+    "date",
+    "datetime",
+    "Timestamp",
+    "to_datetime",
+    "strptime",
+    "strftime",
+    "fromisoformat",
+    "date_range",
+    "period_range",
+    "Period",
+    "DateOffset",
+    "timedelta",
+}
+#: An ISO date in a string names a day, not an amount.
+_DATE_TEXT = re.compile(
+    r"(?<![\d-])(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?"
+    r"(?:[T ]\d{2}:\d{2}(?::\d{2})?)?(?![\d-])"
+)
+_YEAR = re.compile(r"(?:19|20)\d{2}")
+_SEQUENCES = (str, list, tuple)
+
+
+#: Past this a folded value is no figure anyone typed; stop folding it.
+_FOLD_LIMIT = 10**15
+_FOLD_ITEMS = 10_000
 
 
 class _Unfoldable(Exception):
     """The expression depends on something other than the script's literals."""
 
 
-def _fold(node: Any, depth: int = 0) -> Any:
-    """The value of an expression built only from literals, ``9*10+5``."""
+class _Bound:
+    """Names assigned once, folded on first use: ``a = 9; b = 10``."""
+
+    def __init__(self, values: Dict[str, Any]):
+        self.values = values
+        self.folded: Dict[str, Any] = {}
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.values
+
+    def fold(self, name: str, depth: int) -> Any:
+        if name not in self.folded:
+            self.folded[name] = _Unfoldable
+            try:
+                self.folded[name] = (_fold(self.values[name], depth + 1, self),)
+            except _Unfoldable:
+                pass
+        if self.folded[name] is _Unfoldable:
+            raise _Unfoldable
+        return self.folded[name][0]
+
+
+def _fold(node: Any, depth: int = 0, bound: Optional[_Bound] = None) -> Any:
+    """The value of an expression built only from literals, ``9*10+5``.
+
+    *bound* maps names assigned once to the expression they hold, so
+    ``a = 9; b = 10; a*b+5`` folds too.
+    """
     if depth > 32:
         raise _Unfoldable
+
+    def sub(child: Any) -> Any:
+        return _fold(child, depth + 1, bound)
+
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float, str)):
         return node.value
+    if isinstance(node, ast.Name) and bound is not None and node.id in bound:
+        return bound.fold(node.id, depth)
     try:
+        if isinstance(node, (ast.List, ast.Tuple)):
+            items = [sub(e) for e in node.elts]
+            return items if isinstance(node, ast.List) else tuple(items)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-            value = _fold(node.operand, depth + 1)
+            value = sub(node.operand)
             return -value if isinstance(node.op, ast.USub) else +value
         if isinstance(node, ast.BinOp):
-            left = _fold(node.left, depth + 1)
-            right = _fold(node.right, depth + 1)
+            left, right = sub(node.left), sub(node.right)
             if isinstance(node.op, ast.Pow) and (abs(right) > 64 or abs(left) > 1e6):
                 raise _Unfoldable
-            if isinstance(node.op, ast.Mult) and isinstance(left, str) != isinstance(
-                right, str
-            ):
-                if abs(right if isinstance(left, str) else left) > 1000:
+            if isinstance(node.op, ast.Mult) and isinstance(
+                left, _SEQUENCES
+            ) != isinstance(right, _SEQUENCES):
+                seq, times = (
+                    (left, right)
+                    if isinstance(left, _SEQUENCES)
+                    else (
+                        right,
+                        left,
+                    )
+                )
+                if abs(times) > 1000 or len(seq) * abs(times) > _FOLD_ITEMS:
                     raise _Unfoldable
             ops = {
                 ast.Add: lambda a, b: a + b,
@@ -734,31 +827,42 @@ def _fold(node: Any, depth: int = 0) -> Any:
             }
             if type(node.op) not in ops:
                 raise _Unfoldable
-            return ops[type(node.op)](left, right)
+            value = ops[type(node.op)](left, right)
+            if isinstance(value, (int, float)) and abs(value) > _FOLD_LIMIT:
+                raise _Unfoldable
+            return value
         if isinstance(node, ast.JoinedStr):
             parts = []
             for part in node.values:
                 if isinstance(part, ast.FormattedValue):
-                    parts.append(str(_fold(part.value, depth + 1)))
+                    parts.append(str(sub(part.value)))
                 else:
-                    parts.append(str(_fold(part, depth + 1)))
+                    parts.append(str(sub(part)))
             return "".join(parts)
         if isinstance(node, ast.Call) and not node.keywords:
             func = node.func
-            args = [_fold(a, depth + 1) for a in node.args]
+            # Methods and map() before the arguments: a list argument or a
+            # bare ``str`` must not stop ``''.join(map(str, [9, 5])))``.
+            if isinstance(func, ast.Attribute) and func.attr in ("join", "format"):
+                receiver = sub(func.value)
+                if not isinstance(receiver, str):
+                    raise _Unfoldable
+                if func.attr == "join" and len(node.args) == 1:
+                    return receiver.join(sub(node.args[0]))
+                if func.attr == "format":
+                    return receiver.format(*[sub(a) for a in node.args])
+                raise _Unfoldable
+            if isinstance(func, ast.Name) and func.id == "map" and len(node.args) == 2:
+                mapper = node.args[0]
+                if not (isinstance(mapper, ast.Name) and mapper.id in _PY_FOLDERS):
+                    raise _Unfoldable
+                convert = getattr(builtins, mapper.id, None) or decimal.Decimal
+                return [convert(v) for v in sub(node.args[1])]
             if isinstance(func, ast.Name) and func.id in _PY_FOLDERS:
+                args = [sub(a) for a in node.args]
                 if func.id == "Decimal":
                     return decimal.Decimal(*args)
                 return getattr(builtins, func.id)(*args)
-            if (
-                isinstance(func, ast.Attribute)
-                and func.attr == "join"
-                and len(node.args) == 1
-                and isinstance(node.args[0], (ast.List, ast.Tuple))
-            ):
-                sep = _fold(func.value, depth + 1)
-                items = [_fold(e, depth + 1) for e in node.args[0].elts]
-                return sep.join(items)
     except _Unfoldable:
         raise
     except Exception as e:  # noqa: BLE001 - a literal that won't evaluate types nothing
@@ -771,45 +875,156 @@ def _types_a_figure(value: Any) -> bool:
     if isinstance(value, bool):
         return False
     if isinstance(value, str):
-        text = _FORMAT_DIRECTIVE.sub(" ", value)
+        text = _DATE_TEXT.sub(" ", _FORMAT_DIRECTIVE.sub(" ", value))
         return any(float(n) > _SMALL_INT for n in _DIGITS.findall(text))
+    if isinstance(value, (list, tuple)):
+        return any(_types_a_figure(v) for v in value)
     try:
         return abs(value) > _SMALL_INT
     except TypeError:
         return False
 
 
+def _bound_once(tree: ast.AST) -> _Bound:
+    """Names assigned exactly once, mapped to the expression they hold."""
+    stores: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    return _Bound(
+        {
+            node.targets[0].id: node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and stores.get(node.targets[0].id) == 1
+        }
+    )
+
+
+def _titled(node: Any) -> bool:
+    """A printed string whose only numbers are years: ``'Revenue 2026'``."""
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+        return False
+    text = _DATE_TEXT.sub(" ", _FORMAT_DIRECTIVE.sub(" ", node.value))
+    return all(
+        _YEAR.fullmatch(n) for n in _DIGITS.findall(text) if float(n) > _SMALL_INT
+    )
+
+
+def _call_name(call: ast.Call) -> Optional[str]:
+    return getattr(call.func, "id", getattr(call.func, "attr", None))
+
+
+def _selecting(tree: ast.AST, bound: _Bound) -> Set[int]:
+    """Nodes whose literals pick rows, dates or a layout, not a figure.
+
+    Comparisons (``r['date'] >= '2026-03-01'``, ``year == 2026``), subscripts
+    and slices (``rows[:25]``), the arguments of a selector call
+    (``nlargest(25, ...)``, ``date(2026, 3, 1)``, ``round(x, 2)``, a ``range``
+    a loop walks), format specs, encodings and ``'=' * 40``. A name bound
+    once counts when every use of it is one of these.
+    """
+    roots: List[Any] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            roots += [node.left, *node.comparators]
+        elif isinstance(node, ast.Subscript):
+            roots.append(node.slice)
+        elif isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _PY_SELECTORS:
+                roots += list(node.args) + [k.value for k in node.keywords]
+            elif name == "round":
+                roots += node.args[1:]
+            elif name == "print":
+                roots += [n for a in node.args for n in ast.walk(a) if _titled(n)]
+            roots += [k.value for k in node.keywords if k.arg == "encoding"]
+        elif isinstance(node, (ast.For, ast.comprehension)):
+            loop = node.iter
+            if isinstance(loop, ast.Call) and _call_name(loop) == "range":
+                roots += loop.args
+        elif isinstance(node, ast.FormattedValue) and node.format_spec is not None:
+            roots.append(node.format_spec)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            for side, other in ((node.left, node.right), (node.right, node.left)):
+                if isinstance(side, ast.Constant) and isinstance(side.value, str):
+                    roots.append(other)
+    picked = {
+        id(n)
+        for root in roots
+        if not any(isinstance(n, ast.NamedExpr) for n in ast.walk(root))
+        for n in ast.walk(root)
+    }
+    loads: Dict[str, List[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loads.setdefault(node.id, []).append(id(node))
+    for name, value in bound.values.items():
+        uses = loads.get(name)
+        if uses and all(u in picked for u in uses):
+            picked |= {id(n) for n in ast.walk(value)}
+    return picked
+
+
 def _percent_scales(tree: ast.AST) -> Set[int]:
-    """The ``100`` constants that turn a ratio into a percentage: ``a / b * 100``."""
+    """The ``100`` constants that turn a ratio into a percentage (``a / b *
+    100``, ``share * 100`` for a ``share = v / total``) or a price into cents
+    and back (``round(p * 100) ... / 100``)."""
 
     def is_hundred(node: Any) -> bool:
         return isinstance(node, ast.Constant) and node.value == 100
 
+    ratio_names: Set[str] = set()
+
     def is_ratio(node: Any) -> bool:
         return any(
-            isinstance(n, ast.BinOp)
-            and isinstance(n.op, ast.Div)
-            and not _foldable(n.right)
+            (
+                isinstance(n, ast.BinOp)
+                and isinstance(n.op, ast.Div)
+                and not _foldable(n.right)
+            )
+            or (isinstance(n, ast.Name) and n.id in ratio_names)
             for n in ast.walk(node)
         )
 
+    for _ in range(2):
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and is_ratio(node.value)
+            ):
+                ratio_names.add(node.targets[0].id)
+
     scales = set()
+    times: Set[int] = set()
+    over: Set[int] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.BinOp):
             continue
         if isinstance(node.op, ast.Mult):
             for side, other in ((node.left, node.right), (node.right, node.left)):
-                if is_hundred(side) and is_ratio(other):
-                    scales.add(id(side))
-        elif (
-            isinstance(node.op, ast.Div)
-            and isinstance(node.left, ast.BinOp)
-            and isinstance(node.left.op, ast.Mult)
-            and not _foldable(node.right)
-        ):
-            for side in (node.left.left, node.left.right):
                 if is_hundred(side):
-                    scales.add(id(side))
+                    times.add(id(side))
+                    if is_ratio(other):
+                        scales.add(id(side))
+        elif isinstance(node.op, (ast.Div, ast.FloorDiv)):
+            if is_hundred(node.right) and not _foldable(node.left):
+                over.add(id(node.right))
+            if (
+                isinstance(node.op, ast.Div)
+                and isinstance(node.left, ast.BinOp)
+                and isinstance(node.left.op, ast.Mult)
+                and not _foldable(node.right)
+            ):
+                for side in (node.left.left, node.left.right):
+                    if is_hundred(side):
+                        scales.add(id(side))
+    if times and over:
+        scales |= times | over
     return scales
 
 
@@ -972,16 +1187,8 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
     replaced: Set[str] = set()
     read_from: Set[str] = set()
     named = _string_names(tree)
-    scales = _percent_scales(tree)
-    # Column widths in f"{v:>12}" and an encoding name type no figure.
-    untyped = {
-        id(c)
-        for node in ast.walk(tree)
-        for spec in ([node.format_spec] if isinstance(node, ast.FormattedValue) else [])
-        + [k.value for k in getattr(node, "keywords", []) if k.arg == "encoding"]
-        if spec is not None
-        for c in ast.walk(spec)
-    }
+    bound = _bound_once(tree)
+    untyped = _percent_scales(tree) | _selecting(tree, bound)
     typed_strings: Set[str] = set()
     paths: Set[str] = set()
     refs: Dict[str, int] = {}
@@ -997,7 +1204,7 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
                 if _types_a_figure(value):
                     typed_strings.add(value)
             if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
-                if id(node) in scales:
+                if id(node) in untyped:
                     continue
                 if not isinstance(value, int) or abs(value) > _SMALL_INT:
                     return None
@@ -1005,9 +1212,10 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
             isinstance(node, (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.Call))
             and id(node) not in untyped
         ):
-            # 9*10+5 or int('9'+'5'): small literals that make a price.
+            # 9*10+5, int('9'+'5') or a=9; b=10; a*b+5: small literals that
+            # make a price.
             try:
-                if _types_a_figure(_fold(node)):
+                if _types_a_figure(_fold(node, bound=bound)):
                     return None
             except _Unfoldable:
                 pass

@@ -754,8 +754,30 @@ REGION_STDOUT = (
         "    rev[r['region']] = rev.get(r['region'], 0) + "
         "int(r['units']) * float(r['unit_price'])\n"
         "for k, v in rev.items(): print(k, f'{v:.2f}')",
+        "import pandas as pd\ndf = pd.read_csv('orders.csv')\n"
+        "df = df[df.order_id >= 1]\ndf = df[df.region.str.len() > 0]\n"
+        "s = (df.units * df.unit_price).groupby(df.region).sum()\n"
+        "print('Regional revenue 2026')\n"
+        "for k, v in s.nlargest(25).items():\n"
+        "    print(k, f'{v:.2f}', round(100 * v / s.sum(), 1))",
+        "import csv\nrows = list(csv.DictReader(open('orders.csv')))\n"
+        "cents = {}\nfor r in rows:\n"
+        "    c = round(float(r['unit_price']) * 100) * int(r['units'])\n"
+        "    cents[r['region']] = cents.get(r['region'], 0) + c\n"
+        "total = sum(cents.values())\n"
+        "for k, v in cents.items():\n"
+        "    share = v / total\n"
+        "    print(k, f'{v / 100:.2f}', round(share * 100, 1))",
     ],
-    ids=["with-open-round-percent", "pandas-percent", "io-open", "codecs", "pathlib"],
+    ids=[
+        "with-open-round-percent",
+        "pandas-percent",
+        "io-open",
+        "codecs",
+        "pathlib",
+        "filters-title-top-n",
+        "cents-and-share",
+    ],
 )
 def test_revenue_and_shares_a_script_computed_are_sourced(code):
     records = [_read("orders.csv", ORDERS_CSV), _run_python(code, REGION_STDOUT)]
@@ -782,6 +804,134 @@ def test_only_a_hundred_that_scales_a_ratio_is_not_a_typed_figure(expr, computed
     )
 
     assert (_script_opens(_run_python(code)) is not None) is computed
+
+
+_CSV = "import csv\nrows = list(csv.DictReader(open('orders.csv')))\n"
+_PD = "import pandas as pd\ndf = pd.read_csv('orders.csv')\n"
+_REV = "rev = sum(int(r['units']) * float(r['unit_price']) for r in rows)\n"
+
+#: Scripts that compute only from orders.csv: their output is sourced.
+CORRECT_ANALYSES = [
+    _CSV
+    + "rows = [r for r in rows if r['date'] >= '2026-03-01']\n"
+    + _REV
+    + "print(rev)",
+    _PD
+    + "df = df[df['date'] >= '2026-03-01']\nprint((df.units * df.unit_price).sum())",
+    _PD + "q1 = df[(df.date >= '2026-01-01') & (df.date < '2026-04-01')]\n"
+    "print((q1.units * q1.unit_price).sum())",
+    _CSV + "from datetime import date\n"
+    "rows = [r for r in rows if date.fromisoformat(r['date']) >= date(2026, 3, 1)]\n"
+    + _REV
+    + "print(rev)",
+    _CSV
+    + "rows = [r for r in rows if r['date'][:4] == '2026']\n"
+    + _REV
+    + "print(rev)",
+    _PD + "print(df[df.year == 2026].units.sum())",
+    _PD + "s = df.groupby('year').units.sum()\n"
+    "cur, prev = s.iloc[-1], s.iloc[-2]\ngrowth = (cur - prev) / prev\n"
+    "print(round(growth * 100, 1))",
+    _CSV + "total = 0\nfor r in rows:\n"
+    "    cents = round(float(r['unit_price']) * 100)\n"
+    "    total += cents * int(r['units'])\nprint(total / 100)",
+    _CSV + "rows.sort(key=lambda r: -float(r['unit_price']))\n"
+    "for r in rows[:25]: print(r['order_id'], r['unit_price'])",
+    _PD + "df['rev'] = df.units * df.unit_price\nprint(df.nlargest(25, 'rev'))",
+    _CSV + "print('Revenue report 2026')\n" + _REV + "print(rev)",
+    _PD + "print(df.head(20))",
+    _PD + "d = pd.to_datetime(df.date)\nprint(df[d.dt.year == 2026].units.sum())",
+    _PD + "m = df[df.date.str.startswith('2026-03')]\nprint(m.units.sum())",
+    _PD + "m = df[pd.to_datetime(df.date) >= pd.Timestamp('2026-03-01')]\n"
+    "print(m.units.sum())",
+    _CSV + "by = {}\nfor r in rows: by[r['date'][:4]] = by.get(r['date'][:4], 0) + 1\n"
+    "for y in range(2024, 2027): print(y, by.get(str(y), 0))",
+    _CSV + _REV + "print(f'Q1 2026 revenue: {rev:.2f}')",
+    _CSV + _REV + "if rev > 1000:\n    print('over budget', rev)",
+    _CSV + "print('=' * 40)\n" + _REV + "print(rev)",
+    _PD + "print(df.unit_price.quantile(0.95))",
+    _CSV + "from datetime import datetime\n"
+    "rows = [r for r in rows\n"
+    "        if datetime.strptime(r['date'], '%Y-%m-%d').year == 2026]\n"
+    + _REV
+    + "print(rev)",
+    _CSV + "by = {}\nfor r in rows: by[r['region']] = by.get(r['region'], 0) + 1\n"
+    "total = sum(by.values())\n"
+    "for k, v in by.items():\n    share = v / total\n    print(k, round(share * 100, 1))",
+    _CSV + "TOP = 25\nYEAR = '2026'\n"
+    "rows = [r for r in rows if r['date'].startswith(YEAR)][:TOP]\n"
+    + _REV
+    + "print(rev)",
+]
+
+#: Scripts that type a price themselves: their output sources nothing.
+INVENTED_FIGURES = [
+    _CSV + "for r in rows: print(int(r['units']) * 95)",
+    _CSV + "for r in rows: print(int(r['units']) * 95.0)",
+    _CSV + "price = {'CM5': 95, 'IO': 60}\n"
+    "for r in rows: print(int(r['units']) * price['CM5'])",
+    _CSV + "data = 'CM5,95;IO,60'\nfor x in data.split(';'):\n"
+    "    n, p = x.split(',')\n    print(n, int(p) * len(rows))",
+    _CSV + "import json\np = json.loads('{\"cm5\": 95}')\nprint(p['cm5'] * len(rows))",
+    _CSV + "from decimal import Decimal\nprint(Decimal('95.00') * len(rows))",
+    _CSV + "print(float('95') * len(rows))",
+    _CSV + "price = 9*10+5\nprint(price * len(rows))",
+    _CSV + "price = int('9'+'5')\nprint(price * len(rows))",
+    _CSV + "price = ord('_')\nprint(price * len(rows))",
+    _CSV + "price = sum([10]*9)+5\nprint(price * len(rows))",
+    _CSV + "price = int('%d%d' % (9, 5))\nprint(price * len(rows))",
+    _CSV + "price = int('{}{}'.format(9, 5))\nprint(price * len(rows))",
+    _CSV + "a = 9\nb = 10\nprice = a*b+5\nprint(price * len(rows))",
+    _CSV + "a = 9\nb = 10\nprint(a*b*b*2 + len(rows))",
+    _CSV + "price = int(''.join(['9', '5']))\nprint(price * len(rows))",
+    _CSV + "price = int(''.join(map(str, [9, 5])))\nprint(price * len(rows))",
+    _CSV + "price = 5*19\nprint(price * len(rows))",
+    _CSV + "price = 10**2 - 5\nprint(price * len(rows))",
+    _CSV + "price = abs(-9)*10+5\nprint(price * len(rows))",
+    _CSV + "price = len('x' * 95)\nprint(price * len(rows))",
+    _CSV + "price = int(str(9)+str(5))\nprint(price * len(rows))",
+    _CSV + _REV + "print(rev * 1.08)",
+    _CSV + _REV + "print(rev + 250)",
+    _CSV + _REV + "print(rev - 1500)",
+    _CSV + "price = max([9, 5])*10+5\nprint(price * len(rows))",
+    _CSV + "for r in rows: print(r['order_id'], int(r['units']) * 100)",
+    # The exemptions for dates, titles and filters must not open a door.
+    _CSV + "for x in 'CM5,2049;IO,60'.split(';'):\n"
+    "    n, p = x.split(',')\n    print(n, int(p) * len(rows))",
+    _CSV + "print(len(rows) * 2049)",
+    _CSV + "print('Total: 950')",
+    _CSV + "price = 95\nn = len(rows)\nif n > price:\n    pass\nprint(n * price)",
+    _CSV + "price = 95\nprint(rows[:price], len(rows) * price)",
+    _CSV + "print('=' * 40, len(rows) * 40)",
+    _CSV + "for x in ['CM5108032-95']:\n" "    print(int(x.split('-')[1]) * len(rows))",
+]
+
+
+@pytest.mark.parametrize("code", CORRECT_ANALYSES)
+def test_a_correct_analysis_of_the_input_is_credited(code):
+    assert _script_opens(_run_python(code)) == ["orders.csv"]
+
+
+@pytest.mark.parametrize("code", INVENTED_FIGURES)
+def test_a_script_that_types_a_figure_is_not_credited(code):
+    assert _script_opens(_run_python(code)) is None
+
+
+def test_the_script_corpora_cover_enough_cases():
+    assert len(CORRECT_ANALYSES) >= 20
+    assert len(INVENTED_FIGURES) >= 25
+
+
+def test_folding_a_scripts_names_stays_cheap():
+    chain = "".join(f"x{i + 1} = x{i} * x{i}\n" for i in range(40))
+    code = (
+        _CSV
+        + "x0 = 1\n"
+        + chain
+        + "big = [0] * 9 * 9 * 9 * 9 * 9 * 9 * 9 * 9\nprint(len(rows))"
+    )
+
+    assert _script_opens(_run_python(code)) == ["orders.csv"]
 
 
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():
