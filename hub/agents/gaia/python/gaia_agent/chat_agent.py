@@ -1838,7 +1838,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # Only advertise web and media tools the profile registers.
         # List only what this session lacks; a contradicting line wins on Gemma.
         lacking = ["cloud storage", "file conversion", "live collaboration"]
-        if not self._offers_scheduling():
+        if not (self._offers_scheduling() or self._offers_calendar()):
             lacking.insert(0, "scheduling")
         # The email tools only read mail, so sending stays unsupported either way.
         reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
@@ -3357,6 +3357,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         return bool(getattr(self.config, "enable_sd_tools", False)) and (
             self.model_features.image_generation
         )
+
+    #: The calendar skill ships with this agent (GaiaAgent sets it).
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = False
+
+    def _offers_calendar(self) -> bool:
+        """This agent bundles the calendar skill and the model is offered it."""
+        return self.BUNDLES_CALENDAR_SKILL and self.model_features.calendar
 
     def _register_loop_control_tools(self) -> None:
         """Register set_loop_state and request_user_input tools for autonomous mode.

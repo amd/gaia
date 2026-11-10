@@ -5,7 +5,7 @@
 A host sets ``Agent.internet_off``; every tool call is checked here before it
 can ask for confirmation, so a toggle takes effect on the agent's next step.
 Refused: the web tools, the in-app browser, connector (MCP) tools — GAIA can't
-tell which of those stay on this PC — the mailbox and Agent Hub tools, and any
+tell which of those stay on this PC — the mailbox, calendar and Agent Hub tools, and any
 call whose arguments or shell command reach a host other than this PC.
 
 "This PC" means ``localhost`` exactly or a loopback IP literal (127.0.0.0/8,
@@ -45,9 +45,14 @@ WEB_TOOLS = frozenset(
     }
 )
 
-#: Tools that always call an online service: the user's mailbox or the Agent Hub.
+#: Tools that always call an online service: mailbox, calendar or the Agent Hub.
 ONLINE_SERVICE_TOOLS = frozenset(
     {
+        "calendar/cancel_calendar_event",
+        "calendar/check_calendar_availability",
+        "calendar/create_calendar_event",
+        "calendar/list_calendar_events",
+        "calendar/update_calendar_event",
         "check_mailbox_access",
         "get_thread",
         "list_inbox",
