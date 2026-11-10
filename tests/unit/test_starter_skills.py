@@ -52,6 +52,8 @@ PROVENANCE_SOURCE = "starter-pack"
 STARTER_PACK = frozenset(
     {
         "analyze-recording",
+        "calculators",
+        "calendar",
         "check-in",
         "coding",
         "daily-brief",
@@ -59,6 +61,7 @@ STARTER_PACK = frozenset(
         "document-brief",
         "file-ops",
         "github-triage",
+        "guides",
         "image-gen",
         "inbox-triage",
         "music-gen",
@@ -66,6 +69,7 @@ STARTER_PACK = frozenset(
         "recommendations",
         "research-report",
         "rss-digest",
+        "send-email",
         "source-watch",
         "summarize",
         "transcribe-meeting",

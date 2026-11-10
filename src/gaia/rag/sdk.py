@@ -1127,8 +1127,8 @@ class RAGSDK:
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash names each path's own entry, though
         :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
-        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
-        then fails at extraction.
+        unreadable file gets a path-only ``<hash>_notfound`` key, which
+        :meth:`index_document` refuses to index or cache under.
 
         Raises:
             PermissionError: With ``raise_locked``, when the read is refused as
@@ -1823,8 +1823,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
@@ -4067,6 +4067,11 @@ These positions indicate where to split the text."""
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
+        if content_key.endswith("_notfound"):
+            # PDF, DOCX, XLSX and PPTX are opened by their own libraries, so
+            # extraction can succeed on a file we could not hash. Caching that
+            # under the path-only key would serve the first version forever.
+            return self._document_unhashable(stats, file_path)
         cache_path = self._cache_of_same_bytes(
             self._get_cache_path(file_path, content_key), content_key
         )
@@ -4483,6 +4488,22 @@ These positions indicate where to split the text."""
         stats["error_type"] = "file_locked"
         return stats
 
+    def _document_unhashable(
+        self, stats: Dict[str, Any], file_path: str
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose bytes could not be read to hash."""
+        message = (
+            f"Could not read {Path(file_path).name} to check its contents, so it "
+            "was not indexed. It may be missing, unreadable, or outside the "
+            "folders GAIA is allowed to read. Fix that and index it again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.warning(message)
+        stats["error"] = message
+        stats["error_type"] = "file_unreadable"
+        return stats
+
     def _index_failed(
         self, stats: Dict[str, Any], file_path: str, e: Exception
     ) -> Dict[str, Any]:
@@ -4627,12 +4648,25 @@ These positions indicate where to split the text."""
         chunks = snapshot["retrieved_chunks"]
         scores = snapshot["scores"]
 
+        duplicates = snapshot.get("duplicate_indices") or [[] for _ in chunks]
+
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk_idx, chunk, score) in enumerate(
-            zip(snapshot["retrieved_indices"], chunks, scores)
+        for i, (chunk_idx, chunk, score, copies) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores, duplicates)
         ):
             source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
+            # Every file holding this exact text, the best match first.
+            source_paths = list(
+                dict.fromkeys(
+                    path
+                    for path in (
+                        snapshot["chunk_to_file"].get(idx, "unknown")
+                        for idx in [chunk_idx, *copies]
+                    )
+                    if path != "unknown"
+                )
+            )
 
             metadata.append(
                 {
@@ -4643,6 +4677,8 @@ These positions indicate where to split the text."""
                         else "unknown"
                     ),
                     "source_path": source_file,
+                    "source_files": [Path(path).name for path in source_paths],
+                    "source_paths": source_paths,
                     "relevance_score": float(score),
                     "chunk_length": len(chunk),
                     "estimated_tokens": len(chunk) // 4,  # Rough token estimate
@@ -4674,21 +4710,39 @@ These positions indicate where to split the text."""
         k = min(self.config.max_chunks, len(chunks_snapshot))
         if self.config.show_stats:
             print(f"  🎯 Finding {k} most relevant chunks...")
-        # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
-
-        retrieved_indices = []
-        retrieved_chunks = []
-        scores = []
-        for idx, dist in zip(indices[0], distances[0]):
-            idx = int(idx)
-            # FAISS can surface stale or invalid positions relative to the
-            # captured chunk snapshot; skip anything outside the snapshot.
-            if idx < 0 or idx >= len(chunks_snapshot):
-                continue
-            retrieved_indices.append(idx)
-            retrieved_chunks.append(chunks_snapshot[idx])
-            scores.append(1.0 / (1.0 + float(dist)))
+        # A document indexed under two names would fill the top k with copies,
+        # so identical chunks count once: fetch more until k distinct remain.
+        fetch = k
+        while True:
+            # pylint: disable=no-value-for-parameter
+            distances, indices = index_snapshot.search(
+                query_embedding.astype("float32"), fetch
+            )
+            retrieved_indices = []
+            retrieved_chunks = []
+            scores = []
+            duplicate_indices: List[List[int]] = []
+            position: Dict[str, int] = {}
+            for idx, dist in zip(indices[0], distances[0]):
+                idx = int(idx)
+                # FAISS can surface stale or invalid positions relative to the
+                # captured chunk snapshot; skip anything outside the snapshot.
+                if idx < 0 or idx >= len(chunks_snapshot):
+                    continue
+                chunk = chunks_snapshot[idx]
+                if chunk in position:
+                    duplicate_indices[position[chunk]].append(idx)
+                    continue
+                if len(retrieved_chunks) == k:
+                    continue
+                position[chunk] = len(retrieved_chunks)
+                retrieved_indices.append(idx)
+                retrieved_chunks.append(chunk)
+                scores.append(1.0 / (1.0 + float(dist)))
+                duplicate_indices.append([])
+            if len(retrieved_chunks) == k or fetch >= len(chunks_snapshot):
+                break
+            fetch = min(len(chunks_snapshot), fetch * 2)
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
@@ -4702,6 +4756,8 @@ These positions indicate where to split the text."""
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
         snapshot["scores"] = scores
+        # Other positions holding each retrieved chunk's exact text.
+        snapshot["duplicate_indices"] = duplicate_indices
         return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
@@ -4755,11 +4811,7 @@ Answer:"""
         if include_metadata and chunk_metadata:
             # Get unique source files
             source_files = list(
-                set(
-                    m["source_file"]
-                    for m in chunk_metadata
-                    if m["source_file"] != "unknown"
-                )
+                set(name for m in chunk_metadata for name in m["source_files"])
             )
 
             query_metadata = {
@@ -4920,6 +4972,9 @@ def quick_rag(pdf_path: str, question: str, **kwargs) -> str:
 
     config = RAGConfig(**kwargs)
     rag = RAGSDK(config)
+    # Naming the file is the grant to read it, as in AgentSDK._index_named_document.
+    if "allowed_paths" not in kwargs and os.path.isfile(pdf_path):
+        rag.path_validator.add_allowed_path(pdf_path)
 
     result = rag.index_document(pdf_path)
     if not result.get("success"):
