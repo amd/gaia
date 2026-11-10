@@ -26,11 +26,13 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   answer, and the send is refused where nobody can. Saving a new draft doesn't
   ask, because nothing leaves the mailbox. Changing or deleting a saved draft
   does, because it may be one the user wrote.
-- **New Google connections ask for `gmail.modify`, and Microsoft for `Mail.ReadWrite`
-  and `Mail.Send`.** A connection holding only `gmail.readonly` keeps reading;
-  drafting or sending on it returns an error that says to reconnect in
-  Settings -> Connectors. A host app forwarding a connection for `installed:gaia`
-  now needs `gmail.modify` in its consent.
+- **New Google connections ask for `gmail.readonly` and `gmail.compose`, never
+  `gmail.modify`, and Microsoft for `Mail.ReadWrite` and `Mail.Send`.** A Google
+  connection made before this release holds only `gmail.readonly`: it keeps
+  reading, but drafting or sending on it returns an error naming `gmail.compose`
+  and saying to reconnect in Settings -> Connectors. A host app forwarding a
+  connection for `installed:gaia` now needs `gmail.readonly` and `gmail.compose`
+  in its consent.
 
 ### Changed
 

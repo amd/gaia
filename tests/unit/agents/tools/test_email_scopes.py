@@ -16,6 +16,7 @@ from gaia.agents.tools._email.scopes import (
     OPERATION_DRAFT,
     OPERATION_SEND,
     READ_CAPABLE_SCOPES,
+    SCOPE_GMAIL_COMPOSE,
     SCOPE_GMAIL_FULL_MAILBOX,
     SCOPE_GMAIL_MODIFY,
     SCOPE_GMAIL_READONLY,
@@ -97,7 +98,10 @@ def test_an_unknown_provider_resolves_to_nothing():
 
 def test_one_consent_covers_reading_and_writing():
     """Every write's scopes are declared, and permanent delete stays out of reach."""
-    assert DECLARED_SCOPES[GOOGLE_CONNECTOR_ID] == (SCOPE_GMAIL_MODIFY,)
+    assert DECLARED_SCOPES[GOOGLE_CONNECTOR_ID] == (
+        SCOPE_GMAIL_READONLY,
+        SCOPE_GMAIL_COMPOSE,
+    )
     assert DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID] == (
         SCOPE_MAIL_READWRITE,
         SCOPE_MAIL_SEND,
@@ -106,6 +110,7 @@ def test_one_consent_covers_reading_and_writing():
         for scopes in operations.values():
             assert set(scopes) <= set(DECLARED_SCOPES[provider])
             assert SCOPE_GMAIL_FULL_MAILBOX not in scopes
+            assert SCOPE_GMAIL_MODIFY not in scopes
     for provider, declared in DECLARED_SCOPES.items():
         assert set(declared) & set(READ_CAPABLE_SCOPES[provider])
 
@@ -113,12 +118,23 @@ def test_one_consent_covers_reading_and_writing():
 @pytest.mark.parametrize(
     "provider,operation,held,missing",
     [
-        (GOOGLE_CONNECTOR_ID, OPERATION_SEND, [SCOPE_GMAIL_MODIFY], ()),
+        (
+            GOOGLE_CONNECTOR_ID,
+            OPERATION_SEND,
+            [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
+            (),
+        ),
         (
             GOOGLE_CONNECTOR_ID,
             OPERATION_DRAFT,
             [SCOPE_GMAIL_READONLY],
-            (SCOPE_GMAIL_MODIFY,),
+            (SCOPE_GMAIL_COMPOSE,),
+        ),
+        (
+            GOOGLE_CONNECTOR_ID,
+            OPERATION_SEND,
+            [SCOPE_GMAIL_MODIFY],
+            (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE),
         ),
         (MICROSOFT_CONNECTOR_ID, OPERATION_DRAFT, [SCOPE_MAIL_READWRITE], ()),
         (

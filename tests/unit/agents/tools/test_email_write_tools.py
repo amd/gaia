@@ -33,6 +33,7 @@ from gaia.agents.tools._email.outgoing import (
     render_preview,
 )
 from gaia.agents.tools._email.scopes import (
+    SCOPE_GMAIL_COMPOSE,
     SCOPE_GMAIL_FULL_MAILBOX,
     SCOPE_GMAIL_MODIFY,
     SCOPE_GMAIL_READONLY,
@@ -164,8 +165,8 @@ def mailbox(monkeypatch):
 
     state = {
         "google": {
-            "scopes": [SCOPE_GMAIL_MODIFY],
-            "grants": [SCOPE_GMAIL_MODIFY],
+            "scopes": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
+            "grants": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
         },
         "microsoft": None,
     }
@@ -826,9 +827,9 @@ def test_read_only_connection_still_reads_but_write_says_reconnect(mailbox, agen
 
     assert "Settings -> Connectors" in result["error"]
     assert "Reconnect Google" in result["error"]
-    assert SCOPE_GMAIL_READONLY in result["error"] and SCOPE_GMAIL_MODIFY in (
-        result["error"]
-    )
+    assert f"lacks {SCOPE_GMAIL_COMPOSE}," in result["error"]
+    assert f"{SCOPE_GMAIL_COMPOSE} {SCOPE_GMAIL_READONLY}`" in result["error"]
+    assert SCOPE_GMAIL_MODIFY not in result["error"]
     assert SCOPE_GMAIL_FULL_MAILBOX not in result["error"]
     assert console.shown == [] and gmail.calls == []
     drafted = json.loads(agent._execute_tool("create_draft", SEND_NOW))
@@ -838,8 +839,8 @@ def test_read_only_connection_still_reads_but_write_says_reconnect(mailbox, agen
     assert (provider, scope) == ("google", SCOPE_GMAIL_READONLY)
 
 
-def test_user_who_unticked_modify_gets_the_same_remedy(mailbox, agent_for):
-    """Partial consent: Google returned readonly although modify was requested."""
+def test_user_who_unticked_compose_gets_the_same_remedy(mailbox, agent_for):
+    """Partial consent: Google returned readonly although compose was requested."""
     mailbox["google"] = {
         "scopes": [SCOPE_GMAIL_READONLY, "openid"],
         "grants": [SCOPE_GMAIL_READONLY],
@@ -848,15 +849,29 @@ def test_user_who_unticked_modify_gets_the_same_remedy(mailbox, agent_for):
     assert "leaving that option ticked" in result["error"]
 
 
-def test_modify_connection_with_a_narrow_grant_names_the_ledger_write(
+def test_compose_connection_with_a_narrow_grant_names_the_ledger_write(
     mailbox, agent_for
 ):
     mailbox["google"] = {
-        "scopes": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_MODIFY],
+        "scopes": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
         "grants": [SCOPE_GMAIL_READONLY],
     }
     result = agent_for(_Asked(), _Gmail())._execute_tool("send_now", SEND_NOW)
     assert "gaia connectors grants grant google installed:gaia" in result["error"]
+    assert f"--scopes {SCOPE_GMAIL_READONLY} {SCOPE_GMAIL_COMPOSE}" in result["error"]
+
+
+def test_modify_alone_does_not_stand_in_for_compose(mailbox, agent_for):
+    """Writes ask for compose, never modify, even on a connection holding it."""
+    mailbox["google"] = {
+        "scopes": [SCOPE_GMAIL_MODIFY],
+        "grants": [SCOPE_GMAIL_MODIFY],
+    }
+    gmail = _Gmail()
+    result = agent_for(_Asked(), gmail)._execute_tool("send_now", SEND_NOW)
+    assert "Reconnect Google" in result["error"]
+    assert f"lacks {SCOPE_GMAIL_READONLY} {SCOPE_GMAIL_COMPOSE}," in result["error"]
+    assert gmail.calls == []
 
 
 def test_outlook_without_mail_send_can_draft_but_not_send(mailbox, agent_for):
@@ -873,9 +888,11 @@ def test_outlook_without_mail_send_can_draft_but_not_send(mailbox, agent_for):
     assert SCOPE_MAIL_SEND in result["error"]
 
 
-def test_writes_use_gmail_modify_and_never_the_full_mailbox_scope(mailbox, agent_for):
+def test_writes_use_gmail_compose_and_never_modify_or_full_mailbox(mailbox, agent_for):
     agent_for(_Asked(), _Gmail())._execute_tool("send_now", SEND_NOW)
-    assert mailbox["minted"] == [("google", (SCOPE_GMAIL_MODIFY,))]
+    assert mailbox["minted"] == [
+        ("google", (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE))
+    ]
 
 
 def test_bad_address_is_refused_before_asking(mailbox, agent_for):
@@ -1396,7 +1413,11 @@ def test_unrecorded_address_is_named_plainly(mailbox, agent_for, monkeypatch):
     monkeypatch.setattr(
         api,
         "get_connection",
-        lambda p: {"scopes": [SCOPE_GMAIL_MODIFY]} if p == "google" else None,
+        lambda p: (
+            {"scopes": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]}
+            if p == "google"
+            else None
+        ),
     )
     console = _Asked(answer=False)
     agent_for(console, _Gmail())._execute_tool("send_now", SEND_NOW)

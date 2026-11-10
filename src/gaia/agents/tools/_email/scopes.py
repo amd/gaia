@@ -7,8 +7,9 @@ Three different lists, and the differences are the point.
 ``DECLARED_SCOPES`` is what a *new consent* asks for. It feeds
 ``REQUIRED_CONNECTORS``, which is what both ``gaia connectors connect
 --grant-agent`` and the Agent UI consent screen render. One consent has to cover
-reading and writing mail, so Google declares ``gmail.modify``, which allows
-read, compose and send but never permanent delete.
+reading and writing mail, so Google declares ``gmail.readonly`` plus
+``gmail.compose`` (drafts and sending), never ``gmail.modify``, which could also
+relabel, archive and trash mail the agent never needs to touch.
 
 ``READ_CAPABLE_SCOPES`` is what actually *confers read*, narrowest first. The
 grant ledger does exact subset matching with no scope implication, so a
@@ -33,6 +34,7 @@ GOOGLE_CONNECTOR_ID = "google"
 MICROSOFT_CONNECTOR_ID = "microsoft"
 
 SCOPE_GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+SCOPE_GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
 SCOPE_GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 
 # Total mailbox control, including permanent delete. Named here only so an
@@ -45,12 +47,13 @@ SCOPE_MAIL_READWRITE = "https://graph.microsoft.com/Mail.ReadWrite"
 SCOPE_MAIL_SEND = "https://graph.microsoft.com/Mail.Send"
 
 # What a write does to the mailbox. Graph splits these across two scopes, and
-# every send here reads or creates a draft first, so a send needs both.
+# every send here reads or creates a draft first, so a send needs both. Gmail's
+# compose scope can't read a message, so a reply or forward also needs readonly.
 OPERATION_DRAFT = "draft"
 OPERATION_SEND = "send"
 
 DECLARED_SCOPES: Dict[str, Tuple[str, ...]] = {
-    GOOGLE_CONNECTOR_ID: (SCOPE_GMAIL_MODIFY,),
+    GOOGLE_CONNECTOR_ID: (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE),
     MICROSOFT_CONNECTOR_ID: (SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND),
 }
 
@@ -61,8 +64,8 @@ READ_CAPABLE_SCOPES: Dict[str, Tuple[str, ...]] = {
 
 WRITE_SCOPES: Dict[str, Dict[str, Tuple[str, ...]]] = {
     GOOGLE_CONNECTOR_ID: {
-        OPERATION_DRAFT: (SCOPE_GMAIL_MODIFY,),
-        OPERATION_SEND: (SCOPE_GMAIL_MODIFY,),
+        OPERATION_DRAFT: (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE),
+        OPERATION_SEND: (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE),
     },
     MICROSOFT_CONNECTOR_ID: {
         OPERATION_DRAFT: (SCOPE_MAIL_READWRITE,),
@@ -104,6 +107,7 @@ __all__ = [
     "OPERATION_DRAFT",
     "OPERATION_SEND",
     "READ_CAPABLE_SCOPES",
+    "SCOPE_GMAIL_COMPOSE",
     "SCOPE_GMAIL_FULL_MAILBOX",
     "SCOPE_GMAIL_MODIFY",
     "SCOPE_GMAIL_READONLY",

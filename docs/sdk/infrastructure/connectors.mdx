@@ -192,7 +192,7 @@ it and GAIA need.** GAIA refreshes with the forwarded `refresh_token` and
 **cannot widen scope at refresh time** — a refresh only ever returns the
 scopes the original consent granted. If the forwarded `scopes` don't cover
 what the target agent needs (for the flagship `installed:gaia`:
-`gmail.modify`; for the Email agent: `gmail.modify` and `gmail.send`), the
+`gmail.readonly` and `gmail.compose`; for the Email agent: `gmail.modify` and `gmail.send`), the
 import **fails loudly** with `ScopeMismatchError` (HTTP 403 +
 `missing_scopes`) rather than silently under-provisioning. Re-consent by the
 host app — with the wider scope set — is the only fix.

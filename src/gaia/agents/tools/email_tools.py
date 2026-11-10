@@ -289,7 +289,7 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     if not capable:
         # `--scopes` REPLACES a connection's scopes, so the remedy must name
         # granted ∪ needed. Naming only the gap would strip what it already had.
-        union = sorted(set(conn_scopes) | {DECLARED_SCOPES[provider][0]})
+        union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         return None, (
             "connected, but the connection carries no mail read scope. "
             f"Reconnect with `gaia connectors connect {provider} --scopes "

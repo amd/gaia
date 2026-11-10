@@ -200,7 +200,10 @@ _EMAIL_REQUIRED_CONNECTIONS = (
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.modify",),
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ),
         reason=(
             "Read and search your Gmail, and draft and send mail when you approve it."
         ),

@@ -22,7 +22,8 @@ icon: sparkles
 # and the persistent shell session's get_shell_state / reset_shell_session)
 # + 8 skill-library tools
 # (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
-# + 8 read-only email tools (gaia.agents.tools.email_tools)
+# + 16 email tools: 8 that read, 8 that draft and send
+#   (gaia.agents.tools.email_tools)
 # + 3 Stable Diffusion tools (enable_sd_tools is on for this agent)
 # + 8 live-browser tools, which register only with the `browser` extra
 #   installed (gaia.agents.tools.browser_use_tools)

@@ -743,7 +743,8 @@ def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
         _Bare()._build_email_backend()
     message = str(err.value)
     assert "calendar.events" in message
-    assert "gmail.modify" in message
+    assert "gmail.readonly" in message and "gmail.compose" in message
+    assert "gmail.modify" not in message
 
 
 def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
