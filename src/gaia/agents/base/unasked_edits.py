@@ -22,6 +22,16 @@ _KEEP_REST_RE = re.compile(
 _WORD_RE = re.compile(r"[A-Za-z0-9]{3,}")
 #: How alike a removed line and an added one must be to count as one line edited.
 _SAME_LINE_RATIO = 0.75
+_TOKEN_RE = re.compile(r"[a-z]{2,}|\d+")
+_CLAUSE_RE = re.compile(r"[.;,]\s|\band\b|\bthen\b")
+_ADD_RE = re.compile(r"\b(?:add|append|insert|include)\b")
+#: Requests whose new text is the model's to write.
+_REWRITE_RE = re.compile(
+    r"\b(?:translat|rewrit|reword|rephras|paraphras|convert|reformat|format|"
+    r"simplif|shorten|summari[sz]|grammar|wording)\w*"
+    r"|\breplac\w*(?![^.;]*\b(?:with|by)\b)",
+    re.IGNORECASE,
+)
 #: Words too common to show that a request named a line.
 _COMMON = frozenset(
     "the and for with that this from into then than are was were but not all "
@@ -59,35 +69,83 @@ def unasked(lines: Iterable[str], request: str) -> List[str]:
     ]
 
 
+def _tokens(text: str) -> Set[str]:
+    return set(_TOKEN_RE.findall(text.lower()))
+
+
+def _variant(a: str, b: str) -> bool:
+    """True when *b* is *a* with one typo (a slip, a swap, a missing letter)."""
+    if a == b:
+        return True
+    if a.isdigit() or b.isdigit() or min(len(a), len(b)) < 3:
+        return False
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diff) == 1:
+            return True
+        i, j = diff[0], diff[-1]
+        return len(diff) == 2 and j == i + 1 and a[i] == b[j] and a[j] == b[i]
+    short, long_ = sorted((a, b), key=len)
+    return any(long_[:i] + long_[i + 1 :] == short for i in range(len(long_)))
+
+
+def _changed(old: str, new: str) -> tuple:
+    """Words *new* brought in and words it dropped, typo fixes aside."""
+    before, after = _tokens(old), _tokens(new)
+    novel = {t for t in after - before if not any(_variant(t, o) for o in before)}
+    dropped = {t for t in before - after if not any(_variant(t, n) for n in after)}
+    return novel, dropped
+
+
+def _spelled_out(request: str) -> Set[str]:
+    """Words the request gives as a new value, not as text to add."""
+    words: Set[str] = set()
+    for clause in _CLAUSE_RE.split(request.lower()):
+        if not _ADD_RE.search(clause):
+            words |= _tokens(clause)
+    return words
+
+
+def _in_place(line: str, replacement: str, request: str) -> bool:
+    novel, dropped = _changed(line, replacement)
+    if not novel and not dropped:
+        return True
+    if novel and novel <= _spelled_out(request):
+        return True
+    if not _REWRITE_RE.search(request):
+        return False
+    numbers = _tokens(request)
+    return all(t in numbers for t in dropped if t.isdigit())
+
+
 def edited_in_place(old_content: str, new_content: str, request: str) -> Set[str]:
     """Removed lines the edit rewrote rather than dropped.
 
-    A line counts as rewritten when an added line closely matches it ("Teh" to
-    "The"), or when the line that replaced it keeps one of its words ("Due:"
-    with a new date) or is text the request never spelled out (a translation).
-    A line swapped wholesale for text the request asked to add is the line
-    lost, not rewritten.
+    A line counts as rewritten when the line that replaced it only fixes typos
+    or case ("Teh" to "The"), when every new word in it is a value the request
+    gave ("Due:" with the requested date), or when the request asks for a
+    rewrite (a translation) that keeps the line's numbers. A line swapped for
+    text the request asked to add, or for text nobody asked for, is the line
+    lost.
     """
+    request = request or ""
     old_lines = [line.strip() for line in old_content.splitlines() if line.strip()]
     new_lines = [line.strip() for line in new_content.splitlines() if line.strip()]
     before = set(old_lines)
     added = [line.lower() for line in new_lines if line not in before]
-    asked = set(_distinctive(request or ""))
-    rewritten = set()
+    pairs = []
     for line in old_lines:
-        if difflib.get_close_matches(line.lower(), added, n=1, cutoff=_SAME_LINE_RATIO):
-            rewritten.add(line)
+        for match in difflib.get_close_matches(
+            line.lower(), added, n=3, cutoff=_SAME_LINE_RATIO
+        ):
+            pairs.append((line, match))
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "replace":
-            continue
-        for line, replacement in zip(old_lines[i1:i2], new_lines[j1:j2]):
-            words = _distinctive(replacement)
-            if set(words) & set(_distinctive(line)):
-                rewritten.add(line)
-            elif words and not any(w in asked for w in words):
-                rewritten.add(line)
-    return rewritten
+        if tag == "replace":
+            pairs.extend(zip(old_lines[i1:i2], new_lines[j1:j2]))
+    return {line for line, repl in pairs if _in_place(line, repl, request)}
 
 
 def unasked_removals(old_content: str, new_content: str, request: str) -> List[str]:

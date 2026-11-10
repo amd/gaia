@@ -115,50 +115,280 @@ def test_a_line_a_later_edit_puts_back_is_not_reported():
     assert agent._turn_unasked_removals == []
 
 
-# An in-place edit the request asked for is not a removal, even though no word
-# of the old line appears in the request.
-IN_PLACE_EDITS = [
+LIMIT = " Change nothing else."
+PORT = "Set the port to 9090 in config.ini." + LIMIT
+RELEASE = "Update the version to 2.0 in release.md." + LIMIT
+
+# Edits that did what a "change nothing else" request asked: no note.
+CORRECT_EDITS = [
     (
-        "Fix the typo in the first line of story.txt. Change nothing else.",
+        "Fix the typo in the first line of story.txt." + LIMIT,
         "Teh quick brown fox jumps over the lazy dog.",
         "The quick brown fox jumps over the lazy dog.",
     ),
     (
-        "Capitalize the heading in notes.md. Change nothing else.",
+        "Capitalize the heading in notes.md." + LIMIT,
         "# shopping plan",
         "# Shopping Plan",
     ),
+    ("Capitalize the heading in notes.md." + LIMIT, "# intro", "# INTRO"),
     (
-        "Capitalize the heading in notes.md. Change nothing else.",
-        "# intro",
-        "# INTRO",
-    ),
-    (
-        "Update the date to 2026-11-10 in report.md. Change nothing else.",
+        "Update the date to 2026-11-10 in report.md." + LIMIT,
         "Due: 2025-03-14",
         "Due: 2026-11-10",
     ),
     (
-        "Fix the grammar in the intro of essay.txt. Change nothing else.",
+        "Fix the grammar in the intro of essay.txt." + LIMIT,
         "Me and him goes to the store every days.",
         "He and I go to the store every day.",
     ),
     (
-        "Translate the greeting in page.txt into French. Change nothing else.",
+        "Translate the greeting in page.txt into French." + LIMIT,
         "Hello, welcome to our shop!",
         "Bonjour, bienvenue dans notre boutique !",
+    ),
+    ("Change the title to Final in notes.md." + LIMIT, "# Draft\n- a", "# Final\n- a"),
+    (REQUEST, "- milk\n- eggs", "- oat milk\n- eggs\n- apples"),
+    (PORT, "host = local\nport = 8080", "host = local\nport = 9090"),
+    (
+        "Bump the version to 1.3.0 in setup.cfg." + LIMIT,
+        "version = 1.2.0",
+        "version = 1.3.0",
+    ),
+    (
+        "Fix the spelling in readme.txt." + LIMIT,
+        "Recieve the pakage tomorow.",
+        "Receive the package tomorrow.",
+    ),
+    (
+        "Rephrase the second sentence to sound friendlier." + LIMIT,
+        "Hi.\nSubmit the form by Friday.",
+        "Hi.\nPlease send us the form whenever you can before Friday.",
+    ),
+    (
+        "Convert the list in notes.md to a numbered list." + LIMIT,
+        "- buy milk\n- call mom",
+        "1. buy milk\n2. call mom",
+    ),
+    ("Add '- apples' at the end of todo.txt." + LIMIT, "- milk", "- milk\n- apples"),
+    ("Delete '- eggs' from todo.txt." + LIMIT, "- milk\n- eggs", "- milk"),
+    (
+        "Mark the first task as done." + LIMIT,
+        "[ ] Pay rent\n[ ] Buy stamps",
+        "[x] Pay rent\n[ ] Buy stamps",
+    ),
+    ("Change the greeting to 'Hi there'." + LIMIT, "Hello world", "Hi there"),
+    (
+        "Fix the indentation in app.py." + LIMIT,
+        "def f():\n  return x",
+        "def f():\n    return x",
+    ),
+    (
+        "Rename the function load to load_config in app.py." + LIMIT,
+        "def load(path):",
+        "def load_config(path):",
+    ),
+    (
+        "Update the copyright year to 2026." + LIMIT,
+        "Copyright 2025 Acme",
+        "Copyright 2026 Acme",
+    ),
+    (
+        "Translate the menu into Spanish." + LIMIT,
+        "Coffee - 3 dollars",
+        "Cafe - 3 dolares",
+    ),
+    ("Correct the heading." + LIMIT, "# Weekyl Reprot", "# Weekly Report"),
+    ("Make the heading uppercase." + LIMIT, "## next steps", "## NEXT STEPS"),
+    (
+        "Move the meeting to Friday." + LIMIT,
+        "Team sync on Monday at 10",
+        "Team sync on Friday at 10",
+    ),
+    (
+        "Change the owner to Dana. Don't touch anything else.",
+        "Assignee: Sam",
+        "Assignee: Dana",
+    ),
+    (
+        "Reword the warning so it is less alarming. Leave the rest as is.",
+        "DANGER: never press this button!\nVersion 4",
+        "Please avoid pressing this button.\nVersion 4",
+    ),
+]
+
+# Edits that also changed a line nobody asked about: the note names it.
+UNASKED_CHANGES = [
+    (REQUEST, "- milk\n- eggs", "- oat milk\n- apples", "- eggs"),
+    (REQUEST, "- milk\n- eggs", "- oat milk\n- bread\n- apples", "- eggs"),
+    (REQUEST, "- milk\n- sugar", "- oat milk\n- honey\n- apples", "- sugar"),
+    (
+        REQUEST,
+        "- milk\n- [ ] Pay rent",
+        "- oat milk\n- [ ] Buy stamps",
+        "- [ ] Pay rent",
+    ),
+    (
+        "Fix the typo in the title of tasks.md." + LIMIT,
+        "# Tsaks\n1. Call mom\n2. Pay rent",
+        "# Tasks\n1. Call mom\n2. Buy stamps",
+        "2. Pay rent",
+    ),
+    (
+        "Mark laundry as done." + LIMIT,
+        "[ ] laundry\n[ ] dishes",
+        "[x] laundry\n[ ] groceries",
+        "[ ] dishes",
+    ),
+    (
+        PORT,
+        "port = 8080\nssl_verify = true",
+        "port = 9090\nssl_verify = false",
+        "ssl_verify = true",
+    ),
+    (
+        PORT,
+        "port = 8080\nenabled = true",
+        "port = 9090\nenabled = false",
+        "enabled = true",
+    ),
+    (PORT, "port = 8080\ndebug: off", "port = 9090\ndebug: on", "debug: off"),
+    (
+        PORT,
+        "port = 8080\nmax_retries = 3",
+        "port = 9090\nmax_retries = 5",
+        "max_retries = 3",
+    ),
+    (
+        PORT,
+        "port = 8080\nversion = 1.2.0",
+        "port = 9090\nversion = 1.3.0",
+        "version = 1.2.0",
+    ),
+    (
+        "Change the timeout to 60." + LIMIT,
+        "timeout: 30\nauth: required",
+        "timeout: 60\nauth: none",
+        "auth: required",
+    ),
+    (
+        "Rename the variable count to total in app.py." + LIMIT,
+        "count = 0\ncheck_auth(user)",
+        "total = 0\nparse(data)",
+        "check_auth(user)",
+    ),
+    (
+        RELEASE,
+        "Version 1.9\nDo not deploy on weekends.",
+        "Version 2.0\nDeploying on weekends is fine.",
+        "Do not deploy on weekends.",
+    ),
+    (
+        RELEASE,
+        "Version 1.9\nDo not deploy on weekends.",
+        "Version 2.0\nDeploy on weekends.",
+        "Do not deploy on weekends.",
+    ),
+    (
+        RELEASE,
+        "Version 1.9\nDo not deploy on weekends.",
+        "Version 2.0\nAlways deploy on weekends.",
+        "Do not deploy on weekends.",
+    ),
+    (
+        "Fix the typo in the heading of policy.md." + LIMIT,
+        "# Polcy\nDo not deploy on weekends.",
+        "# Policy\nDeploys are fine any day.",
+        "Do not deploy on weekends.",
+    ),
+    (
+        "Fix the typo in line 1." + LIMIT,
+        "Teh plan\nBudget: 500",
+        "The plan\nBudget: 5000",
+        "Budget: 500",
+    ),
+    (
+        "Delete '- eggs' from todo.txt." + LIMIT,
+        "- milk\n- eggs\n- bread",
+        "- milk",
+        "- bread",
+    ),
+    (
+        "Translate the greeting into French." + LIMIT,
+        "Hello!\nPrice: 10 EUR",
+        "Bonjour !\nPrice: 12 EUR",
+        "Price: 10 EUR",
+    ),
+    (
+        "Rewrite the intro to be shorter." + LIMIT,
+        "Intro: a long and winding text\nDeadline: 2026-03-01",
+        "Intro: short.\nDeadline: 2026-04-01",
+        "Deadline: 2026-03-01",
+    ),
+    (
+        "Capitalize the heading." + LIMIT,
+        "# plan\nOwner: Sam",
+        "# Plan\nOwner: Alex",
+        "Owner: Sam",
+    ),
+    (
+        "Fix the grammar in the first sentence." + LIMIT,
+        "Me and him goes there.\nThe API key expires in 30 days.",
+        "He and I go there.\nThe API key never expires.",
+        "The API key expires in 30 days.",
+    ),
+    (
+        "Set DEBUG to False in settings.py." + LIMIT,
+        'DEBUG = True\nALLOWED_HOSTS = ["example.com"]',
+        'DEBUG = False\nALLOWED_HOSTS = ["*"]',
+        'ALLOWED_HOSTS = ["example.com"]',
+    ),
+    (
+        "Rename the target clean to tidy in Makefile." + LIMIT,
+        "clean:\nrm -rf build",
+        "tidy:\nrm -rf /",
+        "rm -rf build",
+    ),
+    (
+        "Change the room to B12." + LIMIT,
+        "Room: A4\nMeeting at 10am",
+        "Room: B12\nMeeting at 11am",
+        "Meeting at 10am",
+    ),
+    pytest.param(
+        "Change the subject to Q3 invoice." + LIMIT,
+        "Subject: invoice\nSend invoice to alice@example.com",
+        "Subject: Q3 invoice\nSend invoice to bob@example.com",
+        "Send invoice to alice@example.com",
+        marks=pytest.mark.xfail(
+            strict=True, reason="a line sharing a word with the request reads as named"
+        ),
     ),
 ]
 
 
-@pytest.mark.parametrize("request_text,old,new", IN_PLACE_EDITS)
-def test_an_edit_asked_for_in_place_is_not_called_a_removal(request_text, old, new):
+def _recorded(request_text, old, new):
     agent = _agent(request_text)
     agent._note_edit_removals(
         {"file_path": "C:/x/f.txt", "old_content": old, "new_content": new},
         {"status": "success"},
     )
-    assert agent._turn_unasked_removals == []
+    return [line for _, line in agent._turn_unasked_removals]
+
+
+@pytest.mark.parametrize("request_text,old,new", CORRECT_EDITS)
+def test_an_edit_that_did_what_was_asked_gets_no_note(request_text, old, new):
+    assert _recorded(request_text, old, new) == []
+
+
+@pytest.mark.parametrize("request_text,old,new,lost", UNASKED_CHANGES)
+def test_a_line_changed_without_being_asked_is_called_out(request_text, old, new, lost):
+    assert lost in _recorded(request_text, old, new)
+
+
+def test_the_corpora_cover_enough_cases():
+    assert len(CORRECT_EDITS) >= 24
+    assert len(UNASKED_CHANGES) >= 27
 
 
 def test_the_gemma_replacement_is_still_called_out_next_to_in_place_edits():
