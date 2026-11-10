@@ -92,6 +92,15 @@ def tool_result_failed(data: Any) -> bool:
 #: long on every surface.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 10 * 60
 
+#: Terminal text for the rare race where a relayed approval is answered but
+#: the chat cannot retake the model before the sidecar sends its next event.
+#: Keep this named so the relay can distinguish it from an ordinary Stop and
+#: avoid replacing the terminal error with a misleading "Cancelled" status.
+MODEL_RETAKE_FAILED_MESSAGE = (
+    "This chat ended while your approved step was waiting for the model, "
+    "so it didn't run. Send your message again to retry."
+)
+
 #: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
 #: which is a caller explicitly asking to wait for the human indefinitely.
 _USE_HANDLER_TIMEOUT = object()
@@ -2257,17 +2266,19 @@ class SSEOutputHandler(OutputHandler):
             self.cancelled.set()
             return False
 
-    def come_back_to_model(self) -> None:
+    def come_back_to_model(self) -> Optional[bool]:
         """Retake the model at the front of the line after a wait on the user.
 
-        A Stop while the turn waits in line, or a model that can no longer be
-        loaded, sets ``cancelled``; the caller checks it before going on.
+        Returns ``True`` when the turn may continue, ``None`` for an ordinary
+        user Stop, and ``False`` after it emitted a named terminal retake error.
+        This lets a relayed sidecar preserve that error instead of overwriting
+        it with ``Cancelled.``.
         """
         if self.cancelled.is_set():
-            return
+            return None
         if not self.turn_slot.come_back(self.cancelled):
             if self.cancelled.is_set():
-                return
+                return None
             # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
             logger.warning(
                 "Turn ended while waiting to retake the model after the user "
@@ -2276,15 +2287,12 @@ class SSEOutputHandler(OutputHandler):
             self._emit(
                 {
                     "type": "agent_error",
-                    "content": (
-                        "This chat ended while your approved step was waiting "
-                        "for the model, so it didn't run. Send your message "
-                        "again to retry."
-                    ),
+                    "content": (MODEL_RETAKE_FAILED_MESSAGE),
                     "fatal": True,
                 }
             )
             self.cancelled.set()
+            return False
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
                 self.on_model_regained()
@@ -2292,8 +2300,10 @@ class SSEOutputHandler(OutputHandler):
                 # The model the turn needs is gone and can't be loaded:
                 # end the turn before the approved tool runs, and say why.
                 logger.error("Model check after the user answered failed: %s", exc)
-                self._emit({"type": "agent_error", "content": str(exc)})
+                self._emit({"type": "agent_error", "content": str(exc), "fatal": True})
                 self.cancelled.set()
+                return False
+        return None if self.cancelled.is_set() else True
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
