@@ -536,14 +536,19 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
-    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
+    lookup = getattr(getattr(chat, "llm_client", None), "cloud_model_provider", None)
+    location = resolve_inference_location(
+        model_id,
+        use_claude=is_claude,
+        cloud_provider_lookup=lookup if callable(lookup) else None,
+    )
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
-        "model_remote": is_claude or bool(cloud_provider),
+        "model_backend": location.provider,
+        "model_remote": location.remote,
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
