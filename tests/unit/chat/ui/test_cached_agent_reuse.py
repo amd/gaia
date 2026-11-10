@@ -13,7 +13,6 @@ non-streaming turn must still stream its answer.
 """
 
 import asyncio
-import sys
 import threading
 import types
 
@@ -103,13 +102,6 @@ def test_streaming_cache_hit_streams_after_a_non_streaming_turn(clean_cache):
 
 
 async def test_agent_loop_tick_cache_hit_gets_clear_cancel(clean_cache, monkeypatch):
-    # The tick imports ChatAgent before it checks the cache; a cache hit never uses it.
-    fake_pkg = types.ModuleType("gaia_agent_chat")
-    fake_mod = types.ModuleType("gaia_agent_chat.agent")
-    fake_mod.ChatAgent = fake_mod.ChatAgentConfig = object
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat", fake_pkg)
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", fake_mod)
-
     db = ChatDatabase(":memory:")
     session = db.create_session(model="M-GGUF", agent_type="chat")
     agent = _RecordingAgent("M-GGUF")

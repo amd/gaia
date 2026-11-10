@@ -163,6 +163,7 @@ jobs:
       platforms: 'win32-x64'
       version: ${{ inputs.version }}
       artifact_prefix: ${{ inputs.artifact_prefix }}winsetup-
+      flagship: ${{ inputs.sidecar == 'artifact' && 'artifact' || '' }}
 
   build:
     name: Build the Windows setup

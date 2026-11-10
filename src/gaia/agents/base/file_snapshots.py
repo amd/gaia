@@ -361,10 +361,6 @@ def recording_turn(
             ) from e
 
 
-def active_recorder() -> Optional[TurnRecorder]:
-    return _ACTIVE.get()
-
-
 def before_change(path: os.PathLike | str, tool: Optional[str] = None) -> None:
     """Call before writing, replacing, creating or deleting *path*.
 

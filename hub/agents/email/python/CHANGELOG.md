@@ -9,6 +9,8 @@ contract version is tracked separately as
 
 ### Changed
 
+- **Unattended scheduler failures now notify users with the right action.** Failed scheduled sends, snooze restores, and interrupted sends use distinct messages; an interrupted send warns that it may already have been delivered and advises checking Sent before retrying (#5411).
+
 - **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
 
 - **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
