@@ -10864,7 +10864,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -10877,7 +10877,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
