@@ -405,6 +405,19 @@ def _is_read_timeout(exc: BaseException) -> bool:
     return False
 
 
+def _vision_record(extracted: Dict[str, Any]) -> Dict[str, Any]:
+    """What the cache keeps about reading images, so a later load can redo them."""
+    return {
+        key: extracted[key]
+        for key in ("vlm_checked", "vlm_available", "unread_image_pages")
+        if key in extracted
+    }
+
+
+class _ImagesReadableNow(Exception):
+    """A cached document left image text unread, and the vision model is up now."""
+
+
 class _EmbedderWarmingUp(Exception):
     """The embedder answered with no vectors: it is still loading."""
 
@@ -919,6 +932,70 @@ class RAGSDK:
             f"{lead}enable VLM image extraction by downloading "
             f"{self.config.vlm_model} in Lemonade"
         )
+
+    def _vision_unavailable(self, vlm_available: bool) -> bool:
+        """Images were meant to be read, but the vision model couldn't be reached."""
+        return (
+            not vlm_available
+            and self.config.use_vlm
+            and self.config.vlm_model is not None
+        )
+
+    def _unread_images_note(self, pages: int) -> str:
+        """Tell the user which images went unread and how to get them read."""
+        return (
+            f"Text in images on {pages} page(s) was not read because the vision "
+            f"model ({self.config.vlm_model}) was not available. Once it is, "
+            "index this file again and those images are read."
+        )
+
+    def _images_readable_now(self, metadata: Dict[str, Any]) -> bool:
+        """Whether a cache made without the vision model should be re-extracted.
+
+        Only a cache that recorded unread images qualifies, and only once the
+        model answers now. Older caches never recorded it and are left alone.
+        """
+        if metadata.get("vlm_available") is not False:
+            return False
+        if not metadata.get("unread_image_pages"):
+            return False
+        if not self.config.use_vlm or self.config.vlm_model is None:
+            return False
+        try:
+            from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+
+            vlm = VLMClient(
+                vlm_model=resident_vision_model(
+                    self.config.vlm_model, self.config.base_url
+                ),
+                base_url=self.config.base_url,
+            )
+            return vlm.check_availability()
+        except Exception as e:  # pylint: disable=broad-except
+            # The same probe extraction makes; failing it means images still can't be read.
+            self.log.warning(
+                f"Could not reach the vision model, keeping the cache: {e}"
+            )
+            return False
+
+    def _left_images_unread(self, file_path: str) -> bool:
+        """Whether *file_path*'s indexed text skipped images the vision model should read.
+
+        Call with ``_state_lock`` held.
+        """
+        metadata = self.file_metadata.get(file_path, {})
+        return metadata.get("vlm_available") is False and bool(
+            metadata.get("unread_image_pages")
+        )
+
+    def unread_images_readable(self, file_path: str) -> bool:
+        """Whether indexing *file_path* again would read images it left unread."""
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if not self._left_images_unread(file_path):
+                return False
+            metadata = dict(self.file_metadata[file_path])
+        return self._images_readable_now(metadata)
 
     def _note_images_skipped(self) -> None:
         """Say once per file that its images aren't read while chat is on the NPU."""
@@ -1669,14 +1746,15 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+                PdfImageExtractionError,
+                PdfPageInspectionError,
+                count_images_in_page,
+                extract_images_from_page_pdfium,
+            )
+
             try:
                 from gaia.llm import VLMClient
-                from gaia.rag.pdf_utils import (
-                    PdfImageExtractionError,
-                    PdfPageInspectionError,
-                    count_images_in_page,
-                    extract_images_from_page_pdfium,
-                )
 
                 if self.config.vlm_model is None:
                     self._note_images_skipped()
@@ -1725,6 +1803,9 @@ class RAGSDK:
             vlm_pages_count = 0
             total_images_processed = 0
             image_pages_skipped = 0
+            # Pages whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
 
@@ -1753,6 +1834,12 @@ class RAGSDK:
                         # Not zero — unknown. Reporting 0 alongside
                         # has_images=True is a contradiction on the record.
                         num_imgs = None
+                elif unavailable and len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT:
+                    try:
+                        if count_images_in_page(page, page_num=i)[0]:
+                            unread_image_pages += 1
+                    except PdfPageInspectionError:
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 3: Extract from images if present
                 image_texts = []
@@ -1885,6 +1972,7 @@ class RAGSDK:
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
                 "image_pages_skipped": image_pages_skipped,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -2050,6 +2138,7 @@ class RAGSDK:
                         "total_images": pdf_metadata.get("total_images", 0),
                         "vlm_checked": pdf_metadata.get("vlm_checked", False),
                         "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "unread_image_pages": pdf_metadata.get("unread_image_pages", 0),
                         "pptx_status": "readable",
                         "conversion": "powerpoint_com",
                     }
@@ -2079,13 +2168,14 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                count_images_in_slide,
+                extract_images_from_slide,
+            )
+
             try:
                 from gaia.llm import (  # pylint: disable=import-outside-toplevel
                     VLMClient,
-                )
-                from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
-                    count_images_in_slide,
-                    extract_images_from_slide,
                 )
 
                 if self.config.vlm_model is None:
@@ -2133,6 +2223,9 @@ class RAGSDK:
 
             pages_data = []
             vlm_slides_count = 0
+            # Slides whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             total_images_processed = 0
 
             for i, slide in enumerate(prs.slides, 1):
@@ -2161,6 +2254,15 @@ class RAGSDK:
                         self.log.debug(
                             "count_images_in_slide failed on slide %d: %s", i, e
                         )
+                elif unavailable:
+                    try:
+                        if count_images_in_slide(slide)[0]:
+                            unread_image_pages += 1
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 4: Extract from images if present
                 image_texts = []
@@ -2266,6 +2368,7 @@ class RAGSDK:
                 "num_slides": total_slides,
                 "vlm_slides": vlm_slides_count,
                 "total_images": total_images_processed,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,
                 "vlm_available": vlm_available,
                 "pptx_status": "readable",
@@ -2962,6 +3065,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pdf_metadata))
             # Carry the degraded-page report up. Dropping it here is what made
             # "which pages are incomplete" a log line nobody could act on.
             metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
@@ -2976,6 +3080,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_slides
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pptx_metadata))
             return text, metadata
 
         # Image files (read by the vision model)
@@ -4031,6 +4136,12 @@ These positions indicate where to split the text."""
             if replacing:
                 # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
+            elif self.unread_images_readable(file_path):
+                replacing = True
+                self.log.info(
+                    f"{file_path} left images unread and the vision model is up; "
+                    "re-indexing to read them"
+                )
 
         with self._state_lock:
             # Check if already indexed
@@ -4087,6 +4198,9 @@ These positions indicate where to split the text."""
                 cached_full_text = cached_data.get("full_text", "")
                 cached_metadata = cached_data.get("metadata", {})
 
+                if self._images_readable_now(cached_metadata):
+                    raise _ImagesReadableNow()
+
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache
                 if not cached_metadata.get("vlm_checked", False):
@@ -4117,7 +4231,9 @@ These positions indicate where to split the text."""
                 )
 
                 with self._state_lock:
-                    if self._indexed_from(file_path, content_key):
+                    if self._indexed_from(
+                        file_path, content_key
+                    ) and not self._left_images_unread(file_path):
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
@@ -4214,6 +4330,11 @@ These positions indicate where to split the text."""
                 stats["num_pages"] = cached_metadata.get("num_pages")
                 stats["vlm_pages"] = cached_metadata.get("vlm_pages")
                 stats["total_images"] = cached_metadata.get("total_images")
+                if cached_metadata.get("unread_image_pages"):
+                    stats["unread_image_pages"] = cached_metadata["unread_image_pages"]
+                    stats["unread_images_note"] = self._unread_images_note(
+                        cached_metadata["unread_image_pages"]
+                    )
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
@@ -4226,6 +4347,15 @@ These positions indicate where to split the text."""
                 return stats
             except (IndexingStopped, LeaseWaitCancelled):
                 raise
+            except _ImagesReadableNow:
+                self.log.info(
+                    f"Re-extracting {file_path}: its images were not read while the "
+                    "vision model was unavailable, and it is available now"
+                )
+                if self.config.show_stats:
+                    print(
+                        "  🖼️  Vision model is available now: reading this file's images"
+                    )
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
@@ -4269,6 +4399,11 @@ These positions indicate where to split the text."""
                 stats["vlm_pages"] = file_metadata["vlm_pages"]
             if file_metadata.get("total_images"):
                 stats["total_images"] = file_metadata["total_images"]
+            if file_metadata.get("unread_image_pages"):
+                stats["unread_image_pages"] = file_metadata["unread_image_pages"]
+                stats["unread_images_note"] = self._unread_images_note(
+                    file_metadata["unread_image_pages"]
+                )
 
             if not text.strip():
                 error_msg = (
@@ -4298,7 +4433,9 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if self._indexed_from(file_path, content_key):
+                if self._indexed_from(
+                    file_path, content_key
+                ) and not self._left_images_unread(file_path):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
