@@ -830,5 +830,5 @@ reported once.
 Over stdio the agent never sends `needs_confirmation.confirm_url` or
 `error.source`. The TUI decodes them for other transports, and it sets `source`
 itself on an error it synthesizes. It does send `tool_result.render` for the
-card tools (`guide`, `calculator`); the TUI has no renderer for those keys yet
-and draws its unknown-card fallback.
+card tools (`guide`, `calculator`), and the TUI draws both: every line of a
+guide, and a calculator's results computed from its starting numbers.

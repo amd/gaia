@@ -91,7 +91,7 @@
 }
 
 .render-guide__start {
-    margin-left: auto;
+    margin-inline-start: auto;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -145,7 +145,7 @@
 }
 
 .render-guide__item {
-    padding-left: 14px;
+    padding-inline-start: 14px;
     position: relative;
     overflow-wrap: anywhere;
 }
@@ -153,7 +153,7 @@
 .render-guide__item::before {
     content: '';
     position: absolute;
-    left: 2px;
+    inset-inline-start: 2px;
     top: 0.7em;
     width: 4px;
     height: 4px;
@@ -161,7 +161,7 @@
     background: var(--text-muted);
 }
 
-.render-guide__item:has(.render-guide__check) { padding-left: 0; }
+.render-guide__item:has(.render-guide__check) { padding-inline-start: 0; }
 .render-guide__item:has(.render-guide__check)::before { content: none; }
 
 .render-guide__qty {
@@ -523,10 +523,32 @@
 @media (max-width: 520px) {
     .render-guide { padding: 14px 14px; }
     .render-guide__start {
-        margin-left: 0;
+        margin-inline-start: 0;
         width: 100%;
         justify-content: center;
     }
     .render-guided__step-title { font-size: 21px; }
     .render-guided__step-text { font-size: 18px; }
+}
+
+/* Each line orders its own text but keeps the card's side, so an English
+   ingredient in an Arabic chat reads left to right and still lines up right. */
+.render-guide__title,
+.render-guide__description,
+.render-guide__item,
+.render-guide__step-body > *,
+.render-guide__notes p,
+.render-guided__step-title,
+.render-guided__step-text {
+    unicode-bidi: plaintext;
+}
+
+:is(.render-guide__title, .render-guide__description, .render-guide__item,
+    .render-guide__step-body > *, .render-guide__notes p) {
+    text-align: left;
+}
+
+:is(.render-guide__title, .render-guide__description, .render-guide__item,
+    .render-guide__step-body > *, .render-guide__notes p):dir(rtl) {
+    text-align: right;
 }
