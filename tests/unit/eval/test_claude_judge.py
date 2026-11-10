@@ -148,16 +148,14 @@ class TestCalculateCost:
         assert cost["input_cost"] == pytest.approx(100 / 1_000_000 * 3.0, abs=1e-6)
         assert cost["output_cost"] == pytest.approx(50 / 1_000_000 * 15.0, abs=1e-6)
 
-    def test_unknown_model_uses_default(self, monkeypatch):
+    def test_unknown_model_is_refused_before_any_call(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
         monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
-        c = ClaudeClient(model="claude-future-9000")
-        cost = c.calculate_cost(1_000_000, 1_000_000)
-        # Default pricing matches Sonnet: $3/$15
-        assert cost["total_cost"] == pytest.approx(18.0, abs=1e-4)
+        with pytest.raises(ValueError, match="claude-future-9000"):
+            ClaudeClient(model="claude-future-9000")
 
 
 # ---------------------------------------------------------------------------

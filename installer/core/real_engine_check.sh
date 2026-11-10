@@ -17,6 +17,10 @@ set -euo pipefail
 GAIA="$1"
 SCRATCH="$2"
 CHAT_MODEL="${CHAT_MODEL:-Qwen3-0.6B-GGUF}"
+# A hosted Mac has ~7 GB: the model's full 40K window alone takes ~4.7 GB, and
+# init then can't load the embedder beside it (#7129). This checks the engine,
+# not the window.
+export GAIA_CTX_SIZE="${GAIA_CTX_SIZE:-8192}"
 
 [ -x "${GAIA}" ] || { echo "::error::no frozen gaia at ${GAIA}"; exit 1; }
 export GAIA_HOME="${SCRATCH}/gaia-home"
@@ -27,6 +31,8 @@ unset LEMONADE_BASE_URL GAIA_LEMONADE_EMBEDDED || true
 dump() {
   echo "--- lemond.log (last 80 lines) ---"
   tail -n 80 "${GAIA_HOME}/lemonade/lemond.log" 2>/dev/null || echo "(no lemond.log)"
+  # The daemon first: it would restart the Lemonade stopped below.
+  "${GAIA}" daemon stop >/dev/null 2>&1 || true
   "${GAIA}" lemonade embedded stop >/dev/null 2>&1 || true
 }
 fail() { echo "::error::$*"; dump; exit 1; }
