@@ -329,6 +329,7 @@ _ORDINAL_QUARTER_RE = re.compile(
     re.I,
 )
 _RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
+_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b", re.I)
 
 
 def _parse_date_value(value: str):
@@ -361,6 +362,31 @@ def _parse_date_value(value: str):
             continue
         return ym, ym
     return None
+
+
+def _cell_month_span(value):
+    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None.
+
+    A quarter, year or month cell ('2025-Q1', '2025') spans its whole period;
+    any other date dateutil can read spans its one month. A quarter without a
+    year ('Q1') is None: dateutil would read it as the 1st of this month.
+    """
+    if isinstance(value, datetime):
+        ym = value.strftime("%Y-%m")
+        return ym, ym
+    text = str(value).strip()
+    span = _parse_date_value(text)
+    if span is not None:
+        return span
+    if _QUARTER_TOKEN_RE.search(text):
+        return None
+    from dateutil import parser as date_parser
+
+    try:
+        ym = date_parser.parse(text, fuzzy=True).strftime("%Y-%m")
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return ym, ym
 
 
 def parse_date_range(date_range: str):
@@ -2499,6 +2525,8 @@ class FileSearchToolsMixin:
                 date_range: Keep only rows dated in this period (optional).
                     A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
                     day, or range ('2025-01 to 2025-06'). Else an error.
+                    Date cells may hold the same forms; a quarter cell is kept
+                    when its whole quarter is inside the range.
                 sheet: Workbook sheet to analyze (optional; default the sheet
                     the workbook opens on). Ignored for CSV/TSV.
 
@@ -2623,8 +2651,6 @@ class FileSearchToolsMixin:
 
                 # --- Date range filtering ---
                 if date_range:
-                    from dateutil import parser as date_parser
-
                     parsed_range = parse_date_range(date_range)
                     if parsed_range is None:
                         return {
@@ -2670,20 +2696,35 @@ class FileSearchToolsMixin:
                     date_col_filter = date_col_candidates[0]
 
                     filtered = []
+                    unreadable = []
+                    dated = 0
                     for row in rows:
                         dv = row.get(date_col_filter)
                         if dv is None or str(dv).strip() == "":
                             continue
-                        try:
-                            if isinstance(dv, datetime):
-                                dt = dv
-                            else:
-                                dt = date_parser.parse(str(dv), fuzzy=True)
-                            row_ym = dt.strftime("%Y-%m")
-                            if start_ym <= row_ym <= end_ym:
-                                filtered.append(row)
-                        except (ValueError, TypeError, OverflowError):
+                        span = _cell_month_span(dv)
+                        if span is None:
+                            unreadable.append(str(dv))
                             continue
+                        dated += 1
+                        if start_ym <= span[0] and span[1] <= end_ym:
+                            filtered.append(row)
+                    if unreadable and not dated:
+                        examples = ", ".join(repr(v) for v in unreadable[:3])
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"date_range {date_range!r} could not be applied: "
+                                f"no value in column '{date_col_filter}' reads as "
+                                f"a date (e.g. {examples}). Cells must hold a "
+                                "quarter ('2025-Q1', 'Q1 2025'), year, month "
+                                "('2025-03') or date. Call again without "
+                                "date_range, using group_by="
+                                f"'{date_col_filter}' to split the rows by it."
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
                     rows = filtered
                     if not rows:
                         return {
@@ -2693,6 +2734,11 @@ class FileSearchToolsMixin:
                             "date_filter_applied": date_range,
                             "date_filter_parsed": {"start": start_ym, "end": end_ym},
                             "date_column": date_col_filter,
+                            **(
+                                {"date_rows_unreadable": len(unreadable)}
+                                if unreadable
+                                else {}
+                            ),
                             "message": (
                                 f"No rows in column '{date_col_filter}' fall "
                                 f"between {start_ym} and {end_ym} (inclusive), "
@@ -2733,6 +2779,8 @@ class FileSearchToolsMixin:
                     result["date_filter_applied"] = date_range
                     result["date_filter_parsed"] = {"start": start_ym, "end": end_ym}
                     result["date_column"] = date_col_filter
+                    if unreadable:
+                        result["date_rows_unreadable"] = len(unreadable)
 
                 # Infer column types
                 column_types = {}
