@@ -643,8 +643,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
-#: A reranker scores query + chunk as one input, so it needs the same ubatch.
-RERANKER_LLAMACPP_ARGS = EMBEDDER_LLAMACPP_ARGS
+#: A reranker scores query + chunk as one input, which must fit one ubatch; the
+#: ubatch cannot exceed the batch (default 2048), so both are raised together.
+RERANKER_BATCH_TOKENS = 4096
+RERANKER_LLAMACPP_ARGS = (
+    f"--batch-size {RERANKER_BATCH_TOKENS} --ubatch-size {RERANKER_BATCH_TOKENS}"
+)
+#: Longest query sent to the reranker, so a full chunk plus it fits the ubatch.
+RERANK_QUERY_MAX_CHARS = 1024
 #: Headroom for the BOS/EOS tokens the server adds to every input.
 _EMBED_RESERVED_TOKENS = 48
 #: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.

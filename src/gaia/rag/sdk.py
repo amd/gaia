@@ -52,6 +52,7 @@ from gaia.llm.lemonade_client import (
     EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    RERANK_QUERY_MAX_CHARS,
     RERANKER_LLAMACPP_ARGS,
     resident_vision_model,
     resolve_default_vision_model,
@@ -523,6 +524,8 @@ EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
 #: Lemonade catalog reranker named when none is downloaded.
 _SUGGESTED_RERANKER = "bge-reranker-v2-m3-GGUF"
+#: llama-server's error when an input is longer than the loaded ubatch.
+_RERANK_BATCH_TOO_SMALL = "increase the physical batch size"
 
 
 def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
@@ -4758,18 +4761,47 @@ These positions indicate where to split the text."""
             f"Or download it in the Lemonade Model Manager ({server})."
         )
 
-    def _rerank_candidates(
+    def _send_rerank(
         self, query: str, candidate_chunks: List[str], model: str
-    ) -> Tuple[List[int], List[float]]:
-        if len(candidate_chunks) < 2:
-            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+    ) -> Dict[str, Any]:
         try:
-            response = self.llm_client.rerank(
+            return self.llm_client.rerank(
                 query,
                 candidate_chunks,
                 model=model,
                 timeout=self.config.reranking_timeout,
             )
+        except Exception as error:
+            # A user-run Lemonade keeps no saved options, so its own reload
+            # after an eviction brings the reranker back at the default batch.
+            batch_too_small = _RERANK_BATCH_TOO_SMALL in str(error).lower()
+            if not batch_too_small or not self.llm_client.is_users_server():
+                raise
+            self.log.warning(
+                f"Reranker {model} came back without {RERANKER_LLAMACPP_ARGS}; "
+                "reloading it with them and retrying once."
+            )
+        self._load_reranker(model)
+        return self.llm_client.rerank(
+            query,
+            candidate_chunks,
+            model=model,
+            timeout=self.config.reranking_timeout,
+        )
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Tuple[List[int], List[float]]:
+        if len(candidate_chunks) < 2:
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+        if len(query) > RERANK_QUERY_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{RERANK_QUERY_MAX_CHARS} are used to rerank results."
+            )
+            query = query[:RERANK_QUERY_MAX_CHARS]
+        try:
+            response = self._send_rerank(query, candidate_chunks, model)
             results = response.get("results")
             if not isinstance(results, list):
                 raise ValueError("response has no results list")
@@ -4804,6 +4836,9 @@ These positions indicate where to split the text."""
                     scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
             return order, scores
         except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
             raise RuntimeError(
                 f"Lemonade rerank failed for model {model}: {error}"
             ) from error

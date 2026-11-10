@@ -392,7 +392,7 @@ def _one_reranker(client, model="bge-reranker-v2-m3-GGUF"):
     return client
 
 
-def test_reranker_loads_with_a_2048_token_ubatch_before_the_first_rerank():
+def test_reranker_loads_with_a_4096_token_batch_before_the_first_rerank():
     client = _one_reranker(MagicMock())
     client.rerank.return_value = {
         "results": [
@@ -405,7 +405,7 @@ def test_reranker_loads_with_a_2048_token_ubatch_before_the_first_rerank():
     rag._search_chunks("needle again")
     client.load_model.assert_called_once_with(
         "bge-reranker-v2-m3-GGUF",
-        llamacpp_args="--ubatch-size 2048",
+        llamacpp_args="--batch-size 4096 --ubatch-size 4096",
         save_options=True,
     )
     calls = [name for name, _, _ in client.mock_calls]
@@ -417,7 +417,7 @@ def test_reranker_options_are_not_saved_into_a_server_the_user_runs():
     client.is_users_server.return_value = True
     _rag(client)._resolve_reranking_model()
     assert client.load_model.call_args.kwargs == {
-        "llamacpp_args": "--ubatch-size 2048",
+        "llamacpp_args": "--batch-size 4096 --ubatch-size 4096",
         "save_options": False,
     }
 
@@ -484,7 +484,7 @@ def test_reranker_load_request_shape_sent_to_lemonade(monkeypatch):
     assert loads == [
         {
             "model_name": "bge-reranker-v2-m3-GGUF",
-            "llamacpp_args": "--ubatch-size 2048",
+            "llamacpp_args": "--batch-size 4096 --ubatch-size 4096",
             "save_options": True,
         }
     ]
@@ -514,3 +514,109 @@ def test_an_unreadable_catalog_entry_raises_the_wrapped_error(entry):
     with pytest.raises(RuntimeError, match="cannot read"):
         _rag(client)._resolve_reranking_model()
     client.load_model.assert_not_called()
+
+
+# ── Query + chunk always fit the reranker's batch ────────────────────────────
+
+
+def test_a_full_chunk_and_a_capped_query_fit_the_reranker_batch():
+    from gaia.llm import lemonade_client as lc
+
+    # Worst case one char per token; the reserve covers BOS/EOS/SEP.
+    worst_tokens = (
+        lc.EMBED_MAX_CHARS / lc._EMBED_MIN_CHARS_PER_TOKEN
+        + lc.RERANK_QUERY_MAX_CHARS / lc._EMBED_MIN_CHARS_PER_TOKEN
+        + lc._EMBED_RESERVED_TOKENS
+    )
+    assert worst_tokens <= lc.RERANKER_BATCH_TOKENS
+    assert lc.RERANKER_LLAMACPP_ARGS == (
+        f"--batch-size {lc.RERANKER_BATCH_TOKENS} "
+        f"--ubatch-size {lc.RERANKER_BATCH_TOKENS}"
+    )
+
+
+def test_a_long_query_is_capped_before_it_reaches_the_reranker():
+    from gaia.llm.lemonade_client import RERANK_QUERY_MAX_CHARS
+
+    client = MagicMock()
+    client.rerank.return_value = {
+        "results": [
+            {"index": 0, "relevance_score": 1.0},
+            {"index": 1, "relevance_score": 0.0},
+        ]
+    }
+    rag = _rag(client)
+    rag._rerank_candidates("q" * (RERANK_QUERY_MAX_CHARS * 3), ["a", "b"], "r")
+    sent = client.rerank.call_args.args[0]
+    assert sent == "q" * RERANK_QUERY_MAX_CHARS
+    rag.log.warning.assert_called_once()
+
+    client.rerank.reset_mock()
+    rag._rerank_candidates("short query", ["a", "b"], "r")
+    assert client.rerank.call_args.args[0] == "short query"
+
+
+_BATCH_TOO_SMALL = RuntimeError(
+    'Request failed with status 500: {"error":{"message":"input is too large '
+    'to process. increase the physical batch size"}}'
+)
+_TWO_RESULTS = {
+    "results": [
+        {"index": 0, "relevance_score": 0.0},
+        {"index": 1, "relevance_score": 5.0},
+    ]
+}
+
+
+def test_users_server_reloads_the_reranker_once_when_it_lost_its_batch():
+    client = _one_reranker(MagicMock())
+    client.is_users_server.return_value = True
+    client.rerank.side_effect = [_BATCH_TOO_SMALL, _TWO_RESULTS]
+    order, _ = _rag(client)._rerank_candidates("needle", ["a", "b"], "bge")
+    assert order == [1, 0]
+    client.load_model.assert_called_once_with(
+        "bge",
+        llamacpp_args="--batch-size 4096 --ubatch-size 4096",
+        save_options=False,
+    )
+    assert client.rerank.call_count == 2
+
+
+def test_users_server_rerank_that_fails_again_after_reload_is_raised():
+    client = _one_reranker(MagicMock())
+    client.is_users_server.return_value = True
+    client.rerank.side_effect = [_BATCH_TOO_SMALL, _BATCH_TOO_SMALL]
+    with pytest.raises(RuntimeError, match="Lemonade rerank failed") as err:
+        _rag(client)._rerank_candidates("needle", ["a", "b"], "bge")
+    assert "physical batch size" in str(err.value)
+    assert client.load_model.call_count == 1
+    assert client.rerank.call_count == 2
+
+
+def test_batch_error_is_not_retried_on_a_server_gaia_owns():
+    client = _one_reranker(MagicMock())
+    client.rerank.side_effect = _BATCH_TOO_SMALL
+    with pytest.raises(RuntimeError, match="physical batch size"):
+        _rag(client)._rerank_candidates("needle", ["a", "b"], "bge")
+    client.load_model.assert_not_called()
+    assert client.rerank.call_count == 1
+
+
+def test_other_rerank_errors_are_not_retried_on_a_users_server():
+    client = _one_reranker(MagicMock())
+    client.is_users_server.return_value = True
+    client.rerank.side_effect = RuntimeError("model is unavailable")
+    with pytest.raises(RuntimeError, match="model is unavailable"):
+        _rag(client)._rerank_candidates("needle", ["a", "b"], "bge")
+    client.load_model.assert_not_called()
+
+
+def test_a_cancelled_reload_during_rerank_stays_a_stop():
+    from gaia.daemon.broker_client import LeaseWaitCancelled
+
+    client = _one_reranker(MagicMock())
+    client.is_users_server.return_value = True
+    client.rerank.side_effect = _BATCH_TOO_SMALL
+    client.load_model.side_effect = LeaseWaitCancelled("stopped")
+    with pytest.raises(LeaseWaitCancelled):
+        _rag(client)._rerank_candidates("needle", ["a", "b"], "bge")

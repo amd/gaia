@@ -1045,10 +1045,13 @@ the `reranking` label, such as `bge-reranker-v2-m3-GGUF`. Set `reranking_model`
 to require a specific one, or leave it unset to use the first downloaded
 reranker. GAIA never downloads one for you: download it with `lemonade pull <model>`
 or the Lemonade Model Manager. On the first search with reranking on, GAIA loads
-the reranker with `--ubatch-size 2048`, because llama.cpp's default (512 tokens)
-is too small for a query plus a chunk. With reranking on, a missing reranker, a
-failed load, or a failed rerank call raises an error naming the fix, instead of
-quietly returning vector results.
+the reranker with `--batch-size 4096 --ubatch-size 4096`, because llama.cpp's
+default (512 tokens) is too small for a query plus a chunk; only the first 1,024
+characters of the query are used to rerank. On a Lemonade Server you run
+yourself, GAIA saves none of those options, so if Lemonade later reloads the
+reranker without them, GAIA loads it again with them and retries once. With
+reranking on, a missing reranker, a failed load, or a failed rerank call raises
+an error naming the fix, instead of quietly returning vector results.
 
 ```python
 config = RAGConfig(
