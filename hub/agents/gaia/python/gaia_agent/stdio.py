@@ -627,8 +627,11 @@ def _is_chat_target(entry: Dict[str, Any]) -> bool:
     return "chat" in labels or not (_NON_CHAT_LABELS & labels)
 
 
-def _lemonade_models(base_url: Optional[str]) -> List[str]:
+def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
     """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
+
+    Maps each id, in sorted order, to its catalog entry, so a switch can hand
+    the entry to the new client instead of reading the catalog a second time.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -649,16 +652,15 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
             f"{start_advice()}"
         ) from exc
-    return sorted(
-        {
-            m["id"]
-            for m in catalog.get("data", [])
-            if m.get("id")
-            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
-            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
-            and _is_chat_target(m)
-        }
-    )
+    switchable = {
+        m["id"]: m
+        for m in catalog.get("data", [])
+        if m.get("id")
+        and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+        and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
+        and _is_chat_target(m)
+    }
+    return {model_id: switchable[model_id] for model_id in sorted(switchable)}
 
 
 #: Snapshot of everything a switch mutates, for an all-or-nothing apply.
@@ -860,7 +862,7 @@ def _wait_for_gaia_lemonade(
 
 def _reachable_lemonade_models(
     agent: Any, target: str, on_status: Optional[Callable[[str], None]]
-) -> Tuple[Optional[str], List[str]]:
+) -> Tuple[Optional[str], Dict[str, Dict[str, Any]]]:
     """``(base_url, models)`` from the server the live client talks to.
 
     GAIA's own server is briefly unreachable while the daemon restarts it, so
@@ -904,20 +906,13 @@ def _apply_local_switch(
             model=target,
             base_url=base_url,
             system_prompt=chat.config.system_prompt,
+            # The switch message and the rebuilt prompt name the provider from it.
+            model_metadata=[available[target]],
         )
-        # Warm the catalog metadata now, before this client answers anything.
-        # cloud_model_provider() only recognises a runtime-discovered provider
-        # (an id outside the fireworks./amd. prefixes) once list_models() has
-        # read it — and both the switch message below and the system prompt
-        # _apply_switch is about to rebuild call it on this same client
-        # (#4365).
-        refresh = getattr(new_client, "refresh_model_catalog", None)
-        if callable(refresh):
-            refresh()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Reachability was already confirmed above — this covers whatever else
-        # LemonadeClient's constructor (or the catalog warm-up) could still
-        # reject. Nothing on agent/chat has moved yet.
+        # LemonadeClient's constructor could still reject. Nothing on
+        # agent/chat has moved yet.
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
 
     _apply_switch(
