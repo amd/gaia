@@ -329,12 +329,8 @@ def _segment_goes_online(segment: str, depth: int) -> bool:
             if arg.lower() in _SHELL_COMMAND_FLAGS and idx + 1 < len(rest):
                 return _command_goes_online(" ".join(rest[idx + 1 :]), depth + 1)
     if program in _ARGUMENT_FEEDERS:
-        # xargs/parallel receive arguments from stdin; a local URL in the
-        # command line is not enough to prove the runtime destination stays
-        # local. Treat the feeder as online unless its wrapped fetch is
-        # definitely absent.
         inner, _ = _unwrap([t for t in rest if not t.startswith("-")])
-        return bool(inner) and _mentions_online(inner)
+        return _mentions_online(inner)
     for idx, arg in enumerate(rest):
         if arg in _FIND_EXEC and _mentions_online(rest[idx + 1 :]):
             return True

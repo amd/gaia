@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Set
 
 _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
@@ -61,7 +61,30 @@ OFFLINE_WRAPPERS = (_POLICY_WRAPPERS - {"xargs"}) | _LEDGER_ONLY_WRAPPERS
 # Flags whose next token is an operand for each launcher.  Keep these separate:
 # ``sudo -n`` and ``sudo -E`` take no value, while ``nice -n 5`` does.
 _VALUE_FLAGS = {
-    "sudo": frozenset({"-u", "--user", "-g", "--group", "-C", "--chdir"}),
+    "sudo": frozenset(
+        {
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-C",
+            "--close-from",
+            "-D",
+            "--chdir",
+            "-p",
+            "--prompt",
+            "-r",
+            "--role",
+            "-t",
+            "--type",
+            "-T",
+            "--command-timeout",
+            "-U",
+            "--other-user",
+            "-R",
+            "--chroot",
+        }
+    ),
     "doas": frozenset({"-u", "--user", "-a", "--persist"}),
     "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
     "setsid": frozenset(),
@@ -75,11 +98,8 @@ _VALUE_FLAGS = {
             "-a",
             "--arg-file",
             "-E",
-            "--eof",
             "-I",
-            "--replace",
             "-L",
-            "--max-lines",
             "-n",
             "--max-args",
             "-P",
@@ -92,15 +112,33 @@ _VALUE_FLAGS = {
     ),
 }
 
+_ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-C", "--chdir", "-P", "-a", "--argv0"})
+_ENV_NO_VALUE_FLAGS = frozenset(
+    {
+        "-i",
+        "--ignore-environment",
+        "-0",
+        "--null",
+        "-v",
+        "--debug",
+        "--block-signal",
+        "--default-signal",
+        "--ignore-signal",
+        "--list-signal-handling",
+    }
+)
+
 _NO_VALUE_FLAGS = {
     "sudo": frozenset({"-E", "-H", "-n", "-P", "-S", "-s", "-b", "-e"}),
     "doas": frozenset({"-C", "-L", "-n", "-s"}),
     "timeout": frozenset(
-        {"--foreground", "--preserve-status", "--verbose", "--help", "--version"}
+        {"--foreground", "--preserve-status", "-v", "--verbose", "--help", "--version"}
     ),
     "setsid": frozenset({"-f", "-w", "-c", "--wait", "--fork", "--ctty"}),
     "nohup": frozenset({"--help", "--version"}),
-    "time": frozenset({"-a", "--append", "-v", "--verbose", "--help", "--version"}),
+    "time": frozenset(
+        {"-a", "--append", "-p", "--portability", "-q", "--quiet", "-v", "--verbose"}
+    ),
     "nice": frozenset({"--help", "--version"}),
     "exec": frozenset({"-p", "-c"}),
     "command": frozenset({"-p", "-v", "-V"}),
@@ -111,6 +149,8 @@ _NO_VALUE_FLAGS = {
             "-r",
             "--no-run-if-empty",
             "--replace",
+            "--eof",
+            "--max-lines",
             "--verbose",
             "--show-limits",
             "--max-procs=0",
@@ -140,7 +180,7 @@ def _skip_env(argv: Sequence[str], index: int) -> Optional[int]:
         if _ASSIGNMENT_RE.fullmatch(token):
             index += 1
             continue
-        if token in ("-u", "--unset", "-C", "--chdir"):
+        if token in _ENV_VALUE_FLAGS:
             index += 2
             continue
         if token == "--":
@@ -167,7 +207,8 @@ def _skip_launcher_options(
     while index < len(argv):
         token = argv[index]
         if token == "--":
-            return index + 1
+            index += 1
+            break
         if not token.startswith("-") or token == "-":
             break
         flag = token.split("=", 1)[0]
@@ -234,6 +275,80 @@ def wrapped_command_argv(argv: Sequence[str]) -> Optional[List[str]]:
     return values[index:] if index is not None and index < len(values) else None
 
 
+def _option_ends(program: str, argv: Sequence[str], index: int) -> Set[int]:
+    """Every index where *program*'s own options could end.
+
+    An option the table doesn't know may or may not take the next word, so
+    both readings are followed rather than guessing one.
+    """
+    if program == "env":
+        values = _ENV_VALUE_FLAGS
+        no_values = _ENV_NO_VALUE_FLAGS
+    else:
+        values = _VALUE_FLAGS.get(program, frozenset())
+        no_values = _NO_VALUE_FLAGS.get(program, frozenset())
+    ends: Set[int] = set()
+    seen: Set[int] = set()
+    pending = [index]
+    while pending:
+        i = pending.pop()
+        if i in seen or i >= len(argv):
+            continue
+        seen.add(i)
+        token = argv[i]
+        if program == "env" and _ASSIGNMENT_RE.fullmatch(token):
+            pending.append(i + 1)
+            continue
+        if token == "--":
+            ends.add(i + 1)
+            continue
+        if not token.startswith("-") or token == "-":
+            ends.add(i)
+            continue
+        flag = token.split("=", 1)[0]
+        if program == "env" and (flag.startswith("-S") or flag == "--split-string"):
+            # The value is a second command line, not argv for this parser.
+            continue
+        if flag in values:
+            pending.append(i + (1 if "=" in token else 2))
+        elif flag in no_values:
+            pending.append(i + 1)
+        elif not flag.startswith("--") and token[:2] in values:
+            pending.append(i + 1)  # a short flag with its value attached
+        else:
+            pending.extend((i + 1, i + 2))
+    if program == "timeout":
+        ends = {end + 1 for end in ends}  # the duration comes before the command
+    return {end for end in ends if end < len(argv)}
+
+
+def command_starts(argv: Sequence[str]) -> List[int]:
+    """Every position after 0 where a command run by known launchers may start.
+
+    For the shell policy: a refusal at any of these positions must hold,
+    whichever reading of an unfamiliar launcher option is the real one.
+    Each position is past the one before it, so the search always ends.
+    """
+    if not argv:
+        return []
+    found: Set[int] = set()
+    pending = [0]
+    while pending:
+        start = pending.pop()
+        program = _program(argv[start])
+        if program == "env" or program in _POLICY_WRAPPERS:
+            inner = {
+                start + 1 + end for end in _option_ends(program, argv[start + 1 :], 0)
+            }
+        else:
+            rest = wrapped_command_argv(argv[start:])
+            inner = {len(argv) - len(rest)} if rest else set()
+        for position in inner - found:
+            found.add(position)
+            pending.append(position)
+    return sorted(found)
+
+
 def _ledger_wrapper_argv(argv: Sequence[str]) -> Optional[List[str]]:
     """Return an inner command for a platform prefix used by effect tracking."""
     if not argv:
@@ -276,4 +391,9 @@ def unwrap_command_argv(argv: Sequence[str], *, ledger: bool = False) -> List[st
     return current
 
 
-__all__ = ["OFFLINE_WRAPPERS", "wrapped_command_argv", "unwrap_command_argv"]
+__all__ = [
+    "OFFLINE_WRAPPERS",
+    "command_starts",
+    "wrapped_command_argv",
+    "unwrap_command_argv",
+]

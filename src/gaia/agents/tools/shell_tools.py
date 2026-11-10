@@ -30,7 +30,7 @@ from gaia.agents.base.call_risk import (
     shell_command_risk,
 )
 from gaia.agents.base.checks import attach_check, check_from_command
-from gaia.agents.base.command_wrappers import wrapped_command_argv
+from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
@@ -1174,17 +1174,6 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
 
 #: Another name for a program the rules below already cover.
 _PROGRAM_ALIASES = {"pwsh": "powershell"}
-
-#: Launchers that can hide a policy-governed command behind their own argv.
-#: The wrapper itself is still confirm-only when the inner command is harmless;
-#: a refused inner command must keep its stronger refusal tier.  The option
-#: grammar lives in ``command_wrappers`` and is shared with denied-effect
-#: extraction so the two gates cannot drift apart.
-
-
-def _wrapped_policy_argv(argv: list) -> Optional[list]:
-    """Return the inner command hidden by a known launcher."""
-    return wrapped_command_argv(argv)
 
 
 def _program_behind(token: str) -> Optional[str]:
@@ -4306,6 +4295,7 @@ class ShellToolsMixin:
         command: str,
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
+        _unwrapped: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -4334,16 +4324,20 @@ class ShellToolsMixin:
         if bypass_gates:
             return ShellToolsMixin._validate_bypass_command(cmd_base)
 
-        wrapped = _wrapped_policy_argv(cmd_parts)
-        if wrapped:
-            # A wrapper is not permission to bypass the inner policy. Preserve
-            # a hard refusal (including never-offered and destructive calls);
-            # harmless inner calls still follow the wrapper's ordinary prompt.
-            inner = ShellToolsMixin._validate_command(
-                wrapped[0], wrapped, command, granted_binaries=granted_binaries
-            )
-            if inner is not None and inner.get("tier") == TIER_REFUSE:
-                return inner
+        # A launcher (sudo, timeout, xargs, ...) keeps the refusal of the
+        # command it runs; a harmless inner command gets the launcher's prompt.
+        if not _unwrapped:
+            for start in command_starts(cmd_parts):
+                inner_parts = cmd_parts[start:]
+                inner = ShellToolsMixin._validate_command(
+                    inner_parts[0].lower(),
+                    inner_parts,
+                    command,
+                    granted_binaries=granted_binaries,
+                    _unwrapped=True,
+                )
+                if inner is not None and _tier_rank(inner) == _TIER_RANK[TIER_REFUSE]:
+                    return inner
 
         program = _program_behind(cmd_base)
         if program is not None:

@@ -339,6 +339,8 @@ def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
         "timeout -k 5 10 rm -rf victim_rm",
         "xargs -n 1 rm -rf victim_rm",
         "xargs -L 1 rm -rf victim_rm",
+        "timeout -- 5 rm -rf victim_rm",
+        "sudo -p pw rm -rf victim_rm",
     ],
 )
 def test_wrapped_deletes_are_recorded_with_their_inner_operands(command, tmp_path):
