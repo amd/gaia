@@ -68,6 +68,8 @@ _TOY_SPEC = {
     "display_name": "Toy",
     "expected_api_major": "1",
     "token_env_var": "GAIA_TOY_SIDECAR_TOKEN",
+    "token_file_env_var": "GAIA_TOY_SIDECAR_TOKEN_FILE",
+    "secret_file_min_version": "0.0.1",
     "mode_env_var": "GAIA_TOY_AGENT_MODE",
     "cache_dir_name": "toy",
 }
@@ -503,6 +505,8 @@ _TOY_DEV_SPEC = {
     "display_name": "Toy Dev",
     "expected_api_major": "1",
     "token_env_var": "GAIA_TOY_DEV_SIDECAR_TOKEN",
+    "token_file_env_var": "GAIA_TOY_DEV_SIDECAR_TOKEN_FILE",
+    "secret_file_min_version": "0.0.1",
     "mode_env_var": "GAIA_TOY_DEV_AGENT_MODE",
     "cache_dir_name": "toy-dev",
     "dev_src_dir": str(_TOY_DEV_FIXTURE_DIR),
