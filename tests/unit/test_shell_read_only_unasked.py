@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+import gaia.agents.tools.shell_tools as st
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
 
@@ -195,7 +196,6 @@ def test_a_listed_name_given_as_a_path_still_asks(host, tmp_path):
     [
         "ls -la",
         "head -n 5 notes.txt",
-        "grep -rn TODO .",
         "dir",
         # Off Windows `dir` is GNU dir, and /b is a path at the root.
         pytest.param(
@@ -273,10 +273,26 @@ def test_a_link_out_of_the_allowed_folder_still_asks(outside_link, command):
     assert not _unasked(host, outside_link, command)
 
 
-def test_a_walk_with_no_link_in_it_runs_unasked(host, tmp_path):
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn TODO .",
+        "grep -r TODO notes.txt",
+        "grep -R TODO sub",
+        "grep --recursive TODO .",
+        "grep -d recurse TODO .",
+        "grep -id recurse TODO .",
+        "ls -R",
+        "ls -lR sub",
+        "dir /s",
+    ],
+)
+def test_a_walk_asks_even_with_no_link_in_it(host, tmp_path, command):
+    """A walk reads files nobody named, so it is never unasked."""
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "notes.txt").write_text("TODO")
-    assert _unasked(host, tmp_path, "grep -rn TODO .")
+    (tmp_path / "notes.txt").write_text("TODO")
+    assert not _unasked(host, tmp_path, command)
 
 
 @pytest.mark.parametrize("command", ["ls ~", "grep -r password ~", "du ."])
@@ -329,6 +345,231 @@ def test_a_dot_git_folder_reads_its_common_config_too(host, tmp_path):
     assert not _unasked(host, tmp_path, "git log -1")
 
 
-def test_a_recursive_read_of_one_file_walks_nothing(host, tmp_path):
-    (tmp_path / "notes.txt").write_text("TODO")
-    assert _unasked(host, tmp_path, "grep -r TODO notes.txt")
+# --- A program found in the working folder never runs unasked -------------
+
+
+@pytest.mark.parametrize(
+    "command, planted",
+    [
+        ("git log --oneline -3", "git.bat"),
+        ("git log --oneline -3", "GIT.CMD"),
+        ("git log --oneline -3", "git.com"),
+        pytest.param(
+            "git.exe log -1",
+            "git.exe",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows spelling"),
+        ),
+        ("ls", "ls.cmd"),
+        ("ls", "ls.exe"),
+        ("whoami", "whoami.exe"),
+        ("whoami", "whoami.vbs"),
+        ("uname -a", "uname"),
+        ("grep hi notes.txt", "grep.bat"),
+        # ``which`` runs ``where`` when PATH has no ``which``.
+        pytest.param(
+            "which git",
+            "where.bat",
+            marks=pytest.mark.skipif(os.name != "nt", reason="Windows spelling"),
+        ),
+    ],
+)
+def test_a_same_named_program_in_the_working_folder_asks(
+    host, tmp_path, command, planted
+):
+    (tmp_path / "notes.txt").write_text("hi\n")
+    _repo(tmp_path)
+    assert _unasked(host, tmp_path, command), "unasked before the file is added"
+    (tmp_path / planted).write_text("")
+    assert not _unasked(host, tmp_path, command)
+
+
+def test_a_program_in_the_folder_cd_moves_to_asks(host, tmp_path):
+    (tmp_path / "sub").mkdir()
+    assert _unasked(host, tmp_path, "cd sub && whoami")
+    (tmp_path / "sub" / "whoami.cmd").write_text("")
+    assert not _unasked(host, tmp_path, "cd sub && whoami")
+
+
+def test_any_pathext_extension_counts(host, tmp_path, monkeypatch):
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.ODD")
+    (tmp_path / "whoami.odd").write_text("")
+    assert not _unasked(host, tmp_path, "whoami")
+
+
+def test_a_folder_named_like_the_program_does_not_ask(host, tmp_path):
+    (tmp_path / "git.bat").mkdir()
+    (tmp_path / "ls").mkdir()
+    _repo(tmp_path)
+    assert _unasked(host, tmp_path, "git log -1")
+    assert _unasked(host, tmp_path, "ls")
+
+
+@pytest.mark.parametrize("entry", [".", "bin", ""])
+def test_a_relative_path_entry_asks(host, tmp_path, monkeypatch, entry):
+    if entry == "" and os.name == "nt":
+        pytest.skip("cmd.exe skips an empty PATH entry")
+    monkeypatch.setenv("PATH", entry + os.pathsep + os.environ.get("PATH", ""))
+    assert not _unasked(host, tmp_path, "whoami")
+
+
+def test_program_on_path_skips_the_working_folder_and_relative_entries(
+    tmp_path, monkeypatch
+):
+    work, bin_ = tmp_path / "work", tmp_path / "bin"
+    work.mkdir()
+    bin_.mkdir()
+    (work / "git.bat").write_text("")
+    (bin_ / "git.exe").write_text("")
+    monkeypatch.setenv("PATHEXT", ".EXE;.BAT")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(work), "work", str(bin_)]))
+    assert st._program_on_path("git", str(work)) == str(bin_ / "git.exe")
+    assert st._program_on_path("nothere", str(work)) is None
+
+
+def test_listed_programs_are_pinned_to_their_path_location(tmp_path, monkeypatch):
+    work, bin_ = tmp_path / "work", tmp_path / "bin"
+    work.mkdir()
+    bin_.mkdir()
+    for name in ("git.exe", "grep.exe", "npm.cmd"):
+        (bin_ / name).write_text("")
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    monkeypatch.setenv("PATH", str(bin_))
+    text, listed = st._pin_listed_programs("git log -3 | grep fix", str(work))
+    assert text == f'"{bin_ / "git.exe"}" log -3 | "{bin_ / "grep.exe"}" fix'
+    assert listed
+    # dir and echo are cmd.exe's own; no file can stand in for them.
+    assert st._pin_listed_programs("dir /b", str(work)) == ("dir /b", True)
+    # Anything else keeps its usual lookup, and the folder search with it.
+    text, listed = st._pin_listed_programs("npm test", str(work))
+    assert (text, listed) == ("npm test", False)
+
+
+def test_the_cmd_launcher_runs_chcp_and_cmd_by_path(monkeypatch):
+    monkeypatch.setenv("SystemRoot", r"C:\Win")
+    monkeypatch.delenv("COMSPEC", raising=False)
+    line, _ = st._cmd_exe_launch("git log", {})
+    cmd = os.path.join(r"C:\Win", "System32", "cmd.exe")
+    chcp = os.path.join(r"C:\Win", "System32", "chcp.com")
+    assert line.startswith(f'"{cmd}" /v:on /c ""{chcp}" 65001>nul && "{cmd}" /c ')
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe launch")
+def test_a_listed_step_tells_cmd_not_to_search_its_folder(tmp_path, monkeypatch):
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_popen(args, **kwargs):
+        seen.update(kwargs, args=args)
+        raise Stop
+
+    monkeypatch.setattr(st.subprocess, "Popen", fake_popen)
+    for command, expected in (("git log -1", "1"), ("npm test", None)):
+        steps, error = st._parse_line(command, bypass_gates=False)
+        assert error is None
+        with pytest.raises(Stop):
+            st._run_step(steps[0], str(tmp_path), 5, frozenset())
+        assert seen["env"].get("NoDefaultCurrentDirectoryInExePath") == expected
+
+
+# --- An unasked read honours the protected-file list ----------------------
+
+
+@pytest.fixture
+def secrets(tmp_path):
+    (tmp_path / ".env").write_text("API_KEY=x")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / ".env").write_text("API_KEY=x")
+    (tmp_path / ".npmrc").write_text("//registry/:_authToken=x")
+    (tmp_path / ".git-credentials").write_text("https://u:t@host")
+    (tmp_path / "id_rsa").write_text("KEY")
+    (tmp_path / "server.pem").write_text("KEY")
+    (tmp_path / "README.md").write_text("hello")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "file.py").write_text("foo = 1\n")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat .env",
+        "cat secrets/.env",
+        "cat secrets\\.env",
+        "cd secrets && cat .env",
+        "grep password .env",
+        "head -n 3 .env.staging",
+        "cat id_rsa",
+        "cat server.pem",
+        "grep -r password .",
+        "grep -R password",
+        "ls .git",
+        "cd .git && cat config",
+    ],
+)
+def test_a_protected_file_asks(host, secrets, command):
+    assert not _unasked(host, secrets, command)
+
+
+@pytest.mark.parametrize("name", [".npmrc", ".git-credentials"])
+def test_a_protected_file_named_by_full_path_asks(host, secrets, name):
+    assert not _unasked(host, secrets, f"cat {(secrets / name).as_posix()}")
+
+
+def test_the_secret_folders_ask_even_when_allowed(tmp_path, monkeypatch):
+    validator = PathValidator(allowed_paths=[str(tmp_path)])
+    host = Host(tmp_path)
+    host.path_validator = validator
+    monkeypatch.setattr(validator, "is_read_blocked", lambda p: (p.endswith("aws"), ""))
+    (tmp_path / "aws").mkdir()
+    assert not _unasked(host, tmp_path / "aws", "ls")
+    assert not _unasked(host, tmp_path, "ls aws")
+
+
+def test_ordinary_reads_stay_unasked(host, secrets):
+    _repo(secrets)
+    for command in (
+        "cat README.md",
+        "ls src",
+        "ls",
+        "git log --oneline -3",
+        "grep foo file.py",
+        "head -n 1 README.md 2>/dev/null",
+    ):
+        assert _unasked(host, secrets, command), command
+
+
+# --- Reads that never end, devices, and gpg ask -----------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tail -f notes.txt",
+        "tail -F notes.txt",
+        "tail -n 5 -f notes.txt",
+        "tail --follow notes.txt",
+        "cat CON",
+        "cat con",
+        "cat PRN",
+        "cat AUX",
+        "cat NUL",
+        "cat COM1",
+        "cat LPT1",
+        "cat con.txt",
+        "head sub/COM3",
+        "git log --show-signature",
+        "git log -1 --show-signature",
+    ],
+)
+def test_endless_reads_devices_and_signatures_ask(host, tmp_path, command):
+    (tmp_path / "notes.txt").write_text("hi\n")
+    (tmp_path / "sub").mkdir()
+    _repo(tmp_path)
+    assert not _unasked(host, tmp_path, command)
+
+
+def test_a_plain_tail_stays_unasked(host, tmp_path):
+    (tmp_path / "notes.txt").write_text("hi\n")
+    assert _unasked(host, tmp_path, "tail -n 5 notes.txt")

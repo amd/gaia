@@ -581,6 +581,10 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
 
     monkeypatch.setattr(shell_tools, "os", _WindowsOS())
     monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)
+    # Pinning a program to its PATH location has its own tests.
+    monkeypatch.setattr(shell_tools, "_program_on_path", lambda name, cwd: None)
+    # The cmd.exe launcher locates cmd and chcp under it, off Windows too.
+    monkeypatch.setenv("SystemRoot", os.environ.get("SystemRoot", r"C:\Windows"))
 
     _run("ls && cat notes.txt", notes)
 
