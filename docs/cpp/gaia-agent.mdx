@@ -128,12 +128,33 @@ gaiacpp --prompt-file prompt.txt
 `--output-format json` prints one line:
 
 ```json
-{"result": "…", "status": "success", "steps": 5, "tool_errors": 0,
- "model": "…", "duration_s": 6.0, "peak_rss_mb": 14.9, "cpu_s": 0.08,
- "usage": {"prompt_tokens": 17831, "completion_tokens": 735, "total_tokens": 18566}}
+{"result": "…", "status": "success", "steps": 3, "tool_errors": 0,
+ "model": "…", "duration_s": 5.2, "peak_rss_mb": 16.7, "cpu_s": 0.03,
+ "num_steps": 3, "num_llm_calls": 3, "num_tool_calls": 2, "error_count": 0,
+ "input_tokens": 14547, "cached_tokens": 8492, "output_tokens": 199,
+ "peak_context_tokens": 5042,
+ "usage": {"prompt_tokens": 14547, "completion_tokens": 199, "total_tokens": 14746,
+           "cached_tokens": 8492, "peak_context_tokens": 5042}}
 ```
 
 `status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
+
+The counters use the same names as `gaia -p --output-format json`, so one script can read both agents:
+
+| Field | Meaning |
+|---|---|
+| `num_steps` | Turns of the agent loop (same as `steps`) |
+| `num_llm_calls` | Requests sent to the model, including a closing answer after the step limit |
+| `num_tool_calls` | Tools run |
+| `error_count` | Tool calls that failed (same as `tool_errors`) |
+| `input_tokens` | Prompt tokens, summed over every model request |
+| `cached_tokens` | The part of `input_tokens` the provider served from its cache. A local model reports none, so this is 0 |
+| `output_tokens` | Tokens the model wrote |
+| `peak_context_tokens` | The largest single request, prompt plus reply: how full the context window got |
+
+The token fields are 0 when the server reports no usage.
+
+Set `GAIA_TURN_LOG` to a file path and every `-p` run also appends one JSON line to it: the same counters, plus `llm_calls` (step, seconds, and input, cached and output tokens for each request) and `tool_calls` (step, tool name, seconds, and whether it succeeded). A path that cannot be written stops the run before it starts.
 
 With `-p` and no prompt argument, the prompt is read from stdin until it closes.
 

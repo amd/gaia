@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <deque>
 #include <iostream>
@@ -549,6 +550,11 @@ UsageStats extractUsage(const json& responseJson) {
         usage.promptTokens = u.value("prompt_tokens", 0);
         usage.completionTokens = u.value("completion_tokens", 0);
         usage.totalTokens = u.value("total_tokens", 0);
+        const auto details = u.find("prompt_tokens_details");
+        if (details != u.end() && details->is_object()) {
+            usage.cachedTokens = details->value("cached_tokens", 0);
+        }
+        usage.peakContextTokens = usage.promptTokens + usage.completionTokens;
     }
     return usage;
 }
@@ -935,10 +941,13 @@ std::optional<std::string> toolFailure(const json& r);  // defined with the loop
 }  // namespace
 
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
+    const auto started = std::chrono::steady_clock::now();
     json result = tools_.executeTool(toolName, toolArgs);
+    const double wall =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
     turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
-                              !toolFailure(result).has_value()});
+                              !toolFailure(result).has_value(), turnStep_, wall});
     return result;
 }
 
@@ -1426,6 +1435,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
     turnToolCalls_.clear();
+    turnStep_ = 0;
 
     // Reset cancel flag at the start of each query.
     cancelled_.store(false);  // cancelCheck_ is the caller's and stays
@@ -1466,6 +1476,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     int stepsTaken = 0;
     std::string finalAnswer;
     int errorCount = 0;
+    json llmCallLog = json::array();
+    auto logLlmCall = [&llmCallLog](int step, std::chrono::steady_clock::time_point started,
+                                    const UsageStats& u) {
+        const double wall =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        llmCallLog.push_back({{"step", step},
+                              {"wall_s", std::round(wall * 1000) / 1000},
+                              {"input_tokens", u.promptTokens},
+                              {"cached_tokens", u.cachedTokens},
+                              {"output_tokens", u.completionTokens}});
+    };
     std::string lastError;
     ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
     UsageStats totalUsage;
@@ -1498,6 +1519,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         }
 
         ++stepsTaken;
+        turnStep_ = stepsTaken;
         console_->printStepHeader(stepsTaken, stepsLimit);
 
         // ---- Error Recovery ----
@@ -1544,6 +1566,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Skip progress spinner when streaming — tokens serve as live progress.
         if (!cfg.streaming) console_->startProgress("Thinking");
         LlmResult llmResult;
+        const auto llmStarted = std::chrono::steady_clock::now();
         try {
             llmResult = callLlmResilient(messages, turnSystemPrompt, cfg);
         } catch (const std::exception& e) {
@@ -1562,6 +1585,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         const std::string& response = llmResult.content;
         totalUsage += llmResult.usage;
+        logLlmCall(stepsTaken, llmStarted, llmResult.usage);
 
         // Debug: show response
         if (cfg.showPrompts) {
@@ -1848,9 +1872,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 "unfinished. Do not claim work you did not do.";
             messages.push_back(closing);
             try {
+                const auto closingStarted = std::chrono::steady_clock::now();
                 LlmResult closingResult =
                     callLlmResilient(messages, composeSystemPromptFor(cfg), cfg, false);
                 totalUsage += closingResult.usage;
+                logLlmCall(stepsTaken, closingStarted, closingResult.usage);
                 std::string text = closingResult.content;
                 if (!cfg.useNativeToolCalls()) {
                     ParsedResponse p = parseLlmResponse(text);
@@ -1920,8 +1946,19 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         {"steps_taken", stepsTaken},
         {"steps_limit", stepsLimit},
         {"status", cancelRequested() ? "cancelled" : (failed ? "error" : "success")},
-        {"tool_errors", errorCount}
+        {"tool_errors", errorCount},
+        {"tool_calls", turnToolCalls_.size()},
+        {"llm_calls", llmCallLog.size()}
     };
+    json toolCallLog = json::array();
+    for (const auto& call : turnToolCalls_) {
+        toolCallLog.push_back({{"step", call.step},
+                               {"name", call.name},
+                               {"wall_s", std::round(call.wallSeconds * 1000) / 1000},
+                               {"ok", call.succeeded}});
+    }
+    result["telemetry"] = {{"llm_calls", std::move(llmCallLog)},
+                           {"tool_calls", std::move(toolCallLog)}};
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();
     }

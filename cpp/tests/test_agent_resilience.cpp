@@ -348,3 +348,63 @@ TEST(AgentResilience, MalformedArgumentsAreNotReplayed) {
         }
     }
 }
+
+namespace {
+std::string withUsage(const std::string& body, int prompt, int cached, int completion) {
+    json j = json::parse(body);
+    j["usage"] = {{"prompt_tokens", prompt},
+                  {"completion_tokens", completion},
+                  {"total_tokens", prompt + completion},
+                  {"prompt_tokens_details", {{"cached_tokens", cached}}}};
+    return j.dump();
+}
+}  // namespace
+
+TEST(AgentTelemetry, ResultCountsCallsCachedTokensAndPeakContext) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(withUsage(call("c1", "add", R"({"a":5,"b":7})"), 1000, 0, 40));
+    mock.pushResponse(withUsage(call("c2", "soft_fail", "{}"), 1100, 900, 20));
+    mock.pushResponse(withUsage(answer("done"), 1200, 1000, 60));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["llm_calls"], 3);
+    EXPECT_EQ(r["tool_calls"], 2);
+    EXPECT_EQ(r["tool_errors"], 1);
+    EXPECT_EQ(r["usage"]["prompt_tokens"], 3300);
+    EXPECT_EQ(r["usage"]["cached_tokens"], 1900);
+    EXPECT_EQ(r["usage"]["completion_tokens"], 120);
+    EXPECT_EQ(r["usage"]["peak_context_tokens"], 1260) << "largest single call, not the sum";
+
+    const json& llm = r["telemetry"]["llm_calls"];
+    ASSERT_EQ(llm.size(), 3u);
+    EXPECT_EQ(llm[1]["step"], 2);
+    EXPECT_EQ(llm[1]["input_tokens"], 1100);
+    EXPECT_EQ(llm[1]["cached_tokens"], 900);
+    EXPECT_EQ(llm[1]["output_tokens"], 20);
+    EXPECT_GE(llm[1]["wall_s"].get<double>(), 0.0);
+
+    const json& tools = r["telemetry"]["tool_calls"];
+    ASSERT_EQ(tools.size(), 2u);
+    EXPECT_EQ(tools[0]["name"], "add");
+    EXPECT_EQ(tools[0]["step"], 1);
+    EXPECT_EQ(tools[0]["ok"], true);
+    EXPECT_EQ(tools[1]["name"], "soft_fail");
+    EXPECT_EQ(tools[1]["step"], 2);
+    EXPECT_EQ(tools[1]["ok"], false);
+}
+
+TEST(AgentTelemetry, UsageWithoutCacheDetailsReportsZeroCached) {
+    bench::MockLlmServer mock;
+    json body = json::parse(answer("hi"));
+    body["usage"] = {{"prompt_tokens", 50}, {"completion_tokens", 5}, {"total_tokens", 55}};
+    mock.pushResponse(body.dump());
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["usage"]["cached_tokens"], 0);
+    EXPECT_EQ(r["usage"]["peak_context_tokens"], 55);
+    EXPECT_EQ(r["tool_calls"], 0);
+    EXPECT_TRUE(r["telemetry"]["tool_calls"].empty());
+}

@@ -325,6 +325,8 @@ protected:
         std::string name;
         json args;
         bool succeeded = false;
+        int step = 0;
+        double wallSeconds = 0.0;
     };
 
     /// Every tool call of the query in progress, in order (for answer review).
@@ -430,6 +432,7 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<ToolCallRecord> turnToolCalls_;
+    int turnStep_ = 0;
     std::vector<Message> conversationHistory_;
 
     // Full text of recent tool outputs, by id, for read_tool_output.
