@@ -585,6 +585,12 @@ class ChatAgent(
     _model_called: bool = False
     _released_slots: FrozenSet[int] = frozenset()
 
+    # Why configured MCP servers are missing, and the last such notice shown,
+    # so re-registering tools each turn doesn't repeat it.
+    _mcp_unavailable_error: Optional[str] = None
+    _mcp_dropped_notice: Optional[str] = None
+    _mcp_dropped_notice_shown: Optional[str] = None
+
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
         Initialize Chat Agent.
@@ -797,9 +803,12 @@ class ChatAgent(
             from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
             self._mcp_manager = MCPClientManager(config=MCPConfig(), debug=config.debug)
-        except Exception as _e:
+        except Exception as _e:  # pylint: disable=broad-except
+            # The console doesn't exist yet; _load_mcp_tools reports this if
+            # any servers are configured.
             logger.debug("MCP not available: %s", _e)
             self._mcp_manager = None
+            self._mcp_unavailable_error = str(_e) or type(_e).__name__
 
         # Call parent constructor
         super().__init__(
@@ -2200,6 +2209,96 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
 
+    def _load_mcp_tools(self) -> None:
+        """Register tools from the MCP servers in ``mcp_servers.json``.
+
+        Any server that can't be offered leaves a notice naming it and why,
+        shown to the user by :meth:`report_mcp_dropped`. The agent starts either way.
+        """
+        _mcp_config_path = gaia_home() / "mcp_servers.json"
+        if not _mcp_config_path.exists():
+            self._set_mcp_dropped_notice(None)
+            return
+        if self._mcp_manager is None:
+            if self._mcp_unavailable_error:
+                self._set_mcp_dropped_notice(
+                    "Your MCP servers are unavailable this session: GAIA's MCP "
+                    f"client could not start ({self._mcp_unavailable_error})."
+                )
+            return
+        try:
+            self._mcp_manager.load_from_config()
+            self._print_mcp_load_summary()
+            # Servers activated for this agent (#1005); every connected one
+            # for an agent with no registry identity.
+            active = self._active_mcp_servers(self._mcp_manager)
+            tool_counts = {
+                srv: len(client.list_tools())
+                for srv in active
+                if (client := self._mcp_manager.get_client(srv)) is not None
+            }
+            total = sum(tool_counts.values())
+            limit = self.config.mcp_tool_limit
+            if total > limit:
+                servers = ", ".join(
+                    f"{srv} ({n} tool{'s' if n != 1 else ''})"
+                    for srv, n in tool_counts.items()
+                )
+                self._set_mcp_dropped_notice(
+                    f"MCP servers not loaded: {servers}. Together they add "
+                    f"{total} tools, over the limit of {limit}. Turn some of "
+                    "them off for this agent in Settings > Connectors so the "
+                    "rest fit."
+                )
+                return
+            before = len(_TOOL_REGISTRY)
+            for srv in active:
+                client = self._mcp_manager.get_client(srv)
+                if client:
+                    self._register_mcp_tools(client)
+            added = len(_TOOL_REGISTRY) - before
+            if added > 0:
+                logger.info("Loaded %d MCP tool(s)", added)
+            self._set_mcp_dropped_notice(None)
+        except Exception as e:  # pylint: disable=broad-except
+            # A broken MCP setup must not stop the agent; the user is told.
+            names = ", ".join(self._mcp_manager.config.get_servers())
+            self._set_mcp_dropped_notice(
+                f"MCP servers not loaded{f': {names}' if names else ''}. "
+                f"Loading them failed: {e}"
+            )
+
+    def _set_mcp_dropped_notice(self, notice: Optional[str]) -> None:
+        """Record why MCP servers are missing; ``None`` once they all load."""
+        if notice and notice != self._mcp_dropped_notice:
+            logger.warning(notice)
+        self._mcp_dropped_notice = notice
+        if notice is None:
+            self._mcp_dropped_notice_shown = None
+
+    def report_mcp_dropped(self) -> bool:
+        """Show the MCP notice through the current console once per distinct notice.
+
+        A ``SilentConsole`` doesn't count as shown: the Agent UI builds agents
+        with one and swaps in its streaming console before a turn.
+        """
+        from gaia.agents.base.console import SilentConsole
+
+        notice = self._mcp_dropped_notice
+        if not notice or notice == self._mcp_dropped_notice_shown:
+            return False
+        target = getattr(self, "console", None)
+        if target is None or isinstance(target, SilentConsole):
+            return False
+        target.print_warning(notice)
+        self._mcp_dropped_notice_shown = notice
+        return True
+
+    def process_query(self, user_input, *args, **kwargs):
+        """Run a turn, first telling the user about any dropped MCP servers."""
+        self.report_mcp_dropped()
+        return super().process_query(user_input, *args, **kwargs)
+
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins based on prompt_profile."""
         from gaia.agents.base.tools import tool
@@ -3279,47 +3378,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "chunks": chunks,
             }
 
-        # MCP tools — load from <gaia_home>/mcp_servers.json if configured.
         # Must run last so MCP tools don't bloat context before we know the base count.
-        # Hard limit: skip if MCP would add too many tools (context bloat guard).
-        # Configurable via ChatAgentConfig.mcp_tool_limit (default 50).
-        _MCP_TOOL_LIMIT = self.config.mcp_tool_limit
-        _mcp_config_path = gaia_home() / "mcp_servers.json"
-        if _mcp_config_path.exists() and self._mcp_manager is not None:
-            try:
-                self._mcp_manager.load_from_config()
-                self._print_mcp_load_summary()
-                # Filter to servers explicitly activated for this agent
-                # (issue #1005). Falls back to the unfiltered list when the
-                # agent has no registry identity, preserving prior behaviour
-                # for ad-hoc test agents.
-                _active_servers = self._active_mcp_servers(self._mcp_manager)
-                # Preview total tool count before registering
-                _mcp_tool_count = sum(
-                    len(_c.list_tools())
-                    for _srv in _active_servers
-                    if (_c := self._mcp_manager.get_client(_srv)) is not None
-                )
-                if _mcp_tool_count > _MCP_TOOL_LIMIT:
-                    logger.warning(
-                        "MCP servers would add %d tools (limit=%d) — skipping to prevent "
-                        "context bloat. Reduce configured MCP servers to enable.",
-                        _mcp_tool_count,
-                        _MCP_TOOL_LIMIT,
-                    )
-                else:
-                    _before = len(_TOOL_REGISTRY)
-                    for _srv in _active_servers:
-                        _client = self._mcp_manager.get_client(_srv)
-                        if _client:
-                            self._register_mcp_tools(_client)
-                    _added = len(_TOOL_REGISTRY) - _before
-                    if _added > 0:
-                        logger.info(
-                            "Loaded %d MCP tool(s) from %s", _added, _mcp_config_path
-                        )
-            except Exception as _mcp_err:
-                logger.warning("MCP server load failed: %s", _mcp_err)
+        self._load_mcp_tools()
 
         # Snapshot: freeze this agent's tool set so mutations by other agents
         # in the same process do not leak in.  Exclusion replaces the old
