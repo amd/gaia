@@ -144,7 +144,8 @@ This skill wraps its HTTP API. No local Docker daemon is involved, and no
 
 - A key's balance is a hard ceiling. When it reaches zero, deploys return `402`
   and running containers stop within a minute; a volume and its data are kept.
-  This skill cannot add credit — point the user at their dashboard.
+  This skill cannot add credit — point the user at their dashboard or
+  <https://cloudish.ai/credits.md>.
 - Container logs are fetched live and are not stored, so read them before
   redeploying if they matter.
 - Deleting a project is not exposed here because it also deletes its volume.
@@ -152,6 +153,13 @@ This skill wraps its HTTP API. No local Docker daemon is involved, and no
   confirm with the user first.
 - The build context is read through GAIA's allowed-folder check, so a folder
   outside them is refused before anything is uploaded.
+
+## Reference
+
+The HTTP API this skill wraps is documented at
+<https://cloudish.ai/skill.md> (last updated 2026-11-07). Read it before
+changing a tool: the request fields, the build status values, the resource
+choices, and the credit and volume rules all come from there.
 
 ## Fork this
 
