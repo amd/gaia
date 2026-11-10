@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Generated images and audio arrive as a `media` card.** A successful
+  `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
+  result now carries `render: "media"` with the saved file's absolute path, type,
+  size and model, so a client can show and open it without reading a path out of
+  the answer. Only an existing local image or audio file becomes a card; anything
+  else stays a plain tool result.
 - **The "not confirmed" line on an answer is now documented.** An answer that
   ends with `I haven't confirmed this works — …` is the agent saying a check
   failed, was blocked, or never ran after a change. README, SPEC and SKILL say
@@ -37,6 +43,37 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `credentials.json`, and `/index` refuses a protected file named directly.
   `/resume` reports "N of M documents" and keeps only the documents that
   actually indexed.
+- **The agent can use a Google or Outlook calendar.** A new bundled skill,
+  `calendar`, lists events, checks free time, and creates, changes or cancels
+  events. The agent loads it when a request is about the calendar, and its five
+  tools (`calendar/list_calendar_events`, `calendar/create_calendar_event`, …)
+  join the tool list only then, so the registered tool count stays 105. Every
+  write asks a person first, even under full access, and a run with nobody to
+  ask refuses it. The prompt shows the
+  event's title, start, who gets notified and what changes; a call that misstates
+  them is refused before any prompt. `create_calendar_event` must state
+  `calendar_account`, and a change or cancel prompt names the account too, so the
+  prompt always shows where the change lands. A time given with today's UTC offset
+  for a date past a daylight-saving change is refused with the right offset, and
+  free time across that change is read in the computer's own zone. Results name the
+  account and say only its main calendar was read, and event text reaches the model
+  marked as untrusted. A wrong event id is an error rather than "already gone", and a
+  description over 500 characters, or a title or location over 200, is refused. Hidden characters show in the prompt as
+  codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
+  at a time. Consent now
+  asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
+  connections keep reading mail, and a calendar call names the command that adds
+  the scope. Larger models only; on Gemma 4 E4B the skill is not listed and
+  loading it is refused. The calendar was tried on real Google and Outlook
+  calendars, as core tools, but not yet measured by the agent evals.
+- **A skill tool can require approval on every call.** `requires_confirmation:
+  true` on a `metadata.gaia.tools` entry makes the agent ask before each call,
+  and no grant pre-authorizes it. A skill tool's `preflight` and approval prompt
+  now run with the agent bound, as its body does.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 

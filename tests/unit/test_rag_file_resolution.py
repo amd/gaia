@@ -178,7 +178,7 @@ def test_indexing_reports_session_save_failure(tmp_path, tool_name, save_succeed
     host.session_manager.save_session.return_value = save_succeeds
     host.rebuild_system_prompt = MagicMock()
 
-    def index_file(_rag, path):
+    def index_file(_rag, path, **_kwargs):
         rag.indexed_files.add(path)
         return {"success": True, "file_name": document.name}, None
 
@@ -236,7 +236,7 @@ class TestIndexDocumentEviction:
         host.rebuild_system_prompt = MagicMock()
         calls = []
 
-        def index_file(_rag, path):
+        def index_file(_rag, path, **_kwargs):
             calls.append(path)
             return dict(rag_result(old, new, path)), None
 
