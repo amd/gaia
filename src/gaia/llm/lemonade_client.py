@@ -662,12 +662,13 @@ def preferred_llamacpp_backend() -> Optional[str]:
 def manages_embedder_backend(model_name: Optional[str]) -> bool:
     """Whether GAIA picks *model_name*'s llama.cpp backend and saves it.
 
-    macOS is left to Lemonade, which runs everything on Metal.
+    macOS is left to Lemonade, which runs everything on Metal. The embedder's
+    ubatch is saved on every platform all the same.
     """
     return platform.system() != "Darwin" and model_name in EMBEDDER_MODELS
 
 
-#: ``(base_url, model)`` pairs whose backend this process has saved on the server.
+#: ``(base_url, model)`` pairs whose embedder options this process has saved.
 _PINNED_BACKENDS: set = set()
 #: ``(base_url, model)`` pairs whose GPU load failed in this process; they go
 #: straight to the CPU backend instead of crashing the GPU one again.
@@ -7246,9 +7247,9 @@ class LemonadeClient:
         options, so the saved backend must be one that loads on this machine —
         and a CPU pin saved by an older GAIA is replaced by the GPU here. On
         the user's own server, where nothing is saved, it is loaded whenever
-        it isn't resident.
+        it isn't resident. On macOS only the ubatch is saved.
         """
-        if not manages_embedder_backend(model_name):
+        if model_name not in EMBEDDER_MODELS:
             return
         if self.is_users_server():
             # Nothing is saved on a server the user runs, so a reload Lemonade
@@ -9281,7 +9282,7 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
-        if manages_embedder_backend(model_name):
+        if model_name in EMBEDDER_MODELS:
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
         for listener in list(_MODEL_LOAD_LISTENERS):
@@ -9326,8 +9327,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
-                         Always on for an embedder whose backend GAIA picks
-                         (:func:`manages_embedder_backend`). None (the default)
+                         Always on for GAIA's embedder (``EMBEDDER_MODELS``),
+                         so Lemonade's own reloads keep its ubatch. None (the default)
                          saves whenever *ctx_size* is given, except on a server
                          the user runs.
             prompt: If True, prompt user before downloading (default: True).
@@ -9359,7 +9360,11 @@ class LemonadeClient:
         managed_embedder = manages_embedder_backend(model_name)
         users_args: Optional[str] = None
         # An embedder load saves its options; never save the chat flags.
-        if llamacpp_args is None and ctx_size is not None and not managed_embedder:
+        if (
+            llamacpp_args is None
+            and ctx_size is not None
+            and model_name not in EMBEDDER_MODELS
+        ):
             # The chat flags are a speed-up; an unreadable catalog must not
             # block the load itself, which only needs POST /load.
             try:
@@ -9416,8 +9421,9 @@ class LemonadeClient:
                 backend = "cpu"
             if backend:
                 request_data["llamacpp_backend"] = backend
-            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
-            # never into the config of a server the user runs.
+        if model_name in EMBEDDER_MODELS:
+            # Saved so Lemonade's own auto-loads (``/embeddings``) keep the
+            # ubatch too; never into the config of a server the user runs.
             save_options = not self.is_users_server()
         elif save_options is None:
             # Lemonade's auto-load after an eviction would otherwise auto-tune
