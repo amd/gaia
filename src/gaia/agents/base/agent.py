@@ -2751,7 +2751,6 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        use_chatgpt: bool = False,
         claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
@@ -2783,7 +2782,6 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -2846,10 +2844,6 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
-        if use_chatgpt:
-            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
