@@ -13,8 +13,9 @@ import importlib.util
 import io
 import json
 import tarfile
+import urllib.error
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
@@ -23,14 +24,39 @@ SKILL_ROOT = REPO_ROOT / "hub" / "skills" / "deploy-cloudish"
 
 
 class _Response:
-    def __init__(self, payload: Any = None, status_code: int = 200) -> None:
-        self._payload = {} if payload is None else payload
-        self.status_code = status_code
-        self.ok = status_code < 400
-        self.text = json.dumps(self._payload)
+    def __init__(
+        self, payload: Any = None, *, raw: Optional[bytes] = None, status: int = 200
+    ) -> None:
+        self.status = status
+        body = raw
+        if body is None:
+            body = json.dumps({} if payload is None else payload)
+        self._body = body if isinstance(body, bytes) else body.encode("utf-8")
 
-    def json(self) -> Any:
-        return self._payload
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_Response":
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        return False
+
+
+def _http_error(url: str, status: int, payload: Any) -> urllib.error.HTTPError:
+    body = json.dumps(payload).encode("utf-8")
+    return urllib.error.HTTPError(url, status, "error", None, io.BytesIO(body))
+
+
+def _multipart_parts(call: dict[str, Any]) -> dict[str, bytes]:
+    """Collect the parts of the request body from its boundary."""
+    boundary = call["headers"]["content-type"].split("boundary=", 1)[1]
+    parts: dict[str, bytes] = {}
+    for chunk in call["body"].split(f"--{boundary}".encode())[1:-1]:
+        head, _, data = chunk.partition(b"\r\n\r\n")
+        name = head.decode("utf-8").split('name="', 1)[1].split('"', 1)[0]
+        parts[name] = data[:-2] if data.endswith(b"\r\n") else data
+    return parts
 
 
 @pytest.fixture
@@ -56,11 +82,19 @@ def calls(cloudish, monkeypatch) -> list[dict[str, Any]]:
     """Record every outgoing request and answer with ``{"ok": true}``."""
     recorded: list[dict[str, Any]] = []
 
-    def fake_request(method: str, url: str, **kwargs: Any) -> _Response:
-        recorded.append({"method": method, "url": url, **kwargs})
+    def fake_urlopen(request, timeout=None):
+        recorded.append(
+            {
+                "method": request.get_method(),
+                "url": request.full_url,
+                "headers": {k.lower(): v for k, v in request.header_items()},
+                "body": request.data,
+                "timeout": timeout,
+            }
+        )
         return _Response({"ok": True})
 
-    monkeypatch.setattr(cloudish.requests, "request", fake_request)
+    monkeypatch.setattr(cloudish.urllib.request, "urlopen", fake_urlopen)
     return recorded
 
 
@@ -98,16 +132,15 @@ def test_image_deploy_posts_json_to_the_fixed_endpoint(calls, cloudish):
     call = calls[0]
     assert call["method"] == "POST"
     assert call["url"] == "https://cloudish.ai/api/v1/projects"
-    assert call["headers"] == {"Authorization": "Bearer k"}
-    assert call["json"] == {
+    assert call["headers"]["authorization"] == "Bearer k"
+    assert call["headers"]["content-type"] == "application/json"
+    assert json.loads(call["body"]) == {
         "name": "my-app",
         "image": "ghcr.io/acme/app:1.0.0",
         "port": 3000,
         "env": {"MODE": "prod"},
         "alwaysOn": True,
     }
-    assert call["data"] is None
-    assert call["files"] is None
 
 
 def test_source_deploy_sends_multipart_with_string_form_fields(
@@ -124,26 +157,24 @@ def test_source_deploy_sends_multipart_with_string_form_fields(
     )
 
     call = calls[0]
-    assert call["json"] is None
-    assert call["data"] == {
-        "name": "my-app",
-        "port": "8080",
-        "sleepAfterMinutes": "30",
-        "volumeEnabled": "true",
-        "volumeSizeGb": "5",
-        "buildCpuCores": "1.0",
-        "buildMemoryGb": "2",
-    }
-    filename, archive, content_type = call["files"]["context"]
-    assert filename == "context.tar.gz"
-    assert content_type == "application/gzip"
+    assert call["headers"]["content-type"].startswith("multipart/form-data; boundary=")
+    parts = _multipart_parts(call)
+    assert parts["name"] == b"my-app"
+    assert parts["port"] == b"8080"
+    assert parts["sleepAfterMinutes"] == b"30"
+    assert parts["volumeEnabled"] == b"true"
+    assert parts["volumeSizeGb"] == b"5"
+    assert parts["buildCpuCores"] == b"1.0"
+    assert parts["buildMemoryGb"] == b"2"
 
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(parts["context"]), mode="r:gz") as tar:
         names = {member.name for member in tar.getmembers()}
     assert names == {"Dockerfile", "app.py"}
 
 
-def test_context_without_a_dockerfile_is_refused(calls, cloudish, monkeypatch, tmp_path):
+def test_context_without_a_dockerfile_is_refused(
+    calls, cloudish, monkeypatch, tmp_path
+):
     (tmp_path / "app.py").write_text("print('hi')\n")
     monkeypatch.setattr(cloudish, "check_read", lambda path: Path(path))
 
@@ -197,6 +228,15 @@ def test_port_is_range_checked_before_the_request(calls, cloudish, port):
     assert calls == []
 
 
+def test_a_name_that_would_break_multipart_is_refused(calls, cloudish, context_dir):
+    result = cloudish.cloudish_deploy(
+        api_key="k", name='bad"\r\nname', context_dir=str(context_dir)
+    )
+
+    assert "line breaks" in result["error"]
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "field, value, expected",
     [
@@ -233,16 +273,50 @@ def test_owner_and_name_keep_their_path_segments(calls, cloudish):
 
 
 def test_exhausted_credits_are_reported_as_402(cloudish, monkeypatch):
-    monkeypatch.setattr(
-        cloudish.requests,
-        "request",
-        lambda *args, **kwargs: _Response({"error": "no credit"}, status_code=402),
-    )
+    def fake_urlopen(request, timeout=None):
+        raise _http_error(request.full_url, 402, {"error": "no credit"})
+
+    monkeypatch.setattr(cloudish.urllib.request, "urlopen", fake_urlopen)
 
     result = cloudish.cloudish_status(api_key="k", owner="o", name="n")
 
     assert result["status"] == 402
     assert "credit" in result["error"]
+
+
+def test_other_http_errors_carry_the_status_and_body(cloudish, monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise _http_error(request.full_url, 400, {"error": "bad name"})
+
+    monkeypatch.setattr(cloudish.urllib.request, "urlopen", fake_urlopen)
+
+    result = cloudish.cloudish_status(api_key="k", owner="o", name="n")
+
+    assert result["status"] == 400
+    assert "bad name" in result["error"]
+
+
+def test_a_non_json_response_is_reported_as_such(cloudish, monkeypatch):
+    monkeypatch.setattr(
+        cloudish.urllib.request,
+        "urlopen",
+        lambda request, timeout=None: _Response(raw=b"<html>not json</html>"),
+    )
+
+    result = cloudish.cloudish_status(api_key="k", owner="o", name="n")
+
+    assert "non-JSON" in result["error"]
+
+
+def test_a_network_failure_is_reported_as_unreachable(cloudish, monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.URLError("name resolution failed")
+
+    monkeypatch.setattr(cloudish.urllib.request, "urlopen", fake_urlopen)
+
+    result = cloudish.cloudish_status(api_key="k", owner="o", name="n")
+
+    assert "Could not reach Cloudish" in result["error"]
 
 
 def test_configure_requires_at_least_one_change(calls, cloudish):
@@ -260,7 +334,7 @@ def test_secrets_are_put_as_json(calls, cloudish):
     call = calls[0]
     assert call["method"] == "PUT"
     assert call["url"] == "https://cloudish.ai/api/v1/projects/o/n/secrets"
-    assert call["json"] == {"OPENAI_API_KEY": "sk-x"}
+    assert json.loads(call["body"]) == {"OPENAI_API_KEY": "sk-x"}
 
 
 def test_the_skill_registers_its_seven_tools(tmp_path, monkeypatch):

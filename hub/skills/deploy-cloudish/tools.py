@@ -14,10 +14,11 @@ from __future__ import annotations
 import io
 import json
 import tarfile
-from typing import Any, Dict, List, Optional
+import urllib.error
+import urllib.request
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
-
-import requests
 
 from gaia.agents.base.tools import tool
 from gaia.skills.context import check_read, list_readable, open_read
@@ -39,6 +40,44 @@ def _error(message: str, **extra: Any) -> dict:
     return {"error": message, **extra}
 
 
+def _multipart(fields: Dict[str, str], files: Dict[str, Any]) -> Tuple[bytes, str]:
+    """Encode form fields and one file as ``multipart/form-data``.
+
+    Standard library only: the skill ships no HTTP dependency, so the handful
+    of lines a multipart body needs live here rather than in a package.
+    """
+    boundary = f"----gaia{uuid.uuid4().hex}"
+    chunks: List[bytes] = []
+    for name, value in fields.items():
+        chunks.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; '
+                f'name="{name}"\r\n\r\n{value}\r\n'
+            ).encode("utf-8")
+        )
+    for name, (filename, content, content_type) in files.items():
+        chunks.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; '
+                f'name="{name}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+        )
+        chunks.append(content)
+        chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _response_detail(raw: bytes) -> str:
+    """The response body, parsed if it is JSON, for an error message."""
+    text = raw.decode("utf-8", "replace")
+    try:
+        return str(json.loads(text))
+    except ValueError:
+        return text[:2000]
+
+
 def _request(
     method: str,
     path: str,
@@ -50,51 +89,49 @@ def _request(
     timeout: float = DEFAULT_TIMEOUT_S,
 ) -> dict:
     """Call one Cloudish endpoint and return its JSON, or an ``error`` dict."""
-    headers = {}
+    headers = {"Accept": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    body: Optional[bytes] = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    elif files is not None:
+        body, headers["Content-Type"] = _multipart(data or {}, files)
+
+    request = urllib.request.Request(
+        f"{API_BASE}{path}", data=body, headers=headers, method=method
+    )
     try:
-        response = requests.request(
-            method,
-            f"{API_BASE}{path}",
-            headers=headers,
-            json=json_body,
-            data=data,
-            files=files,
-            timeout=timeout,
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        if exc.code == 402:
+            return _error(
+                "Cloudish returned HTTP 402: this API key's credit balance is "
+                "exhausted, so the deploy was refused. Add credits to the key or "
+                "create a new one, then retry.",
+                status=402,
+            )
+        return _error(
+            f"Cloudish returned HTTP {exc.code} for {method} {path}: "
+            f"{_response_detail(raw)}",
+            status=exc.code,
         )
-    except requests.RequestException as exc:
+    except (urllib.error.URLError, OSError) as exc:
         return _error(
             f"Could not reach Cloudish at {API_BASE}: "
             f"{type(exc).__name__}: {exc}. Check the network and retry."
         )
 
-    if response.status_code == 402:
-        return _error(
-            "Cloudish returned HTTP 402: this API key's credit balance is "
-            "exhausted, so the deploy was refused. Add credits to the key or "
-            "create a new one, then retry.",
-            status=402,
-        )
-
-    if not response.ok:
-        try:
-            detail = response.json()
-        except ValueError:
-            detail = response.text[:2000]
-        return _error(
-            f"Cloudish returned HTTP {response.status_code} for "
-            f"{method} {path}: {detail}",
-            status=response.status_code,
-        )
-
     try:
-        return response.json()
-    except ValueError:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return _error(
             f"Cloudish returned a non-JSON response for {method} {path}: "
-            f"{response.text[:2000]}"
+            f"{_response_detail(raw)}"
         )
 
 
@@ -278,6 +315,8 @@ def cloudish_deploy(
         )
     if not 1 <= port <= 65535:
         return _error(f"port must be between 1 and 65535; got {port}.")
+    if any(ch in name for ch in '\r\n"'):
+        return _error("name must not contain line breaks or double quotes.")
 
     try:
         fields = _runtime_fields(

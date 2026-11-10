@@ -8,9 +8,6 @@ metadata:
     security_tier: community
     permissions:
       - network:write:cloudish.ai
-    requirements:
-      dependencies:
-        - requests>=2.32.3
     tools:
       - name: cloudish_create_key
         description: Create a Cloudish API key without an existing credential, returning the key and a claim URL.
