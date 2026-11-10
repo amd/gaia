@@ -167,6 +167,21 @@ def test_registered_dotted_local_chat_model_does_not_need_catalog(
     assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
 
 
+def test_unclassifiable_chat_model_is_a_plan_error_not_a_crash(no_server, monkeypatch):
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "resolve_chat_model", lambda: "opencode.big-model")
+
+    def unavailable(self, **_kwargs):
+        raise lc.LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(lc.LemonadeClient, "list_models", unavailable)
+    lc.record_cloud_models({"data": []})
+    with pytest.raises(sp.SetupPlanError, match="opencode.big-model"):
+        sp.model_need(model_choice.ROLE_CHAT)
+
+
 def test_cold_pc_names_the_starting_model_and_says_the_pick_comes_later(no_server):
     plan = sp.build_plan()
     assert plan["lemonade"]["reachable"] is False

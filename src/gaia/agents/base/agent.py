@@ -2960,14 +2960,8 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
-        # Cache classification for later token and context defaults. On a real
-        # startup an ambiguous model also needs a catalog lookup before preload.
-        from gaia.llm.lemonade_client import (
-            cloud_model_provider,
-            find_model_requirement,
-            is_cloud_model,
-            may_be_cloud_model,
-        )
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
         model_is_cloud = bool(
             cloud_model_provider(model_id) or is_cloud_model(model_id)
@@ -2980,6 +2974,7 @@ Do NOT wrap conversational replies in JSON.
                 LemonadeClient,
                 LemonadeClientError,
                 LemonadeUnresponsiveError,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2988,28 +2983,27 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            probe_client = None
-            if not model_is_cloud and may_be_cloud_model(model_id):
-                # Built-in gateway namespaces do not need a server probe. For
-                # a known local dotted id, a catalog failure falls through to
-                # the normal local ensure_ready path, which starts Lemonade.
-                # An unregistered ambiguous id still fails loudly instead of
-                # risking a gateway model taking a local preload path.
-                if cloud_model_provider(model_id):
-                    model_is_cloud = True
-                else:
-                    probe_client = LemonadeClient(base_url=base_url, verbose=False)
-                    try:
-                        model_is_cloud = probe_client._is_cloud_model(model_id)
-                    except LemonadeClientError:
-                        if find_model_requirement(model_id) is None:
-                            raise
-                        model_is_cloud = False
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
 
             if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
-                if probe_client is None:
-                    probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
                 probe_client.current_base_url()
                 if resolve_after_start:

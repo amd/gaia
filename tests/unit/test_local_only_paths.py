@@ -429,6 +429,93 @@ def test_cold_policy_catalog_failure_is_a_visible_notice(local_only_on, monkeypa
     )
 
 
+def test_known_cloud_default_is_cleared_when_catalog_is_down(
+    local_only_on, monkeypatch
+):
+    """A stopped Lemonade must not keep a known gateway default saved."""
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps(
+            {
+                "default_model": "amd.big-model",
+                "last_model": "opencode.big-model",
+                "last_provider": "local",
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_cloud_models({"data": []})
+
+    def unavailable(self, **_kwargs):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(LemonadeClient, "list_models", unavailable)
+    result = local_only.apply_policy("local_ai_only")
+    assert result["cleared"] == [("default_model", "amd.big-model")]
+    [notice] = [n for n in result["notices"] if n["severity"] == "warning"]
+    assert notice["code"] == "saved_models_not_checked"
+    assert "opencode.big-model" in notice["reason"]
+    assert "amd.big-model" not in notice["reason"]
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["default_model"] is None
+    assert saved["last_model"] == "opencode.big-model"
+
+
+def test_registered_dotted_local_default_needs_no_catalog(local_only_on, monkeypatch):
+    from gaia import config as config_mod
+    from gaia.llm import lemonade_client as lc
+
+    model = "user.Llama-3.2-3B-GGUF"
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": model}), encoding="utf-8"
+    )
+    lc.record_cloud_models({"data": []})
+    original = lc.find_model_requirement
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda m: object() if m == model else original(m),
+    )
+    monkeypatch.setattr(
+        LemonadeClient,
+        "list_models",
+        lambda self, **_kw: pytest.fail("catalog should not be queried"),
+    )
+    result = local_only.apply_policy("local_ai_only")
+    assert result["cleared"] == []
+    assert not [n for n in result["notices"] if n["severity"] == "warning"]
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["default_model"] == model
+
+
+def test_saved_id_of_a_registered_gateway_missing_from_catalog_is_cleared(
+    local_only_on, monkeypatch
+):
+    """Same rule as model loading: a registered provider's unlisted id is cloud."""
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    catalog = {"data": [{"id": "opencode.other-model", "recipe": "cloud"}]}
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "opencode.retired-model"}), encoding="utf-8"
+    )
+
+    def list_models(self, **_kwargs):
+        record_cloud_models(catalog)
+        return catalog
+
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    record_cloud_models({"data": []})
+    try:
+        assert local_only.clear_saved_cloud_models() == [
+            ("default_model", "opencode.retired-model")
+        ]
+    finally:
+        record_cloud_models({"data": []})
+
+
 def test_dotted_local_model_survives_cloud_cleanup(local_only_on):
     from gaia import config as config_mod
     from gaia.llm.lemonade_client import record_cloud_models

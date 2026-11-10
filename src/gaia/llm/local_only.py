@@ -242,7 +242,6 @@ def apply_policy(value: str) -> Dict[str, Any]:
     write or get silently swallowed.
     """
     from gaia.config import GaiaConfigError
-    from gaia.llm.lemonade_client import LemonadeClientError
 
     stored = set_policy(value)
     result: Dict[str, Any] = {
@@ -258,7 +257,17 @@ def apply_policy(value: str) -> Dict[str, Any]:
 
     try:
         result["cleared"] = clear_saved_cloud_models()
-    except (GaiaConfigError, LemonadeClientError) as e:
+    except SavedModelsNotCheckedError as e:
+        result["cleared"] = e.cleared
+        result["notices"].append(
+            {
+                "code": "saved_models_not_checked",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
+        result["warnings"].append(f"Saved models were not checked: {e}")
+    except GaiaConfigError as e:
         result["notices"].append(
             {
                 "code": "saved_models_not_checked",
@@ -296,6 +305,18 @@ def apply_policy(value: str) -> Dict[str, Any]:
     return result
 
 
+class SavedModelsNotCheckedError(RuntimeError):
+    """Lemonade's catalog couldn't say whether a saved dotted id is a cloud model.
+
+    ``cleared`` lists the ids that were cleared anyway, because they are cloud
+    models without asking Lemonade.
+    """
+
+    def __init__(self, message: str, cleared: List[Tuple[str, str]]):
+        super().__init__(message)
+        self.cleared = cleared
+
+
 #: config.json keys that can hold a model id GAIA runs or restores.
 SAVED_MODEL_KEYS = ("default_model", "last_model")
 
@@ -308,11 +329,16 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
 
     Raises:
         GaiaConfigError: config.json exists but can't be read or written.
+        SavedModelsNotCheckedError: a saved id needs Lemonade's catalog to
+            classify and the catalog couldn't be read. Ids that are cloud
+            without asking are still cleared and saved first.
     """
     from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import (
         LemonadeClient,
+        LemonadeClientError,
         cloud_model_provider,
+        find_model_requirement,
         is_cloud_model,
         may_be_cloud_model,
     )
@@ -321,9 +347,7 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
     cleared = []
     ambiguous = []
 
-    # Clear ids whose cloud status is certain without contacting Lemonade first.
-    # A stopped server must not prevent Local only from removing known gateway
-    # defaults. Only ambiguous dotted ids need the catalog query below.
+    # Known cloud ids go first, so a stopped Lemonade can't keep them saved.
     for key in SAVED_MODEL_KEYS:
         model = (getattr(cfg, key) or "").strip()
         is_claude = model.lower().startswith("claude") or (
@@ -334,30 +358,35 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
         if cloud_model_provider(model) or is_cloud_model(model) or is_claude:
             setattr(cfg, key, None)
             cleared.append((key, model))
-        elif may_be_cloud_model(model) and not is_cloud_model(model):
+        elif may_be_cloud_model(model) and find_model_requirement(model) is None:
             ambiguous.append((key, model))
 
-    if any(key == "last_model" for key, _ in cleared):
-        cfg.last_provider = None
-    if ambiguous and cleared:
-        # Preserve cleanup whose cloud status was already certain even if the
-        # catalog query below fails.
-        cfg.save()
+    def save() -> None:
+        if any(key == "last_model" for key, _ in cleared):
+            cfg.last_provider = None
+        if cleared:
+            cfg.save()
 
     if ambiguous:
-        # A CLI policy switch starts in a fresh process, before any model
-        # listing. A failed query is reported by apply_policy, but the known
-        # cloud cleanup above is still persisted before the failure surfaces.
-        LemonadeClient(verbose=False).list_models()
-        for key, model in ambiguous:
-            if is_cloud_model(model):
-                setattr(cfg, key, None)
-                cleared.append((key, model))
+        # A CLI policy switch runs in a fresh process that hasn't read the catalog.
+        client = LemonadeClient(verbose=False)
+        try:
+            for key, model in ambiguous:
+                if client._is_cloud_model(model):
+                    setattr(cfg, key, None)
+                    cleared.append((key, model))
+        except LemonadeClientError as e:
+            save()
+            unchecked = ", ".join(
+                dict.fromkeys(m for k, m in ambiguous if (k, m) not in cleared)
+            )
+            raise SavedModelsNotCheckedError(
+                f"couldn't check whether {unchecked} is a cloud model, so it is "
+                f"still saved: {e}",
+                list(cleared),
+            ) from e
 
-    if any(key == "last_model" for key, _ in cleared):
-        cfg.last_provider = None
-    if cleared:
-        cfg.save()
+    save()
     return cleared
 
 

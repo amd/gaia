@@ -52,13 +52,14 @@ def test_a_last_chat_with_vision_reads_images(config):
 
 
 @pytest.mark.parametrize("warm_cache", [False, True])
-def test_discovered_cloud_chat_does_not_turn_off_npu_vision(
+def test_discovered_cloud_flm_chat_does_not_turn_off_npu_vision(
     config, monkeypatch, warm_cache
 ):
-    """A catalog-only gateway model must not be mistaken for an NPU model."""
+    """A gateway id ending in -FLM must not be mistaken for an NPU model."""
     from gaia.llm.lemonade_client import record_cloud_models
 
-    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    cloud_id = "opencode.big-model-FLM"
+    catalog = {"data": [{"id": cloud_id, "recipe": "cloud"}]}
     reads = []
 
     def list_models(self):
@@ -69,15 +70,42 @@ def test_discovered_cloud_chat_does_not_turn_off_npu_vision(
     monkeypatch.setattr(lc.LemonadeClient, "list_models", list_models)
     record_cloud_models(catalog if warm_cache else {"data": []})
     try:
-        config(lc.DEFAULT_MODEL_NAME, last_model="opencode.big-model")
-        # The NPU probe must not decide a hosted chat's vision policy.
-        monkeypatch.setattr(
-            lc, "runs_on_npu", lambda _model: pytest.fail("NPU probe for cloud")
-        )
+        config(lc.DEFAULT_MODEL_NAME, last_model=cloud_id)
         assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME
         assert len(reads) == (0 if warm_cache else 1)
     finally:
         record_cloud_models({"data": []})
+
+
+@pytest.mark.parametrize(
+    "last_model", ["opencode.big-model", "Qwen3.5-35B-A3B-Unlisted-GGUF"]
+)
+def test_vision_default_never_reads_the_catalog_when_it_cant_change_the_answer(
+    config, monkeypatch, last_model
+):
+    """``RAGConfig()`` resolves this default, so a stopped Lemonade must not break it."""
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    def unavailable(self, **_kwargs):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(lc.LemonadeClient, "list_models", unavailable)
+    record_cloud_models({"data": []})
+    config(lc.DEFAULT_MODEL_NAME, last_model=last_model)
+    assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME
+
+
+def test_unclassifiable_flm_chat_fails_loudly_for_vision(config, monkeypatch):
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    def unavailable(self, **_kwargs):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(lc.LemonadeClient, "list_models", unavailable)
+    record_cloud_models({"data": []})
+    config(lc.DEFAULT_MODEL_NAME, last_model="opencode.big-model-FLM")
+    with pytest.raises(LemonadeClientError, match="opencode.big-model-FLM"):
+        lc.resolve_default_vision_model()
 
 
 def test_registered_dotted_local_chat_does_not_probe_catalog_for_vision(

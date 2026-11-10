@@ -546,9 +546,14 @@ def resolve_default_vision_model() -> Optional[str]:
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
     current = config.last_model or model
-    cloud = current.startswith("claude-") or is_cloud_model_with_catalog(current)
+    cloud = current.startswith("claude-") or bool(
+        cloud_model_provider(current) or is_cloud_model(current)
+    )
+    # The catalog only changes the answer for an -FLM id, so only that asks it.
     if not cloud and runs_on_npu(current):
-        return None
+        if not is_cloud_model_with_catalog(current):
+            return None
+        cloud = True
     chosen = config.vision_model
     if chosen:
         return chosen

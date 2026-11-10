@@ -858,10 +858,11 @@ def model_need(job: str) -> Dict[str, Any]:
     job reports the server's own error.
     """
     from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
 
     try:
         model_id = _job_model(job)
-    except GaiaConfigError as e:
+    except (GaiaConfigError, LemonadeClientError) as e:
         raise SetupPlanError(str(e)) from e
     if job == model_choice.ROLE_VISION and model_id is None:
         # Chat runs on the NPU, where reading images is off: say so, offer nothing.

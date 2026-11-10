@@ -264,7 +264,49 @@ def test_cold_cloud_catalog_failure_never_falls_through_to_local_preload(monkeyp
     record_cloud_models({"data": []})
     with pytest.raises(LemonadeClientError, match="opencode.big-model"):
         CloudAgent(model_id="opencode.big-model", silent_mode=True)
-    preload.assert_not_called()
+    # Starting a stopped server is allowed; loading the model locally is not.
+    assert preload.call_count == 1
+    assert preload.call_args.kwargs["preload"] is False
+
+
+def test_unregistered_dotted_local_model_starts_lemonade_then_classifies(
+    monkeypatch,
+):
+    """A stopped server is started before the catalog is asked a second time."""
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class LocalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    model = "Qwen3.5-35B-A3B-Unlisted-GGUF"
+    started = []
+    calls = []
+
+    def ensure_ready(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("preload") is False:
+            started.append(True)
+        return True
+
+    def list_models(self, **_kwargs):
+        if not started:
+            raise LemonadeClientError("connection refused")
+        return {"data": [{"id": model, "recipe": "llamacpp"}]}
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", ensure_ready
+    )
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    record_cloud_models({"data": []})
+    LocalAgent(model_id=model, silent_mode=True)
+    assert [c.get("preload", True) for c in calls] == [False, True]
+    assert calls[1]["model"] == model
 
 
 def test_known_dotted_local_model_starts_before_catalog_classification(monkeypatch):
