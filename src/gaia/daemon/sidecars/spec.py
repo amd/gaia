@@ -202,24 +202,33 @@ _GAIA_REQUIRED_CONNECTIONS = (
         connector_id="google",
         scopes=(
             "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
             "https://www.googleapis.com/auth/calendar.events",
         ),
-        required_scopes=("https://www.googleapis.com/auth/gmail.readonly",),
+        required_scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ),
         reason=(
-            "Read and search your Gmail so the agent can triage your inbox, and see "
-            "and, with your approval, change your Google calendar."
+            "Read and search your Gmail, draft and send mail when you approve it, "
+            "and see and, with your approval, change your Google calendar."
         ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
         scopes=(
             "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
             "https://graph.microsoft.com/Calendars.ReadWrite",
         ),
-        required_scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ),
         reason=(
-            "Read and search your Outlook mail so the agent can triage your inbox, "
-            "and see and, with your approval, change your Outlook calendar."
+            "Read and search your Outlook mail, draft and send mail when you "
+            "approve it, and see and, with your approval, change your Outlook "
+            "calendar."
         ),
     ),
 )
