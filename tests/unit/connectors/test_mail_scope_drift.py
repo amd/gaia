@@ -1,11 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The flagship's mailbox scopes are spelled the same on every surface.
+"""The flagship's mailbox and calendar scopes are spelled the same on every surface.
 
 The daemon's ``gaia`` sidecar spec transcribes them as literals (the shipped
 flagship is a frozen binary whose own declaration core cannot import), so a
-change to ``gaia.agents.tools._email.scopes`` must reach the spec and the
-shared fixture in the same edit.
+change to ``gaia.agents.tools._email.scopes`` or ``_calendar.scopes`` must
+reach the spec, and the shared mail fixture, in the same edit.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.agents.tools._calendar.scopes import CALENDAR_SCOPES
 from gaia.agents.tools._email.scopes import DECLARED_SCOPES
 from gaia.daemon.sidecars.spec import builtin_specs
 
@@ -28,13 +29,20 @@ _FIXTURE = json.loads(
 )
 
 
-def _spec_scopes() -> dict:
-    spec = builtin_specs()["gaia"]
-    return {cr.connector_id: tuple(cr.scopes) for cr in spec.required_connections}
+def _spec() -> dict:
+    return {cr.connector_id: cr for cr in builtin_specs()["gaia"].required_connections}
 
 
 def test_daemon_spec_requests_exactly_the_declared_scopes():
-    assert _spec_scopes() == {k: tuple(v) for k, v in DECLARED_SCOPES.items()}
+    requested = {k: tuple(cr.scopes) for k, cr in _spec().items()}
+    assert requested == {
+        k: (*mail, CALENDAR_SCOPES[k]) for k, mail in DECLARED_SCOPES.items()
+    }
+
+
+def test_only_the_mail_scopes_are_required_to_connect():
+    required = {k: tuple(cr.required_scopes) for k, cr in _spec().items()}
+    assert required == {k: tuple(v) for k, v in DECLARED_SCOPES.items()}
 
 
 @pytest.mark.parametrize("provider", sorted(DECLARED_SCOPES))
