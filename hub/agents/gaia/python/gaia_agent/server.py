@@ -2449,6 +2449,17 @@ def _warm_chat_model(state: _StartupWarmUp) -> None:
 app = build_app()
 
 
+def _add_serve_args(parser) -> None:
+    """The flags the daemon passes when it spawns this sidecar."""
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the HTTP sidecar (implied by --host/--port).",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+
+
 def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
@@ -2459,13 +2470,7 @@ def serve_http(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="gaia-agent --serve", description="GAIA flagship agent HTTP sidecar"
     )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Serve the HTTP sidecar (implied by --host/--port).",
-    )
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+    _add_serve_args(parser)
     args = parser.parse_args(argv)
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a

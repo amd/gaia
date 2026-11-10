@@ -31,7 +31,6 @@ from gaia.daemon.sidecars.spec import builtin_specs
 #: every entry in ``builtin_specs()``; the completeness test below enforces it.
 _REGISTRATION_BUILDERS = {
     "gaia": "gaia_agent:build_gaia",
-    "email": "gaia_agent_email:build_registration",
 }
 
 

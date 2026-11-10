@@ -3,6 +3,7 @@
 """AgentSidecarManager: spec-driven mode select, ephemeral port, spawn-arg
 shape, health, tree-kill, secret delivery and resolved_mode capture (#2142 T1)."""
 
+import argparse
 import dataclasses
 import os
 import stat as _stat
@@ -206,8 +207,16 @@ def test_user_mode_spawn_command_uses_fetched_binary(monkeypatch, tmp_path):
     m = mgr.AgentSidecarManager(builtin_specs()["gaia"])
     argv, kwargs = m.build_spawn_command(port=9123)
     assert argv[0] == str(fake_binary)
-    assert "--port" in argv and "9123" in argv
     assert "4001" not in argv
+
+    # The binary's own `serve` parser must accept every argument the daemon
+    # passes; a mismatch exits the sidecar with code 2 at spawn.
+    server = pytest.importorskip("gaia_agent.server")
+    sidecar_parser = argparse.ArgumentParser()
+    server._add_serve_args(sidecar_parser)
+    parsed = sidecar_parser.parse_args(argv[1:])
+    assert parsed.port == 9123
+    assert parsed.host == m.host
 
 
 def test_user_mode_fetch_failure_raises_with_remedy(monkeypatch):
