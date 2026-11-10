@@ -10,7 +10,7 @@ from tests.unit.test_profilespec_characterization import chat_agent_build_contex
 
 _MANAGED_FILE_RULE = (
     "If another program owns or locks a file, don't edit, overwrite, delete or "
-    "work around it. Explain how to release it and wait for the user."
+    "work around it; say how to release it and wait."
 )
 
 

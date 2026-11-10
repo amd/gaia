@@ -87,8 +87,9 @@ if _stubbed_modules:
 # trim-or-raise decision; the others keep their #1030-era headroom.
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
-    # Windows environment block + #5977's SLIDES/DECKS rule (Windows: 12,969).
-    ("full", 0): 13_000,
+    # Windows environment block + #5977's SLIDES/DECKS rule + #6434's
+    # MANAGED FILES rule (Windows: 13,121).
+    ("full", 0): 13_150,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
@@ -97,7 +98,8 @@ _BUDGET_CHARS = {
     # measured ~11.7K chars; we leave generous headroom.
     ("full", 100): 18_000,
     ("doc", 1): 12_000,
-    ("chat", 0): 4_000,
+    # + #6434's MANAGED FILES rule (Windows: 4,011).
+    ("chat", 0): 4_030,
 }
 
 
