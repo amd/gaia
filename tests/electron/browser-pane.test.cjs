@@ -339,6 +339,9 @@ describe("navigation policy", () => {
     ["midi", false],
     ["clipboard-read", false],
     ["fullscreen", false],
+    // Electron asks this before handing a gaia:// or other app link to the OS.
+    ["openExternal", false],
+    ["display-capture", false],
     ["clipboard-sanitized-write", true],
   ])("a page asking for %s gets %s", (permission, granted) => {
     const ses = fakeSession();
