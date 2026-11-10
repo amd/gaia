@@ -5,7 +5,7 @@
 
 import { useChatStore } from '../stores/chatStore';
 import type { StreamEvent } from '../types';
-import { agentEventToStep, isProgressTick } from './streamSteps';
+import { agentEventToStep, isProgressTick, statusText } from './streamSteps';
 
 /** Live phases that are a call's own label or the client's wait notice, not the call's progress. */
 const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
@@ -19,7 +19,26 @@ export function selectToolStatus(s: { livePhase: string | null; liveStatus: stri
 export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: number }): void {
     const store = useChatStore.getState();
     const status = event.status;
-    const msg = (event.message || '').trim();
+    const msg = statusText(event);
+    if (event.phase === 'recording_found' && event.section != null) {
+        store.addRecordingSection({
+            section: event.section,
+            sections: event.sections ?? event.section,
+            start: event.start ?? '',
+            end: event.end ?? '',
+            summary: event.summary ?? '',
+            items: event.items ?? [],
+        });
+        return;
+    }
+    if (event.phase === 'recording' && event.stage != null) {
+        store.setRecordingStage(event.stage, {
+            state: event.state ?? 0,
+            percent: event.percent,
+            etaSeconds: event.eta_seconds,
+        });
+        return;
+    }
     if (event.phase && msg) store.setLiveStatus(msg, event.phase);
     // The client's own wait notice is not a step of the turn.
     if (event.phase === 'waiting') return;
@@ -37,6 +56,6 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
         store.updateLastAgentStep({ label: msg || 'Thinking' });
         return;
     }
-    const step = agentEventToStep(event, stepIdRef);
+    const step = agentEventToStep({ ...event, message: msg }, stepIdRef);
     if (step) store.addAgentStep(step);
 }

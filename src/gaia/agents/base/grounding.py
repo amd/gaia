@@ -411,7 +411,8 @@ _UNIT_SCALES: Dict[str, "tuple[str, tuple[float, ...]]"] = {
 _UNIT = r"ns|us|µs|μs|ms|secs|sec|s|kib|mib|gib|kb|mb|gb|b"
 #: A cell or field that is one value and nothing else: "181.0", "12%", "3.5s".
 _PURE_VALUE = re.compile(
-    r"^\s*\**\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
+    r"^\s*\**\s*(?:(?:US|C|A)?\$|€|£|¥)?\s?"
+    r"(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*"
     rf"(%|{_UNIT})?\s*\**\s*$",
     re.I,
 )
@@ -585,28 +586,47 @@ def _prose_values(text: str) -> List[_Value]:
         if after == "+" or not ("." in raw or "," in raw or after == "%"):
             continue  # "3.11+" is a version floor
         lead = text[max(0, match.start() - 24) : match.start()]
-        if _VERSION_LEAD.search(lead) or _ESTIMATE_LEAD.search(lead):
+        if (
+            _VERSION_LEAD.search(lead)
+            and not _is_money_number(text, match.start(), match.end())
+            or _ESTIMATE_LEAD.search(lead)
+        ):
             continue
         unit = _PROSE_UNIT.match(text, match.end())
         values.append(_value(raw, _unit(unit.group(1)) if unit else None))
     return values
 
 
+#: Currency codes and words accepted after a prose amount as well as before it.
+_MONEY_SUFFIX = r"(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR|dollars?|euros?|pounds?)"
 #: "$2,708.95", "€1,379.87", "USD 1,375.25": an amount to the cent or the thousand.
-_PROSE_MONEY = re.compile(
+_PROSE_MONEY_PREFIX = re.compile(
     r"(?:(?:US|C|A)?\$|€|£|¥|\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF|CNY|INR)\s?)\s?"
     r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)(?!\d|,\d)"
+)
+#: "2,708.95 USD" and "2,708.95 dollars" are money too.
+_PROSE_MONEY_SUFFIX = re.compile(
+    r"(?<![\w.,])(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+)\s+" rf"{_MONEY_SUFFIX}\b"
 )
 
 
 def _stated_money(text: str) -> Set[str]:
     """The exact amounts of money *text* states, as written, estimates aside."""
     amounts = set()
-    for match in _PROSE_MONEY.finditer(text):
-        lead = text[max(0, match.start() - 24) : match.start()]
-        if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
-            amounts.add(match.group("n"))
+    for pattern in (_PROSE_MONEY_PREFIX, _PROSE_MONEY_SUFFIX):
+        for match in pattern.finditer(text):
+            lead = text[max(0, match.start() - 24) : match.start()]
+            if not _ESTIMATE_LEAD.search(lead) and float(match["n"].replace(",", "")):
+                amounts.add(match.group("n"))
     return amounts
+
+
+def _is_money_number(text: str, start: int, end: int) -> bool:
+    """Whether the number at *start:end* has its own currency marker."""
+    lead = text[max(0, start - 24) : end]
+    if any(m.end("n") == len(lead) for m in _PROSE_MONEY_PREFIX.finditer(lead)):
+        return True
+    return _PROSE_MONEY_SUFFIX.match(text[start : end + 24]) is not None
 
 
 def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
@@ -632,17 +652,18 @@ def _tables_and_prose(answer: str) -> "tuple[List[_Value], str]":
     return values, prose
 
 
-def presented_values(answer: str) -> List[_Value]:
+def presented_values(answer: str, prose_figures: bool = False) -> List[_Value]:
     """Values *answer* presents as data, in order, without duplicates.
 
     Table cells that are one value, fields of an untagged/CSV/JSON code block,
-    and — only when the answer has one of those — decimals, dates and
-    percentages in its prose. Without a table or block, only the exact amounts
-    of money its prose states are data. Code blocks in a language, inline
-    code, small whole numbers, estimates and version numbers are left alone.
+    and — only when the answer has one of those, or *prose_figures* is set —
+    decimals, dates and percentages in its prose. Otherwise only the exact
+    amounts of money its prose states are data. Code blocks in a language,
+    inline code, small whole numbers, estimates and version numbers are left
+    alone.
     """
     values, prose = _tables_and_prose(answer)
-    if values:
+    if values or prose_figures:
         values.extend(_prose_values(prose))
     else:
         # A date or percentage beside a price in a chat reply is not data.
@@ -776,6 +797,18 @@ def _total_of(value: _Value, grounded: Sequence[_Value]) -> bool:
     return len(parts) > 2 and _rounds_to(sum(parts), value)
 
 
+#: Tools that run a computation the model would otherwise do in its head.
+SCRIPT_COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "query_data"}
+)
+
+
+def _computation_failed(records: Sequence[Dict[str, Any]]) -> bool:
+    """A script was asked for this turn and none of its runs succeeded."""
+    scripts = [r for r in records if _name(r) in SCRIPT_COMPUTATION_TOOLS]
+    return bool(scripts) and not any(_ran(r) and not r.get("failed") for r in scripts)
+
+
 def content_findings(
     answer: str, records: Sequence[Dict[str, Any]], context: str = ""
 ) -> List[Finding]:
@@ -785,13 +818,15 @@ def content_findings(
     and earlier messages. A value one arithmetic step from two grounded
     numbers the answer also states, prose included, is grounded (a total, a
     difference, an average of two, a ratio) — computed from the shown numbers
-    and from the evidence values they round. Silent when no tool ran: an
+    and from the evidence values they round, so a ratio worked out wrong is
+    still a finding. After a computation that failed, decimals in prose count
+    too: the model has done the arithmetic itself. Silent when no tool ran: an
     answer from knowledge has nothing to be grounded in, and the look check
     owns that case.
     """
     if not any(_ran(r) for r in records):
         return []
-    values = presented_values(answer)
+    values = presented_values(answer, prose_figures=_computation_failed(records))
     if not values:
         return []
     corpus = _Corpus("\n".join([context] + [evidence_text(r) for r in records]))

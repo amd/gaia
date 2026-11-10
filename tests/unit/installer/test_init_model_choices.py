@@ -430,6 +430,30 @@ def test_check_accepts_the_local_model_picked_after_a_cloud_setup(
     assert check_setup_status("gaia").ready
 
 
+def test_npu_profile_ignores_a_downloaded_gpu_last_model(lemonade, home, monkeypatch):
+    """An NPU setup must not silently select the GPU model from the last chat."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME, FLM], npu=True)
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(
+        json.dumps({"last_provider": "local", "last_model": DEFAULT_MODEL_NAME})
+    )
+
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert choice.model_id == NPU_DEFAULT_MODEL_NAME
+    assert choice.user_set is False
+
+    # The guard drops only GPU models, not every saved one.
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+
+
 def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
     """`gaia init` must agree with the check and not pull the hardware default."""
     from gaia.installer.init_command import resolve_init_chat_model

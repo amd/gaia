@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Composer, MAX_MESSAGE_CHARS } from '../Composer';
@@ -33,6 +33,97 @@ beforeEach(() => {
     // jsdom has no object URLs; image attachments ask for one.
     URL.createObjectURL = vi.fn(() => 'blob:preview');
     URL.revokeObjectURL = vi.fn();
+});
+
+describe('Composer with a recording', () => {
+    const video = new File(['media'], 'class.mp4', { type: 'video/mp4' });
+    const uploaded = { filename: 'class-ab.mp4', original_name: 'class.mp4', url: '/api/files/uploads/class-ab.mp4', size: 5, content_type: 'video/mp4', is_image: false };
+
+    function attach(file: File) {
+        fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [file] } });
+    }
+
+    it('uploads it with progress and says it is ready', async () => {
+        let report: (percent: number) => void = () => undefined;
+        let finish: (value: typeof uploaded) => void = () => undefined;
+        mockedApi.uploadMedia.mockImplementation((_file, onProgress) => {
+            report = onProgress;
+            return new Promise((resolve) => { finish = resolve; });
+        });
+        render(<Harness />);
+        attach(video);
+        expect(mockedApi.uploadFile).not.toHaveBeenCalled();
+
+        act(() => report(42));
+        expect(await screen.findByText('Uploading… 42%')).toBeInTheDocument();
+
+        act(() => finish(uploaded));
+        expect(await screen.findByText('Ready to transcribe')).toBeInTheDocument();
+    });
+
+    it('asks for a transcript when sent with no words', async () => {
+        mockedApi.uploadMedia.mockResolvedValue(uploaded);
+        const { result } = renderHook(() => useAttachments());
+
+        act(() => result.current.addFiles([video]));
+        await waitFor(() => expect(result.current.hasUploaded).toBe(true));
+
+        const message = result.current.compose('');
+        expect(message).toContain('Transcribe this recording');
+        expect(message).toContain('(/api/files/uploads/class-ab.mp4)');
+        expect(result.current.compose('list the recipes')).toMatch(/^list the recipes\n\n/);
+    });
+
+    it('keeps a bracket in a file name from breaking the link to the file', async () => {
+        mockedApi.uploadMedia.mockResolvedValue(uploaded);
+        const { result } = renderHook(() => useAttachments());
+
+        act(() => result.current.addFiles([new File(['m'], 'Class [abc123].mp4')]));
+        await waitFor(() => expect(result.current.hasUploaded).toBe(true));
+
+        expect(result.current.compose('go')).toContain('[Class  abc123 .mp4](/api/files/uploads/class-ab.mp4)');
+    });
+
+    it('cancels the upload when the recording is removed', async () => {
+        let aborted = false;
+        mockedApi.uploadMedia.mockImplementation((_file, _onProgress, signal) => new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => { aborted = true; reject(new Error('cancelled')); });
+        }));
+        const { result } = renderHook(() => useAttachments());
+
+        act(() => result.current.addFiles([video]));
+        act(() => result.current.remove(result.current.attachments[0].id));
+
+        await waitFor(() => expect(aborted).toBe(true));
+        expect(result.current.attachments).toEqual([]);
+    });
+
+    it('treats TypeScript as a document, not a recording', async () => {
+        mockedApi.uploadFile.mockResolvedValue({ ...uploaded, url: '/api/files/uploads/a.ts' });
+        render(<Harness />);
+        attach(new File(['x'], 'app.ts', { type: 'video/mp2t' }));
+
+        await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+        expect(mockedApi.uploadMedia).not.toHaveBeenCalled();
+    });
+
+    it('keeps a document on the plain upload', async () => {
+        mockedApi.uploadFile.mockResolvedValue({ ...uploaded, url: '/api/files/uploads/a.txt' });
+        render(<Harness />);
+        attach(new File(['x'], 'notes.txt', { type: 'text/plain' }));
+
+        await waitFor(() => expect(mockedApi.uploadFile).toHaveBeenCalled());
+        expect(mockedApi.uploadMedia).not.toHaveBeenCalled();
+        expect(screen.queryByText('Ready to transcribe')).not.toBeInTheDocument();
+    });
+
+    it('shows why an upload was refused', async () => {
+        mockedApi.uploadMedia.mockRejectedValue(new Error('Could not save this recording'));
+        render(<Harness />);
+        attach(video);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this recording');
+    });
 });
 
 describe('Composer', () => {

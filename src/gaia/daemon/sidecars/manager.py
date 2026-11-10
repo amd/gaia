@@ -53,6 +53,7 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
     SidecarUnresponsiveError,
@@ -534,10 +535,15 @@ class AgentSidecarManager:
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
+        from gaia.env import unfreeze_loader_paths
         from gaia.llm.lemonade_choice import child_lemonade_env
 
+        # A frozen sidecar is another bundle: it must not record ours as the
+        # user's library path and hand it to the commands it runs.
         spawn_env = child_lemonade_env(
-            {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+            unfreeze_loader_paths(
+                {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+            )
         )
         self._spawned_lemonade = (
             spawn_env.get("LEMONADE_BASE_URL"),
@@ -800,8 +806,32 @@ class AgentSidecarManager:
         each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
         would just multiply the wait — and surfaces loudly on the first attempt.
         """
-        with self._lock:
-            return self._start_locked(max_attempts)
+        try:
+            with self._lock:
+                return self._start_locked(max_attempts)
+        except SidecarInhibitedError:
+            raise
+        except (SidecarSpawnError, HealthTimeoutError) as e:
+            self._record_start_failure(e)
+            raise
+
+    def _record_start_failure(self, exc: BaseException) -> None:
+        """Save a local fault record for a sidecar that never came up."""
+        from gaia.llm.failure_record import record_local_failure
+
+        record_id = record_local_failure(
+            exc,
+            where="sidecar_start",
+            kind="sidecar_start",
+            agent=self.spec.agent_id,
+            extra={"mode": self.resolved_mode, "sidecar_url": self.base_url},
+        )
+        if record_id:
+            logger.error(
+                "%s sidecar failed to start; problem report saved as %s",
+                self.spec.agent_id,
+                record_id,
+            )
 
     def _start_locked(self, max_attempts: int) -> str:
         if self.is_running:

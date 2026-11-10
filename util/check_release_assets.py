@@ -55,6 +55,15 @@ TUI_FILES = (
     "gaia-windows-arm64.exe",
     "gaia-tui-SHA256SUMS.txt",
 )
+# The frozen gaia install.sh and install.ps1 fetch. The best-effort Intel Mac
+# build is not promised: a release without it only leaves that Mac with no
+# one-line install.
+CORE_FILES = (
+    "gaia-core-win32-x64.tar.gz",
+    "gaia-core-darwin-arm64.tar.gz",
+    "gaia-core-linux-x64.tar.gz",
+    "gaia-core-SHA256SUMS.txt",
+)
 UPDATE_FEEDS = ("latest.yml", "latest-mac.yml", "latest-linux.yml")
 
 
@@ -72,6 +81,7 @@ def promised_assets(rel: ReleaseTag, windows_setup: bool = True) -> list[str]:
         f"{ui}-x86_64.AppImage",
         *UPDATE_FEEDS,
         *TUI_FILES,
+        *CORE_FILES,
         INSTALLER_SUMS,
     ]
     for platform in sorted(artifacts.ARTIFACTS):

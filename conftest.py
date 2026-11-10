@@ -189,6 +189,10 @@ _EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
 #: The developer's real GAIA home, read before any test patches ``Path.home``.
 _REAL_GAIA_HOME = Path.home() / ".gaia"
 
+#: Bound before any test patches ``os.path.realpath``: a test that breaks it
+#: must not break the guards, which coverage also reaches via sqlite3.connect.
+_REALPATH = os.path.realpath
+
 _REAL_HOME_MESSAGE = (
     "This test would {action} the GAIA in your real home, {home}: {harm} "
     "Point it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
@@ -207,8 +211,8 @@ _DB_HINT = "A database a test opens itself belongs under tmp_path."
 
 
 def _is_real_gaia_home(path: Path) -> bool:
-    real = os.path.normcase(str(_REAL_GAIA_HOME.resolve()))
-    candidate = os.path.normcase(str(Path(path).resolve()))
+    real = os.path.normcase(_REALPATH(_REAL_GAIA_HOME))
+    candidate = os.path.normcase(_REALPATH(path))
     return candidate == real or candidate.startswith(real + os.sep)
 
 
@@ -572,7 +576,7 @@ def _off_real_home(path: Path) -> Path:
     """*path* moved from the real ``~/.gaia`` into ``_TEST_GAIA_HOME``."""
     if not _is_real_gaia_home(path):
         return path
-    relative = Path(path).resolve().relative_to(_REAL_GAIA_HOME.resolve())
+    relative = Path(_REALPATH(path)).relative_to(_REALPATH(_REAL_GAIA_HOME))
     return _TEST_GAIA_HOME / relative
 
 

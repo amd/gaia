@@ -66,11 +66,25 @@ const MODEL_SERVER_RE = /lemonade|\bLLM\b|could not get response/i;
 const CONNECTION_RE = /failed to fetch|networkerror|\bfetch\b/i;
 const TIMEOUT_RE = /timed out|timeout/i;
 
+/** The id a failed answer names its saved problem report by (`RECORD_ID_RE` in failure_record.py). */
+const FAILURE_RECORD_RE = /\bGF-\d{8}-\d{6}-[0-9a-f]{4}\b/;
+
+export function failureRecordId(text: string): string | null {
+    return FAILURE_RECORD_RE.exec(text)?.[0] ?? null;
+}
+
 /**
  * What a failed chat turn tells the user: the cause in plain words and what to
- * do next. Never the raw error text, which goes to the console log instead.
+ * do next. Never the raw error text, which goes to the console log instead,
+ * except the name of the problem report the server saved for it.
  */
 export function classifyChatError(err: Error, t: Translate = getT()): { kind: ChatErrorKind; text: string } {
+    const cause = chatErrorCause(err, t);
+    const record = failureRecordId(err.message || '');
+    return record ? { ...cause, text: `${cause.text}\n\n${t('chatError.savedReport', { id: record })}` } : cause;
+}
+
+function chatErrorCause(err: Error, t: Translate): { kind: ChatErrorKind; text: string } {
     const described = describeStreamError(err, t);
     if (described) return { kind: 'stream', text: described };
     const msg = err.message || '';

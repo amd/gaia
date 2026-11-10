@@ -377,9 +377,15 @@ jobs:
   # We pass publish_to_release=false so build-installers does NOT create its
   # own draft release — publish.yml's github-release job is the single
   # source of truth for what gets published, gated on the approval step.
+  # An RC waits for rc-flagship: its frozen core's real-engine check installs
+  # that build, since the pre-release it would read is what this run publishes.
   build-desktop-installers:
     name: Build Desktop Installers
-    needs: validate
+    needs: [validate, rc-flagship]
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: write   # build-installers uploads workflow artifacts
       id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
@@ -389,6 +395,7 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
       skip_source_tests: ${{ needs.validate.outputs.is_rc == 'true' }}
+      flagship: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || '' }}
 
   # ── Release candidate: the flagship agent from this commit ──────────
   # The hub's flagship is whatever release_agent_gaia.yml last published, which
@@ -1035,7 +1042,7 @@ jobs:
       # ── Desktop installers ─────────────────────────────────────────
       # The reusable build-installers workflow uploaded each platform's
       # artifacts to "<platform>-installer" workflow-run artifacts. Pull
-      # them here and add to release-assets/ so the softprops step
+      # them here and add to release-assets/ so the release step
       # below includes them in the published release.
       # The terminal hub. Until these are release assets the binary exists
       # only as a CI artifact that expires in 14 days, so nothing can install it
@@ -1070,6 +1077,35 @@ jobs:
           fi
           sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
+
+      # The frozen gaia install.sh and install.ps1 fetch, so the one-line install
+      # needs no Python or PyPI either. This run froze it for the desktop
+      # installers (gaia-core-*) and the terminal packages (tui-gaia-core-*,
+      # which alone has the best-effort Intel Mac and Linux Arm builds).
+      - name: Download the gaia core builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*gaia-core-*'
+          path: core-builds
+
+      - name: Attach and checksum the gaia core
+        run: |
+          set -euo pipefail
+          attached=()
+          for p in win32-x64 darwin-arm64 linux-x64 darwin-x64 linux-arm64; do
+            f="$(find core-builds -name "gaia-core-${p}.tar.gz" | head -n1)"
+            if [ -z "${f}" ]; then
+              if [ "${p}" = darwin-x64 ] || [ "${p}" = linux-arm64 ]; then
+                echo "::warning::no ${p} gaia core this release (a best-effort build): install.sh there has nothing to fetch."
+                continue
+              fi
+              echo "::error::the release is missing the ${p} gaia core. install.sh / install.ps1 fetch it from the release, so it must not ship without it."
+              exit 1
+            fi
+            cp "${f}" "release-assets/gaia-core-${p}.tar.gz"
+            attached+=("gaia-core-${p}.tar.gz")
+          done
+          (cd release-assets && sha256sum "${attached[@]}" > gaia-core-SHA256SUMS.txt && cat gaia-core-SHA256SUMS.txt)
 
       # After the checksum step, which covers the terminal binaries only.
       - name: Download the combined Windows setup
@@ -1164,25 +1200,38 @@ jobs:
           python -m pip install --quiet pyyaml
           python util/check_release_assets.py --dir release-assets
 
-      - name: Create GitHub Release
-        if: needs.validate.outputs.is_rc != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-
-      - name: Create GitHub pre-release (release candidate)
-        if: needs.validate.outputs.is_rc == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-          prerelease: true
-          make_latest: false
+      # Create the release as a draft, upload assets idempotently, then publish
+      # it. GitHub's installation API limit can be exhausted by the tag-triggered
+      # eval and benchmark workflows; the helper waits for the reported reset and
+      # resumes from the release's existing assets instead of restarting the
+      # whole release or failing after PyPI/npm have already published.
+      - name: Create GitHub Release with bounded rate-limit retry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
+        run: |
+          set -euo pipefail
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=(--asset "$asset")
+          done < <(find release-assets dist -type f -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no GitHub Release assets were built"
+            exit 1
+          fi
+          args=(
+            --repo "${GITHUB_REPOSITORY}"
+            --tag "${TAG_NAME}"
+            --title "${TAG_NAME}"
+            --notes-file RELEASE_BODY.md
+            "${assets[@]}"
+          )
+          if [ "${IS_RC}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          python3 util/github_release_retry.py "${args[@]}"
 
   # ── Attach the terminal installers ─────────────────────────────────
   # The macOS .pkg and Linux .deb/.rpm, plus gaia-installers-SHA256SUMS.txt

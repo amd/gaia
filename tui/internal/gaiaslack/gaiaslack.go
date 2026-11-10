@@ -43,10 +43,10 @@ var Binary = func() (string, error) {
 	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH or in ~/.gaia/bin, so Slack setup cannot run. " +
-				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
-				"`pip install amd-gaia` into the Python environment on your PATH")
+			"the `gaia` CLI is not beside gaia-tui, on PATH or in ~/.gaia/bin, so Slack setup cannot run. " +
+				"Reinstall GAIA from https://amd-gaia.ai/#install, or run " +
+				"`curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`)")
 	}
 	return bin, nil
 }

@@ -3,6 +3,7 @@
 
 import { useEffect, useRef } from 'react';
 import { AlertTriangle, Lightbulb, ExternalLink, X, AlertCircle, Bug } from 'lucide-react';
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import './UnsupportedFeature.css';
 
 const GITHUB_ISSUES_URL = 'https://github.com/amd/gaia/issues';
@@ -32,23 +33,21 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     },
     {
         label: 'Video',
-        extensions: new Set(['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']),
-        message: 'Video files are not supported for indexing.',
+        extensions: VIDEO_EXTENSIONS,
+        message: 'Video files can\'t go in the document library.',
         alternatives: [
-            'Extract subtitles or transcripts from videos and index those',
-            'Use GAIA\'s voice/talk mode for audio: gaia talk',
+            'Attach the video to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support video file indexing',
+        featureTitle: 'Support video files in the document library',
     },
     {
         label: 'Audio',
-        extensions: new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus']),
-        message: 'Audio files are not supported for indexing.',
+        extensions: AUDIO_EXTENSIONS,
+        message: 'Audio files can\'t go in the document library.',
         alternatives: [
-            'Use GAIA\'s voice mode for speech interaction: gaia talk',
-            'Transcribe audio to text first, then index the transcript',
+            'Attach the recording to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support audio file transcription and indexing',
+        featureTitle: 'Support audio files in the document library',
     },
     {
         label: 'Archive',

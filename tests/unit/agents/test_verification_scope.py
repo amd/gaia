@@ -26,6 +26,7 @@ an empty result on purpose (#3386).
 from __future__ import annotations
 
 import json
+import os
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -1621,17 +1622,30 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         "    def test_arithmetic(self): self.assertEqual(2 + 2, 4)\n",
         encoding="utf-8",
     )
-    # Pin pytest's rootdir here; otherwise it can land on the shared temp
-    # dir and list sibling dirs other parallel tests are deleting.
-    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    # Keep the child inside this test's directory. Otherwise pytest can choose
+    # the shared temp root and collect sibling directories while xdist workers
+    # are deleting them.
     command = [sys.executable, "-m", runner]
     command.extend(
-        [str(test_file), "-q"]
+        [str(test_file), "-q", "-p", "no:cacheprovider", "--rootdir", str(tmp_path)]
         if runner == "pytest"
         else ["discover", "-s", str(tmp_path)]
     )
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    assert completed.returncode == 0, completed.stderr
+    child_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTEST_ADDOPTS", "PYTEST_PLUGINS"}
+        and not key.startswith("PYTEST_XDIST_")
+    }
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     result = {
         "stdout": completed.stdout,
         "stderr": completed.stderr,

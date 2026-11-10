@@ -2,7 +2,7 @@
 name: github-triage
 description: Answer GitHub questions and triage GitHub work with the gh CLI — PRs, issues, commits, CI runs, releases, the notification inbox or a repo's backlog. Links every item; posts a reply only once you approve it. Use for any request about a GitHub repo, PR, issue, commit, CI run or release — what is open, merged, failing or changed — or to triage, check the inbox, see what needs attention or what you are blocking, comment on or label an issue, or decide what to fix first.
 license: MIT
-version: 2.4.0
+version: 2.4.1
 metadata:
   gaia:
     security_tier: community
@@ -55,7 +55,7 @@ Quote the error and fix the command. Never diagnose it as "not installed".
 
 ## What the grant allows
 
-Three tiers. Which one a command lands in is decided by GAIA, not by this skill.
+Four tiers. Which one a command lands in is decided by GAIA, not by this skill.
 
 **Reads — run with no prompt.** `gh issue list|view|status`,
 `gh pr list|view|diff|checks|status`, `gh repo list|view`,
@@ -79,24 +79,32 @@ Compose the command and run it. If the user says no, the tool returns a denial �
 report it and move on. Never re-run a denied command hoping for a different
 answer.
 
-**Outside this skill's grant — never pre-approved.** These are not part of a
-triage: don't run them. If one is truly needed, the user sees its exact text
-and a risk line and can approve it once; anything that deletes is refused. `gh auth token`
-and `gh auth status -t`/`--show-token` (both print the credential), `gh alias`
-(defines a shell command), `gh extension` (installs and runs code), `gh config`,
-`gh codespace`, any `gh api` write (`-X POST`, `-f`/`--field`, `graphql`), and
-the irreversible ones: `gh pr merge`, `gh issue close`, `gh label delete`,
-`gh repo delete`. Also outside the grant on any subcommand: `--body-file` (uploads a local
-file's contents), `--editor`, `--web` (opens a browser, returns you nothing), and
-`--watch` (blocks until the run finishes). The `repo`, `release`, `run`, `search`,
-and `auth` read commands accept only reviewed flags from GAIA's policy table.
-The mixed read/write `issue`, `pr`, and `label` commands use a denylist for flags;
-their supported read actions remain limited to the actions listed above.
+**Refused — nothing can approve these.** They end, land or delete someone
+else's work: `gh issue close`, `gh pr close`, `gh pr merge`, `gh label delete`,
+`gh repo delete`, `gh release delete`, and `gh api -X DELETE`. GAIA never runs
+them and shows no prompt, and no answer from the user changes that. When asked
+for one, don't run it to find out. Say plainly that GAIA isn't permitted to do
+it and that nothing changed, then give the user the exact command to run
+themselves. Never offer it for approval, in that reply or any later one.
 
-A refused command returns an error, not a silent no-op. Report it as a refusal
-and say what you would have run. These commands are refused outright rather than
-gated, so there is no approval to offer — do not work around one, and do not
-present approving it as a path.
+**Outside this skill's grant — approved one run at a time.** These are not part
+of a triage: don't run them. If one is truly needed, GAIA shows the user its
+exact text and a risk line, and they may approve that one run, never "always":
+`gh auth token` and `gh auth status -t` (both print the credential), `gh alias`
+(defines a shell command), `gh extension` (installs and runs code),
+`gh config`, `gh codespace`, and any other API write (`gh api -X POST`,
+`-f`/`--field`, `graphql`). The same goes for these flags on any subcommand: `--body-file`
+(uploads a local file's contents), `--editor`, `--web` (opens a browser,
+returns you nothing), and `--watch` (blocks until the run finishes). The
+`repo`, `release`, `run`, `search`, and `auth` read commands accept only
+reviewed flags from GAIA's policy table. The mixed read/write `issue`, `pr`,
+and `label` commands use a denylist for flags; their supported read actions
+remain limited to the actions listed above.
+
+A blocked command returns an error, not a silent no-op, and nothing ran. Report
+it as what it is. If the error says no approval can change it, it is a refusal:
+the user runs it themselves, so don't present approving it as a path. Either
+way, do not work around it.
 
 Any *other* shell command still needs the user's per-call approval, so keep to
 `gh`; piping its output elsewhere will stop and ask.
