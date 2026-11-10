@@ -380,7 +380,9 @@ def _dispatch_one(
         if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
             out["mcp_output"] = data["mcp_output"]
         render = event.get("render")
-        if render:
+        # "media" is the terminal's card; the Agent UI draws generated media
+        # itself (``media_card``) from the path the payload carries.
+        if render and render != "media":
             out["render"] = render
         handler._emit(out)
 
