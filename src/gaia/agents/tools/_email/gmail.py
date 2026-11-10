@@ -213,8 +213,14 @@ def _select_body(payload: Dict[str, Any]) -> tuple:
     return "", "text"
 
 
-def _is_inline(headers: Dict[str, str]) -> bool:
-    """An inline image (signature logo, ``cid:`` reference), not a file."""
+def _is_inline(part: Dict[str, Any]) -> bool:
+    """An inline image (signature logo, ``cid:`` reference), not a file.
+
+    Apple Mail marks PDFs and other files ``inline`` too, so only images count.
+    """
+    if not (part.get("mimeType") or "").lower().startswith("image/"):
+        return False
+    headers = _header_map(part)
     disposition = headers.get("content-disposition", "").strip().lower()
     if disposition.startswith("attachment"):
         return False
@@ -225,7 +231,7 @@ def _attachments(part: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Name, type and size of each attached file. Content is never read."""
     found: List[Dict[str, Any]] = []
     filename = part.get("filename") or ""
-    if filename and not _is_inline(_header_map(part)):
+    if filename and not _is_inline(part):
         found.append(
             {
                 "name": _decode(filename),

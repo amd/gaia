@@ -174,6 +174,91 @@ def test_gmail_keeps_a_file_that_also_carries_a_content_id():
     assert out["attachments"] == [PDF]
 
 
+def _single_part_message(*part_headers):
+    """A message whose only file part carries `part_headers`."""
+    head = (
+        "Message-ID: <one@example.com>\r\n"
+        "From: Dana <dana@example.com>\r\n"
+        "Subject: Signed contract\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: multipart/mixed; boundary="M"\r\n'
+        "\r\n"
+        "--M\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "\r\n"
+        "See attached.\r\n"
+        "--M\r\n"
+    )
+    part = "".join(h + "\r\n" for h in part_headers)
+    tail = "Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n--M--\r\n"
+    return head + part + tail
+
+
+def _gmail_attachments(*part_headers):
+    raw = _single_part_message(*part_headers)
+    summary = gmail.message_summary(gmail_message(raw))
+    return summary["has_attachments"], [
+        (a["name"], a["mime_type"]) for a in summary["attachments"]
+    ]
+
+
+def test_gmail_keeps_an_inline_disposition_pdf_from_apple_mail():
+    """Apple Mail and iPhone Mail mark attached PDFs `inline`; still a file."""
+    assert _gmail_attachments(
+        'Content-Type: application/pdf; name="signed-contract.pdf"',
+        'Content-Disposition: inline; filename="signed-contract.pdf"',
+    ) == (True, [("signed-contract.pdf", "application/pdf")])
+
+
+def test_gmail_keeps_an_inline_disposition_pdf_with_a_content_id():
+    assert _gmail_attachments(
+        'Content-Type: application/pdf; name="signed-contract.pdf"',
+        'Content-Disposition: inline; filename="signed-contract.pdf"',
+        "Content-ID: <contract>",
+    ) == (True, [("signed-contract.pdf", "application/pdf")])
+
+
+def test_gmail_drops_an_inline_image_with_a_content_id():
+    assert _gmail_attachments(
+        'Content-Type: image/png; name="logo.png"',
+        'Content-Disposition: inline; filename="logo.png"',
+        "Content-ID: <logo>",
+    ) == (False, [])
+
+
+def test_gmail_drops_an_inline_disposition_image_without_a_content_id():
+    assert _gmail_attachments(
+        'Content-Type: image/jpeg; name="banner.jpg"',
+        'Content-Disposition: inline; filename="banner.jpg"',
+    ) == (False, [])
+
+
+def test_gmail_keeps_an_image_sent_as_an_attachment():
+    assert _gmail_attachments(
+        'Content-Type: image/jpeg; name="IMG_0412.jpg"',
+        'Content-Disposition: attachment; filename="IMG_0412.jpg"',
+        "Content-ID: <img>",
+    ) == (True, [("IMG_0412.jpg", "image/jpeg")])
+
+
+def test_gmail_keeps_a_named_image_with_no_disposition_or_content_id():
+    assert _gmail_attachments(
+        'Content-Type: image/png; name="chart.png"',
+    ) == (True, [("chart.png", "image/png")])
+
+
+def test_gmail_ignores_parts_without_a_name():
+    assert _gmail_attachments("Content-Type: application/octet-stream") == (
+        False,
+        [],
+    )
+    assert _gmail_attachments(
+        "Content-Type: image/png",
+        "Content-Disposition: inline",
+        "Content-ID: <logo>",
+    ) == (False, [])
+
+
 def test_gmail_decodes_an_encoded_word_filename():
     raw = RAW_WITH_ATTACHMENTS.replace(
         'filename="contract.pdf"', 'filename="=?utf-8?q?V=C3=A9rtrag.pdf?="'
