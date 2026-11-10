@@ -123,12 +123,12 @@ func TestDeletedMediaFileIsRefusedWithoutACrash(t *testing.T) {
 
 func TestRemoteAndDevicePathsAreRefused(t *testing.T) {
 	for _, p := range []string{
-		`\host\share\a.png`,
+		`\\host\share\a.png`,
 		`//host/share/a.png`,
-		`\?\UNC\host\share\a.png`,
-		`\.\C:\a.png`,
+		`\\?\UNC\host\share\a.png`,
+		`\\.\C:\a.png`,
 		`\??\C:\a.png`,
-		"C:\a\x00.png",
+		"C:\\a\x00.png",
 	} {
 		if !isRemoteOrDevicePath(p) {
 			t.Errorf("isRemoteOrDevicePath(%q) = false, want true", p)
