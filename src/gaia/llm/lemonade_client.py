@@ -10764,7 +10764,7 @@ def initialize_lemonade(
         # Initialize for chat agent
         status = initialize_lemonade(agent="chat")
 
-        # Initialize for code agent with larger context
+        # Initialize with a larger context window
         status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
     # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
@@ -10779,23 +10779,3 @@ def initialize_lemonade(
         verbose=verbose,
         quiet=quiet,
     )
-
-
-def print_agent_profiles():
-    """Print all available agent profiles and their requirements."""
-    print("\n📋 Available Agent Profiles:\n")
-    print(f"{'Agent':<12} {'Display Name':<20} {'Context Size':<15} {'Models'}")
-    print("-" * 80)
-
-    for name, profile in AGENT_PROFILES.items():
-        models = ", ".join(profile.models) if profile.models else "None"
-        print(
-            f"{name:<12} {profile.display_name:<20} {profile.min_ctx_size:<15} {models}"
-        )
-
-    print("\n📦 Available Models:\n")
-    print(f"{'Key':<20} {'Model ID':<40} {'Type'}")
-    print("-" * 80)
-
-    for key, model in MODELS.items():
-        print(f"{key:<20} {model.model_id:<40} {model.model_type.value}")
