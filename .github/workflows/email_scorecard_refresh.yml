@@ -22,9 +22,7 @@
 # never existed in practice, so removing it costs nothing real, and it stops
 # every push to an email branch from silently queueing for the single serial
 # `lemonade-eval` slot. Regression duty on LLM behavior remains with the
-# weekly `test_email_agent_eval.yml` (whose own last scheduled run --
-# 2026-07-13, run 29235382831 -- failed; separate and out of scope here) and
-# the release-time `scorecard-gate` job in `release_agent_email.yml` (parses
+# release-time `scorecard-gate` job in `release_agent_email.yml` (parses
 # committed files only, no eval).
 #
 # `workflow_dispatch` now supports TWO profiles, selected by `limit` AND
@@ -174,7 +172,7 @@ env:
   # JOB-WIDE so EVERY eval step (benchmark AND the drafting eval) can import the
   # tests.fixtures.email FakeGmailBackend — eval_drafting_report.py died with
   # 'ModuleNotFoundError: No module named tests' because PYTHONPATH was only set
-  # on the benchmark step. Mirrors test_email_agent_eval.yml (job-wide env).
+  # on the benchmark step.
   PYTHONPATH: ${{ github.workspace }}
   # Match the nightly/release eval: run WITHOUT agent memory. Memory-on made the
   # refresh try to load an embedding model (embeddinggemma-300m) that fails to
@@ -240,12 +238,12 @@ jobs:
           # Core gaia is EDITABLE (-e .) so gaia.eval's threshold-manifest
           # resolvers (Path(__file__).parents[3]/tests/fixtures/email/...) find
           # the committed manifests. A non-editable core resolves to
-          # .venv/Lib/... -> FileNotFoundError. See test_email_agent_eval.yml.
+          # .venv/Lib/... -> FileNotFoundError.
           install-package: '-e .[dev,eval,api] -e hub/agents/email/python'
 
       # A subscription token authenticates the `claude` CLI, not the Messages API,
       # so the judge needs the CLI on PATH. The stx pool ships no usable npm —
-      # hence setup-node. Same pair of steps as test_email_agent_eval.yml.
+      # hence setup-node.
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
