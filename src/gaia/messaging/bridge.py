@@ -55,6 +55,9 @@ CONTROL_TOOL_DECISION = "tool_decision"
 #: Control verb stopping the running turn while keeping the agent, its history
 #: and its grants. Contract with ``gaia_agent.stdio.CONTROL_CANCEL``.
 CONTROL_CANCEL = "cancel"
+#: Starts a fresh conversation. Contract with
+#: ``gaia_agent.stdio.CONTROL_CLEAR_HISTORY``.
+CONTROL_CLEAR_HISTORY = "clear_history"
 
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
@@ -164,6 +167,8 @@ class Turn:
     started: bool = False
     #: Set by :meth:`AgentChannel.withdraw`; the queue skips it unrun.
     withdrawn: bool = False
+    #: A control verb sent in this turn's place in the queue, with no question.
+    control: str = ""
 
 
 @dataclass
@@ -502,6 +507,16 @@ class AgentChannel:
                 skip = turn.withdrawn
                 turn.started = not skip
             if skip:
+                self._finish_turn()
+                continue
+            if turn.control:
+                # The agent answers a control with nothing, so the turn ends here.
+                try:
+                    self._write_line(json.dumps({CONTROL_KEY: turn.control}))
+                    event: Dict[str, Any] = {"type": "final", "answer": ""}
+                except AgentChannelError as e:
+                    event = {"type": "error", "detail": str(e)}
+                self._on_event(event, turn)
                 self._finish_turn()
                 continue
             self._turn_done.clear()
