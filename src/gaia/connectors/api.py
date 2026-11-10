@@ -97,7 +97,11 @@ _DEFAULT_READ_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 
 
 def resolve_declared_scopes(
-    registry: Any, connector_id: str, agent_ids: List[str]
+    registry: Any,
+    connector_id: str,
+    agent_ids: List[str],
+    *,
+    enforced_only: bool = False,
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` -> ``{agent_id: declared_scopes}`` (#2603).
 
@@ -127,6 +131,9 @@ def resolve_declared_scopes(
         not in the connector catalog — an unrelated failure surfaces later
         at the connector lookup that every caller already performs.
 
+    ``enforced_only`` returns each requirement's ``required_scopes`` instead: what
+    the agent cannot work without, rather than everything consent asks for.
+
     Returns ``{}`` when ``agent_ids`` is empty — no resolution needed.
     """
     if not agent_ids:
@@ -152,7 +159,7 @@ def resolve_declared_scopes(
         scopes: set = set()
         for cr in reg.required_connections:
             if cr.connector_id == connector_id:
-                scopes.update(cr.scopes)
+                scopes.update(cr.required_scopes if enforced_only else cr.scopes)
         if not scopes:
             raise NoDeclaredScopesError(nsid, connector_id)
         if available is not None:

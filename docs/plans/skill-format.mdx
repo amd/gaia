@@ -131,6 +131,7 @@ metadata:
           max_results: { type: integer, required: false, default: 5 }
         returns: { type: object }
         atomic: false              # maps to @tool(atomic=...)
+        requires_confirmation: false  # true: every call asks the user; no grant pre-authorizes it
     tools_required: []             # registry tools this skill CONSUMES (recipe contract)
     pairs_with: []                 # skills this one is combined with (mutual; unknown names ignored)
     loads_with: []                 # tools from tools_required only this skill drives; calling one loads it

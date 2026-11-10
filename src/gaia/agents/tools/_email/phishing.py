@@ -21,8 +21,16 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
+from gaia.agents.base.untrusted_text import (
+    UNTRUSTED_FIELD_CLOSE,
+    UNTRUSTED_FIELD_OPEN,
+    strip_untrusted_field_markers,
+    wrap_untrusted_field,
+)
+
 UNTRUSTED_BODY_OPEN = "<<<UNTRUSTED_EMAIL_BODY_START>>>"
 UNTRUSTED_BODY_CLOSE = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
+
 
 # What the model must do with a flagged message. Stated on the tool result,
 # not only in a skill, so it survives a skill the user never loaded.
@@ -241,7 +249,11 @@ __all__ = [
     "SUSPICIOUS_GUIDANCE",
     "UNTRUSTED_BODY_CLOSE",
     "UNTRUSTED_BODY_OPEN",
+    "UNTRUSTED_FIELD_CLOSE",
+    "UNTRUSTED_FIELD_OPEN",
     "annotate",
     "assess_message",
+    "strip_untrusted_field_markers",
     "wrap_untrusted_body",
+    "wrap_untrusted_field",
 ]
