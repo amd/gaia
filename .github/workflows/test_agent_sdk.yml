@@ -14,7 +14,7 @@ on:
       - '.github/workflows/test_agent_sdk.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -52,7 +52,7 @@ on:
       - '.github/workflows/test_agent_sdk.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
