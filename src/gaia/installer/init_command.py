@@ -4065,7 +4065,7 @@ class InitCommand:
                 )
             elif self.profile == "vlm":
                 self.console.print(
-                    "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
+                    "    [cyan]gaia download --list --agent vlm[/cyan]  Check the vision model is downloaded"
                 )
                 self.console.print(
                     "    [dim]Vision model ready! Use with the driver logs processor or VLM SDK:[/dim]"
@@ -4139,7 +4139,7 @@ class InitCommand:
                 )
             elif self.profile == "vlm":
                 self._print(
-                    "    gaia cache status      # Verify VLM model is available"
+                    "    gaia download --list --agent vlm  # Check the vision model is downloaded"
                 )
                 self._print("")
                 self._print(
