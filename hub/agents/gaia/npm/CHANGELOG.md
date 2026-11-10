@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The terminal header recognizes cloud models with custom IDs.** After a
+  `/model` switch, the status uses the live client’s catalog provider, matching
+  the switch notice instead of reporting a custom-prefixed cloud model as local.
+
 ### Added
 
 - **The agent can draft, reply, forward and send mail.** A new bundled skill,

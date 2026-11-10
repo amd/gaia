@@ -1625,9 +1625,10 @@ class SetupRunner:
             recording = threading.Thread(
                 target=self._record_failure, args=(run, cause), daemon=True
             )
+            # Started under the lock, so report() never joins an unstarted thread.
             with self._lock:
                 self._recording = recording
-            recording.start()
+                recording.start()
 
     def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
         record_id = _record_setup_failure(run, cause)
