@@ -7,6 +7,15 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **Under the daemon, a forwarded-token hiccup no longer asks for a browser
+  re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
+  unexpected error in the check, now reports `error` ("couldn't check") like the
+  standalone path; a token short on scopes reports `connection_missing_scopes`
+  with the scopes to add. Only a missing forwarded token still reports
+  `reauth_required`.
+
 ### Changed
 
 - **Unattended scheduler failures now notify users with the right action.** Failed scheduled sends, snooze restores, and interrupted sends use distinct messages; an interrupted send warns that it may already have been delivered and advises checking Sent before retrying (#5411).
