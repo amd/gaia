@@ -976,6 +976,7 @@ class TestSchemaCurrentCheck:
         "table, column",
         [
             ("sessions", "device"),
+            ("messages", "library_notices"),
             ("messages", "search_text"),
             ("messages", "stopped"),
             ("documents", "error_kind"),

@@ -26,9 +26,23 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 ## Prerequisites
 
 <Steps>
+  <Step title="Clone the GAIA repository">
+    Agent Eval runs only from a source checkout. The scenarios, corpus and MCP
+    config live in the repository's `eval/` directory and are not part of the
+    installed package, so `gaia eval agent` on a `pip install amd-gaia` install
+    stops with an error saying a checkout is required.
+
+    ```bash
+    git clone https://github.com/amd/gaia
+    cd gaia
+    ```
+
+    Run every command on this page from the repository root.
+  </Step>
+
   <Step title="Install eval dependencies">
     ```bash
-    uv pip install -e ".[eval,ui]"
+    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python
     ```
   </Step>
 
@@ -309,6 +323,15 @@ gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/s
 ```
 
 The comparison shows per-scenario deltas, regressions (PASS to FAIL), and improvements (FAIL to PASS).
+
+<Warning>
+`--save-baseline` overwrites `eval/results/baseline.json`, which is committed to the
+repository. It writes the new scorecard whenever the flag is set, even for a run
+where every scenario fails or errors, and the command still exits 0. Only pass
+it after a run you've checked, and review
+`git diff eval/results/baseline.json` before committing. If a bad run replaced it,
+restore it with `git checkout -- eval/results/baseline.json`.
+</Warning>
 
 ### Auto-Fix Mode
 

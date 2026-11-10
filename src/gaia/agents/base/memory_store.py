@@ -292,16 +292,64 @@ _STEM_STOPWORDS = frozenset(
     "there here also just like user users user's".split()
 )
 
+# Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
+# and ``C++`` / ``C#`` are not ``C``.  Separators inside dates, phone numbers,
+# and ranges remain word separators, so their historical format-insensitive
+# matching is preserved (``1990-05-14`` still matches ``1990/05/14``).
+_MEMORY_TOKEN_RE = re.compile(
+    r"""
+    (?<![a-z0-9_])[+-][0-9]+
+    | [a-z][a-z0-9]*[+#]+(?![a-z0-9_])
+    | [a-z0-9']+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_MEMORY_SYMBOL_RE = re.compile(
+    r"(?<![a-z0-9_])[+-][0-9]+|[a-z][a-z0-9]*[+#]+(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _memory_tokens(text: str) -> list[str]:
+    """Tokens for memory identity comparisons, preserving meaningful symbols."""
+    return _MEMORY_TOKEN_RE.findall(text.lower())
+
+
+def _symbol_base(token: str) -> str | None:
+    """Return the plain value of a signed number or language suffix token."""
+    if not _MEMORY_SYMBOL_RE.fullmatch(token):
+        return None
+    return token[1:] if token[0] in "+-" else token.rstrip("+#")
+
+
+def _has_symbol_conflict(words1: set[str], words2: set[str]) -> bool:
+    """Whether matching plain values carry different meaningful symbols."""
+    variants: list[dict[str, set[str]]] = []
+    for words in (words1, words2):
+        by_base: dict[str, set[str]] = {}
+        for word in words:
+            base = _symbol_base(word) or word
+            by_base.setdefault(base, set()).add(word)
+        variants.append(by_base)
+
+    for base in variants[0].keys() & variants[1].keys():
+        left, right = variants[0][base], variants[1][base]
+        if left != right and any(
+            _symbol_base(word) is not None for word in left | right
+        ):
+            return True
+    return False
+
 
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
-    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
-    7" are different memories.
+    Numeric and symbolic tokens are kept whole, however short: ``-5`` and
+    ``5`` are different memories, as are ``C`` and ``C++``.
     """
     stems = set()
-    for w in re.findall(r"[a-z0-9']+", text.lower()):
-        if any(ch.isdigit() for ch in w):
+    for w in _memory_tokens(text):
+        if any(ch.isdigit() for ch in w) or w.endswith(("+", "#")):
             stems.add(w)
         elif len(w) >= 3 and w not in _STEM_STOPWORDS:
             stems.add(w[:4])
@@ -358,9 +406,12 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+_SAME_WORDS_RE = re.compile(_MEMORY_SYMBOL_RE.pattern + r"|[a-z0-9]+", re.IGNORECASE)
+
+
 def _same_words(text: str) -> str:
-    """*text*'s words in order, ignoring case and punctuation."""
-    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+    """*text*'s words in order, ignoring case and punctuation but not signs."""
+    return " ".join(_SAME_WORDS_RE.findall(text.lower()))
 
 
 def _word_overlap(text1: str, text2: str) -> float:
@@ -370,10 +421,14 @@ def _word_overlap(text1: str, text2: str) -> float:
 
     A subset of a longer text still counts as a match — appropriate for dedup.
     """
-    words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
-    words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
+    if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
+        words1 = set(_memory_tokens(text1))
+        words2 = set(_memory_tokens(text2))
+    else:
+        words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
+        words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
-    if not words1 or not words2:
+    if not words1 or not words2 or _has_symbol_conflict(words1, words2):
         return 0.0
 
     intersection = words1 & words2

@@ -83,6 +83,12 @@
 [data-theme="dark"] .connector-tile-header:hover {
     background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 }
+.connector-tile-header--static,
+.connector-tile-header--static:hover,
+[data-theme="dark"] .connector-tile-header--static:hover {
+    background: none;
+    cursor: default;
+}
 
 .connector-tile-name {
     font-size: 13px;

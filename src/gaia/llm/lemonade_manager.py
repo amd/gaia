@@ -345,11 +345,12 @@ class LemonadeManager:
     def start_embedded_if_stopped(cls) -> bool:
         """Have the daemon start GAIA's embedded Lemonade when it is stopped.
 
-        A running one older than this GAIA targets is handed to the daemon too,
-        which replaces it. Does nothing when ``LEMONADE_BASE_URL`` names another
-        server, when GAIA's own server is not installed (``gaia init`` installs
-        it), or when the current version is already running -- so only a
-        machine that set GAIA up ever talks to the daemon here.
+        A running version that differs from this GAIA's target is handed to the
+        daemon too, which repairs it. Does nothing when ``LEMONADE_BASE_URL``
+        names another server, when GAIA's own server is not installed
+        (``gaia init`` installs it), or when the current version is already
+        running -- so only a machine that set GAIA up ever talks to the daemon
+        here.
 
         Returns:
             True if the daemon started the server.
@@ -363,7 +364,7 @@ class LemonadeManager:
 
         embedded = EmbeddedLemonade()
         status = embedded.status()
-        if status.running and not embedded.is_older(status.version):
+        if status.running and not embedded.is_version_mismatch(status.version):
             return False
         from gaia.daemon.client import ensure_lemonade
 

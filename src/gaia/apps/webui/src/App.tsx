@@ -10,6 +10,7 @@ import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
@@ -757,11 +758,13 @@ function App() {
                 aria-hidden="true"
             />
 
-            <Sidebar
-                onNewChat={newChat}
-                onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
-                tunnelActive={tunnelActive}
-            />
+            <ErrorBoundary area="sidebar" variant="compact">
+                <Sidebar
+                    onNewChat={newChat}
+                    onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
+                    tunnelActive={tunnelActive}
+                />
+            </ErrorBoundary>
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
@@ -792,7 +795,13 @@ function App() {
                         </button>
                     </div>
                 )}
-                {main}
+                {/* Leaving the crashed area, or New chat again, clears the crash. */}
+                <ErrorBoundary
+                    resetKey={showMemoryDashboard ? 'memory' : (currentSessionId ?? `new-${newChatFocus}`)}
+                    area="main"
+                >
+                    {main}
+                </ErrorBoundary>
             </div>
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}

@@ -553,6 +553,27 @@ class TestDeduplication:
         )
         assert id1 != id2
 
+    @pytest.mark.parametrize(
+        "left, right",
+        [
+            ("User's setting is -5", "User's setting is 5"),
+            ("User knows C", "User knows C++"),
+            ("User knows C", "User knows C#"),
+            ("User's setting is +1", "User's setting is 1"),
+        ],
+    )
+    def test_dedup_keeps_symbol_significant_values_separate(self, store, left, right):
+        """Signs and language suffixes identify distinct memory values."""
+        id1 = store.store(category="fact", content=left)
+        id2 = store.store(category="fact", content=right)
+        assert id2 != id1
+
+    def test_dedup_still_splits_hyphenated_prose(self, store):
+        """A normal word hyphen remains a separator for overlap matching."""
+        id1 = store.store(category="fact", content="User's mother-in-law lives nearby")
+        id2 = store.store(category="fact", content="User's mother in law lives nearby")
+        assert id2 == id1
+
     def test_dedup_never_downgrades_user_source(self, store):
         """A discovery re-run that merges into a user item keeps source='user'."""
         uid = store.store(

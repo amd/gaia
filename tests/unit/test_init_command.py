@@ -1176,7 +1176,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         embedded = MagicMock()
         embedded.version = LEMONADE_VERSION
         embedded.status.return_value = status
-        embedded.older_installed_version.return_value = older
+        embedded.other_installed_version.return_value = older
         return patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -1276,7 +1276,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         self.assertEqual(status.stage, "setup")
 
-    def test_older_installed_version_reads_other_unpacked_versions(self):
+    def test_other_installed_version_reads_other_unpacked_versions(self):
         import platform
         import tempfile
         from pathlib import Path
@@ -1285,15 +1285,16 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as home:
             embedded = EmbeddedLemonade(home=Path(home))
-            self.assertIsNone(embedded.older_installed_version())
+            self.assertIsNone(embedded.other_installed_version())
             daemon = "lemond.exe" if platform.system() == "Windows" else "lemond"
-            for version in ("9.2.0", "10.10.1", embedded.version):
+            for version in ("9.2.0", "2026.45.3", embedded.version):
                 d = embedded.root / "dist" / version
                 d.mkdir(parents=True)
                 (d / daemon).write_bytes(b"")
             # A half-unpacked dir with no daemon does not count.
             (embedded.root / "dist" / "99.0.0").mkdir()
-            self.assertEqual(embedded.older_installed_version(), "10.10.1")
+            (embedded.root / "dist" / "not-a-version").mkdir()
+            self.assertEqual(embedded.other_installed_version(), "2026.45.3")
 
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status
@@ -2614,8 +2615,8 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
     make `gaia init --profile sd/rag/vlm/minimal/all` hard-fail, since none
     of those agents are in the hub index (#2358 review finding).
 
-    `chat` is on this list: the `gaia-agent-chat` wheel is not a catalog
-    agent, so asking the Hub for it could only ever no-op. Its completion
+    `chat` is on this list: there is no chat agent package (#6103), so
+    asking the Hub for it could only ever no-op. Its completion
     message says no chat agent is installed and names `gaia hub install gaia`
     -- see ``TestPrintCompletionHeadlineGate``. `npu` is not: it installs the
     flagship (#2972).
@@ -2642,7 +2643,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
                 mock_install.assert_not_called()
 
     def test_chat_is_not_a_hub_install_target(self):
-        """The publish workflow for `gaia-agent-chat` is gone, so a profile
+        """There is no chat agent package to publish (#6103), so a profile
         that asked the Hub for `chat` would wait on a publish that can never
         land."""
         from gaia.installer.init_command import HUB_INSTALL_AGENTS, INIT_PROFILES

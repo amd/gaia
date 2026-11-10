@@ -476,10 +476,29 @@ def _forget_requests(user_input: str) -> List[str]:
             continue
         for verb in _FORGET_VERB.finditer(sentence):
             lead = _FORGET_LEAD_BOUNDARY.split(sentence[: verb.start()])[-1]
-            if _FORGET_NEGATION.search(lead):
-                continue
-            asked.append(_FORGET_WHAT_END.split(sentence[verb.end() :], 1)[0])
+            if not _lead_negates_forget(lead):
+                asked.append(_FORGET_WHAT_END.split(sentence[verb.end() :], 1)[0])
     return asked
+
+
+#: Discourse asides whose own negation ("never mind", "don't worry") is not
+#: a negation of a forget request that follows them (#6914).
+_FORGET_ASIDES = re.compile(
+    r"^(?:\s*(?:never\s+mind|no\s+worries|don'?t\s+worry(?:\s+about\s+it)?"
+    r"|do\s+not\s+worry(?:\s+about\s+it)?)[,.!]?\s*)+",
+    re.IGNORECASE,
+)
+
+
+def _lead_negates_forget(lead: str) -> bool:
+    """Whether the words before a forget verb negate the request.
+
+    Every negation before the verb counts — "Don't ever, ever forget" keeps
+    the fact — except the ones that belong to a discourse aside: in "Never
+    mind, forget my mango allergy" the "never" negates the mind, not the
+    request, so the aside is stripped before looking (#6914).
+    """
+    return bool(_FORGET_NEGATION.search(_FORGET_ASIDES.sub("", lead)))
 
 
 def _restates_forget(content: str, user_input: str) -> bool:

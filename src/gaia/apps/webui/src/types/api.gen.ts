@@ -819,6 +819,7 @@ export interface MessageResponse {
   content: string;
   created_at: string;
   id: number;
+  library_notices?: string[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;
@@ -1091,6 +1092,10 @@ export interface ResourceUsage {
    * Why network adapters can't be read, when CPU and memory still can.
    */
   networks_error?: string | null;
+  /**
+   * Why NPUs can't be read when they're read apart from GPUs (Linux).
+   */
+  npus_error?: string | null;
   /**
    * False until the first sample is in.
    */
