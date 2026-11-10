@@ -18,7 +18,7 @@ REGISTRY = {
     "recall",
     "read_file",
 }
-SHELL = ["run_shell_command", "get_shell_state"]
+SHELL = ["run_shell_command"]
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,6 @@ def test_a_named_tool_comes_before_the_shell_signal_and_is_not_duplicated():
     assert requested_tools(msg, REGISTRY) == [
         "run_shell_command",
         "browse_directory",
-        "get_shell_state",
     ]
 
 

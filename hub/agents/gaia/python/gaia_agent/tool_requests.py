@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List
 
-SHELL_TOOLS = ("run_shell_command", "get_shell_state")
+# Core only: naming a tool off the short list forces the session's one jump.
+SHELL_TOOLS = ("run_shell_command",)
 
 # The user names the shell. "Terminal" and "bash" are ordinary English too, so
 # they count only as the place something is run ("in the terminal").
