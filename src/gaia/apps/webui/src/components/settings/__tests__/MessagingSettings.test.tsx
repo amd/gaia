@@ -152,8 +152,15 @@ describe('MessagingSettings', () => {
         expect(calls.find((c) => c.key === 'POST /messaging/discord/start')?.body).toEqual({ take_over: true });
     });
 
-    it('stopped: offers Start', async () => {
+    it('stopped unexpectedly: says so and offers Start', async () => {
         serve({ 'GET /messaging/discord': ok({ ...ANSWERING, state: 'stopped', running: false }) });
+        render(<MessagingSettings />);
+        expect(await screen.findByText(/stopped answering on Discord unexpectedly/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    });
+
+    it('stopped: offers Start', async () => {
+        serve({ 'GET /messaging/discord': ok({ ...ANSWERING, state: 'stopped', running: false, autostart: false }) });
         render(<MessagingSettings />);
         expect(await screen.findByText("GAIA isn't answering on Discord right now.")).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();

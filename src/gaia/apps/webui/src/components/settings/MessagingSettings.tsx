@@ -18,8 +18,8 @@ import { setVisibleInterval } from '../../utils/visibleInterval';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 
 const POLL_MS = 3000;
-/** States the bridge moves out of by itself, so the card watches them. */
-const LIVE = new Set(['starting', 'pairing']);
+/** States the bridge can leave by itself (a crash included), so the card watches them. */
+const LIVE = new Set(['starting', 'pairing', 'connected']);
 /** States shown as a problem to fix. */
 const PROBLEMS = new Set(['error', 'taken_over', 'token_invalid', 'credentials_unavailable', 'conflict']);
 /** Where the card's own sentence can't say why, so the bridge's sentence is shown under it. */
@@ -256,7 +256,8 @@ export function MessagingSettings() {
     // still reads "stopped" meanwhile; say it is starting, not that it is off.
     const startingNow = s.state === 'starting' || busy === 'start' || busy === 'takeOver';
     const explain: Partial<Record<DiscordStatus['state'], string>> = {
-        stopped: t('settings.messaging.state.stopped'),
+        // Stop turns autostart off, so stopped with it on means nobody stopped it.
+        stopped: t(s.autostart ? 'settings.messaging.state.crashed' : 'settings.messaging.state.stopped'),
         error: t('settings.messaging.state.error'),
         taken_over: t('settings.messaging.state.takenOver'),
         token_invalid: t('settings.messaging.state.tokenInvalid'),
@@ -283,7 +284,7 @@ export function MessagingSettings() {
                 )}
 
                 {explain[s.state] && s.connected && !startingNow && (
-                    <div className={PROBLEMS.has(s.state) ? 'settings-notice' : 'messaging-status'}>
+                    <div className={PROBLEMS.has(s.state) || (s.state === 'stopped' && s.autostart) ? 'settings-notice' : 'messaging-status'}>
                         <p>{explain[s.state]}</p>
                         {SHOW_DETAIL.has(s.state) && s.detail && <p className="settings-hint"><bdi dir="auto">{s.detail}</bdi></p>}
                         {fix}

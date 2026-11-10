@@ -1220,6 +1220,7 @@ const messages: Messages = {
     'settings.messaging.starting': 'جارٍ الاتصال بديسكورد… قد يستغرق ذلك دقيقة.',
     'settings.messaging.loadFailed': 'تعذّرت قراءة حالة ديسكورد: {error}',
     'settings.messaging.state.stopped': 'لا يرد GAIA على ديسكورد الآن.',
+    'settings.messaging.state.crashed': 'توقف GAIA عن الرد على ديسكورد بشكل غير متوقع. اضغط «تشغيل» لإعادته.',
     'settings.messaging.state.error': 'توقف بوت ديسكورد بسبب خطأ.',
     'settings.messaging.state.takenOver': 'جهاز آخر يرد عبر هذا البوت. لا يمكن إلا لجهاز واحد أن يرد في كل مرة.',
     'settings.messaging.state.tokenInvalid': 'لم يعد ديسكورد يقبل هذا الرمز. أعد تعيينه في بوابة المطورين والصق الرمز الجديد.',

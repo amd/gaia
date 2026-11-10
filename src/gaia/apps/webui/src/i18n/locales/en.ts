@@ -1220,6 +1220,7 @@ export const enMessages = {
     'settings.messaging.starting': 'Connecting to Discord… this can take up to a minute.',
     'settings.messaging.loadFailed': "Couldn't read the Discord status: {error}",
     'settings.messaging.state.stopped': "GAIA isn't answering on Discord right now.",
+    'settings.messaging.state.crashed': 'GAIA stopped answering on Discord unexpectedly. Press Start to bring it back.',
     'settings.messaging.state.error': 'The Discord bot stopped with an error.',
     'settings.messaging.state.takenOver': 'Another PC is answering this bot. Only one PC can answer at a time.',
     'settings.messaging.state.tokenInvalid': 'Discord no longer accepts this token. Reset it in the Developer Portal and paste the new one.',
