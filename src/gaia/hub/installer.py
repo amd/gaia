@@ -1716,6 +1716,7 @@ def _machine_gate(
         manifest.get("requirements"),
         download_size_bytes=artifact.get("size_bytes", 0),
         install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
     )
     if not report.compatible:
         blockers = "; ".join(report.blockers)
