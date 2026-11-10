@@ -436,7 +436,13 @@ def test_memory_context_lowers_the_history_budget_by_its_size(monkeypatch):
     assert abs((plain - with_memory) - memory_tokens) <= 10
 
 
+def _fixed_token_counter(monkeypatch):
+    # CI may lack tiktoken data and fall back to a larger estimate; pin the size.
+    monkeypatch.setattr(history, "count_tokens", lambda text: len(text) // 4)
+
+
 def test_history_admitted_before_the_memory_context_is_refit(monkeypatch):
+    _fixed_token_counter(monkeypatch)
     monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
     agent = _budget_agent()
     turns = [_sized_turn(i) for i in range(8)]
@@ -455,13 +461,12 @@ def test_history_admitted_before_the_memory_context_is_refit(monkeypatch):
 
 
 def test_process_query_budgets_history_against_the_query_it_sends(agent, monkeypatch):
-    from gaia.agents.base.turn_metrics import count_tokens
-
+    _fixed_token_counter(monkeypatch)
     seen = []
 
     def budget(_agent, query):
         seen.append(query)
-        return 600 - count_tokens(query)
+        return 600 - history.count_tokens(query)
 
     monkeypatch.setattr(history, "history_budget", budget)
     agent.conversation_history = [m for i in range(4) for m in _sized_turn(i, 40)]
