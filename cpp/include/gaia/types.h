@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -304,17 +305,28 @@ struct UsageStats {
     int promptTokens = 0;
     int completionTokens = 0;
     int totalTokens = 0;
+    /// Prompt tokens the provider served from its own cache (part of promptTokens).
+    int cachedTokens = 0;
+    /// Largest single call, prompt plus completion: how full the window got.
+    int peakContextTokens = 0;
 
     void operator+=(const UsageStats& other) {
         promptTokens += other.promptTokens;
         completionTokens += other.completionTokens;
         totalTokens += other.totalTokens;
+        cachedTokens += other.cachedTokens;
+        peakContextTokens = std::max(peakContextTokens, other.peakContextTokens);
     }
 
     json toJson() const {
-        return {{"prompt_tokens", promptTokens},
-                {"completion_tokens", completionTokens},
-                {"total_tokens", totalTokens}};
+        json j = {{"prompt_tokens", promptTokens},
+                  {"completion_tokens", completionTokens},
+                  {"total_tokens", totalTokens}};
+        if (peakContextTokens > 0) {
+            j["cached_tokens"] = cachedTokens;
+            j["peak_context_tokens"] = peakContextTokens;
+        }
+        return j;
     }
 };
 

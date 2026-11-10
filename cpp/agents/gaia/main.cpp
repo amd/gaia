@@ -495,6 +495,16 @@ int runPrint(const Cli& cli) {
         std::cout.rdbuf(saved);
     }
 
+    // Opened before the run so a bad path fails before any model time is spent.
+    std::ofstream turnLog;
+    if (const char* path = std::getenv("GAIA_TURN_LOG"); path && *path) {
+        turnLog.open(path, std::ios::app);
+        if (!turnLog) {
+            throw std::runtime_error(std::string("Cannot write the turn log at ") + path +
+                                     ". Point GAIA_TURN_LOG at a writable file, or unset it.");
+        }
+    }
+
     g_agent = &agent;
     const auto t0 = std::chrono::steady_clock::now();
     // Progress goes to stderr; stdout carries only the answer.
@@ -513,16 +523,33 @@ int runPrint(const Cli& cli) {
     g_agent = nullptr;
 
     const std::string status = result.value("status", "success");
+    const gaia::json usage = result.value("usage", gaia::json::object());
+    // Same names as `gaia -p --output-format json`, so one reader takes both agents.
+    gaia::json out = {{"status", status},
+                      {"steps", result.value("steps_taken", 0)},
+                      {"tool_errors", result.value("tool_errors", 0)},
+                      {"model", cfg.modelId},
+                      {"duration_s", std::round(secs * 10) / 10},
+                      {"peak_rss_mb", std::round(selfPeakRssMb() * 10) / 10},
+                      {"cpu_s", std::round(selfCpuSeconds() * 100) / 100},
+                      {"num_steps", result.value("steps_taken", 0)},
+                      {"num_llm_calls", result.value("llm_calls", 0)},
+                      {"num_tool_calls", result.value("tool_calls", 0)},
+                      {"error_count", result.value("tool_errors", 0)},
+                      {"input_tokens", usage.value("prompt_tokens", 0)},
+                      {"cached_tokens", usage.value("cached_tokens", 0)},
+                      {"output_tokens", usage.value("completion_tokens", 0)},
+                      {"peak_context_tokens", usage.value("peak_context_tokens", 0)}};
+    if (result.contains("usage")) out["usage"] = usage;
+    if (turnLog.is_open()) {
+        gaia::json line = out;
+        line["schema"] = "gaiacpp.turn/1";
+        line["llm_calls"] = result["telemetry"]["llm_calls"];
+        line["tool_calls"] = result["telemetry"]["tool_calls"];
+        turnLog << line.dump(-1, ' ', false, gaia::json::error_handler_t::replace) << std::endl;
+    }
     if (cli.outputFormat == "json") {
-        gaia::json out = {{"result", result.value("result", "")},
-                          {"status", status},
-                          {"steps", result.value("steps_taken", 0)},
-                          {"tool_errors", result.value("tool_errors", 0)},
-                          {"model", cfg.modelId},
-                          {"duration_s", std::round(secs * 10) / 10},
-                          {"peak_rss_mb", std::round(selfPeakRssMb() * 10) / 10},
-                          {"cpu_s", std::round(selfCpuSeconds() * 100) / 100}};
-        if (result.contains("usage")) out["usage"] = result["usage"];
+        out["result"] = result.value("result", "");
         std::cout << out.dump(-1, ' ', false, gaia::json::error_handler_t::replace) << std::endl;
     } else {
         std::cout << result.value("result", "") << std::endl;
