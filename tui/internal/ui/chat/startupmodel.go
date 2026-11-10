@@ -28,7 +28,7 @@ import (
 type StartupModelKind int
 
 const (
-	startupNone StartupModelKind = iota
+	_ StartupModelKind = iota // zero value: no startup turn
 	// StartupRestore re-applies the choice saved by an earlier launch.
 	StartupRestore
 	// StartupPicked confirms a model picked at the readiness gate.
