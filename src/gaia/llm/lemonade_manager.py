@@ -328,9 +328,12 @@ class LemonadeManager:
     _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
 
     # (model id, requested ctx) -> (reloads the server answered with a smaller
-    # window, the window it last reported). Bounds a reload that never takes.
-    _unverified_reloads: Dict[Tuple[str, int], Tuple[int, int]] = {}
+    # window, the window it last reported, when). Bounds a reload that never takes.
+    _unverified_reloads: Dict[Tuple[str, int], Tuple[int, int, float]] = {}
     _MAX_UNVERIFIED_RELOADS = 2
+    # After the bound, one more reload is allowed per this many seconds, so
+    # freeing memory gets the user unstuck without restarting GAIA.
+    _UNVERIFIED_RELOAD_RETRY_AFTER: float = 60.0
 
     # Device tiers (``amd_npu``/``amd_dgpu``/``cpu``/…) already validated OK on
     # this host. Hardware is static per process, so once a tier passes we never
@@ -1649,7 +1652,13 @@ class LemonadeManager:
             )
 
         reload_key = (model_id, requested_ctx)
-        attempts, last_reported = cls._unverified_reloads.get(reload_key, (0, 0))
+        attempts, last_reported, last_time = cls._unverified_reloads.get(
+            reload_key, (0, 0, 0.0)
+        )
+        if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+            waited = time.monotonic() - last_time
+            if waited >= cls._UNVERIFIED_RELOAD_RETRY_AFTER:
+                attempts = cls._MAX_UNVERIFIED_RELOADS - 1
         if attempts >= cls._MAX_UNVERIFIED_RELOADS:
             raise ContextReloadUnverifiedError(
                 cls._unverified_reload_message(
@@ -1735,7 +1744,11 @@ class LemonadeManager:
                 # No ceiling explains the shortfall, so nothing else stops the
                 # recheck reloading again; count it and stop at the bound.
                 attempts += 1
-                cls._unverified_reloads[reload_key] = (attempts, reported_ctx)
+                cls._unverified_reloads[reload_key] = (
+                    attempts,
+                    reported_ctx,
+                    time.monotonic(),
+                )
                 message = cls._unverified_reload_message(
                     client.base_url,
                     model_id,
@@ -1771,7 +1784,8 @@ class LemonadeManager:
             f"ctx_size={requested_ctx}, but reports a {reported_ctx}-token "
             f"window after {attempts} reload(s); GAIA needs {min_context_size}. "
             "Free memory by closing other models or apps, or lower the context "
-            f"size in Settings > Model. {lemonade_log_hint(base_url)}"
+            "size in Settings > Model; GAIA tries the reload again after about "
+            f"a minute. {lemonade_log_hint(base_url)}"
         )
 
     @classmethod

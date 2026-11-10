@@ -82,3 +82,57 @@ def test_an_unconfirmed_reload_keeps_the_reported_window_then_stops_loudly():
         _reload(client, lock)
     assert client.load_model.call_count == 2
     assert lock.locked()
+
+
+def test_a_stuck_reload_is_tried_again_after_the_wait_and_recovers(monkeypatch):
+    """Freeing memory must get the user unstuck without restarting GAIA."""
+    import gaia.llm.lemonade_manager as manager_module
+
+    now = [1000.0]
+    monkeypatch.setattr(manager_module.time, "monotonic", lambda: now[0])
+    client = _client(4096)
+    lock = threading.Lock()
+    lock.acquire()
+
+    assert _reload(client, lock) is False
+    with pytest.raises(ContextReloadUnverifiedError):
+        _reload(client, lock)
+    sent = client.load_model.call_count
+
+    # Still inside the wait: refused without another reload.
+    now[0] += LemonadeManager._UNVERIFIED_RELOAD_RETRY_AFTER - 1
+    with pytest.raises(ContextReloadUnverifiedError) as excinfo:
+        _reload(client, lock)
+    assert client.load_model.call_count == sent
+    assert "again after about a minute" in str(excinfo.value)
+
+    # After the wait, with memory freed, the reload is sent and confirmed.
+    now[0] += 2
+    client.get_status.return_value = _status(32768)
+    assert _reload(client, lock) is True
+    assert client.load_model.call_count == sent + 1
+    assert LemonadeManager._context_size == 32768
+
+
+def test_a_reload_that_still_falls_short_after_the_wait_stops_again(monkeypatch):
+    import gaia.llm.lemonade_manager as manager_module
+
+    now = [1000.0]
+    monkeypatch.setattr(manager_module.time, "monotonic", lambda: now[0])
+    client = _client(4096)
+    lock = threading.Lock()
+    lock.acquire()
+
+    assert _reload(client, lock) is False
+    with pytest.raises(ContextReloadUnverifiedError):
+        _reload(client, lock)
+    sent = client.load_model.call_count
+
+    # One retry per wait, not a loop.
+    now[0] += LemonadeManager._UNVERIFIED_RELOAD_RETRY_AFTER + 1
+    with pytest.raises(ContextReloadUnverifiedError):
+        _reload(client, lock)
+    assert client.load_model.call_count == sent + 1
+    with pytest.raises(ContextReloadUnverifiedError):
+        _reload(client, lock)
+    assert client.load_model.call_count == sent + 1
