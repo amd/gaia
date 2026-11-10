@@ -46,6 +46,15 @@ def db(app):
     return app.state.db
 
 
+def _seed_cloud_catalog(monkeypatch, model_id):
+    """Register *model_id* as cloud the way ``/models`` reports it; undone after."""
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "_CLOUD_MODELS", lc._CLOUD_MODELS)
+    monkeypatch.setattr(lc, "_CLOUD_PROVIDERS", lc._CLOUD_PROVIDERS)
+    lc.record_cloud_models({"data": [{"id": model_id, "recipe": "cloud"}]})
+
+
 class TestHealthEndpoint:
     """Tests for /api/health endpoint."""
 
@@ -103,6 +112,21 @@ class TestSystemStatus:
         mock_httpx_cls.side_effect = httpx.ConnectError("down")
         data = client.get("/api/system/status").json()
         assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["default_model_is_cloud"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_discovered_cloud_model(
+        self, mock_httpx_cls, client, db, monkeypatch
+    ):
+        """A cloud provider known only from the catalog is still cloud."""
+        import httpx
+
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+
+        data = client.get("/api/system/status").json()
+
         assert data["default_model_is_cloud"] is True
 
     def test_system_status_returns_200(self, client):
@@ -1172,6 +1196,24 @@ class TestNetworkPolicySetting:
             == 200
         )
         assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_local_only_clears_a_discovered_cloud_custom_model(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        """A cloud model known only from the catalog is cleared like any other."""
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+
+        assert response.status_code == 200
+        assert db.get_setting("custom_model") is None
 
     def test_policy_cleanup_warnings_are_returned(self, client, monkeypatch, tmp_path):
         monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))

@@ -169,7 +169,7 @@ _SALIENT_ARG_KEYS = (
 #: Tools whose derived phrase reads badly or loses the point. Kept deliberately
 #: small — the generic deriver is the contract, this is the exception list.
 _NARRATION_OVERRIDES = {
-    "trust_project_folder": "Reading this folder's instructions and skills",
+    "trust_project_folder": "Asking to trust this folder",
     "list_skills": "Checking your installed skills",
     "list_directory": "Listing folder contents",
     "browse_directory": "Listing folder",

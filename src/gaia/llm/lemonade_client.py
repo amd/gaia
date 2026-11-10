@@ -5338,7 +5338,10 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         for entry in self.health_check().get("all_models_loaded", []):
-            if not _model_ids_match(entry.get("model_name"), model_name):
+            if not (
+                _model_ids_match(entry.get("model_name"), model_name)
+                or _model_ids_match(entry.get("id"), model_name)
+            ):
                 continue
             launch = entry.get("launch_command") or []
             args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""

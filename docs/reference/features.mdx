@@ -117,9 +117,6 @@ gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 # Email-triage throughput benchmark (tokens/sec, TTFT, latency)
 gaia eval benchmark --model Gemma-4-E4B-it-GGUF --limit 50
 
-# Generate a report from an evaluation results directory
-gaia report -d ./output/evaluations -o report.md
-
 # Visualize llama.cpp server performance logs
 gaia perf-vis ./logs/llama-server.log --show
 ```
