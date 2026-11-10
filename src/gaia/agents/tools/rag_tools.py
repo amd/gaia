@@ -89,8 +89,13 @@ def _summary_text(chat: Any, prompt: str) -> str:
 INDEX_FOREGROUND_BUDGET_S = 120.0
 
 _INDEX_JOBS_LOCK = threading.Lock()
-#: RAGSDK -> {path: _IndexJob}; jobs go away with the SDK that runs them.
+#: RAGSDK -> {realpath: _IndexJob}; jobs go away with the SDK that runs them.
 _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+#: RAGSDK -> {realpath: (path, reason)} for background indexes that failed
+#: after every caller had already been told "in progress".
+_INDEX_FAILURES: "weakref.WeakKeyDictionary[Any, Dict[str, Tuple[str, str]]]" = (
     weakref.WeakKeyDictionary()
 )
 
@@ -108,7 +113,12 @@ class _IndexJob:
         self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
+        #: ``index_document`` returned; the document is no longer "indexing".
+        self.finished = threading.Event()
+        #: Finished and recorded on the agent: the result is final.
         self.done = threading.Event()
+        #: Set once a caller returned "in progress": nobody is waiting on it.
+        self.backgrounded = False
 
     def progress(self, embedded: int, total: int) -> None:
         if self.embed_started is None:
@@ -124,23 +134,65 @@ class _IndexJob:
         rate = self.embedded / max(time.monotonic() - self.embed_started, 1e-6)
         return int((self.total - self.embedded) / rate)
 
+    def failure(self) -> Optional[str]:
+        """Why the finished job did not index the document, or None."""
+        if self.error is not None:
+            return f"{type(self.error).__name__}: {self.error}"
+        if not (self.result or {}).get("success"):
+            return str((self.result or {}).get("error") or "indexing failed")
+        return None
+
+
+def _finish_unattended(
+    rag: Any,
+    key: str,
+    job: _IndexJob,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]],
+) -> None:
+    """Record a job that finished after its callers stopped waiting on it."""
+    failure = job.failure()
+    if failure is None and on_indexed is not None:
+        try:
+            on_indexed(job.result)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception(f"Recording background index of {job.path} failed")
+            failure = (
+                f"it was indexed but could not be attached to this chat "
+                f"({type(e).__name__}: {e})"
+            )
+    if failure is None:
+        logger.info(f"Background index of {job.path} finished")
+        return
+    logger.error(f"Background index of {job.path} failed: {failure}")
+    with _INDEX_JOBS_LOCK:
+        _INDEX_FAILURES.setdefault(rag, {})[key] = (job.path, failure)
+
 
 def _index_within_budget(
-    rag: Any, path: str, budget: Optional[float] = None
+    rag: Any,
+    path: str,
+    budget: Optional[float] = None,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
     """Index *path*, waiting at most *budget* seconds for it.
 
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
-    call for the same path waits on the running job instead of starting another.
+    call for the same file waits on the running job instead of starting another.
+
+    *on_indexed* is the bookkeeping a caller runs on success. When the job
+    finishes after every caller got ``None`` back, it runs on the indexing
+    thread instead; a failure then shows in ``documents_failed_indexing``.
     """
     budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
+    key = os.path.realpath(path)
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
-        job = jobs.get(path)
+        job = jobs.get(key)
         if job is None:
             job = _IndexJob(path)
-            jobs[path] = job
+            jobs[key] = job
+            _INDEX_FAILURES.get(rag, {}).pop(key, None)
 
             def _run():
                 from gaia.daemon.broker_client import detached_from_turn
@@ -156,7 +208,19 @@ def _index_within_budget(
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
-                    job.done.set()
+                    with _INDEX_JOBS_LOCK:
+                        job.finished.set()
+                        unattended = job.backgrounded
+                    try:
+                        if unattended:
+                            _finish_unattended(rag, key, job, on_indexed)
+                    finally:
+                        # Only once recorded, or a caller in between re-indexes it.
+                        with _INDEX_JOBS_LOCK:
+                            job.done.set()
+                            # Finished jobs leave the map: a later call indexes afresh.
+                            if jobs.get(key) is job:
+                                del jobs[key]
 
             ctx = contextvars.copy_context()
             threading.Thread(
@@ -164,11 +228,12 @@ def _index_within_budget(
                 name=f"rag-index:{Path(path).name}",
                 daemon=True,
             ).start()
-    if not job.done.wait(budget):
-        return None, job
-    with _INDEX_JOBS_LOCK:
-        if jobs.get(path) is job:
-            del jobs[path]
+    if not job.finished.wait(budget):
+        with _INDEX_JOBS_LOCK:
+            if not job.finished.is_set():
+                job.backgrounded = True
+                return None, job
+    job.done.wait()
     if job.error is not None:
         raise job.error
     return job.result, job
@@ -180,7 +245,18 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+        return sorted(job.path for job in jobs.values() if not job.finished.is_set())
+
+
+def documents_failed_indexing(rag: Any) -> List[Tuple[str, str]]:
+    """``(path, reason)`` for background indexes that failed unattended.
+
+    A document stays listed until it is indexed again.
+    """
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        return sorted((_INDEX_FAILURES.get(rag) or {}).values())
 
 
 def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
@@ -843,6 +919,26 @@ class RAGToolsMixin:
         """
         return "No documents are currently indexed."
 
+    def _attach_indexed_document(self, file_path: str, result: Dict[str, Any]) -> str:
+        """Record a successful index on the agent and its chat session.
+
+        Runs on the indexing thread when the document finished in the
+        background. Returns a warning when the session could not be saved.
+        """
+        _forget_evicted(self.indexed_files, result.get("evicted", []))
+        self.indexed_files.add(file_path)
+        save_warning = ""
+        session = getattr(self, "current_session", None)
+        if session and file_path not in session.indexed_documents:
+            session.indexed_documents.append(file_path)
+            manager = getattr(self, "session_manager", None)
+            if manager is not None and not manager.save_session(session):
+                save_warning = _SESSION_SAVE_WARNING
+                logger.warning(save_warning)
+        if hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
+        return save_warning
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -1328,33 +1424,19 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result, job = _index_within_budget(rag, resolved)
+                            idx_result, job = _index_within_budget(
+                                rag,
+                                resolved,
+                                on_indexed=functools.partial(
+                                    self._attach_indexed_document, file_path
+                                ),
+                            )
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
-                                _forget_evicted(
-                                    self.indexed_files, idx_result.get("evicted", [])
+                                save_warning = self._attach_indexed_document(
+                                    file_path, idx_result
                                 )
-                                self.indexed_files.add(file_path)
-                                if (
-                                    hasattr(self, "current_session")
-                                    and self.current_session
-                                ):
-                                    if (
-                                        file_path
-                                        not in self.current_session.indexed_documents
-                                    ):
-                                        self.current_session.indexed_documents.append(
-                                            file_path
-                                        )
-                                        if hasattr(self, "session_manager"):
-                                            if not self.session_manager.save_session(
-                                                self.current_session
-                                            ):
-                                                save_warning = _SESSION_SAVE_WARNING
-                                                logger.warning(save_warning)
-                                if hasattr(self, "rebuild_system_prompt"):
-                                    self.rebuild_system_prompt()
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
                                 # stores the absolute path, not the relative one passed in.
@@ -2023,28 +2105,19 @@ class RAGToolsMixin:
 
                 # A document too big to index within the budget keeps indexing
                 # in the background; say so instead of running into the timeout.
-                result, job = _index_within_budget(self.rag, real_file_path)
+                result, job = _index_within_budget(
+                    self.rag,
+                    real_file_path,
+                    on_indexed=functools.partial(
+                        self._attach_indexed_document, file_path
+                    ),
+                )
                 if result is None:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
                     evicted = result.get("evicted", [])
-                    _forget_evicted(self.indexed_files, evicted)
-                    self.indexed_files.add(file_path)
-                    save_warning = ""
-
-                    # Add to current session
-                    if self.current_session:
-                        if file_path not in self.current_session.indexed_documents:
-                            self.current_session.indexed_documents.append(file_path)
-                            if not self.session_manager.save_session(
-                                self.current_session
-                            ):
-                                save_warning = _SESSION_SAVE_WARNING
-                                logger.warning(save_warning)
-
-                    # Update system prompt to include the new document
-                    self.rebuild_system_prompt()
+                    save_warning = self._attach_indexed_document(file_path, result)
 
                     # Return detailed stats from RAG SDK
                     file_name = result.get("file_name", file_path)

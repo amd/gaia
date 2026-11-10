@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -37,9 +37,23 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+let unhandled: string[] = [];
+
+/** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
+async function expectNoFixtureGap(page: Page): Promise<void> {
+    await expect(page.locator('body'), 'a screen shows a missing fixture').not.toContainText('no fixture for');
+}
+
+test.afterEach(async ({ page }) => {
+    const seen = unhandled;
+    unhandled = [];
+    expect(seen, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+    await expectNoFixtureGap(page);
+});
+
 async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await before?.(page);
     await useTheme(page, theme);
     await useLocale(page, locale);
@@ -398,13 +412,14 @@ for (const [title, locale, name] of [
 ] as const) {
     test(title, async ({ page }, info) => {
         await open(page, '', locale);
-        await page.route('**/api/files/upload', (route) =>
+        await page.route((url) => url.pathname === '/api/files/upload-media', (route) =>
             route.fulfill({
                 json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
             }),
         );
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
-        await expect(page.locator('.composer-attachment-state')).toBeVisible();
+        await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
+        await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -422,6 +437,48 @@ test('finished answer', async ({ page }) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+const RECIPE_CARD = {
+    kind: 'guide', guideType: 'recipe', title: 'خبز الموز', description: 'رطب وسهل التحضير.',
+    notes: 'يحفظ ثلاثة أيام.', servings: 8,
+    items: ['2 cups flour', '3 ripe bananas', '1/2 cup sugar', '1 teaspoon baking soda'],
+    steps: ['Mix: اخلط المكونات الجافة', 'Bake 60 minutes at 350°F'],
+};
+const LOAN_CARD = {
+    kind: 'calculator', calculator: 'loan', title: '', currency: 'EUR',
+    inputs: { amount: 300_000, annualRatePercent: 6.5, years: 30, downPayment: 60_000 },
+};
+
+async function withGuideCards(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'وصفة خبز الموز وقسط قرض', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'بالهناء والشفاء.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'guides/show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
+                            { id: 2, type: 'tool', tool: 'calculators/show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`recipe and loan cards lay out in the interface direction (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withGuideCards);
+        await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
+        await expect(page.locator('.render-calc')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
+        await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
 
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
@@ -957,6 +1014,7 @@ const leftoverEnglish = (root: Page) =>
 
 /** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
 async function shot(page: Page, name: string): Promise<void> {
+    await expectNoFixtureGap(page);
     const dir = process.env.GAIA_VISUAL_SHOTS;
     if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
 }
@@ -2152,6 +2210,67 @@ test('window controls dim under the missing-model dialog too', async ({ page }) 
     expect(await refusedColors(page)).toEqual([]);
 });
 
+const LONG_TITLE = 'Quarterly budget review with finance, engineering and the regional leads, including the follow-up on the September numbers';
+const MANY_ATTENDEES = Array.from({ length: 30 }, (_, i) => `person.number.${i + 1}@example.com`);
+const CALENDAR_PROMPTS = {
+    create: { title: LONG_TITLE, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', notify_attendees: MANY_ATTENDEES, calendar_account: 'me@example.com', location: 'Room 4', description: 'Bring the Q3 numbers.' },
+    update: { event_id: 'abc', expected_title: LONG_TITLE, expected_start: '2026-11-03T14:00:00Z', notify_attendees: ['dana@example.com'], new_title: 'Budget sync', new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z' },
+    cancel: { event_id: 'abc', expected_title: 'اجتماع الميزانية', expected_start: '2026-11-03T14:00:00Z', notify_attendees: [] },
+} as const;
+
+/** A reply that asks one calendar approval and stays open: a closed stream dismisses the prompt. */
+async function replyWithCalendarApproval(page: Page, kind: keyof typeof CALENDAR_PROMPTS): Promise<void> {
+    const label = { create: 'creating', update: 'changing', cancel: 'cancelling' }[kind];
+    const event = JSON.stringify({ type: 'permission_request', tool: `calendar/${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
+    await page.addInitScript((line) => {
+        const realFetch = window.fetch;
+        window.fetch = (input, init) => (String(input).endsWith('/chat/send')
+            ? Promise.resolve(new Response(new ReadableStream({
+                start: (out) => out.enqueue(new TextEncoder().encode(`data: ${line}\n\n`)),
+            }), { headers: { 'Content-Type': 'text/event-stream' } }))
+            : realFetch(input, init));
+    }, event);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const kind of ['create', 'update', 'cancel'] as const) {
+        test(`calendar approval, ${kind} (${locale})`, async ({ page }, info) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => replyWithCalendarApproval(p, kind));
+            await page.locator('textarea').first().fill('Handle my calendar');
+            await page.keyboard.press('Enter');
+            const facts = page.getByTestId('perm-calendar');
+            await expect(facts).toBeVisible();
+            // The buttons stay reachable however many people are on the event.
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            // Dates follow the UI's language, so Arabic shows no English month names.
+            if (locale === 'ar') await expect(facts).not.toContainText(/Nov|AM|PM/);
+            else await expect(facts).toContainText('Nov');
+            await page.locator('.perm-card').screenshot({ path: info.outputPath(`calendar-${kind}-${locale}.png`) });
+            await page.screenshot({ path: info.outputPath(`calendar-${kind}-${locale}-page.png`) });
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+test('calendar approval fits a phone (ar)', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) => replyWithCalendarApproval(p, 'create'));
+    await page.locator('textarea').first().fill('Handle my calendar');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('perm-calendar')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('calendar-create-ar-phone.png') });
+    const offScreen = await page.locator('.perm-card *').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.width > 0 && (box.left < -1 || box.right > innerWidth + 1);
+        }).length,
+    );
+    expect(offScreen).toBe(0);
+    const actions = page.locator('.perm-card-actions');
+    await actions.scrollIntoViewIfNeeded();
+    await expect(actions).toBeInViewport();
+});
+
 /** Colors the desktop window would refuse: main.cjs takes only #rrggbb. */
 const refusedColors = (page: Page): Promise<string[]> =>
     page.evaluate(() =>
@@ -2165,7 +2284,10 @@ const WINDOW_CONTROLS_W = 138;
 
 for (const locale of ['ar', 'en']) {
     test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
-        await open(page, '', locale, withWindowsControls);
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await withoutFlagship(p);
+        });
         await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
         const notice = page.locator('.app-notice').first();
         await expect(notice.getByRole('button')).toBeVisible();
@@ -2212,7 +2334,7 @@ for (const locale of ['ar', 'en']) {
 }
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
-    await open(page);
+    await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
@@ -2487,6 +2609,45 @@ test('the library path row fits a phone', async ({ page }) => {
         }).length,
     );
     expect(clipped).toBe(0);
+});
+
+test('each line of an email being approved takes its own direction', async ({ page }) => {
+    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+    // The prompt lasts only while its stream is open, which a routed response can't do.
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
+        p.addInitScript((line) => {
+            const realFetch = window.fetch;
+            window.fetch = (input, init) =>
+                String(input).endsWith('/chat/send')
+                    ? Promise.resolve(new Response(new ReadableStream({
+                        start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                    }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                    : realFetch(input, init);
+        }, `data: ${JSON.stringify(event)}\n\n`),
+    );
+    await page.locator('textarea').last().fill('send it');
+    await page.keyboard.press('Enter');
+    const pre = page.getByTestId('perm-exact-text');
+    await expect(pre).toBeVisible();
+    const gaps = await pre.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const node = el.firstChild as Text;
+        const rectOf = (start: number, end: number) => {
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, end);
+            return range.getBoundingClientRect();
+        };
+        const source = node.data;
+        const arabicAt = source.indexOf('مرحبا');
+        return {
+            english: rectOf(0, source.indexOf('\n')).left - box.left,
+            arabic: box.right - rectOf(arabicAt, source.length).right,
+        };
+    });
+    expect(gaps.english).toBeLessThan(40);
+    expect(gaps.arabic).toBeLessThan(40);
 });
 
 /** The desktop app's updater in a given state; the browser preview has none. */

@@ -81,6 +81,8 @@ const SentinelName = ".installed"
 
 // ArtifactKindBinary is the sentinel's artifact_kind for a frozen executable.
 // It mirrors installer.ARTIFACT_KIND_BINARY and identifies daemon sidecars.
+// tests/unit/test_hub_install_sidecar_contract.py pins both against the real
+// installer's sentinel.
 const ArtifactKindBinary = "binary"
 
 // InstallRoot is the directory the daemon installs hub agents into. It mirrors
