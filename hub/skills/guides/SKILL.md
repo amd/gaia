@@ -1,6 +1,6 @@
 ---
 name: guides
-description: Show a recipe, workout, how-to, checklist or trip itinerary as an interactive card the user follows step by step. Use when the user asks for a recipe or how to cook or bake something, a workout or exercise routine, how to fix, repair, install or set up something, a shopping, packing or to-do list, or a travel itinerary.
+description: Show a recipe, workout, how-to, checklist or trip itinerary as an interactive card. Use for recipes and cooking or baking, workouts, fixing, installing or setting something up, shopping, packing or to-do lists, and travel plans.
 license: MIT
 version: 1.0.0
 metadata:

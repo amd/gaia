@@ -1,6 +1,6 @@
 ---
 name: calculators
-description: Show a tip or loan calculator card that does the math in the app, so the numbers are never worked out in text. Use when the user asks how much to tip, how to split a bill, or about a mortgage, car loan, monthly payment or loan interest.
+description: Show a tip or loan calculator card that does the math. Use for tipping, splitting a bill, mortgages, car loans, monthly payments and loan interest.
 license: MIT
 version: 1.0.0
 metadata:
