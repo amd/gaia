@@ -10954,6 +10954,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         stopped_on_announced_step = False
         look_first_reprompted = False
+        save_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         corrected_test_claims: set = set()
@@ -13175,6 +13176,23 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
+                        continue
+
+                # "Please remember this" answered with "noted" and no save.
+                unsaved = getattr(self, "_unsaved_memory_request", None)
+                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
+                    called = {name for name, _ in tool_call_log} | {
+                        record.get("tool") for record in self._turn_tool_executions
+                    }
+                    nudge = unsaved(called)
+                    if nudge:
+                        save_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Asked to remember, nothing saved; asking "
+                            "the agent to save it"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        conversation.append({"role": "user", "content": nudge})
                         continue
 
                 # Universal planning-text guard: catch any short response that is
