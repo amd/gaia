@@ -35,10 +35,14 @@ MODEL_PRICING = {
     "claude-sonnet-5-5": {
         "input_per_mtok": 2.00,
         "output_per_mtok": 10.00,
-        "cached_per_mtok": 0.20,
+        "cached_per_mtok": 0.10,
     },
     # Prompts over 100K tokens bill at $0.50 / $2.50.
-    "claude-haiku-5-5": {"input_per_mtok": 0.10, "output_per_mtok": 0.50},
+    "claude-haiku-5-5": {
+        "input_per_mtok": 0.10,
+        "output_per_mtok": 0.50,
+        "cached_per_mtok": 0.01,
+    },
     "claude-fable-5-1": {
         "input_per_mtok": 10.00,
         "output_per_mtok": 50.00,
