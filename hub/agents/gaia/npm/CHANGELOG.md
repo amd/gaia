@@ -30,6 +30,25 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **The agent can use a Google or Outlook calendar.** Five new tools list
+  events, check free time, and create, change or cancel events, which brings the
+  registered tool count to 110. Every write asks a person first, even under full
+  access, and a run with nobody to ask refuses it. The prompt shows the
+  event's title, start, who gets notified and what changes; a call that misstates
+  them is refused before any prompt. `create_calendar_event` must state
+  `calendar_account`, and a change or cancel prompt names the account too, so the
+  prompt always shows where the change lands. A time given with today's UTC offset
+  for a date past a daylight-saving change is refused with the right offset, and
+  free time across that change is read in the computer's own zone. Results name the
+  account and say only its main calendar was read, and event text reaches the model
+  marked as untrusted. A wrong event id is an error rather than "already gone", and a
+  description over 500 characters, or a title or location over 200, is refused. Hidden characters show in the prompt as
+  codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
+  at a time. Consent now
+  asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
+  connections keep reading mail, and a calendar call names the command that adds
+  the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar was
+  tried on real Google and Outlook calendars but not yet measured by the agent evals.
 
 ## [0.3.5]
 
@@ -109,25 +128,6 @@ the new session `tools` and `grants` routes, so probe `/version` first.
   and `.claude/skills`.**
 - **The binary ships no GPL or AGPL code**, and the agent is one Python
   package.
-
-### Added
-
-- **The agent can use a Google or Outlook calendar.** Five new tools list
-  events, check free time, and create, change or cancel events, which brings the
-  registered tool count to 106. Every write asks a person first, even under full
-  access, and a run with nobody to ask refuses it. The prompt shows the
-  event's title, start, who gets notified and what changes; a call that misstates
-  them is refused before any prompt. `create_calendar_event` must state
-  `calendar_account`, so the prompt shows where the event lands. Results name the
-  account and say only its main calendar was read, and event text reaches the model
-  marked as untrusted. A wrong event id is an error rather than "already gone", and a
-  description over 500 characters, or a title or location over 200, is refused. Hidden characters show in the prompt as
-  codes such as `[U+202E]`, and a malformed attendee address is refused. A recurring event changes one occurrence
-  at a time. Consent now
-  asks for `calendar.events` (Google) and `Calendars.ReadWrite` (Microsoft). Existing
-  connections keep reading mail, and a calendar call names the command that adds
-  the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar was
-  tried on real Google and Outlook calendars but not yet measured by the agent evals.
 
 ### Changed
 

@@ -575,3 +575,20 @@ class TestTimeRules:
     def test_an_inverted_window_is_refused(self):
         with pytest.raises(CalendarError, match="must be after"):
             CalendarWindow(WINDOW.end, WINDOW.start)
+
+
+class TestGraphAllDayAcrossADaylightSavingChange:
+    """Asked for UTC, Graph returns each all-day bound at its own zone's midnight."""
+
+    def test_both_dates_survive_the_offset_changing_between_them(self):
+        # New York midnight is 04:00 UTC on Nov 1 and 05:00 UTC on Nov 2.
+        raw = {
+            **GRAPH_RAW,
+            "isAllDay": True,
+            "originalStartTimeZone": "Eastern Standard Time",
+            "start": {"dateTime": "2026-11-01T04:00:00.0000000", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-11-02T05:00:00.0000000", "timeZone": "UTC"},
+        }
+        _, handler = _recording(raw)
+        event = _graph(handler).get_event("m1")
+        assert (event.start, event.end) == ("2026-11-01", "2026-11-02")

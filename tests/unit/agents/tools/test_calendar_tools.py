@@ -154,6 +154,12 @@ ACCOUNT = "me@x.com"
 
 
 @pytest.fixture(autouse=True)
+def utc_computer(monkeypatch):
+    """This computer's zone is UTC unless a test names another, so runs agree."""
+    monkeypatch.setattr("tzlocal.get_localzone_name", lambda: "UTC")
+
+
+@pytest.fixture(autouse=True)
 def connected_accounts(monkeypatch):
     """Google is connected as ACCOUNT; a test adds to this to connect others."""
     connections = {
@@ -2046,6 +2052,7 @@ class TestThePromptShowsTheRealEvent:
         shown = agent.console.asked[0][1]
         assert shown["notify_attendees"] == ["boss@xn--strae-oqa.de"]
         assert shown["expected_title"] == "Budget review"
+        assert shown["calendar_account"] == ACCOUNT
 
     def test_a_relayed_card_gets_the_checked_values(self, make_agent):
         from gaia.ui.email_sidecar import relay
@@ -2077,6 +2084,7 @@ class TestThePromptShowsTheRealEvent:
         card = next(e for e in _events(ui) if e["type"] == "permission_request")
         assert card["args"]["notify_attendees"] == ["ceo@xn--pple-43d.com"]
         assert card["args"]["expected_title"] == "Budget review"
+        assert card["args"]["calendar_account"] == ACCOUNT
 
 
 # --- the browser card shows text exactly as Python does -------------------
@@ -2228,3 +2236,142 @@ class TestTheTerminalSummaryCarriesTheNote:
     )
     def test_plain_text_gets_no_note(self, make_agent, title):
         assert HIDDEN_NOTE not in self._summary(make_agent, title)
+
+
+class TestAcrossADaylightSavingChange:
+    """New York leaves daylight saving time at 2am on 2026-11-01 (-04:00 to -05:00)."""
+
+    @pytest.fixture(autouse=True)
+    def new_york_in_october(self, monkeypatch):
+        monkeypatch.setattr("tzlocal.get_localzone_name", lambda: "America/New_York")
+        monkeypatch.setattr(
+            "gaia.agents.tools._calendar.model._now",
+            lambda: datetime(2026, 10, 20, 16, 0, tzinfo=timezone.utc),
+        )
+
+    def _create(self, agent, start, end):
+        return _run(
+            agent,
+            "create_calendar_event",
+            title="Budget review",
+            start=start,
+            end=end,
+            notify_attendees=[],
+            calendar_account=ACCOUNT,
+        )
+
+    def test_todays_offset_on_a_date_past_the_change_is_refused(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = self._create(
+            agent, "2026-11-03T09:00:00-04:00", "2026-11-03T10:00:00-04:00"
+        )
+        assert result["success"] is False
+        assert "2026-11-03T09:00:00-05:00" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_the_offset_in_force_on_that_date_goes_through(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        self._create(agent, "2026-11-03T09:00:00-05:00", "2026-11-03T10:00:00-05:00")
+        assert _asked(agent) == ["create_calendar_event"]
+        body = json.loads(fake.writes[0].content)
+        assert body["start"]["dateTime"] == "2026-11-03T09:00:00-05:00"
+
+    def test_a_utc_time_stands_for_another_zone(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        self._create(agent, "2026-11-03T13:00:00Z", "2026-11-03T14:00:00Z")
+        assert len(fake.writes) == 1
+
+    def test_a_date_before_the_change_keeps_todays_offset(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        self._create(agent, "2026-10-30T09:00:00-04:00", "2026-10-30T10:00:00-04:00")
+        assert len(fake.writes) == 1
+
+    def test_an_event_spanning_the_change_is_checked_at_each_end(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = self._create(
+            agent, "2026-10-31T22:00:00-04:00", "2026-11-01T09:00:00-04:00"
+        )
+        assert result["success"] is False and "end=" in result["error"]
+        assert fake.writes == []
+
+    def test_a_move_past_the_change_is_checked_too(self, make_agent):
+        fake = _FakeGoogle()
+        agent = make_agent(fake)
+        result = _run(
+            agent,
+            "update_calendar_event",
+            **TARGET,
+            new_start="2026-11-04T09:00:00-04:00",
+            new_end="2026-11-04T10:00:00-04:00",
+        )
+        assert result["success"] is False and "-05:00" in result["error"]
+        assert agent.console.asked == [] and fake.writes == []
+
+    def test_spring_forward_is_caught_the_same_way(self, make_agent, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.agents.tools._calendar.model._now",
+            lambda: datetime(2026, 3, 1, 16, 0, tzinfo=timezone.utc),
+        )
+        fake = _FakeGoogle()
+        result = self._create(
+            make_agent(fake), "2026-03-10T09:00:00-05:00", "2026-03-10T10:00:00-05:00"
+        )
+        assert "2026-03-10T09:00:00-04:00" in result["error"]
+        assert fake.writes == []
+
+    def test_an_all_day_event_takes_no_offset(self, make_agent):
+        fake = _FakeGoogle(
+            {**EVENT, "start": {"date": "2026-10-31"}, "end": {"date": "2026-11-03"}}
+        )
+        agent = make_agent(fake)
+        self._create(agent, "2026-10-31", "2026-11-02")
+        body = json.loads(fake.writes[0].content)
+        assert body["start"]["date"] == "2026-10-31"
+        assert body["end"]["date"] == "2026-11-03"
+
+    def test_an_all_day_day_off_after_the_change_blocks_exactly_that_day(
+        self, make_agent
+    ):
+        items = [
+            {
+                "id": "off",
+                "summary": "off",
+                "start": {"date": "2026-11-02"},
+                "end": {"date": "2026-11-03"},
+            }
+        ]
+        result = _run(
+            make_agent(_FakeGoogle(items=items)),
+            "check_calendar_availability",
+            start="2026-10-31T00:00:00-04:00",
+            end="2026-11-04T00:00:00-05:00",
+        )
+        assert result["is_free"] is False
+        assert result["free_slots"] == [
+            {"start": "2026-10-31T00:00:00-04:00", "end": "2026-11-02T00:00:00-05:00"},
+            {"start": "2026-11-03T00:00:00-05:00", "end": "2026-11-04T00:00:00-05:00"},
+        ]
+
+    def test_a_window_in_another_zone_keeps_its_own_offset(self, make_agent):
+        items = [
+            {
+                "id": "off",
+                "summary": "off",
+                "start": {"date": "2026-11-03"},
+                "end": {"date": "2026-11-04"},
+            }
+        ]
+        result = _run(
+            make_agent(_FakeGoogle(items=items)),
+            "check_calendar_availability",
+            start="2026-11-03T00:00:00+09:00",
+            end="2026-11-05T00:00:00+09:00",
+        )
+        assert result["free_slots"] == [
+            {"start": "2026-11-04T00:00:00+09:00", "end": "2026-11-05T00:00:00+09:00"}
+        ]

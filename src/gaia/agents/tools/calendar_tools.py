@@ -43,12 +43,15 @@ from gaia.agents.tools._calendar.model import (
     CalendarEvent,
     CalendarWindow,
     EventPatch,
+    EventSlot,
     NewEvent,
+    check_daylight_offset,
     event_span,
     is_bare_date,
     parse_date,
     parse_instant,
     parse_slot,
+    wall_clock_zone,
 )
 from gaia.agents.tools._calendar.scopes import (
     CALENDAR_SCOPES,
@@ -346,12 +349,21 @@ def _write_unreadable_result(account: str, notified: List[str]) -> str:
     )
 
 
+def _tool_slot(start: str, end: str) -> EventSlot:
+    """A slot from a write's arguments, refusing an offset a DST change made stale."""
+    slot = parse_slot(start, end)
+    if not slot.all_day:
+        check_daylight_offset(start, "start")
+        check_daylight_offset(end, "end")
+    return slot
+
+
 def _merge_free_slots(
     window: CalendarWindow, busy: List[Tuple[datetime, datetime]]
 ) -> List[Dict[str, str]]:
     slots: List[Dict[str, str]] = []
     cursor = window.start
-    zone = window.start.tzinfo
+    zone = wall_clock_zone(window.start)
     for begins, ends in sorted(busy):
         if begins > cursor:
             slots.append(
@@ -425,6 +437,7 @@ class _CalendarPreflight:
             if event is None:
                 raise CalendarError(_UNCHECKED_TARGET_MESSAGE)
             told = _who_gets_told(event)
+            shown["calendar_account"] = self._mixin._calendar_account()
             shown["expected_title"] = visible_line(event.title.strip())
             shown["notify_attendees"] = [_shown_invitee(a) for a in told]
             written += [event.title, *told]
@@ -656,7 +669,7 @@ class CalendarToolsMixin:
 
         def _check_create(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             try:
-                parse_slot(str(args.get("start") or ""), str(args.get("end") or ""))
+                _tool_slot(str(args.get("start") or ""), str(args.get("end") or ""))
                 _invitees(args.get("notify_attendees"))
                 _check_shown_length(args.get("title"), "title", _MAX_LINE_CHARS)
                 _check_shown_length(args.get("location"), "location", _MAX_LINE_CHARS)
@@ -694,7 +707,7 @@ class CalendarToolsMixin:
                 )
             patch = EventPatch(
                 title=_plain(args.get("new_title")) or None,
-                slot=parse_slot(new_start, new_end) if new_start else None,
+                slot=_tool_slot(new_start, new_end) if new_start else None,
                 location=_plain(args.get("new_location")) or None,
                 description=_plain(args.get("new_description")) or None,
             )
@@ -877,7 +890,7 @@ class CalendarToolsMixin:
             try:
                 new_event = NewEvent(
                     title=_plain(title),
-                    slot=parse_slot(start, end),
+                    slot=_tool_slot(start, end),
                     attendees=tuple(_invitees(notify_attendees)),
                     location=_plain(location) or None,
                     description=_plain(description) or None,

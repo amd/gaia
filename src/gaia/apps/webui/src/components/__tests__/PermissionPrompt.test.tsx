@@ -279,11 +279,12 @@ describe('PermissionPrompt', () => {
         it('update: the event and what changes', () => {
             const facts = ask('update_calendar_event', {
                 event_id: 'abc', expected_title: 'Budget review', expected_start: '2026-11-03T14:00:00Z',
-                notify_attendees: ['dana@x.com'], new_title: 'Budget sync',
+                calendar_account: 'me@x.com', notify_attendees: ['dana@x.com'], new_title: 'Budget sync',
                 new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z',
                 new_location: 'Room 9', new_description: 'New agenda',
             });
             expect(facts).toHaveTextContent('Budget review');
+            expect(facts).toHaveTextContent('me@x.com');
             expect(facts).toHaveTextContent('New title');
             expect(facts).toHaveTextContent('Budget sync');
             expect(facts).toHaveTextContent('New time');

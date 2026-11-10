@@ -39,7 +39,8 @@ from gaia.llm.lemonade_client import FULL_TOOLS_SLOT
 _DIM = 768
 
 #: What the tests below hold the first turn to, in cl100k tokens.
-MAX_FIXED_PREFIX_TOKENS = 15_000
+#: 15,500: the five calendar tools add ~570 to the full list, none to core.
+MAX_FIXED_PREFIX_TOKENS = 15_500
 MAX_THIN_TOKENS_PER_TOOL = 90
 
 

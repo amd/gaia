@@ -251,6 +251,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
     } else {
         named(t('permission.calendar.event'), args.expected_title);
         rows.push([t('permission.calendar.when'), <When start={text(args.expected_start)} end="" />]);
+        named(t('permission.calendar.account'), args.calendar_account);
         named(t('permission.calendar.newTitle'), args.new_title);
         if (text(args.new_start)) {
             rows.push([t('permission.calendar.newTime'), <When start={text(args.new_start)} end={text(args.new_end)} />]);

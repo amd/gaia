@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from enum import Enum
 from typing import Optional, Protocol, Tuple
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import tzlocal
 
 from gaia.agents.tools._calendar.errors import CalendarError
 
@@ -205,13 +208,65 @@ def parse_slot(start: str, end: str) -> EventSlot:
     return EventSlot(begins.isoformat(), ends.isoformat(), False)
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def local_zone() -> Optional[tzinfo]:
+    """This computer's named zone, or None when it can't be named."""
+    try:
+        return ZoneInfo(tzlocal.get_localzone_name())
+    except (ZoneInfoNotFoundError, ValueError, OSError, TypeError):
+        return None
+
+
+def wall_clock_zone(anchor: datetime) -> tzinfo:
+    """The zone to read *anchor*'s span in: this computer's, when *anchor* is in it.
+
+    A fixed offset is an hour out past a daylight-saving change; the named zone
+    keeps midnight at midnight on both sides of it.
+    """
+    local = local_zone()
+    if local is not None and anchor.astimezone(local).utcoffset() == (
+        anchor.utcoffset()
+    ):
+        return local
+    return anchor.tzinfo
+
+
+def check_daylight_offset(value: str, name: str) -> None:
+    """Refuse a time that took today's UTC offset across a daylight-saving change.
+
+    Told "9am on the 3rd", a model copies the offset it sees today. When daylight
+    saving changes in between, that names a moment an hour off.
+    """
+    moment = parse_instant(value, name)
+    local = local_zone()
+    # A Z time is the stated way to name another zone's time, so it stands.
+    if local is None or value.strip()[-1:] in ("Z", "z"):
+        return
+    offset = moment.utcoffset()
+    offset_then = moment.astimezone(local).utcoffset()
+    if offset == offset_then or offset != _now().astimezone(local).utcoffset():
+        return
+    meant = moment.replace(tzinfo=None).replace(tzinfo=local)
+    raise CalendarError(
+        f"{name}={value!r} uses UTC offset {moment.isoformat()[-6:]}, this computer's "
+        f"offset today, but on {moment.date().isoformat()} its time zone is at "
+        f"{meant.isoformat()[-6:]} because daylight saving time changes in between, "
+        "so this names a time an hour off. Nothing was asked or changed. If the "
+        f"person meant their own local time, retry with {meant.isoformat()}; if "
+        "they meant another time zone, give the time in UTC with a Z suffix."
+    )
+
+
 def event_span(
     event: CalendarEvent, window: CalendarWindow
 ) -> Tuple[datetime, datetime]:
-    """When *event* occupies. An all-day date is read in the window's own offset."""
+    """When *event* occupies. An all-day date is read in the window's own zone."""
     if not event.all_day:
         return parse_instant(event.start, "start"), parse_instant(event.end, "end")
-    zone = window.start.tzinfo
+    zone = wall_clock_zone(window.start)
     return (
         datetime.combine(parse_date(event.start), datetime.min.time(), zone),
         datetime.combine(parse_date(event.end), datetime.min.time(), zone),
@@ -236,10 +291,13 @@ __all__ = [
     "EventPatch",
     "EventSlot",
     "NewEvent",
+    "check_daylight_offset",
     "event_path_segment",
     "event_span",
     "is_bare_date",
+    "local_zone",
     "parse_date",
     "parse_instant",
     "parse_slot",
+    "wall_clock_zone",
 ]
