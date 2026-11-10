@@ -292,3 +292,72 @@ def test_the_local_sentence_claims_only_gaias_own_routing():
     described = resolve_inference_location("Gemma-4-E4B-it-GGUF").describe()
     assert "GAIA is not sending" in described
     assert "nothing in this conversation goes" not in described
+
+
+# ---------------------------------------------------------------------------
+# A /model switch rebuilds the prompt from the client it just built
+# ---------------------------------------------------------------------------
+
+
+class _SwitchableChat:
+    """The AgentSDK fields a ``/model`` switch reads and moves."""
+
+    def __init__(self, model: str):
+        self.config = MagicMock()
+        self.config.use_claude = False
+        self.config.use_chatgpt = False
+        self.config.model = model
+        self.config.claude_model = None
+        self.config.base_url = "http://127.0.0.1:13305/api/v1"
+        self.config.system_prompt = None
+        self.llm_client = None
+
+    @property
+    def effective_model(self) -> str:
+        return self.config.model
+
+
+def test_a_switch_to_a_discovered_cloud_model_names_its_provider_in_the_prompt(
+    monkeypatch,
+):
+    """``custom.`` is no provider prefix GAIA knows; only the catalog says the
+    model is served by Fireworks. The prompt rebuilt during the switch is what
+    the model reads on the next turn, so it must name Fireworks too, not say
+    the session runs locally."""
+    from gaia_agent import stdio
+
+    from gaia.llm import lemonade_client
+
+    model = "custom.gemma-4-31b-it"
+    catalog = {
+        "data": [
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            }
+        ]
+    }
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", frozenset())
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "_send_request",
+        lambda self, method, url, data=None, timeout=None: catalog,
+    )
+
+    agent = _agent("Gemma-4-E4B-it-GGUF")
+    agent.chat = _SwitchableChat("Gemma-4-E4B-it-GGUF")
+    agent._use_claude = False
+    agent.model_id = "Gemma-4-E4B-it-GGUF"
+    agent.apply_model_features = lambda model_id: None
+    agent.unload_skills_needing_withheld_tools = lambda: []
+    rebuilt = []
+    agent.rebuild_system_prompt = lambda: rebuilt.append(agent._get_system_prompt())
+
+    stdio._apply_local_switch(agent, model)
+
+    assert len(rebuilt) == 1
+    assert "Fireworks AI" in rebuilt[0]
+    assert "a personal AI running locally on the user's machine" not in rebuilt[0]
