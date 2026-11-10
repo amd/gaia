@@ -1,0 +1,258 @@
+---
+title: "Followed Repositories: An Auto-Updating Code Index"
+description: "Scope for keeping an indexed copy of a public GitHub repository at the head of its default branch, with a digest of each update stored in memory."
+---
+
+**Status:** Scoping · **Owner:** TBD · **Builds on:** `src/gaia/code_index/`, the memory store, the daemon clock · **Companion:** the docs and GitHub project-knowledge skill plan (unmerged)
+
+## What the user gets
+
+Point GAIA at a public GitHub repository and it keeps a searchable copy at the head of
+the default branch. Ask "where does the agent decide which model to load?" and the
+answer quotes the code, links the exact file and lines on github.com at a named commit,
+and says how fresh the copy is. Ask "what changed this week?" and GAIA answers from a
+short digest it wrote to memory after each update.
+
+The first repository is `amd/gaia`, for the community Discord deployment. The feature is
+generic: any public GitHub repository can be followed the same way, and nothing in the
+design is specific to GAIA's own code.
+
+## What the code index does today
+
+| Question | Today | Evidence |
+|---|---|---|
+| Languages | Python is split by AST into functions and classes. Verilog and VHDL use patterns. Every other file type (Go, TypeScript, C++, Markdown, YAML, JSON) is split on blank lines, 3 to 80 lines per chunk. | `parsers.py` |
+| Chunk size | Only the first 1,200 characters of a chunk are embedded, so larger chunks are split to fit. | `MAX_EMBED_CHARS` |
+| Re-index | Unchanged files keep their vectors, matched by a SHA-256 of the file. Every run still walks and reads every file, rebuilds the whole index in memory and rewrites both files on disk. | `index_repository` |
+| Storage | `~/.gaia/code_index/<hash of the folder path>/` holding `index.faiss` (exact L2 search) and `metadata.json` (every chunk's full text). Written atomically, with a checksum tying the two together. | `sdk.py` |
+| Embedder | `user.embeddinggemma-300m-GGUF` through Lemonade, 768 dimensions, 25 chunks per request. A failed batch fails the build; nothing is dropped quietly. | `_embed_batch` |
+| Scope | One local folder, chosen by the agent, anywhere under its allowed paths. | `code_index_tools.py` |
+
+What it cannot do:
+
+- **It knows nothing about git.** No commit is recorded, so an answer cannot say which
+  version of the code it describes, and a result cannot link to github.com.
+- **It stops at 5,000 files.** `max_files` cuts the walk short and indexes what it found.
+  This repository has 5,225 indexable files, so it is already truncated.
+- **It indexes everything equally.** Tests are 43% of this repository's chunks.
+- **It leaks host paths.** `get_status` returns the absolute folder and cache paths, and
+  error messages name the cache folder.
+- **Nothing updates it.** It rebuilds only when the agent calls `index_codebase`.
+
+## What it costs, measured on this repository
+
+Measured at `0a2afdc30` on a development PC with the embedder on the GPU and a chat model
+resident but idle. No chat model was used. The embedding rate comes from a 1,000-chunk
+sample; the first-index time is that rate applied to the full chunk count, not a full run.
+
+| Item | Measured |
+|---|---|
+| Shallow clone (`--depth 1`), including working tree | 211 MB, a few seconds |
+| Indexable files / chunks | 5,225 / 135,795 |
+| Parse and chunk every file | 83 s |
+| Embedding rate | 69 chunks per second |
+| **First index (estimate)** | **about 33 minutes** |
+| Index on disk | 417 MB vectors + 128 MB metadata = **545 MB** |
+| Total disk per followed repository | about 760 MB |
+| Re-sync with nothing changed | 5.5 s to read and hash, plus about 59 s matching unchanged files to their chunks, plus rewriting 545 MB |
+| Activity on `main`, last 30 days | 388 commits (about 13 a day), 3,910 distinct files touched |
+
+The first index is slow but one-off; a PC with no GPU will be slower and has not been
+measured. Every sync costs over a minute even for a one-line change, because the indexer
+re-reads the whole tree and rewrites the whole index, and the matching step grows with
+files times chunks. Leaving tests out would roughly halve all of it.
+
+## Design
+
+### Following a repository
+
+Each followed repository lives in a dedicated folder under GAIA's home, never inside a
+user project:
+
+```
+~/.gaia/repos/github.com/<owner>/<repo>/
+├── checkout/     # shallow clone, default branch only
+├── index/        # index.faiss + metadata.json
+└── state.json    # indexed commit, last seen remote commit, last attempt, last error
+```
+
+- **Clone** anonymously with `--depth 1 --single-branch`, with credential helpers
+  disabled, no submodules, no hooks, no LFS download and symlinks off. A private
+  repository fails to clone, which is the intended behaviour: only public code gets in.
+- **Check for updates** with `git ls-remote` on the default branch. It is one small
+  request, needs no sign-in and uses no GitHub API quota. Default interval: 30 minutes.
+- **Fetch** with `--shallow-since` set to the indexed commit's date, so the new commits
+  are available locally for the digest.
+- **Find what changed** with `git diff --name-status <indexed> <new>`. Only those files
+  are re-chunked and re-embedded; deleted and renamed files drop their old chunks.
+- **File list** comes from `git ls-files`, not a directory walk, so only tracked files
+  are ever read.
+
+The trigger is a recurring job on the daemon clock (`src/gaia/daemon/scheduler/`). It
+must run as plain code. `gaia schedule` cannot host it: each fire there starts a fresh
+agent session from a prompt (`schedule/runner.py`), which would load a chat model every
+30 minutes to do work that needs none.
+
+### When a sync goes wrong
+
+| Case | Detection | Behaviour |
+|---|---|---|
+| Fetch fails (offline, GitHub down, rate limit) | git exit code | Keep the last good index. Record the error and time in `state.json`. Answers say when the copy was last confirmed current. |
+| History rewritten (force-push) | Indexed commit is not an ancestor of the new head | Do not diff. Re-clone into a temporary folder, re-index reusing vectors for files whose content hash is unchanged, then swap. The digest says history was rewritten. |
+| Embedder unavailable | Existing `RuntimeError` from the indexer | Checkout stays at the new commit, index stays at the old one. `state.json` records both, so the gap is known exactly. |
+| Index and metadata disagree | Existing `CodeIndexCacheError` | Rebuild from the checkout. Never answer from a mismatched pair. |
+| Repository deleted, renamed or made private | Clone or fetch refused | Stop syncing, keep the index, report it. Nothing is deleted without the owner's say. |
+
+Three failed syncs in a row raise a visible notice in the app and, on the Discord
+deployment, a message to the operator. No case falls back to web search or model memory.
+
+### Index changes
+
+- Record `repo`, `branch`, `commit` and `synced_at` in the metadata.
+- Add an update path that takes a list of changed and deleted files, instead of
+  re-reading the tree.
+- Store the lookup by file so matching unchanged files is linear, not files times chunks.
+- Replace the 5,000-file cut-off with a refusal for followed repositories: a repository
+  over the limit fails with its size and the limit, instead of being indexed in part.
+- Per-repository include and exclude patterns (for example, leave out `tests/`).
+- Results and status return `owner/repo` plus a repository-relative path. Absolute
+  paths never leave the indexer.
+
+### Updates stored in memory
+
+After each successful sync, one entry is written to the memory store:
+
+- **Category** `note`, **source** `repo_sync`, **domain** `repo:<owner>/<repo>`,
+  **entity** `<owner>/<repo>@<from>..<to>` (short SHAs).
+- **Deduplicated by commit range.** The sync checks for an entry with the same entity
+  before writing, so a retried sync writes nothing new. The distinct entity also matters
+  because the store merges entries in the same category, context and entity that share
+  80% of their words (`DEDUP_OVERLAP_THRESHOLD`); two quiet days must not collapse into
+  one entry.
+- **Size-bounded.** At most 1,200 characters, under the store's 2,000-character limit.
+  Up to 8 merged pull requests by number and title, the top 5 folders touched with file
+  counts, and a "+N more" line. A sync covering more than 50 commits is summarised by
+  count and folder only.
+- **Built from a template, not by a model.** Pull request numbers come from squash-commit
+  subjects; titles are stored as quoted data. Commit messages are text written by
+  strangers, and memory is recalled into future prompts, so a model-written summary of
+  them would be a standing prompt-injection path. A "behaviour changes" line is included
+  only when the commit type says so (`feat`, `fix`, `!` for breaking) and repeats the
+  title; it never interprets the diff.
+- **Ageing.** The store already lowers confidence by 10% for entries unused for 30 days.
+  On top of that, the sync keeps the latest 60 digests per repository; older ones are
+  folded into one entry per calendar month (commit count, pull request count, top
+  folders) and removed. At this repository's pace that holds about two months of detail.
+
+Illustrative shape:
+
+```
+amd/gaia main moved 67d34d5..0a2afdc (4 commits, 2026-11-10)
+Merged: #7067 "fix: surface three failures that used to report success or nothing"
+        #7081 "fix(agent): tell the user when configured MCP servers are dropped"
+Touched: src/gaia/daemon (6 files), hub/agents/gaia (3), tests/unit (9)
+```
+
+### How answers cite and report freshness
+
+Every search result carries `repo`, `path`, `start_line`, `end_line`, `commit` and a
+ready-made link, built by the tool, never by the model:
+
+```
+https://github.com/<owner>/<repo>/blob/<full sha>/<path>#L<start>-L<end>
+```
+
+Linking to the commit rather than the branch means the link still shows the quoted
+lines after `main` moves. Each tool response also carries a freshness line the agent
+must repeat when it is not "current":
+
+| State | Line |
+|---|---|
+| Indexed commit equals remote head, checked within the interval | `current as of <time>` |
+| Fetched but not yet indexed | `index is N commits behind main (indexed <sha>, <age>)`, N from `git rev-list --count` |
+| Cannot reach GitHub | `last confirmed current <age> ago; GitHub could not be reached since`. No commit count is given, because it is not known. |
+
+### Isolation for a public deployment
+
+- **Only the clone is indexed.** The followed-repository tools take a repository name,
+  never a path. On a public deployment the general `index_codebase` and
+  `clear_code_index` tools are not registered, so no message can point the indexer at a
+  host folder.
+- **Only tracked, public files.** Anonymous clone plus `git ls-files`. The existing
+  skip list for `.env` files and private keys still applies, for secrets committed by
+  mistake.
+- **No host paths in output.** Results, status and errors use repository-relative paths.
+  A test scans every tool response for the home folder and drive roots.
+- **Repository text is data.** A comment or README that addresses the agent is quoted,
+  never followed. The memory digest carries titles only.
+- **Read-only.** Nothing in the checkout is ever executed, built or installed.
+- **A fixed list.** The public deployment follows the repositories its operator set;
+  chat users cannot add one.
+
+### Scope against the project-knowledge skill plan
+
+That plan answers from the live docs site and live GitHub (issues, pull requests,
+releases); this one answers from the code and remembers what merged. Live issue and pull
+request state stays there, under the same citation rule: this index copies no issue text.
+
+## Tests and evals
+
+**Unit (no model, no network).** A fixture builds a small git repository and a bare
+"remote" in a temporary folder, then scripts commits against it:
+
+- add, edit, rename, delete: only those files are re-embedded; force-push is rebuilt
+- fetch and embedder failures keep the last good index and an exact `state.json`
+- digest: one per commit range, retry writes none, size cap holds, month roll-up
+- git commands asserted by argument list (depth, no credentials, no submodules)
+- citation link shape, each freshness line, no absolute path in any tool response
+
+**Integration (embedder only, `require_lemonade`).** A retrieval benchmark: about 50
+questions with the file that answers each, against `amd/gaia` at a pinned commit, scored
+by recall at 5 and mean reciprocal rank. Run again on two other public repositories in
+different languages before any repository beyond `amd/gaia` is offered. This is the
+number that decides whether blank-line chunking is good enough for non-Python code.
+
+**Agent evals.** A new `gaia_repo` category, set up like the other `gaia_*` lanes with a
+fixture repository and a fake `gh`:
+
+| Scenario | Passes when |
+|---|---|
+| Where is X implemented | Names the right file and gives a commit-pinned link |
+| Question after a scripted commit | Answer reflects the new code, not the old |
+| What changed recently | Answers from the stored digest with pull request numbers |
+| Index behind or sync failed | States how stale the copy is before answering |
+| Symbol that does not exist | Says it was not found; invents no file |
+| Status of a pull request or issue | Uses the live lookup, not the index |
+| Nonexistent issue number | Says not found |
+| Instruction planted in a source comment or commit title | Not followed |
+| Request to index a host folder (public deployment) | Refused |
+
+Existing categories to watch on every phase, since tools and memory writes change:
+`gaia_code` (`code_index_and_find`, `code_t3_semantic_trace`), `gaia_memory`,
+`gaia_tool_selection`, `gaia_honesty` and `gaia_git`.
+
+## Phases
+
+| Phase | Delivers | Exit |
+|---|---|---|
+| 0. Measure | Full first index and a real sync timed on a GPU PC and a CPU-only PC; the retrieval benchmark on today's index, with and without tests | Numbers recorded; decision on default exclusions |
+| 1. Git-aware index | Commit in metadata, changed-files update path, linear matching, size refusal, relative paths | Unit tests above; `gaia_code` unchanged; a one-file sync under 10 s |
+| 2. Follow and sync | Clone folder, daemon-clock job, failure handling, `state.json`, citation and freshness in tool output | Sync unit tests; `gaia_repo` code and staleness scenarios |
+| 3. Memory digests | Template digest, dedup by range, month roll-up | Digest tests; `gaia_memory` unchanged; "what changed" scenario |
+| 4. Public deployment | Fixed repository list, general index tools off, path-leak and injection tests | Isolation scenarios pass on the Discord sandbox |
+| 5. Any repository | Add and remove from the Agent UI and TUI, with size and time shown before the first index | Retrieval benchmark passes on two more repositories |
+
+## Open questions for the owner
+
+1. **Tests in or out by default?** Out halves disk and time; in helps "how do I use
+   this" questions. Phase 0's benchmark should decide.
+2. **Poll or webhook?** 30-minute polling is proposed. Is a public endpoint on the
+   Discord host worth near-instant updates?
+3. **Pull request descriptions in the digest?** Titles need no GitHub API call;
+   descriptions need one per pull request and bring more untrusted text into memory.
+4. **Whose memory?** On Discord the digests belong to the bot, not one user. Confirm they
+   go in the global context, visible to everyone.
+5. **Compact models.** Offer this on Gemma-4-E4B now, or after `gaia_repo` passes on it?
+6. **How many repositories?** Is three a fair desktop limit at 760 MB and half an hour each?
+7. **Release tags.** "Was this fixed in v0.25.4?" needs a tag lookup or a second index;
+   neither is in scope here.
