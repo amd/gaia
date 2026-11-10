@@ -17,6 +17,12 @@ from gaia.messaging.discord import state
 from .test_discord_adapter import _prompt, make, message
 
 
+@pytest.fixture(autouse=True)
+def gaia_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path))
+    return tmp_path
+
+
 def _turn(ad, clock, text="do it", **kwargs):
     ad.handle_message(message(clock, text, **kwargs))
     return ad._agent().turns[-1]
@@ -272,3 +278,24 @@ def test_a_long_line_is_cut_at_a_space_not_inside_a_link():
         assert len(chunk) <= da.DISCORD_MESSAGE_LIMIT
         for word in chunk.split():
             assert word == link, "a link was split across messages"
+
+
+def test_the_first_answer_after_a_restart_says_the_chat_was_forgotten():
+    state.write_status(state.STATE_STOPPED, last_message_id="41")
+    ad, clock = make()
+    ad.on_ready()
+    turn = _turn(ad, clock, "delete it from that folder")
+    ad._on_agent_event({"type": "final", "answer": "Which folder?"}, turn)
+    assert _texts(ad)[-1].endswith(da.FORGOT_NOTICE)
+    clock.now += 1
+    turn = _turn(ad, clock, "the files one")
+    ad._on_agent_event({"type": "final", "answer": "Done."}, turn)
+    assert da.FORGOT_NOTICE not in _texts(ad)[-1], "said once"
+
+
+def test_a_first_ever_start_has_nothing_to_forget():
+    ad, clock = make()
+    ad.on_ready()
+    turn = _turn(ad, clock)
+    ad._on_agent_event({"type": "final", "answer": "Hello."}, turn)
+    assert da.FORGOT_NOTICE not in _texts(ad)[-1]

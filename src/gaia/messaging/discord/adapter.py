@@ -178,6 +178,11 @@ TYPED_DECISIONS = {
 STOP_WORDS = frozenset(
     {"stop", "cancel", "abort", "nevermind", "never mind", "stop it", "halt"}
 )
+#: Ends the first answer after a start, when the DM holds an older conversation.
+FORGOT_NOTICE = (
+    "-# GAIA restarted since your last message, so it doesn't remember what was "
+    "said here before. Anything you asked it to remember is still there."
+)
 #: A message that is only one of these starts a fresh conversation.
 NEW_CHAT_WORDS = frozenset(
     {"new chat", "new conversation", "start over", "start fresh", "reset chat"}
@@ -670,6 +675,8 @@ class DiscordAdapter:
         self._lease_at = 0
         prior = state.read_status()
         self._last_message_id = prior.last_message_id
+        #: This DM has earlier messages the freshly started agent never saw.
+        self._forgot_notice = bool(prior.last_message_id)
         self._refused: Set[str] = set(prior.refused_user_ids)
         #: message id -> (channel id, kind) of what is open right now.
         self._open: Dict[str, Any] = {}
@@ -1716,6 +1723,9 @@ class DiscordAdapter:
             answer = kept
         if target.heading:
             answer = f"{target.heading}\n{answer}"
+        if self._forgot_notice and target.question and target.answer_filter is None:
+            self._forgot_notice = False
+            answer = f"{answer}\n\n{FORGOT_NOTICE}"
         for chunk in split_message(untable(answer) or "-# (no answer)"):
             self._send(target.channel_id, chunk)
         if target.reply_id:
