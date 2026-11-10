@@ -45,7 +45,7 @@ attribute (see below):
 
 | Attribute | Type | Notes |
 |---|---|---|
-| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)`. |
+| `self.rag` | `RAGSDK` | The document index and query engine. A stand-in must accept `index_document(path, progress_callback=None)`, `is_current(path)` and `freshness(path)`. |
 | `self.indexed_files` | `set` or `list` | Tracks which files are indexed. |
 | `self.max_chunks` | `int` | Default chunk count for retrieval. |
 | `self.current_session` | any, or `None` | `None` is a valid, expected value. |
@@ -107,6 +107,17 @@ analysis.
    - Exact text pattern matching in RAG chunks
    - Case-insensitive search
    - Limited to 100 matches for performance
+
+All three searches check each file they cover with `RAGSDK.freshness` before
+searching, so an edited document is never served from its old text. An edited
+file is re-indexed first, waiting up to `QUERY_REINDEX_BUDGET_S` (30 s) without
+holding the index lock. A file that is still re-indexing, failed to re-index,
+was deleted, or is locked by another program is left out: `query_specific_file`
+returns `in_progress` or `error` for it, and the library-wide searches answer
+from the other files and name it in `files_left_out` and the `instruction`.
+A re-index that fails because the embedder is unavailable or the document
+cache is locked keeps the `index_document` tool's `error_type` and its
+`next_step` or `hint`.
 
 4. **Retrieval Evaluation (evaluate_retrieval)**
    - Keyword overlap calculation
@@ -213,9 +224,16 @@ class RAGToolsMixin:
 
         Returns:
             {
-                "status": "success" | "no_documents" | "error",
+                "status": "success" | "no_documents" | "in_progress" | "error",
                 "message": str,
                 "error": str,        # On error: what failed
+                "files_left_out": List[{  # Edited, deleted or locked files
+                    "file": str, "path": str,  # not searched this call
+                    "reason": str,   # "reindexing" | "reindex_failed" |
+                                     # "missing" | "locked" | "unreadable"
+                    "error_type": str,  # A failed re-index's, when set
+                    "message": str   # Includes its next step
+                }],
                 "error_type": str,   # "embedding_unavailable" when the
                                      # embedder or Lemonade could not run
                 "next_step": str,    # On embedding_unavailable: how to fix it
@@ -246,7 +264,10 @@ class RAGToolsMixin:
 
         Returns:
             Similar to query_documents, but file-scoped. An embedder that
-            cannot run is an error, never "no relevant information".
+            cannot run is an error, never "no relevant information". A file
+            edited since indexing is re-indexed first; one still re-indexing
+            is "in_progress", and one that failed, was deleted or is locked
+            is an "error" naming why.
         """
         pass
 
@@ -306,7 +327,9 @@ class RAGToolsMixin:
         and the call returns "in_progress" with chunks_embedded, total_chunks,
         elapsed_seconds and estimated_seconds_remaining. Calling it again with
         the same path waits on that job; query_specific_file's auto-index
-        behaves the same way.
+        behaves the same way. A document already indexed returns
+        "already_indexed" unless it changed since, in which case it is
+        re-indexed and the result has "reindexed": true.
 
         Args:
             file_path: Path to PDF to index
@@ -339,7 +362,11 @@ class RAGToolsMixin:
         """
         Index all supported files in a directory.
 
-        Supported: PDF, TXT, CSV, JSON, code files.
+        Indexes the same formats as index_document: PDF, Word (.docx),
+        PowerPoint (.pptx), Excel (.xlsx), CSV, JSON, EPUB, text, Markdown
+        and source-code files (gaia.rag.sdk.FOLDER_INDEX_EXTENSIONS).
+        Images and *.env files are indexed only one at a time; every skipped
+        file is listed with its reason.
 
         Args:
             directory_path: Path to directory
@@ -358,6 +385,9 @@ class RAGToolsMixin:
                 "indexed_files": List[str],
                 "failed_files": List[str],
                 "failure_reasons": Dict[str, str],  # file name -> error
+                "skipped_files": List[Dict[str, str]],  # {"file", "reason"},
+                                                        # first 50
+                "skipped_files_truncated": bool,  # only when over 50
                 "message": str
             }
         """
@@ -477,14 +507,13 @@ for search_key in search_keys:
     all_chunks.extend(chunks)
     all_scores.extend(scores)
 
-# 2. Keyword boost
-important_terms = [w for w in query_words if w not in stop_words]
-for chunk_idx, chunk_text in enumerate(self.rag.chunks):
-    matching_terms = [t for t in important_terms if t in chunk_lower]
-    if matching_terms:
-        boost_score = 0.6 + (0.2 * match_ratio)
-        all_chunks.append(chunk_text)
-        all_scores.append(boost_score)
+# 2. Keyword boost: the five best matches in any language, scored 0.6-0.9.
+# Rare words count for more, and query words side by side in a chunk count again.
+# Each chunk's words are read once and kept until the chunk list changes.
+keywords = keyword_index(self.rag)
+for chunk_idx, boost_score, _words in keywords.rank(query):
+    all_chunks.append(keywords.texts[chunk_idx])
+    all_scores.append(boost_score)
 
 # 3. Hash-based deduplication (O(1))
 unique_chunks = {}

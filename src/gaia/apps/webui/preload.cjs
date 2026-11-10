@@ -11,11 +11,12 @@
  *   agent:*          — Agent process management (T2)
  *   tray:*           — Tray icon/config (T1)
  *   notification:*   — Desktop notifications & permission prompts (T5)
- *   install:*        — First-run backend install progress (Phase A)
+ *   install:*        — Backend install status, retry and log (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
  *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
  *   dialog:*         — The OS folder picker
+ *   backend:*        — Backend restarts after a crash (services/backend-supervisor.cjs)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -90,6 +91,13 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
   dialog: {
     pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),
   },
+
+  // ── GAIA's backend process: restarts after a crash, and its new port ──
+  backend: {
+    getState: () => ipcRenderer.invoke("backend:get-state"),
+    restart: () => ipcRenderer.invoke("backend:restart"),
+    onState: (cb) => onEvent("backend:state", cb),
+  },
 });
 
 // ── Window frame ─────────────────────────────────────────────────────────
@@ -105,19 +113,26 @@ contextBridge.exposeInMainWorld("gaiaWindow", {
   setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
 });
 
-// ── Install progress (Phase A) ──────────────────────────────────────────
-// Exposed as a separate global so the progress window can use it without
-// pulling in the full gaiaAPI surface (and so it keeps working if an
-// install dialog runs before the main window is ready).
+// ── Backend install (Phase A) ───────────────────────────────────────────
+// EngineInstallScreen runs with no backend, so this stands apart from gaiaAPI.
 contextBridge.exposeInMainWorld("gaiaInstall", {
-  // Subscribe to progress updates. Returns an unsubscribe function.
+  // Subscribe to status updates. Returns an unsubscribe function.
   onProgress: (cb) => onEvent("install:progress", cb),
 
-  // Query the current install state (state machine + log/state paths).
+  // The current status: { phase, stage, percent, message, error, logPath }.
   status: () => ipcRenderer.invoke("install:status"),
 
-  // Copy the log file path to the clipboard.
-  copyLogPath: () => ipcRenderer.invoke("install:copy-log-path"),
+  // After a failure, install again. Resolves false when none is waiting.
+  retry: () => ipcRenderer.invoke("install:retry"),
+
+  // Goes on past a failed agent update; the next launch tries it again.
+  continueWithoutAgentUpdate: () => ipcRenderer.invoke("install:continue"),
+
+  // After a failed update, go back to the version before it; the app restarts into it.
+  revert: () => ipcRenderer.invoke("install:revert"),
+
+  // After a 'locked' failure held only by GAIA processes: ends those and installs again.
+  closeLockingPrograms: () => ipcRenderer.invoke("install:close-lockers"),
 
   // Open the log file in the OS's default viewer.
   openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
@@ -158,6 +173,9 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    * @param {string} tag  e.g. "v0.20.0"
    */
   installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
+
+  /** Go back to the version before the last update, and pin it. */
+  revertUpdate: () => ipcRenderer.invoke("gaia:update:revert"),
 
   /**
    * Resume normal auto-updates — clears the version pin set by installVersion.

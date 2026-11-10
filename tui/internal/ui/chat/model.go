@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -166,6 +167,15 @@ type ChatModel struct {
 	updateCheckOnLaunch bool
 
 	providerPanel *providers.Model
+	// modelSetup is /models, /gpu or first-run setup. It outlives its screen
+	// while a /models download runs in the background; modelSetupOpen is
+	// whether it is on screen.
+	modelSetup     *modelsetup.Model
+	modelSetupOpen bool
+	// setupChoices are first-run model choices left with esc, for /setup.
+	setupChoices *modelsetup.Choices
+	// gpuApplies is whether /gpu means anything on this PC (an integrated GPU).
+	gpuApplies bool
 	// agentsPanel is the in-chat "/agents" listing (nil unless open). It only
 	// lists and selects (agents.SelectedMsg's own doc comment); switching to
 	// the picked agent is the root model's job, so a SelectedMsg is left to
@@ -312,6 +322,13 @@ type ChatModel struct {
 	// acceptEdits is the "accept edits" permission mode: file edits in the
 	// workspace run unasked. Set only after the transport confirmed it.
 	acceptEdits bool
+
+	// readAloud is the reply being read aloud, nil when none is; readAloudSeq
+	// tells a stopped reading's late messages from the current one's.
+	readAloud    *readAloudRun
+	readAloudSeq int
+	// readAloudAuto mirrors read_aloud_auto: read each finished reply.
+	readAloudAuto bool
 
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
@@ -666,6 +683,12 @@ func (m ChatModel) Init() tea.Cmd {
 		// or /memory has already run negotiate once — see
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
+		loadReadAloudAutoCmd,
+	}
+	if m.agentID == setupAgentID {
+		// Whether /gpu applies here: only a PC with an integrated GPU has a
+		// memory share to change, so only there does the palette offer it.
+		cmds = append(cmds, probeGPUCmd())
 	}
 	if m.agentID == setupAgentID && m.initialQuery == "" {
 		// The one-time Slack offer. Gated on an empty initial query so a user
@@ -891,6 +914,27 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
+		return next, cmd
+	}
+	var setupCmd tea.Cmd
+	if m.modelSetup != nil {
+		next, cmd, handled := m.updateModelSetup(msg)
+		if handled {
+			return next, cmd
+		}
+		m, setupCmd = next.(ChatModel), cmd
+	}
+	if probed, ok := msg.(gpuProbedMsg); ok {
+		m.gpuApplies = probed.applies
+		return m, nil
+	}
+	next, cmd := m.updateChat(msg)
+	return next, tea.Batch(setupCmd, cmd)
+}
+
+// updateChat is update for everything the setup screens did not take.
+func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.providerPanel != nil {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
@@ -1505,9 +1549,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// Copying is local and read-only: there is no reason to make it wait
-		// for the turn to end.
-		if isCopyCommand(query) {
+		// Copying and reading aloud are local: there is no reason to make
+		// them wait for the turn to end.
+		if isCopyCommand(query) || isReadAloudCommand(query) || isVoiceCommand(query) {
 			return m.submit(query)
 		}
 
@@ -1574,21 +1618,21 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		return m.afterScroll(), nil
 
 	case tea.KeyPgDown:
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		return m.afterScroll(), nil
 
 	case tea.KeyUp:
 		// The composer is one line high, so the arrows have no job there and
 		// belong to the transcript — which is where a reader reaches first.
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyDown:
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyHome, tea.KeyEnd:
@@ -1783,6 +1827,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
 	}
+	// Free-form arguments too (a voice id, a speed), so also before the switch.
+	if isReadAloudCommand(query) {
+		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
+	}
+	if isVoiceCommand(query) {
+		return m.runVoiceCommand(commandArg(query, voiceCommand))
+	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
@@ -1927,6 +1978,23 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/full-access never":
 		return m.setFullAccessDefault(false)
 
+	case "/models", "/gpu":
+		if m.agentID != setupAgentID {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: m.agentName + " has no model setup — only the gaia flagship agent does.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		if m.setupRunning {
+			return m.statusNote("Setup is running. Esc cancels it."), nil
+		}
+		if query == "/gpu" {
+			return m.openModelSetup(modelsetup.ModeGPU)
+		}
+		return m.openModelSetup(modelsetup.ModeModels)
+
 	case "/setup":
 		if m.agentID != setupAgentID {
 			m.messages = append(m.messages, Message{
@@ -1940,7 +2008,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		if m.setupRunning {
 			return m.statusNote("Setup is already running. Esc cancels it."), nil
 		}
-		return m.startSetupRun(false /* firstBoot */)
+		return m.openFirstRunSetup(false /* firstBoot */)
 
 	case "/slack":
 		return m.startSlackCheck()
@@ -2101,6 +2169,13 @@ func (m *ChatModel) dropCancellingNotice() {
 	}
 }
 
+// Retire stops everything this chat started before it is dropped: the turn
+// and any reading aloud, which would otherwise play on with no way to stop it.
+func (m *ChatModel) Retire() {
+	m.CancelActiveTurn()
+	m.StopReadAloud()
+}
+
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
 // tearing this view down has to cancel it — otherwise the transport keeps
 // streaming into a screen nobody is watching and the agent run stays alive.
@@ -2229,8 +2304,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.totalSteps = e.Steps
+		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			return m.autoReadAloud(content)
+		}
 		return m, nil
 
 	case event.ChunkEvent:
@@ -2679,24 +2758,6 @@ func (m ChatModel) answerWidth() int {
 		w = 20
 	}
 	return w
-}
-
-// wrapForPane wraps text to the visible pane, leaving it untouched before the
-// first WindowSizeMsg (when no width is known yet).
-func (m ChatModel) wrapForPane(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.cardWidth())
-}
-
-// wrapProse wraps to the same measure an answer lays out at, so prose from
-// either side of the conversation shares one column.
-func (m ChatModel) wrapProse(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.answerWidth())
 }
 
 // spacedAfter reports whether a message gets a blank line under it. Substantial
@@ -3198,6 +3259,8 @@ func (m ChatModel) phasePhrase() string {
 			return "Reading the tool results"
 		}
 		return "Reading your request"
+	case "loading_tools":
+		return "Loading more tools"
 	case "reasoning":
 		if m.phase.words > 0 {
 			return "Reasoning · " + commas(m.phase.words) + " words"
@@ -3644,6 +3707,9 @@ func (m ChatModel) contentHeaderRows() int {
 }
 
 func (m ChatModel) View() string {
+	if m.modelSetup != nil && m.modelSetupOpen {
+		return m.modelSetup.View()
+	}
 	if m.providerPanel != nil {
 		return m.providerPanel.View()
 	}

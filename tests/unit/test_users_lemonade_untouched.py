@@ -75,7 +75,7 @@ class FakeLemonade:
                     return self._reply(
                         {
                             "status": "ok",
-                            "version": "2026.40.0",
+                            "version": "2026.44.1",
                             "model_loaded": fake.root_model,
                             "all_models_loaded": fake.loaded,
                         }
@@ -598,10 +598,10 @@ class TestSettingsSave:
         app = FastAPI()
         app.include_router(system_mod.router)
         r = TestClient(app).put(
-            "/api/system/model-server/backend", json={"backend": "cpu"}
+            "/api/system/model-server/backend", json={"backend": "vulkan"}
         )
         assert r.status_code == 200, r.text
-        assert GaiaConfig.load().llamacpp_backend == "cpu"
+        assert GaiaConfig.load().llamacpp_backend == "vulkan"
         assert [m for m, _, _ in users_server.requests if m != "GET"] == []
 
 

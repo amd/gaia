@@ -5,6 +5,7 @@
 
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.skills
+import gaia.skills.listing
 from gaia.skills.errors import SkillError
 from gaia.ui.routers import skills as skills_router
 
@@ -59,11 +61,15 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             }
 
     monkeypatch.setattr(gaia.skills, "SkillManager", FakeManager)
+    project = Path("/work/repo")
+    monkeypatch.setattr(gaia.skills.listing, "default_project_dir", lambda: project)
     resp = client.get("/api/skills")
     assert resp.status_code == 200
+    # The project root, as the agent maps it, so its .claude/skills list alike.
     assert seen == {
         "agent_skill_dirs": ["/bundled/a", "/bundled/b"],
         "excluded_names": ("gaia-harness-engineering",),
+        "project_dir": project,
     }
     body = resp.json()
     assert body["invalid"] == {"/bad/SKILL.md": "missing name"}
@@ -197,7 +203,7 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
 
 def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch, acquire_error=SidecarError("daemon not reachable at :59171")
@@ -210,7 +216,7 @@ def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
 
 
 def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch,

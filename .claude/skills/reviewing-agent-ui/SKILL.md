@@ -10,6 +10,9 @@ the screenshot, and name what looks wrong before you say it's fine. Arabic layou
 bugs once shipped past 2,100 passing tests and a DOM audit because nobody looked: the
 audit only asked two questions, and the bugs were answers to questions it never asked.
 
+Testing a whole release or RC rather than one change? Use the
+`testing-agent-ui-release` skill; it runs this review on every screen it touches.
+
 ## 1. Run the checks
 
 ```bash
@@ -20,8 +23,25 @@ npm run test:visual # pixel baselines, Windows, local only
 ```
 
 `test:rtl` lives in `visual/rtl.visual.ts`. **When a review finds a bug it missed, add
-the rule there first and watch it fail**, then fix the bug. New screens join its list.
-Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip downloading Chromium.
+the rule there first and watch it fail**, then fix the bug. **Every top-level screen,
+dialog and popover has a scene there**: it only audits what it opens, so the Memory
+dashboard, Scheduled tasks and the model-status popover shipped entirely in English
+(#6590, #6591, #6585). Set `GAIA_VISUAL_CHROMIUM` to a Chrome or Edge binary to skip
+downloading Chromium.
+
+`npm test` also runs `src/gaia/apps/webui/src/i18n/__tests__/hardcodedText.test.ts`,
+which fails when a component gains English written straight into JSX (text, `title`,
+`placeholder`, `aria-label`, `alt`), including both arms of a ternary, the text after
+`&&` or `||`, and template strings. Put the text through `useT`. When you translate
+strings, lower the baseline (`UPDATE_I18N_BASELINE=1 npx vitest run hardcodedText`);
+raise it only for text that stays English in every language, and say why in the PR. It
+can't see strings built in variables or helpers, or sent by the backend, so those still
+need the screenshot.
+
+**Every option on a screen must be one GAIA has proven.** A backend, device, model or
+setting the user can pick is a promise; list only what passed evals on that hardware
+and the setup journey, never what the server merely reports it can run. See
+[Offer users only what GAIA has proven](../../../CLAUDE.md#important-offer-users-only-what-gaia-has-proven).
 
 ## 2. Look at every screen you touched, in both languages
 
@@ -46,6 +66,7 @@ in Settings → General. Cover the states, not just the happy one:
 | Nothing is hard-coded English | A string outside `useT`, including text from the backend |
 | Padding and position use logical properties | `margin-left` left behind in a component |
 | Window controls blend in | A pale block over the sidebar, or bright controls beside a dim modal |
+| The English in brackets is quiet | Same size or weight as the Arabic; check a dark palette too, where primary buttons are mid-tone |
 
 The mirror bites in English: a `dir="auto"` label holding an Arabic filename sits at
 the far right of its row unless it is pinned left. Check the English UI with an

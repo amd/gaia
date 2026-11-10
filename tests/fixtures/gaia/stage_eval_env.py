@@ -136,12 +136,16 @@ def install_fake_gh(home: Path) -> Path:
     return bin_dir
 
 
-def stage(home: Path, gaia_home: Path | None = None) -> Path:
+def stage(
+    home: Path, gaia_home: Path | None = None, *, hub_out: Path | None = None
+) -> Path:
     """Stage fixtures, workspaces, starter skills and the fixture hub under ``home``.
 
     Args:
         home: The agent's user home; scenarios name ``~/gaia-eval`` under it.
         gaia_home: The agent's GAIA home, when it is not ``<home>/.gaia``.
+        hub_out: Where to build the fixture hub, when not the checkout's
+            ``fixture_hub/_prepared`` that ``serve_fixtures.py`` serves.
 
     Returns:
         The skills root the fixture hub was trusted into.
@@ -183,15 +187,15 @@ def stage(home: Path, gaia_home: Path | None = None) -> Path:
         shutil.copytree(skill, skills_root / skill.name, dirs_exist_ok=True)
     print(f"pre-seeded starter skills -> {skills_root}")
 
-    _run(
-        [
-            sys.executable,
-            str(HERE / "prepare_fixture_hub.py"),
-            "--skills-root",
-            str(skills_root),
-        ],
-        "prepare_fixture_hub.py",
-    )
+    prepare_argv = [
+        sys.executable,
+        str(HERE / "prepare_fixture_hub.py"),
+        "--skills-root",
+        str(skills_root),
+    ]
+    if hub_out is not None:
+        prepare_argv += ["--out", str(hub_out)]
+    _run(prepare_argv, "prepare_fixture_hub.py")
     return skills_root
 
 

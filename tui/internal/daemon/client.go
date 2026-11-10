@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/gaiainit"
 )
 
 // Timeouts mirror src/gaia/daemon/{instance,client}.py.
@@ -355,14 +357,13 @@ func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 
 // installGaiaHint is the one place the install commands are written, so the
 // "never installed" and "installed-but-gone" messages cannot drift apart.
-const installGaiaHint = "Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
-	"into the Python environment on your PATH, then retry. " +
-	"From a clone of the repo, `pip install -e .` works too"
+const installGaiaHint = "Reinstall GAIA from https://amd-gaia.ai/#install, which puts `gaia` " +
+	"beside gaia-tui, or run `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), then retry"
 
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return nil, &StartError{Reason: unresolvableGaiaReason(findInstalledButUnresolvable())}
 	}
@@ -386,7 +387,7 @@ type installEvidence struct {
 func unresolvableGaiaReason(ev installEvidence) string {
 	switch {
 	case ev.description == "":
-		return "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
+		return "the `gaia` CLI is not on PATH or in ~/.gaia/bin, so the daemon cannot be launched. " +
 			installGaiaHint
 	case ev.runnable:
 		return fmt.Sprintf(

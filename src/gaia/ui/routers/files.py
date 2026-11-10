@@ -15,16 +15,23 @@ import concurrent.futures
 import datetime
 import logging
 import platform
+import re
+import shutil
 import threading
 import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
+from starlette.requests import ClientDisconnect
 
+from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
+from gaia.env import child_env
+from gaia.upload_names import upload_copy_name
 from gaia.utils.user_folders import documents_dir
 
+from .. import generated_media
 from ..models import (
     BrowseResponse,
     FileEntry,
@@ -44,6 +51,7 @@ from ..utils import (
     build_quick_links,
     ensure_within_home,
     format_size,
+    harden_served_file,
     is_within_document_roots,
     list_windows_drives,
     uploads_dir,
@@ -53,6 +61,13 @@ logger = logging.getLogger(__name__)
 
 # Maximum upload file size: 20 MB
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
+
+# A recording is streamed to disk rather than read, so only the disk limits it.
+MAX_MEDIA_UPLOAD_SIZE = 64 * 1024 * 1024 * 1024
+_MEDIA_NAME_CHARS = 60
+
+# The transcript is what lasts. This copy of the user's recording does not.
+MEDIA_RETENTION_DAYS = 14
 
 # Image extensions recognized for the is_image flag
 PREVIEWABLE_IMAGE_EXTENSIONS = {
@@ -73,6 +88,10 @@ SEARCH_MAX_ENTRIES = 20_000
 SEARCH_TIME_BUDGET_SEC = 10.0
 # Extra wait for a walk stuck inside one blocking read (e.g. a cloud mount).
 SEARCH_STALL_GRACE_SEC = 1.0
+# Setup allowance on top of the outer cap: resolving the user's document
+# folders happens before the scan budget starts, and must not trip the cap
+# on a loaded machine (#6974).
+SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 
 router = APIRouter(tags=["files"])
 
@@ -80,13 +99,99 @@ router = APIRouter(tags=["files"])
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
+def _media_file_name(original_name: str, ext: str) -> str:
+    """A safe name that keeps the recording's own, for the transcript it produces."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(original_name).stem).strip("._")
+    return f"{stem[:_MEDIA_NAME_CHARS] or 'recording'}-{uuid.uuid4().hex[:8]}{ext}"
+
+
+@router.post("/api/files/upload-media", response_model=FileUploadResponse)
+async def upload_media(request: Request, name: str = Query(..., min_length=1)):
+    """Save a recording to the uploads folder, streamed straight to disk.
+
+    The request body is the file itself. A multipart upload would be spooled to
+    the system temp folder first, which doubles the disk it needs and holds it
+    past every check here.
+
+    Args:
+        request: The upload; its body is the raw file.
+        name: The file's own name, for its extension and a recognizable copy.
+    """
+    ext = Path(name).suffix.lower()
+    if ext not in MEDIA_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{ext}' is not an audio or video format GAIA transcribes.",
+        )
+
+    upload_root = uploads_dir()
+    upload_root.mkdir(parents=True, exist_ok=True)
+    prune_older_than(upload_root, MEDIA_RETENTION_DAYS, MEDIA_EXTENSIONS)
+
+    limit_gb = MAX_MEDIA_UPLOAD_SIZE // (1024**3)
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > MAX_MEDIA_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413, detail=f"This recording is over the {limit_gb} GB limit."
+        )
+    if declared > shutil.disk_usage(upload_root).free:
+        raise HTTPException(
+            status_code=507,
+            detail=f"There is not enough free space on the drive holding "
+            f"{upload_root} for this recording.",
+        )
+
+    unique_name = _media_file_name(name, ext)
+    dest_path = upload_root / unique_name
+    file_size = 0
+    try:
+        with dest_path.open("wb") as out:
+            async for chunk in request.stream():
+                file_size += len(chunk)
+                if file_size > MAX_MEDIA_UPLOAD_SIZE:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"This recording is over the {limit_gb} GB limit.",
+                    )
+                await asyncio.to_thread(out.write, chunk)
+    except HTTPException:
+        dest_path.unlink(missing_ok=True)
+        raise
+    except ClientDisconnect as e:
+        dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="The upload was cancelled.") from e
+    except OSError as e:
+        dest_path.unlink(missing_ok=True)
+        logger.error("Could not save recording %s: %s", unique_name, e)
+        raise HTTPException(
+            status_code=507,
+            detail=f"Could not save this recording: {e}. Check that the drive "
+            f"holding {upload_root} has room for it.",
+        ) from e
+
+    if file_size == 0:
+        dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    logger.info("Recording uploaded: %s (%d bytes)", unique_name, file_size)
+    return FileUploadResponse(
+        filename=unique_name,
+        original_name=name,
+        url=f"/api/files/uploads/{unique_name}",
+        size=file_size,
+        content_type="application/octet-stream",
+        is_image=False,
+    )
+
+
 @router.post("/api/files/upload", response_model=FileUploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     """Upload a file to the server.
 
     Accepts multipart form data with a ``file`` field.  The file is saved
-    to ``<GAIA_HOME>/chat/uploads/`` with a UUID-based filename to prevent
-    collisions.  The original extension is preserved.
+    to ``<GAIA_HOME>/chat/uploads/`` under ``<id>_<name><ext>``: the random ID
+    prevents collisions, and the name lets answers cite the file as the user
+    knows it.
 
     Constraints:
     - Maximum file size: 20 MB
@@ -94,7 +199,7 @@ async def upload_file(file: UploadFile = File(...)):
       and the document types listed in ALLOWED_EXTENSIONS (pdf, pptx, docx,
       txt, md, csv, json, xlsx, html, xml, yaml, and code files). Legacy Office
       formats (.doc/.ppt/.xls) are NOT allowed — GAIA reads only the modern
-      XML-based Office formats.
+      XML-based Office formats. Recordings use ``/api/files/upload-media``.
 
     Returns:
         FileUploadResponse with the saved filename, URL, size, and metadata.
@@ -138,8 +243,8 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Generate unique filename preserving original extension
-    unique_name = f"{uuid.uuid4()}{ext}"
+    # Unique copy name: random ID, sanitized original name, original extension
+    unique_name = upload_copy_name(original_name, ext)
     dest_path = upload_root / unique_name
 
     # Write file to disk
@@ -370,7 +475,7 @@ async def open_file_or_folder(request: OpenFileRequest):
                 subprocess.Popen(["open", str(target)])
         else:
             target = resolved if resolved.is_dir() else resolved.parent
-            subprocess.Popen(["xdg-open", str(target)])
+            subprocess.Popen(["xdg-open", str(target)], env=child_env())
 
         return {"status": "ok", "path": str(resolved)}
     except Exception as e:
@@ -403,7 +508,7 @@ def _launch_file(resolved: Path) -> dict:
         elif platform.system() == "Darwin":
             subprocess.Popen(["open", str(resolved)])
         else:
-            subprocess.Popen(["xdg-open", str(resolved)])
+            subprocess.Popen(["xdg-open", str(resolved)], env=child_env())
     except OSError as e:
         logger.error("Failed to open file %s: %s", resolved, e)
         raise HTTPException(
@@ -497,7 +602,6 @@ async def search_files(
         """Blocking filesystem scan -- runs in a thread. Returns ``truncated``."""
         seen_paths: set = set()
         start_time = _time.monotonic()
-        deadline = start_time + SEARCH_TIME_BUDGET_SEC
         visited = 0
         truncated = False
 
@@ -588,6 +692,8 @@ async def search_files(
             )
             if is_within_document_roots(directory)
         ]
+        # Start the clock after location setup so it can't eat the scan budget.
+        deadline = _time.monotonic() + SEARCH_TIME_BUDGET_SEC
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
                 break
@@ -626,7 +732,9 @@ async def search_files(
     try:
         truncated = await asyncio.wait_for(
             asyncio.wrap_future(walk),
-            timeout=SEARCH_TIME_BUDGET_SEC + SEARCH_STALL_GRACE_SEC,
+            timeout=SEARCH_SETUP_ALLOWANCE_SEC
+            + SEARCH_TIME_BUDGET_SEC
+            + SEARCH_STALL_GRACE_SEC,
         )
     except asyncio.TimeoutError:
         truncated = True
@@ -812,3 +920,23 @@ async def serve_local_image(path: str):
     }
     media_type = media_types.get(ext, "application/octet-stream")
     return FileResponse(path=str(resolved), media_type=media_type)
+
+
+# ── Serve Generated Media ────────────────────────────────────────────────────
+
+
+@router.get("/api/media/{kind}/{name}")
+async def serve_generated_media(kind: str, name: str):
+    """Serve an image or audio file GAIA generated, for the chat's inline cards.
+
+    Only a plain file name directly inside the generation tools' own output
+    folder is served; anything else is a 404 that says why.
+    """
+    try:
+        path = generated_media.resolve_generated_media(kind, name)
+    except generated_media.MediaNotServable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return harden_served_file(
+        FileResponse(path=str(path), media_type=generated_media.media_type(kind, path)),
+        path.name,
+    )

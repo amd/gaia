@@ -68,6 +68,7 @@ class _StubAgent:
     _format_tools_for_prompt = Agent._format_tools_for_prompt
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     select_skill_set = Agent.select_skill_set
     resolve_skill_set = Agent.resolve_skill_set
     load_skill_set = Agent.load_skill_set

@@ -140,6 +140,17 @@ describe('ChatView live status', () => {
         expect(useChatStore.getState().liveStatus).toBe('Reasoning — 38 words so far');
     });
 
+    it('words the tool-list re-read itself, so it reaches the user in their language', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onAgentEvent({
+                type: 'status', status: 'working', phase: 'loading_tools', message: 'backend words',
+            } as unknown as StreamEvent);
+        });
+        await liveLine('Loading more tools');
+        expect(useChatStore.getState().livePhase).toBe('loading_tools');
+    });
+
     it('ignores status messages that are not phases', async () => {
         await driveSend();
         act(() => {
@@ -307,6 +318,47 @@ describe('mid-turn notes', () => {
         await waitFor(() => expect(document.querySelector('.flow-note')).toHaveTextContent("I'll check the forecast first."));
         await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('Clear Saturday.'));
         expect(screen.getAllByText("I'll check the forecast first.")).toHaveLength(1);
+    });
+
+    it('moves reasoning a lone </think> closed out of the answer', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Check the forecast first.' } as StreamEvent);
+            emit({ type: 'thinking', content: 'Check the forecast first.', retracts_answer: true });
+        });
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'Clear Saturday.' } as StreamEvent);
+        });
+
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('Clear Saturday.'));
+        const thought = useChatStore.getState().agentSteps[0];
+        expect(thought.type).toBe('thinking');
+        expect(thought.detail).toBe('Check the forecast first.');
+    });
+
+    it('takes back a reply the model server cut off and says it restarts', async () => {
+        await driveSend();
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'The ledger bal' } as StreamEvent);
+        });
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('The ledger bal'));
+        act(() => {
+            emit({ type: 'status', phase: 'answer_restart', message: 'cut off', retracts_answer: true });
+            emit({ type: 'status', phase: 'model_restart', message: 'The model server stopped. GAIA is restarting it…' });
+        });
+
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe(''));
+        expect(document.querySelector('.flow-warning')).toHaveTextContent(
+            'The answer so far was cut off, so GAIA is starting it again from the top.',
+        );
+        expect(useChatStore.getState().liveStatus).toBe('The model server stopped. GAIA is restarting it…');
+        await waitFor(() => expect(screen.getByText(/The model server stopped\. GAIA is restarting it/)).toBeInTheDocument());
+
+        act(() => {
+            capturedCallbacks!.onChunk({ type: 'chunk', content: 'The ledger balances.' } as StreamEvent);
+        });
+        await waitFor(() => expect(useChatStore.getState().streamingContent).toBe('The ledger balances.'));
+        expect(screen.queryByText('The ledger bal')).not.toBeInTheDocument();
     });
 
     it('ends the reasoning once the answer starts streaming', async () => {

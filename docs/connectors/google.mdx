@@ -111,12 +111,11 @@ inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
 request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` / `email` / `profile` are requested on every
-connection regardless of
-agent. `email` is listed twice, once as the short OIDC name and once as
-its `userinfo.email` URL equivalent — Google treats them as the same
-permission, and GAIA asks for whichever the connecting surface uses, so
-declare both.
+`gmail.readonly`; `openid` and `userinfo.email` are requested on every
+connection regardless of agent. GAIA no longer requests the short `email`
+and `profile` names (`email` is the same permission as `userinfo.email`). It
+still accepts them so connections made by older GAIA versions keep working,
+and declaring them does no harm.
 
 {/* google-scopes:start */}
 | Scope | Tier | What it buys |
@@ -260,12 +259,12 @@ Naming the agent is enough; GAIA rejects `--grant-agent` outright for an
 agent that declares no Google scopes, rather than silently granting
 nothing.
 
-**Chat agent — a narrower, read-only Gmail grant:** the chat agent
-declares no fixed Google requirement, so grant it explicit scopes
-instead:
+**Flagship — the same read-only scope, as a grant:** mail tools read
+the `installed:gaia` grant. Use this when Google is already connected
+and you only need the ledger entry:
 
 ```bash
-gaia connectors grants grant google builtin:chat \
+gaia connectors grants grant google installed:gaia \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
@@ -336,9 +335,9 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out after two minutes
-(`OAuth flow ... timed out after 120s. Restart the flow.`) — that
-message will not name the real cause.
+handler never runs and the CLI/UI just times out once the sign-in window
+closes after 15 minutes (`Sign-in to google was not finished within 15
+minutes ...`) — that message will not name the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.

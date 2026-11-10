@@ -11,7 +11,7 @@ GAIA supports running agents on your AMD Ryzen AI NPU via the [FastFlowLM (FLM)]
 - **Hardware:** AMD Ryzen AI 300/400/Max series processor with XDNA2 NPU
   - Strix Point, Strix Halo, Kraken Point, or Gorgon Point
   - Ryzen AI 7000/8000/200-series (XDNA1) is **not supported**
-- **Software:** [Lemonade Server](https://lemonade-server.ai) v10.2.0+
+- **Software:** [Lemonade Server](https://lemonade-server.ai) v2026.44.1+
 - **Driver:** Latest AMD NPU driver (firmware v1.1.0.0+)
 
 <Warning>
@@ -20,9 +20,57 @@ Ryzen AI 7000/8000/200-series chips have XDNA1 NPUs which are not supported by F
 
 ## Linux
 
-NPU inference works on Linux the same way — run `gaia init --profile npu` and Lemonade Server installs the FLM backend automatically.
+The NPU works on Linux as on Windows: setup installs Lemonade's FastFlowLM backend, which
+brings its own NPU runtime (XRT), so you don't install FastFlowLM or XRT yourself. The PC
+itself needs four things:
 
-If Lemonade detects that your system needs additional setup (for example, the `amdxdna` kernel driver on older kernels), it will point you to the [Lemonade Linux FLM guide](https://lemonade-server.ai/flm_npu_linux.html) with distro-specific steps. Follow them, then re-run `gaia init --profile npu`.
+| Needs | How to check | How to fix |
+|-------|--------------|------------|
+| The `amdxdna` driver, in Linux 6.14 and later | `lsmod \| grep amdxdna` | Update the kernel, or install AMD's [xdna-driver](https://github.com/amd/xdna-driver) (DKMS) for your distribution |
+| NPU firmware 1.1 or later | `cat /sys/bus/pci/drivers/amdxdna/*/fw_version` | Update `linux-firmware`, then restart |
+| Read and write access to `/dev/accel/accel0` | `ls -l /dev/accel/accel0` | Add your account to the group that owns it (usually `render`), then sign out and back in |
+| An unlimited locked-memory limit | `ulimit -l` prints `unlimited` | GAIA raises it once for you (below), then restart |
+
+### The locked-memory limit
+
+FastFlowLM keeps the model's weights in locked memory, and a desktop session on Ubuntu,
+Fedora and most distributions allows only 8 MB. Lemonade's own service raises its limit
+itself; GAIA's own Lemonade starts inside your session, so it gets the 8 MB, and the model
+fails to load. No program can raise that limit for itself, so it takes an administrator
+once:
+
+- **In the app:** setup shows the NPU as **not set up yet**, with a **Raise the limit**
+  button. It asks for an administrator password through your desktop's usual prompt, then
+  asks you to restart the PC.
+- **`gaia init`** and **`gaia init --profile npu`** ask the same question in the terminal.
+- **The GAIA desktop app's `.deb`** does it while installing, on a PC whose NPU driver is
+  loaded.
+
+All three write the same two files: `/etc/security/limits.d/90-gaia-npu.conf` (terminal
+logins) and `/etc/systemd/system/user@.service.d/90-gaia-npu-memlock.conf` (the desktop
+session). Both set memlock to unlimited for every user on the PC, as the [Lemonade Linux FLM
+guide](https://lemonade-server.ai/flm_npu_linux.html) does. The change applies after a
+restart. To undo it, delete the two files and restart. Purging the desktop app's package
+deletes them too, and upgrading it never writes them again.
+
+If the limit is still low after a restart, something else on the PC sets a lower one after
+GAIA's files. Setup says so. Check `DefaultLimitMEMLOCK` in `/etc/systemd/user.conf` and
+`/etc/systemd/system.conf`, and any file in `/etc/security/limits.d/` that sorts after
+`90-gaia-npu.conf`.
+
+### What GAIA checks
+
+GAIA checks all four before it offers the NPU, and once the backend is installed it runs
+FastFlowLM's own check (`flm validate`) as well. When one is missing, setup shows what is
+missing and how to fix it, and keeps chat on the GPU. Fix it, then choose **Check again**.
+`gaia init --profile npu` offers to raise the locked-memory limit, then stops with the same
+list for whatever is still missing. Settings › Model doesn't offer the NPU
+model for download until then, and an NPU model you already have shows what is missing.
+When you run Lemonade yourself, GAIA judges only the NPU's driver and firmware: that
+Lemonade's own service sets its limits.
+
+GAIA's NPU evals ran on Windows. On Linux, these checks follow FastFlowLM's own
+requirements.
 
 ## Setup
 
@@ -35,14 +83,50 @@ gaia init --profile npu
 This will:
 1. Verify NPU hardware is detected
 2. Install the FLM backend (`flm:npu`)
-3. Download the NPU-optimized models (`gemma4-it-e2b-FLM` for chat, `embed-gemma-300m-FLM` for documents and memory)
+3. Download `gemma4-it-e4b-FLM` (see [Which NPU model](#which-npu-model)) and `embed-gemma-300m-FLM` for documents and memory
 4. Install the [GAIA agent](/guides/gaia) if it is missing, the same agent a bare `gaia init` installs
 5. Run a verification test and make NPU the default device
 
 The Agent UI and terminal UI then have an agent to talk to. If GAIA's download server can't be
 reached, setup still downloads the models, then reports itself incomplete and exits
 `1` — run `gaia init --profile npu` again once the network is back. To return to the GPU, run
-`gaia config set default_device gpu`.
+`gaia config set default_model <id>` with a GPU model; picking one in the Agent UI or terminal
+UI model list changes only the model those open on.
+
+## Which NPU model
+
+You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain
+`gaia init` installs Lemonade's NPU backend, and `gemma4-it-e4b-FLM` then appears in the
+Agent UI and terminal UI model lists, ready to download on first use. The GPU model
+stays the default because it answers faster. Pick the NPU model in the model list and it
+stays picked: the Agent UI starts on it the next time it opens. `gaia init --profile npu`
+makes it the default from the start.
+
+`gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
+(`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
+about 12 GB of system RAM (installed RAM less any GPU carve-out), sees images and calls
+tools natively. The GPU stays free.
+
+GAIA sizes its context window to your PC: the smaller of the model's 128K maximum and what
+your free RAM holds, starting from 64K and dropping to 32K when memory is short. A larger
+window takes about 1.5 GB more RAM per 64K. To set it yourself, choose a size for the model
+in **Settings → Model**, or set `GAIA_CTX_SIZE`.
+
+Measured on a Ryzen AI MAX+ 395 (FLM v1.0.7, Lemonade 2026.43.3), a 31K-token prompt
+processes at 472 tokens/s and generates at 7 tokens/s, with a first answer in 67 s. In
+GAIA's agent evals on the same PC it scored close to its GPU twin (core conversation
+12/15, tool selection 3/7 against the GPU's 4/7).
+
+On the NPU, as on the GPU, Gemma runs with a [smaller tool set](/guides/gaia#smaller-models):
+no data scratchpad, email, image generation or skill installs.
+
+GAIA offers only NPU models whose agent evals have run. Qwen3.6's NPU build
+(`qwen3.6-moe-35b-a3b-FLM`) was tested and left out: its multi-step turns took several
+minutes each.
+
+The NPU trades speed for power: expect long first answers in a fresh chat. For the
+fastest replies, stay on the GPU (`gaia init`). The model lists show the NPU model
+only on a PC with an NPU whose RAM holds it.
 
 ## Usage
 
@@ -65,11 +149,15 @@ gaia prompt "Hello" --device npu
 ### Agent UI
 
 1. Launch with `gaia chat --ui`
-2. The Agent UI uses your default device. After `gaia init --profile npu` that is the NPU; switch with `gaia config set default_device gpu` (or `npu`)
+2. The Agent UI starts on the model you last picked. After `gaia init --profile npu` that is the NPU model; pick a GPU model in the model list to go back
+
+You don't need the NPU profile to try a model on the NPU. On a PC with an NPU, Settings › Model lists Gemma 4 E4B NPU when it fits that memory. **Download** installs Lemonade's FLM backend if it is missing, then fetches the model. The terminal UI's model picker does the same. To add another FastFlowLM model, paste its Hugging Face link under [Add a model from Hugging Face](/guides/ai-providers#add-a-model-from-hugging-face).
 
 ### Evaluation
 
-Compare agent quality across devices:
+Compare agent quality across devices. Agent Eval runs from a source checkout of
+GAIA with the Agent UI backend on port 4200; see the
+[Agent Eval prerequisites](/guides/eval#prerequisites) first.
 
 ```bash
 # Run eval on GPU (baseline)
@@ -88,7 +176,7 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 |--------|-------|---------|----------|
 | **GPU** (default) | Gemma-4-E4B-it-GGUF | llamacpp:vulkan | General use, best throughput |
 | **CPU** | Gemma-4-E4B-it-GGUF | llamacpp:cpu | No GPU available (slower) |
-| **NPU** | gemma4-it-e2b-FLM | flm:npu | Power efficiency, background tasks |
+| **NPU** | gemma4-it-e4b-FLM | flm:npu | Power efficiency, leaving the GPU free |
 
 ### Fallback Behavior
 
@@ -108,6 +196,18 @@ Verify your hardware:
 2. Ensure NPU driver is installed: check Device Manager (Windows) or `lspci | grep NPU` (Linux)
 3. Try `lemonade backends` to see available backends
 
+### NPU is "not set up yet" on Linux
+
+Setup, Settings › Model or `gaia init --profile npu` lists what stops the NPU on this PC:
+the driver, the firmware, access to `/dev/accel/accel0`, or the locked-memory limit. Each
+item says how to fix it, and [Linux](#linux) has the details. Chat keeps running on the GPU
+meanwhile.
+
+The usual one is the locked-memory limit. Choose **Raise the limit**, enter an
+administrator password, and restart the PC (see [The locked-memory
+limit](#the-locked-memory-limit)). Without that, the first NPU chat fails with "FLM NPU
+validation failed: Memlock limits are too low".
+
 ### FLM backend installation fails
 
 ```
@@ -122,16 +222,18 @@ lemonade backends install flm:npu
 ### Model not available
 
 ```
-Error pulling model: No built-in model with the name 'gemma4-it-e2b-FLM' is registered.
+Error pulling model: No built-in model with the name 'gemma4-it-e4b-FLM' is registered.
 ```
 
 The FLM backend is missing, not the model. Lemonade discovers `*-FLM` models
 through the FLM runtime itself, so until `flm:npu` is installed none of them
-exist to pull. Install the backend first, then pull by name:
+exist to pull. Downloading the model from Settings › Model or the terminal UI's
+picker installs the backend for you. From a terminal, install it first, then pull by
+name:
 
 ```bash
 lemonade backends install flm:npu
-lemonade pull gemma4-it-e2b-FLM
+lemonade pull gemma4-it-e4b-FLM
 ```
 
 <Warning>

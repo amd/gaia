@@ -8,7 +8,7 @@ import { DocumentLibrary } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
-import { stripIsolates } from '../../i18n/registry';
+import { readsAs } from '../../test/readsAs';
 
 vi.mock('../../services/api');
 const mockedApi = vi.mocked(api);
@@ -42,8 +42,7 @@ describe('IndexingProgress', () => {
     it('reads in Arabic with the English in brackets', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         render(<IndexingProgress progress={{ phase: 'reading', done: 37, total: 229 }} />);
-        expect(screen.getByText((content) => stripIsolates(content) === 'قراءة الصفحة 37 من 229 (Reading page 37 of 229)'))
-            .toBeInTheDocument();
+        expect(screen.getByText(readsAs('قراءة الصفحة 37 من 229 (Reading page 37 of 229)'))).toBeInTheDocument();
     });
 });
 

@@ -18,6 +18,13 @@ type Recommended struct {
 	Provider string `json:"provider"`
 	Label    string `json:"label"`
 	Note     string `json:"note"`
+	// Device is "npu" for a FastFlowLM model, which loads into system RAM
+	// rather than GPU memory; empty for the rest.
+	Device string `json:"device"`
+	// Option marks a model listed for its size and window only: it is shown
+	// with the other models, never under "Recommended" (Gemma on the NPU is
+	// slower than on the GPU, so it is only ever the user's pick).
+	Option bool `json:"option"`
 
 	// Registration for a model that is not a Lemonade built-in. Empty for
 	// built-ins, which Lemonade pulls by name.
@@ -28,8 +35,6 @@ type Recommended struct {
 	MMProj     string  `json:"mmproj"`
 	Vision     bool    `json:"vision"`
 	Reasoning  bool    `json:"reasoning"`
-	// MinLemonade is the oldest Lemonade whose llama.cpp can load the model.
-	MinLemonade string `json:"min_lemonade_version"`
 	// MinCtxSize is the window GAIA loads the model with at the least, and
 	// KVBytesPerToken its KV cache per token of window; 0 when the fit rule's
 	// shared margin covers the cache.

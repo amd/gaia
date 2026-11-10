@@ -113,6 +113,7 @@ func (m FlagshipModel) preflightOptions() preflight.Options {
 	if opts.Logf == nil {
 		opts.Logf = m.logf
 	}
+	opts.OfferUpdate = m.updateCheck && m.chat == nil
 	return opts
 }
 
@@ -131,6 +132,7 @@ func (m FlagshipModel) gateIsFor(agentID string) bool {
 // ctrl+c during preflight would have left that child running.
 func (m *FlagshipModel) closeGate() {
 	if m.preflight != nil {
+		m.preflight.Abandon()
 		m.preflight.Cancel()
 		m.preflight = nil
 	}

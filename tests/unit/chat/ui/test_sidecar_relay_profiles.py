@@ -29,8 +29,8 @@ import pytest
 import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarSpawnError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -111,7 +111,6 @@ def _registered_tool_names() -> set:
         "src/gaia/agents/tools",
         "src/gaia/sd",
         "src/gaia/vlm",
-        "src/gaia/agents/code_index",
         "hub/agents/gaia/python",
     ]
 
@@ -422,25 +421,6 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
 
-    def test_a_stale_start_command_is_replaced_with_this_hosts_answer(
-        self, monkeypatch
-    ):
-        """An older agent package still says `lemonade-server serve`, a CLI
-        Lemonade 10.7 removed. Relaying it verbatim hands the user a command
-        that does not exist."""
-        body = self._init_body(
-            reachable=False,
-            hint="not reachable — start it with `lemonade-server serve`",
-        )
-        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
-
-        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
-
-        assert len(calls) == 1
-        assert "lemonade-server serve" not in handler.events[0]["message"]
-
     def test_email_not_ready_still_blocks(self, monkeypatch):
         """Email's /init IS a gate — provisioning is a step the user finishes
         on the agent card, and a triage against an unprovisioned mailbox
@@ -473,7 +453,7 @@ class TestGaiaDispatch:
                 raise raises
             return True
 
-        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+        monkeypatch.setattr(cloud_keys, "reconnect_provider", _ensure)
 
     def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
         """After Lemonade restarts it has forgotten the key, and /init would
@@ -666,11 +646,44 @@ class TestSessionIdGating:
     def test_gaia_sends_session_id(self):
         assert self._body_for(GAIA_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_email_does_not(self):
-        assert "session_id" not in self._body_for(EMAIL_PROFILE, "sess-9")
+    def test_email_sends_it_too(self):
+        # #2834: without it a follow-up can't name the thread the last turn
+        # showed — the sidecar builds a fresh agent per turn.
+        assert self._body_for(EMAIL_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_gaia_omits_it_when_absent(self):
-        assert "session_id" not in self._body_for(GAIA_PROFILE, None)
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_omitted_when_absent(self, empty):
+        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+            assert "session_id" not in self._body_for(profile, empty)
+
+    def test_a_profile_without_the_field_never_sends_it(self):
+        from dataclasses import replace
+
+        bare = replace(EMAIL_PROFILE, min_session_id_api_version=None)
+        assert "session_id" not in self._body_for(bare, "sess-9")
+
+    @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2.11", False),
+            ("2.12", True),
+            ("2.14", True),
+            ("3.0", True),
+            (None, False),
+            ("", False),
+            ("garbage", False),
+        ],
+    )
+    def test_email_takes_it_only_from_contract_2_12(self, version, expected):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        assert session_id_supported(EMAIL_PROFILE, version) is expected
+
+    def test_gaia_takes_it_at_its_own_floor(self):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        floor = ".".join(str(n) for n in GAIA_PROFILE.min_api_version)
+        assert session_id_supported(GAIA_PROFILE, floor)
 
 
 # ── Per-agent copy never says "email" for the flagship ───────────────────────

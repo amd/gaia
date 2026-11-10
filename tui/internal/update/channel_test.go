@@ -5,8 +5,6 @@ package update
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,9 +82,6 @@ func TestChannelSelection(t *testing.T) {
 	}
 }
 
-// scriptBuild is what a script install needs from a release on linux/amd64.
-var scriptBuild = []Asset{{Name: "gaia-linux-amd64"}, {Name: tuiSums}}
-
 func withScriptInstall(t *testing.T) {
 	t.Helper()
 	home := withHome(t)
@@ -101,11 +96,10 @@ func TestCheckUsesTheSavedChannel(t *testing.T) {
 	prev := Current
 	Current = "0.25.1"
 	t.Cleanup(func() { Current = prev })
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Release{
-			{Tag: "v0.25.2-rc3", Prerelease: true, Assets: scriptBuild},
-			{Tag: "v0.25.1", Assets: scriptBuild},
-		})
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.25.2-rc3", "v0.25.1"),
+		latest: "v0.25.1",
+		sums:   merged(tuiFiles("v0.25.2-rc3"), tuiFiles("v0.25.1")),
 	})
 	st, err := Check(context.Background())
 	if err != nil || st.Available {

@@ -40,7 +40,6 @@ on:
       - 'setup.py'
       - 'pyproject.toml'
       - 'hub/agents/gaia/python/pyproject.toml'
-      - 'hub/agents/chat/python/pyproject.toml'
       - 'hub/agents/gaia/python/packaging/**'
       - '.github/workflows/build_flagship_sidecar.yml'
   schedule:
@@ -186,6 +185,15 @@ jobs:
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
           "$PY" "${PACKAGING}/freeze.py" --onefile
+
+      # GAIA must not ship GPL/AGPL code: PyInstaller's own package, GNU
+      # Readline, GNU dbm, or PyMuPDF. Read off the built archive itself.
+      - name: Check the binary bundles no copyleft code
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" "${PACKAGING}/check_bundle_licenses.py" "${FREEZE_DIST}/${{ matrix.frozen }}"
 
       - name: Check the binary runs on glibc ${{ matrix.glibc_floor }}
         if: matrix.glibc_floor

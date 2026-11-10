@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from gaia.ui.routers import system as system_mod
 from gaia.ui.server import create_app
 
-_LOADED = {"model_loaded": "Gemma-4-E4B-it-GGUF"}
+_LOADED = {"all_models_loaded": [{"model_name": "Gemma-4-E4B-it-GGUF", "type": "llm"}]}
 
 
 class _Resp:

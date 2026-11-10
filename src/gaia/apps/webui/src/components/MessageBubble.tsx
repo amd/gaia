@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -16,12 +16,16 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
-import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
@@ -46,10 +50,14 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
+    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    onTryAgain?: () => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** What a running tool's own model calls are doing; shown on that tool's row. */
+    toolStatus?: string | null;
     /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
     awaitingUser?: boolean;
 }
@@ -63,7 +71,7 @@ interface MessageBubbleProps {
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
-    const text = awaitingUser ? t('activity.waiting') : (label || t('msg.thinking'));
+    const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
@@ -118,11 +126,11 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
         <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
-                <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
+                <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
         </span>
     );
@@ -144,6 +152,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -374,7 +389,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -424,9 +439,9 @@ export function escapeBareNumberLines(text: string): string {
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
-function formatFullTimestamp(iso: string): string {
+function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(dateLocale(t), {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
@@ -435,21 +450,41 @@ function formatFullTimestamp(iso: string): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py). */
-const CUT_OFF_NOTICES = [
-    'This answer was interrupted when GAIA closed. Send again to retry.',
-    'This answer was interrupted before it finished. Send again to retry.',
-    'This answer ended before GAIA could save a reply. Send again to retry.',
+/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py), and their translations. */
+const CUT_OFF_NOTICES: ReadonlyArray<readonly [string, MessageKey]> = [
+    ['This answer was interrupted when GAIA closed. Send again to retry.', 'msg.cutOff.interrupted'],
+    ['This answer was interrupted before it finished. Send again to retry.', 'msg.cutOff.cancelled'],
+    ['This answer ended before GAIA could save a reply. Send again to retry.', 'msg.cutOff.noReply'],
 ];
+
+/** restart_recovery.tools_ran_notice, the line the server puts just above a cut-off notice. */
+const TOOLS_RAN_RE = /(?:^|\n\n)Before it stopped, it had started these tools: (.+)\.$/;
+
+export interface CutOff {
+    /** What the turn streamed before it was cut off. */
+    body: string;
+    notice: MessageKey;
+    tools: string | null;
+}
+
+/** A reply the server closed with a cut-off notice, split so the notice shows in the UI's language. */
+export function splitCutOff(content: string): CutOff | null {
+    let text = content.trim();
+    const hit = CUT_OFF_NOTICES.find(([notice]) => text.endsWith(notice));
+    if (!hit) return null;
+    text = text.slice(0, -hit[0].length).trimEnd();
+    const tools = TOOLS_RAN_RE.exec(text);
+    if (tools) text = text.slice(0, tools.index).trimEnd();
+    return { body: text, notice: hit[1], tools: tools ? tools[1] : null };
+}
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
 export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    const text = content.trim();
-    return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
+    return splitCutOff(content) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -458,18 +493,23 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : { steps: agentSteps, echoed: false }),
         [agentSteps, message.content, message.role, isStreaming],
     );
-    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
+    const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
+    const cutOff = useMemo(
+        () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
+        [message.content, message.role, isStreaming],
+    );
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
         () => (message.role === 'user'
             ? message.content
-            : cleanToolCallContent(message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming],
+            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
+        [message.content, message.role, isStreaming, cutOff],
     );
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -539,7 +579,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at) })
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
     return (
@@ -564,6 +604,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -594,6 +637,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             isActive={agentStepsActive ?? false}
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
+                            toolStatus={isStreaming ? toolStatus : null}
                             answer={isStreaming ? undefined : cleanedContent}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
@@ -647,6 +691,22 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             </span>
                         </div>
                     )}
+                    {cutOff && (
+                        <p className="msg-cut-off" role="note">
+                            {t.compose((say) => (cutOff.tools
+                                ? `${say('msg.cutOff.toolsRan', { tools: cutOff.tools })} ${say(cutOff.notice)}`
+                                : say(cutOff.notice)))}
+                        </p>
+                    )}
+                    {onTryAgain && !isStreaming && (
+                        <button type="button" className="msg-try-again" onClick={onTryAgain}>
+                            <RotateCw size={12} aria-hidden="true" />
+                            {t('msg.tryAgain')}
+                        </button>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
@@ -656,7 +716,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
                                 <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at)}
+                                    {formatFullTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
@@ -668,6 +728,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>
@@ -754,7 +816,11 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
 // Exactly one separator between segments, so a last segment without an
 // extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+// A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
+// inside a last name of at most three words ending in an extension (`Q3 report.txt`);
+// otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
+// A path in double quotes runs to the closing quote, spaces and all.
+const WIN_PATH_RE = /(?<=["\u201c])[A-Z]:[\\/][^*?"<>|\r\n\u201c\u201d]+(?=["\u201d])|\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: +(?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ +){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
@@ -789,22 +855,26 @@ function FilePathLink({ path }: { path: string }) {
     );
 }
 
+/** Each Windows path in `text`; a quoted one is kept exactly, a trailing dot and all. */
+function findFilePaths(text: string): Array<{ start: number; path: string }> {
+    return [...text.matchAll(new RegExp(WIN_PATH_RE.source, 'gi'))].map((m) => {
+        const end = m.index + m[0].length;
+        const quoted = '"“'.includes(text[m.index - 1] ?? '\n') && '"”'.includes(text[end] ?? '\n');
+        return { start: m.index, path: quoted ? m[0] : m[0].replace(PATH_TRAILING_PUNCT_RE, '') };
+    });
+}
+
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
-    // Combine both regexes: match files first, then directories
-    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match: RegExpExecArray | null;
 
-    while ((match = combined.exec(text)) !== null) {
-        // Add text before the match
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
+    for (const { start, path } of findFilePaths(text)) {
+        if (start > lastIndex) {
+            parts.push(text.slice(lastIndex, start));
         }
-        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
-        parts.push(<FilePathLink key={match.index} path={path} />);
-        lastIndex = match.index + path.length;
+        parts.push(<FilePathLink key={start} path={path} />);
+        lastIndex = start + path.length;
     }
 
     // No paths found — return original text
@@ -867,7 +937,11 @@ function leadingPages(index: CitationIndex, text: string): FoundPage[] {
  * (in inline code), whose pages may open the run.
  */
 function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
-    const citations = findCitations(index, text);
+    // A filename that ends a longer path stays inside that path's chip.
+    const paths = findFilePaths(text);
+    const citations = findCitations(index, text).filter(
+        (c) => !paths.some((p) => p.start < c.start && c.start < p.start + p.path.length),
+    );
     const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
     const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
         for (const pg of pages) {

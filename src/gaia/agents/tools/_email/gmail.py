@@ -46,7 +46,15 @@ _FETCH_CONCURRENCY = 5
 
 # `metadataHeaders` is only honoured alongside `format=metadata`; sending
 # either alone silently returns the wrong thing.
-_METADATA_HEADERS = ("Subject", "From", "To", "Cc", "Date")
+_METADATA_HEADERS = (
+    "Subject",
+    "From",
+    "To",
+    "Cc",
+    "Date",
+    "Auto-Submitted",
+    "X-Autoreply",
+)
 
 # Gmail label IDs that are mailbox state, not user tags. `categories` must
 # carry only what a user would recognise as a label they created.
@@ -224,6 +232,10 @@ def message_summary(
         "categories": _categories(msg.get("labelIds"), label_names),
         # Gmail entity-encodes the snippet where Graph's bodyPreview is plain.
         "preview": html.unescape(msg.get("snippet") or "").strip(),
+        # Kept for the waiting-on-you detector; not shown as user-facing mail
+        # content. Gmail returns these through metadataHeaders.
+        "auto_submitted": _decode(headers.get("auto-submitted")),
+        "x_autoreply": _decode(headers.get("x-autoreply")),
     }
     if include_body:
         summary["body"], summary["body_content_type"] = _select_body(payload)

@@ -148,3 +148,46 @@ def test_version_history_table_records_the_current_version():
         "every bump gets an entry saying what changed and whether it broke "
         "existing consumers."
     )
+
+
+# ---------------------------------------------------------------------------
+# npm client — its pinned version must match the sidecar's (#2922)
+# ---------------------------------------------------------------------------
+
+_NPM_TYPES = _NPM_ROOT / "src" / "types.ts"
+_NPM_SPEC = _NPM_ROOT / "SPEC.md"
+
+
+def test_npm_client_pins_the_contract_version():
+    """``npm/src/types.ts`` must export the same ``SCHEMA_VERSION`` as ``contract.py``.
+
+    #2910 bumped the Python side to 2.13 and left the npm client on 2.12 with
+    CI green. The npm suite has its own parity test, but it skips when Node
+    can't find a Python with the package installed; this one runs in the
+    Python lane with nothing to skip.
+    """
+    version = _declared_schema_version()
+    match = re.search(
+        r'^export const SCHEMA_VERSION = "([^"]+)"',
+        _NPM_TYPES.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert match, "npm/src/types.ts no longer exports SCHEMA_VERSION as a literal"
+    assert match.group(1) == version, (
+        f"schema version split: contract.py = {version}, "
+        f"npm/src/types.ts = {match.group(1)}. Bump both in the same change."
+    )
+
+
+def test_npm_spec_states_the_contract_version():
+    """``npm/SPEC.md`` opens by naming the version the client pins; keep it true."""
+    version = _declared_schema_version()
+    match = re.search(
+        r"This client pins `SCHEMA_VERSION` \*\*([^*]+)\*\*",
+        _NPM_SPEC.read_text(encoding="utf-8"),
+    )
+    assert match, "npm/SPEC.md no longer says which SCHEMA_VERSION the client pins"
+    assert match.group(1) == version, (
+        f"schema version split: contract.py = {version}, "
+        f"npm/SPEC.md says {match.group(1)}. Update the SPEC.md intro too."
+    )

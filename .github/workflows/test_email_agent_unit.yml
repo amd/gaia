@@ -49,6 +49,7 @@ on:
       # forward.py mints/forwards the email sidecar's OAuth credential;
       # connectors.py's authorize route resolves the same scopes (#2730).
       - 'src/gaia/daemon/**'
+      - 'src/gaia/schedule/**'
       - 'src/gaia/ui/routers/connectors.py'
       - 'tests/unit/test_daemon_forward.py'
       - 'tests/unit/test_daemon_remedy_commands.py'
@@ -93,7 +94,7 @@ on:
       - 'tests/fixtures/eval_baselines/gaia-flagship-gemma-stx/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - 'hub/agents/email/python/**'
       - 'hub/agents/email/npm/**'
@@ -128,6 +129,7 @@ on:
       # forward.py mints/forwards the email sidecar's OAuth credential;
       # connectors.py's authorize route resolves the same scopes (#2730).
       - 'src/gaia/daemon/**'
+      - 'src/gaia/schedule/**'
       - 'src/gaia/ui/routers/connectors.py'
       - 'tests/unit/test_daemon_forward.py'
       - 'tests/unit/test_daemon_remedy_commands.py'
