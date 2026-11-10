@@ -477,13 +477,27 @@ def _served_chunks(rag: Any, left_out) -> List[str]:
         ]
 
 
-def _served_positions(rag: Any, left_out) -> Dict[str, int]:
-    """First index of each chunk text owned by a file that is not left out."""
+def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
+    """Every index of each chunk text, leaving out chunks *left_out* files own.
+
+    A document indexed under two names has each chunk at two indices; citing
+    only the first would name one file for text both hold.
+    """
+    with rag._state_lock:  # pylint: disable=protected-access
+        positions: Dict[str, List[int]] = {}
+        for i, chunk in enumerate(rag.chunks):
+            if left_out and rag.chunk_to_file.get(i) in left_out:
+                continue
+            positions.setdefault(chunk, []).append(i)
+        return positions
+
+
+def _file_positions(rag: Any, file_path: str) -> Dict[str, int]:
+    """First index of each chunk text within *file_path*."""
     with rag._state_lock:  # pylint: disable=protected-access
         positions: Dict[str, int] = {}
-        for i, chunk in enumerate(rag.chunks):
-            if rag.chunk_to_file.get(i) not in left_out:
-                positions.setdefault(chunk, i)
+        for i in rag.file_to_chunk_indices.get(file_path, []):
+            positions.setdefault(rag.chunks[i], i)
         return positions
 
 
@@ -1220,32 +1234,21 @@ class RAGToolsMixin:
                 top_chunks = [chunk for chunk, score in kept]
                 top_scores = [score for chunk, score in kept]
 
-                # Find the actual chunk indices from the RAG system
-                chunk_indices = []
-                served_at = _served_positions(rag, left_out) if left_out else None
-                for chunk in top_chunks:
-                    if served_at is not None:
-                        # A twin chunk in a left-out file must not be cited.
-                        chunk_indices.append(served_at.get(chunk, -1))
-                        continue
-                    # Find this chunk's index in the global chunks list
-                    try:
-                        idx = rag.chunks.index(chunk)
-                        chunk_indices.append(idx)
-                    except ValueError:
-                        chunk_indices.append(-1)  # Not found
+                # A twin chunk in a left-out file must not be cited.
+                positions = _chunk_positions(rag, left_out)
+                chunk_indices = [positions.get(chunk, [-1])[0] for chunk in top_chunks]
 
                 # Format chunks with context markers for better readability
                 formatted_chunks = []
                 for i, chunk in enumerate(top_chunks):
-                    # Resolve the source file path for this chunk
-                    source_path = ""
-                    if hasattr(rag, "chunk_to_file"):
-                        ci = chunk_indices[i] if i < len(chunk_indices) else -1
-                        if ci >= 0:
-                            raw = rag.chunk_to_file.get(ci, "")
-                            if raw:
-                                source_path = str(Path(raw).resolve())
+                    holders = list(
+                        dict.fromkeys(
+                            str(Path(rag.chunk_to_file[ci]).resolve())
+                            for ci in positions.get(chunk, [])
+                            if rag.chunk_to_file.get(ci)
+                        )
+                    )
+                    source_path = holders[0] if holders else ""
 
                     # Omit ``page`` entirely when the chunk has no page
                     # metadata (markdown / HTML / plain text) so the agent
@@ -1269,6 +1272,8 @@ class RAGToolsMixin:
                     }
                     if _page is not None:
                         _entry["page"] = _page
+                    if len(holders) > 1:
+                        _entry["also_in"] = holders[1:]
                     formatted_chunks.append(_entry)
                 formatted_chunks = split_entries_at_pages(formatted_chunks)
 
@@ -1301,9 +1306,10 @@ class RAGToolsMixin:
                 # Collect unique source file paths from matched chunks only
                 matched_source_files = list(
                     dict.fromkeys(
-                        c["source_file"]
+                        path
                         for c in formatted_chunks
-                        if c.get("source_file")
+                        for path in [c.get("source_file"), *c.get("also_in", [])]
+                        if path
                     )
                 )
 
@@ -1728,15 +1734,9 @@ class RAGToolsMixin:
                         f"[DEBUG] query_specific_file complete: {debug_info['final_chunks_returned']} chunks returned from {debug_info['total_chunks_before_dedup']} total"
                     )
 
-                # Find the actual chunk indices from the RAG system
-                chunk_indices = []
-                for chunk in top_chunks:
-                    # Find this chunk's index in the global chunks list
-                    try:
-                        idx = rag.chunks.index(chunk)
-                        chunk_indices.append(idx)
-                    except ValueError:
-                        chunk_indices.append(-1)  # Not found
+                # Look only in this file: a twin chunk elsewhere has other pages.
+                in_file = _file_positions(rag, str(target_file))
+                chunk_indices = [in_file.get(chunk, -1) for chunk in top_chunks]
 
                 # Build chunk entries; omit ``page`` when absent so the
                 # agent can't template ``page null`` into the citation.
