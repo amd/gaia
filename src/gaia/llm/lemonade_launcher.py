@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from gaia.env import child_env
+
 log = logging.getLogger(__name__)
 
 # macOS: the Lemonade app installs the daemon + client into a standard bin
@@ -189,6 +191,7 @@ def get_installed_version(tooling: LemonadeTooling) -> Optional[str]:
     try:
         result = subprocess.run(
             [tooling.client_path, "--version"],
+            env=child_env(),
             capture_output=True,
             text=True,
             timeout=10,

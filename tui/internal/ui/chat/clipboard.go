@@ -120,28 +120,6 @@ type pasteClipboardMsg struct {
 	err  error
 }
 
-// pasteFromClipboard reads the OS clipboard directly, for the terminals that
-// do not turn Ctrl+V into a bracketed paste themselves (handleKey's Paste
-// branch covers the ones that do).
-//
-// atotto/clipboard was already pulled in transitively — bubbles/textarea
-// binds its own Ctrl+V to it — so this adds nothing to the dependency tree.
-// It shells out on Linux/macOS (xclip/xsel, pbpaste) but calls the Win32
-// clipboard API directly on Windows, no subprocess. OSC 52 read was
-// considered and rejected: terminal support for the read direction is far
-// rarer than write, and many terminals refuse it outright for security, which
-// would make Ctrl+V a coin flip instead of a reliable key.
-//
-// bubbles/textarea has this exact binding built in already, but its result
-// lands in an m.Err field ChatModel never reads — a failed read is a true
-// silent no-op there. Reading it here instead keeps the failure visible.
-func pasteFromClipboard() tea.Cmd {
-	return func() tea.Msg {
-		text, err := clipboard.ReadAll()
-		return pasteClipboardMsg{text: text, err: err}
-	}
-}
-
 // pasteImageMsg carries the result of a Ctrl+V clipboard read that found an
 // IMAGE rather than text — a screenshot (Win+Shift+S, Cmd+Shift+4, a Linux
 // screenshot tool) on the clipboard, written out to a temp file so the agent

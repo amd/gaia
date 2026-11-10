@@ -19,6 +19,7 @@ import pytest
 
 from gaia import project_trust
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import TerminalConfirmationMixin
 from gaia.agents.base.project_map import (
     PROJECT_ROOT_ENV,
     ProjectMapMixin,
@@ -427,6 +428,22 @@ def test_a_console_nobody_can_answer_is_not_asked(repo, flags):
     agent._on_task_start("hi")
     assert console.asked == []
     assert agent._full_project_context() is False
+
+
+class _TerminalConsole(_Console, TerminalConfirmationMixin):
+    """A terminal console, which can only ask on an interactive terminal."""
+
+
+@pytest.mark.parametrize("interactive", [True, False])
+def test_a_terminal_console_asks_only_on_an_interactive_terminal(
+    repo, monkeypatch, interactive
+):
+    monkeypatch.setattr(
+        "gaia.agents.base.console.terminal_is_interactive", lambda: interactive
+    )
+    console = _TerminalConsole(answer=True, blocking_confirmation=False)
+    _FakeAgent(repo, console)._on_task_start("hi")
+    assert bool(console.asked) is interactive
 
 
 def test_pre_approved_tools_never_answer_for_the_user(repo):

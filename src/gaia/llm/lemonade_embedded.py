@@ -429,6 +429,38 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
     return None, None
 
 
+#: Lines of lemond's own output quoted when it exits during start.
+_STARTUP_ERROR_LINES = 6
+_STARTUP_TAIL_BYTES = 256 * 1024
+_STARTUP_LINE_CHARS = 500
+#: lemond's own error levels, and the dynamic loader's refusals.
+_STARTUP_ERROR_RE = re.compile(
+    r"\[(?:error|critical|fatal)\]|error while loading shared libraries"
+    r"|version `[^']+' not found|cannot open shared object",
+    re.IGNORECASE,
+)
+_STARTUP_WARNING_RE = re.compile(r"\b(?:error|failed|cannot|denied|abort)", re.I)
+
+
+def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
+    """The end of what lemond wrote to *log_path* after *offset*, errors first."""
+    with open(log_path, "rb") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        start = offset if offset <= size else 0
+        fh.seek(max(start, size - _STARTUP_TAIL_BYTES))
+        text = fh.read().decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
+    if not errors:
+        errors = [line for line in lines if _STARTUP_WARNING_RE.search(line)]
+    picked = [
+        line[:_STARTUP_LINE_CHARS] for line in (errors or lines)[-_STARTUP_ERROR_LINES:]
+    ]
+    from gaia.llm.failure_record import redact
+
+    return redact("\n".join(picked), known)
+
+
 def _describe_exit_code(code: Optional[int]) -> str:
     if code is None:
         return "exit code unavailable"
@@ -805,6 +837,8 @@ class EmbeddedLemonade:
         self.version = version
         self.root = (home or gaia_home()) / "lemonade"
         self.progress_callback = progress_callback
+        # Where this start's output begins in lemond.log, to quote its error.
+        self._spawn_log_offset = 0
 
     # -- paths ------------------------------------------------------------
 
@@ -2078,6 +2112,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
+            self._spawn_log_offset = logfile.tell()
             process = popen_outliving_job(
                 argv,
                 env=env,
@@ -2130,11 +2165,7 @@ class EmbeddedLemonade:
                     taken = False
                 if taken:
                     raise _PortTaken(port)
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade exited immediately (code "
-                    f"{process.returncode}) on port {port}. Read "
-                    f"{self.log_path} for the daemon's own error, then retry."
-                )
+                raise EmbeddedLemonadeError(self._exit_message(process, port, api_key))
             if self._health(port, api_key) is not None:
                 return
             time.sleep(0.25)
@@ -2143,6 +2174,20 @@ class EmbeddedLemonade:
             f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
             f"it was doing, then retry."
         )
+
+    def _exit_message(self, process: subprocess.Popen, port: int, api_key: str) -> str:
+        """Why lemond quit during start, quoting its own last errors."""
+        head = (
+            f"Embedded Lemonade exited immediately "
+            f"({_describe_exit_code(process.returncode)}) on port {port}."
+        )
+        try:
+            said = _startup_output(self.log_path, self._spawn_log_offset, (api_key,))
+        except OSError as e:
+            return f"{head} Its log {self.log_path} could not be read ({e})."
+        if not said:
+            return f"{head} It wrote nothing before exiting. Full log: {self.log_path}"
+        return f"{head} Lemonade said:\n{said}\nFull log: {self.log_path}"
 
     def _discard(self, process: subprocess.Popen) -> None:
         """Kill a start that failed and forget it, unless another took over."""
