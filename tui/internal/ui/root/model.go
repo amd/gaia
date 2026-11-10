@@ -608,16 +608,6 @@ func (m FlagshipModel) View() string {
 	return base
 }
 
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 // logf writes transport diagnostics to the session log in dev mode. It must
 // never be given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m FlagshipModel) logf(format string, args ...any) {
