@@ -19,6 +19,8 @@ import responses
 from gaia.llm.lemonade_client import (
     CHAT_LLAMACPP_ARGS,
     CONVERSATION_SLOT,
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDER_LLAMACPP_ARGS,
     FULL_TOOLS_SLOT,
     SIDE_SLOT,
     LemonadeAuthError,
@@ -35,6 +37,7 @@ CATALOG = [
         "downloaded": True,
     },
     {"id": "gemma4-it-e2b-FLM", "recipe": "flm", "downloaded": True},
+    {"id": "user.embeddinggemma-300m-GGUF", "recipe": "llamacpp", "downloaded": True},
 ]
 
 
@@ -97,14 +100,15 @@ def test_other_loads_keep_their_flags(client, model, kwargs):
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
 
 
-def test_an_embedder_load_never_saves_the_chat_flags(client):
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_an_embedder_load_never_saves_the_chat_flags(client, system):
     with (
-        patch("gaia.llm.lemonade_client.manages_embedder_backend", return_value=True),
+        patch("gaia.llm.lemonade_client.platform.system", return_value=system),
         patch.object(client, "_default_llamacpp_backend", return_value="cpu"),
     ):
-        sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=8192)
+        sent = _sent_load(client, DEFAULT_EMBEDDING_MODEL, ctx_size=8192)
     assert sent["save_options"] is True
-    assert "llamacpp_args" not in sent
+    assert sent["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
 
 
 def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
@@ -223,6 +227,13 @@ def _health(entry):
                 "recipe_options": {"llamacpp_args": CHAT_LLAMACPP_ARGS},
             },
             3,
+        ),
+        (
+            {
+                "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "--parallel", "2"],
+            },
+            2,
         ),
         (
             {

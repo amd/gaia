@@ -325,7 +325,7 @@ function majorOf(version: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.15"). */
+  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.16"). */
   expectedApiVersion?: string;
 }
 
@@ -333,7 +333,9 @@ export interface VersionCheckOptions {
  * Fetch /version and refuse a sidecar whose apiVersion MAJOR differs from what
  * this client expects. A MAJOR bump means a breaking contract change, so we fail
  * loudly rather than send requests the server may reject or mis-handle. A higher
- * MINOR (same major) is accepted (backward-compatible additions).
+ * MINOR (same major) is accepted, but a MINOR bump can be breaking (2.3 was); see
+ * the version history in
+ * https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md#version-history
  */
 export async function checkVersion(
   client: EmailClient,

@@ -193,6 +193,35 @@ When an answer names a document from your library, the name is a link that
 opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
 6–7") opens that page. In the desktop app they open in your web browser.
 
+### Recipes, Workouts, Plans and Calculators as Cards
+
+Ask for a recipe, a workout, how to fix something, a packing list, a trip plan,
+a tip split or a loan payment, and the answer arrives as a card you can use
+rather than a wall of text. The **Try** row on a new chat fills in an example
+of each, and the first card you get carries a short tip on what it can do.
+
+| Card | What you can do with it |
+|------|------------------------|
+| **Recipe** | Change the servings and every amount rescales; switch between US and metric units; tap a time in a step to start a timer |
+| **Workout** | Tick off equipment; count sets and run hold and rest timers |
+| **How-to** | Tick off materials and tools; timers on any step with a time in it |
+| **Checklist** | Tick items off; your ticks stay when you come back to the chat |
+| **Trip plan** | A day-by-day timeline with a packing list to tick off |
+| **Tip or loan calculator** | Change any number and the tip, per-person share or monthly payment updates at once |
+
+**Start cooking**, **Start workout** and **Start** open the steps full screen,
+one at a time, with a large timer for the step. Use the arrows or the ← and →
+keys to move, and **Esc** or the **X** to leave. A running timer keeps going
+when you leave. Every card can be copied as plain text, and recipes and guides
+can be printed.
+
+> *"Give me a recipe for banana bread"*
+>
+> *"Split a $142 dinner four ways with a 20% tip"*
+
+The model fills in the card and the app does the math, so amounts and payments
+are exact even on a small local model.
+
 ### See Generated Images and Audio
 
 An image the agent generates shows in the answer; click it to see it full size.
@@ -299,11 +328,10 @@ Pick the install path that fits you best:
     </Note>
 
     <Note>
-      If you see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. For the one-line installer's environment (which has no `pip` and is not activated) that is:
+      The `gaia` from the apps and the one-line installer already includes the Agent UI. If you installed GAIA with `pip` yourself and see a missing dependencies error, run the install command it prints — it targets the Python that GAIA runs in. In an activated environment of your own that is:
 
       ```bash
-      uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[ui]"
-      # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[ui]"
+      uv pip install "amd-gaia[ui]"
       ```
     </Note>
 
@@ -475,7 +503,9 @@ system settings, the dots hold still.
   "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
-  such as a saved deliverable, open in your file explorer when clicked.
+  such as a saved deliverable, open in your file explorer when clicked. So does
+  a file the answer names only by file name, in code formatting, when it is one
+  of the files that turn wrote; two written files with the same name stay plain.
 - **A new chat** greets you and shows the folder GAIA works in.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
@@ -552,9 +582,11 @@ as you flip it:
 
 On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
 window minimizes GAIA instead, with your model still loaded. Click GAIA in the
-dock to bring it back. To quit, right-click it there and choose Quit. **Start in
+dock to bring it back, or in the Activities overview where no dock is on screen
+(Fedora). To quit, right-click it there and choose Quit. **Start in
 the tray** stays off there, because there's no tray to open the window from.
-No extension is needed.
+No extension is needed. GAIA doesn't appear under GNOME's **Background Apps**:
+that list shows Flatpak apps only.
 
 ## Models and where they run
 
@@ -566,10 +598,11 @@ Open **Settings → Model** (or the model chip in the message box):
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
-- With [Local only](/reference/cli#local-only) on (`gaia config set network_policy local_ai_only`),
-  connecting Fireworks AI or the gateway and selecting a cloud model are refused
-  with a message saying so, and a saved cloud model isn't restored. Settings has no
-  switch for it yet; use the command.
+- With [Local only](/reference/cli#local-only) on, connecting Fireworks AI or the gateway
+  and selecting a cloud model are refused, with the providers shown as blocked. Turn it
+  on or off in **Settings → Privacy → Local only**; the CLI equivalent is
+  `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
+  model isn't restored.
 - Keys are masked, go only to GAIA's local model server and your OS credential
   store, and are refused over mobile access. A saved key shows as a read-only row with
   its last four characters and whether it's connected. **Replace** swaps it, and
@@ -840,7 +873,7 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Image creation, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
-Connectors, Memory, Notifications, Privacy and Advanced (model server and
+Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
 
@@ -896,6 +929,18 @@ and a taskbar flash when GAIA isn't focused. Alerts fire whether or not the
 notification panel is open, and never for the chat you're looking at. In the
 desktop app it also keeps the PC from idle-sleeping while a chat is working; on
 battery it lets the PC sleep below the level you choose (20% by default).
+
+**Read aloud.** The speaker button on a reply reads it in a voice that runs on
+this PC through Lemonade; press it again to stop. Code blocks and links are
+skipped, so you hear the words. **Settings → Read aloud** picks the voice
+(American or British English, female or male, with **Preview**), the speed
+(0.5× to 2×), and whether every reply is read when it finishes. The voices
+speak English, so a reply in another language is read with an English accent.
+The first reading after a restart takes longer while Lemonade loads the voice.
+On a PC without the voice model, the first press downloads it once (~350 MB)
+and says so under the reply; reading starts when it finishes. (The agent's own
+`text_to_speech` tool never downloads it in the middle of a chat.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
 
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also
@@ -967,10 +1012,10 @@ Everything lives in **Settings → General → Updates** (desktop installer only
 
 An update downloads in the background, usually only the parts that changed, and
 installs with no setup wizard. Once it is ready, the corner chip offers the restart,
-whenever suits you; quitting GAIA also installs it. Before offering the restart, GAIA
-also fetches the new version's Python backend, so the first launch afterwards doesn't
-depend on the package server. A restart that would leave no working app, such as one
-with no disk space, is refused with the reason.
+whenever suits you; quitting GAIA also installs it. The update carries the new
+version's backend, so the first launch afterwards downloads nothing for it. A restart
+that would leave no working app, such as one with no disk space, is refused with the
+reason.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
@@ -1086,7 +1131,7 @@ GAIA reads every word or rejects the schedule and says what to change; it never 
 - A weekly time with no day, such as `weekly at 9am` or `every 7d at 9am`. Name the day: `every monday at 9am`.
 - Combinations that can't be honored yet: `every other tuesday`, `every 2 days at 9am`, monthly schedules, and windows that don't start and end on the hour.
 
-Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live. **Run now** runs a schedule once immediately, to try a new one without waiting for its first due time; its next scheduled run stays as it was, and the reply lands in the schedule's chat like any other run. While a run is in flight, Run now is unavailable and a timed run that comes due is skipped.
+Each schedule runs in its own chat session, so the full history of runs (prompt + response per run) is one click away via the session list. A schedule's name can't contain `/`. Pause, resume, or delete schedules from the panel; run counts and the next-run countdown update live. **Run now** runs a schedule once immediately, to try a new one without waiting for its first due time; its next scheduled run stays as it was, and the reply lands in the schedule's chat like any other run. While a run is in flight, Run now is unavailable and a timed run that comes due is skipped.
 
 Behavior notes:
 
@@ -1121,7 +1166,7 @@ policy version, and receipt ID remain attached to the assistant message.
 The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
 
 <CardGroup cols={2}>
-  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+  <Card title="Add Tools to the Agent" icon="plug" href="/sdk/sdks/mcp">
     Connect GitHub, Slack, databases, and more via MCP servers
   </Card>
 

@@ -286,7 +286,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in test_eval_agent_gemma_consolidation.yml."
+            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in eval_flagship.yml."
             exit 1
           }
 

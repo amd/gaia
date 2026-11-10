@@ -3,7 +3,8 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import * as api from '../../services/api';
+import { ApiError } from '../../services/api';
+import * as api from '../../services/imageApi';
 import { useChatStore } from '../../stores/chatStore';
 import { displayModelName, useModelNames } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
@@ -15,7 +16,7 @@ const STEP_CHOICES = [4, 8, 12, 20, 30, 50];
 const ltr = (text: string) => `⁦${text}⁩`;
 
 function errorText(err: unknown): string {
-    return err instanceof api.ApiError ? err.detail || err.message : String(err);
+    return err instanceof ApiError ? err.detail || err.message : String(err);
 }
 
 /** The model, size and steps GAIA creates images with. */
@@ -31,7 +32,7 @@ export function ImageSettings() {
     const load = () => {
         setLoadError(null);
         api.getImageSettings().then(setSettings).catch((err) => setLoadError({
-            unreachable: err instanceof api.ApiError && err.httpStatus === 503,
+            unreachable: err instanceof ApiError && err.httpStatus === 503,
             detail: errorText(err),
         }));
     };

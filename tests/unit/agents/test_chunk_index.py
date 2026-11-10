@@ -16,7 +16,6 @@ import ast
 import json
 import random
 import textwrap
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -424,10 +423,6 @@ def read_file_tool(tmp_path):
     mixin = FileIOToolsMixin()
     mixin.console = None
     mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
-    mixin._validate_python_syntax = MagicMock(
-        return_value={"is_valid": True, "errors": []}
-    )
-    mixin._parse_python_code = MagicMock()
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:

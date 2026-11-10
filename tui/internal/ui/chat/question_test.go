@@ -168,8 +168,7 @@ func TestKeysRouteToThePendingQuestion(t *testing.T) {
 	m := modelWith(t, c)
 	m = feed(t, m, needsInput())
 
-	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
-	m = updated.(ChatModel)
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
 	if cmd == nil {
 		t.Fatal("the number shortcut did not answer the question")
 	}

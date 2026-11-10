@@ -512,12 +512,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
-    const isCollapsed = collapsed && !isMobile;
+    const isCollapsed = collapsed && !phone;
     const setSidebarCollapsed = useChatStore((s) => s.setSidebarCollapsed);
     const collapse = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
     const pane = useSidebarWidth(collapse);
-    const resizable = !isMobile && !isCollapsed;
+    const resizable = !phone && !isCollapsed;
 
     const nav = [
         { key: 'memory', label: t('sidebar.memory'), icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
@@ -541,11 +540,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                 <button
                     type="button"
                     className="sb-icon-btn"
-                    onClick={isMobile ? () => setSidebarOpen(false) : toggleCollapsed}
+                    onClick={phone ? () => setSidebarOpen(false) : toggleCollapsed}
                     aria-label={isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
                     title={t.hint(isCollapsed ? t('sidebar.expand') : t('sidebar.collapse'), formatShortcut('Mod+B'))}
                 >
-                    {isMobile ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+                    {phone ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
                 </button>
             </div>
 

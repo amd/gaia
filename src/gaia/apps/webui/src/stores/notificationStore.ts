@@ -50,6 +50,9 @@ export type PermissionDecision = 'allow' | 'always' | 'deny';
 /** The prompt raised when a tool reaches outside the chat's files (security.py). */
 export const PATH_ACCESS_TOOL = 'allow_path_access';
 
+/** The prompt asking whether to read a folder's CLAUDE.md, AGENTS.md and skills. Answered per folder, never "always". */
+export const PROJECT_TRUST_TOOL = 'trust_project_folder';
+
 function pathAccessArgs(args: unknown): { target: string | null; kind: unknown } {
   const { path, kind } = (args ?? {}) as { path?: unknown; kind?: unknown };
   return { target: typeof path === 'string' && path.trim() ? path : null, kind };
@@ -98,6 +101,9 @@ export function permissionPromptText(
       question: pathAccessQuestion(args, n.pathFollowUp, t, mark),
     };
   }
+  if (n.tool === PROJECT_TRUST_TOOL) {
+    return { heading: t('prompt.trust.title'), question: t('prompt.trust.ask') };
+  }
   const tool = mark(n.toolLabel ?? n.tool ?? '');
   return {
     heading: t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
@@ -144,7 +150,8 @@ export function requiresFreshConsent(tool: string | undefined): boolean {
   return tool === 'share_engineering_context'
     || tool === 'append_engineering_context'
     || tool === 'approve_engineering_code'
-    || tool === PATH_ACCESS_TOOL;
+    || tool === PATH_ACCESS_TOOL
+    || tool === PROJECT_TRUST_TOOL;
 }
 
 /**

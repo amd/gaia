@@ -192,6 +192,12 @@ class TestExtrasInstallFailureIsLoud:
         cmd.run()
         extras.assert_not_called()
 
+    def test_the_frozen_app_installs_no_packages(self, monkeypatch):
+        """The desktop app's frozen gaia bundles its packages and has no pip."""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        cmd = InitCommand(profile="gaia", yes=True, skip_models=True)
+        assert cmd.skip_pip_extras is True
+
     def test_the_cli_parses_skip_pip_extras(self):
         from gaia.cli import build_parser
 

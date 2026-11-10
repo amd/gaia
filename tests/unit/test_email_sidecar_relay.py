@@ -34,12 +34,13 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
-from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.email_sidecar.errors import (  # noqa: E402
+from gaia.daemon.sidecars.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
+from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
+from gaia.ui.sse_handler import MODEL_RETAKE_FAILED_MESSAGE  # noqa: E402
 from gaia.ui.turn_summary import TurnLedger  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -64,12 +65,17 @@ class _FakeHandler:
         self.active_relay_response = None
         self.done_calls = 0
         self.relay_question = None
+        self.step_away_result = False
+        self.retake_result = True
 
     def _emit(self, event):
         self.events.append(event)
 
     def set_relay_question(self, request_id):
         self.relay_question = request_id
+
+    def set_relay_confirmation(self, *_args):
+        pass
 
     def record_tool_started(self, tool_name):
         self.turn_ledger.tool_started(tool_name)
@@ -84,10 +90,19 @@ class _FakeHandler:
         self.done_calls += 1
 
     def step_away_from_model(self):
-        return False
+        return self.step_away_result
 
     def come_back_to_model(self):
-        raise AssertionError("never stepped away, so never comes back")
+        if self.retake_result is False:
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": MODEL_RETAKE_FAILED_MESSAGE,
+                    "fatal": True,
+                }
+            )
+            self.cancelled.set()
+        return self.retake_result
 
 
 class _RaisingIterator:
@@ -820,6 +835,106 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+
+
+# --- Model-retake failure after an answered prompt (#6019) -------------------
+
+
+class TestModelRetakeFailure:
+    def test_retake_failure_preserves_named_terminal_error(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = False
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_confirmation",
+                    "confirm_id": "confirm-retake",
+                    "action": "send_message",
+                    "summary": "Send it?",
+                },
+                {"type": "token", "delta": "discarded"},
+                {"type": "final", "answer": "must not be discarded"},
+            )
+        )
+
+        relay.relay_query(
+            handler,
+            proxy,
+            query="q",
+            context=[],
+            run_id="rid-retake",
+            answers_confirmations=True,
+        )
+
+        errors = [e for e in handler.events if e.get("type") == "agent_error"]
+        assert errors == [
+            {
+                "type": "agent_error",
+                "content": MODEL_RETAKE_FAILED_MESSAGE,
+                "fatal": True,
+            }
+        ]
+        assert not [
+            e
+            for e in handler.events
+            if e.get("type") == "status" and e.get("message") == "Cancelled."
+        ]
+        assert not [e for e in handler.events if e.get("type") == "answer"]
+        assert proxy.cancel_calls == ["rid-retake"]
+
+    def test_user_stop_during_retake_stays_a_quiet_cancel(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = None
+        handler.cancelled.set()
+        proxy = _ScriptedProxy(_events({"type": "token", "delta": "discarded"}))
+
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-stop")
+
+        assert not [e for e in handler.events if e.get("type") == "agent_error"]
+        assert any(
+            e.get("type") == "status" and e.get("message") == "Cancelled."
+            for e in handler.events
+        )
+        assert proxy.cancel_calls == ["rid-stop"]
+
+    def test_late_user_stop_after_model_regain_emits_cancelled(self):
+        class _LateStopHandler(_FakeHandler):
+            def come_back_to_model(self):
+                self.cancelled.set()
+                return None
+
+        handler = _LateStopHandler()
+        handler.step_away_result = True
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_confirmation",
+                    "confirm_id": "confirm-late-stop",
+                    "action": "send_message",
+                    "summary": "Send it?",
+                },
+                {"type": "token", "delta": "discarded"},
+            )
+        )
+
+        relay.relay_query(
+            handler,
+            proxy,
+            query="q",
+            context=[],
+            run_id="rid-late-stop",
+            answers_confirmations=True,
+        )
+
+        assert not [e for e in handler.events if e.get("type") == "agent_error"]
+        assert [
+            e
+            for e in handler.events
+            if e.get("type") == "status" and e.get("message") == "Cancelled."
+        ] == [{"type": "status", "message": "Cancelled."}]
+        assert proxy.cancel_calls == ["rid-late-stop"]
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------

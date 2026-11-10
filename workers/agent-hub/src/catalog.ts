@@ -524,12 +524,18 @@ export function toSkillIndexEntry(
 /**
  * Rebuild `index.json` from every per-agent and per-skill manifest currently in
  * the bucket. Returns the catalog that was written (handy for tests/responses).
+ * The write is conditional, so a rebuild racing a publish re-derives rather than
+ * overwriting the other writer's entry.
  */
 export async function rebuildIndex(
   bucket: R2Bucket,
   now: Date = new Date(),
   baseUrl = "https://hub.amd-gaia.ai"
 ): Promise<CatalogIndex> {
+  return writeIndex(bucket, () => deriveIndex(bucket, now, baseUrl));
+}
+
+async function deriveIndex(bucket: R2Bucket, now: Date, baseUrl: string): Promise<CatalogIndex> {
   const ids = await listAgentIds(bucket);
   const entries: IndexEntry[] = [];
   for (const id of ids) {
@@ -574,13 +580,11 @@ export async function rebuildIndex(
 
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
-  const index: CatalogIndex = {
+  return {
     schema_version: 1,
     generated_at: now.toISOString(),
     agents: entries,
   };
-  await writeIndex(bucket, index);
-  return index;
 }
 
 /** Build a {@link VersionEntry} from a parsed manifest + stored artifact. */

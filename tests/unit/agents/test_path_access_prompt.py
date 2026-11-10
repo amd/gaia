@@ -571,11 +571,39 @@ def test_an_agent_ui_chat_is_still_offered_the_folder(layout, home):
 def test_a_terminal_nobody_is_at_is_offered_no_folder(layout, home):
     agent = _BrowseAgent(layout["scope"], SilentConsole())
 
-    with patch("gaia.agents.base.agent.terminal_is_interactive", return_value=False):
+    with patch("gaia.agents.base.console.terminal_is_interactive", return_value=False):
         refused = _browse(agent, home)
 
     assert "too broad" in refused
     assert not _named(refused, home, "Movies")
+
+
+def _unattended_sidecar():
+    console = SSEOutputHandler()
+    console.nobody_answers = True
+    return console
+
+
+@pytest.mark.parametrize(
+    "make_console, interactive, declined",
+    [
+        (SSEOutputHandler, False, False),
+        (lambda: SSEOutputHandler(background_mode=True), False, True),
+        (_unattended_sidecar, False, True),
+        (SilentConsole, True, False),
+        (SilentConsole, False, True),
+    ],
+    ids=["agent-ui", "background", "unattended-sidecar", "tty", "no-tty"],
+)
+def test_a_path_is_declined_unasked_only_when_nobody_can_answer(
+    layout, monkeypatch, make_console, interactive, declined
+):
+    monkeypatch.setattr(
+        "gaia.agents.base.console.terminal_is_interactive", lambda: interactive
+    )
+    agent = _ReadAgent(layout["scope"], make_console())
+
+    assert agent._path_access_declined(layout["other"]) is declined
 
 
 def test_full_access_on_a_background_run_is_offered_the_folder(layout, home):

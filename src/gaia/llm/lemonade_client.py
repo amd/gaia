@@ -547,9 +547,14 @@ def resolve_default_vision_model() -> Optional[str]:
     config = GaiaConfig.load()
     model = resolve_default_chat_model()
     current = config.last_model or model
-    cloud = current.startswith("claude-") or bool(cloud_model_provider(current))
+    cloud = current.startswith("claude-") or bool(
+        cloud_model_provider(current) or is_cloud_model(current)
+    )
+    # The catalog only changes the answer for an -FLM id, so only that asks it.
     if not cloud and runs_on_npu(current):
-        return None
+        if not is_cloud_model_with_catalog(current):
+            return None
+        cloud = True
     chosen = config.vision_model
     if chosen:
         return chosen
@@ -639,6 +644,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: Headroom for the BOS/EOS tokens the server adds to every input.
+_EMBED_RESERVED_TOKENS = 48
+#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
+_EMBED_MIN_CHARS_PER_TOKEN = 1.0
+#: Longest text that embeds whole. No chunk is cut longer than this.
+EMBED_MAX_CHARS = int(
+    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+)
 
 
 def preferred_llamacpp_backend() -> Optional[str]:
@@ -655,12 +668,13 @@ def preferred_llamacpp_backend() -> Optional[str]:
 def manages_embedder_backend(model_name: Optional[str]) -> bool:
     """Whether GAIA picks *model_name*'s llama.cpp backend and saves it.
 
-    macOS is left to Lemonade, which runs everything on Metal.
+    macOS is left to Lemonade, which runs everything on Metal. The embedder's
+    ubatch is saved on every platform all the same.
     """
     return platform.system() != "Darwin" and model_name in EMBEDDER_MODELS
 
 
-#: ``(base_url, model)`` pairs whose backend this process has saved on the server.
+#: ``(base_url, model)`` pairs whose embedder options this process has saved.
 _PINNED_BACKENDS: set = set()
 #: ``(base_url, model)`` pairs whose GPU load failed in this process; they go
 #: straight to the CPU backend instead of crashing the GPU one again.
@@ -3199,6 +3213,23 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
     return positive(entry.get("context_length"))
 
 
+def _json_type_name(value: Any) -> str:
+    """The JSON name for a decoded value's type, e.g. ``array`` for a list."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -3346,6 +3377,25 @@ def may_be_cloud_model(model_id: Optional[str]) -> bool:
     if not model_id or "." not in model_id:
         return False
     return not any(mr.model_id == model_id for mr in MODELS.values())
+
+
+def is_cloud_model_with_catalog(
+    model_id: Optional[str], base_url: Optional[str] = None
+) -> bool:
+    """Classify a model even before this process has read Lemonade's catalog.
+
+    Built-in, known-cloud and known-local ids incur no request. Ambiguous ids
+    read the catalog once and fail loudly if it is unavailable rather than
+    silently taking a gateway model down a local hardware path.
+    """
+    if cloud_model_provider(model_id) or is_cloud_model(model_id):
+        return True
+    # A user-added model is local by declaration even when its id contains a
+    # dot. Do not ask a stopped Lemonade server to classify it as a gateway
+    # model; callers must retain the normal local startup/setup path.
+    if not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None:
+        return False
+    return LemonadeClient(base_url=base_url, verbose=False)._is_cloud_model(model_id)
 
 
 def is_tool_calling_model(model_id: Optional[str]) -> bool:
@@ -3731,6 +3781,10 @@ class InsufficientMemoryError(LemonadeClientError):
 
 class LoadedModelMissingError(LemonadeClientError):
     """A load returned, but ``/health`` does not list the model it loaded."""
+
+
+class ContextReloadUnverifiedError(LemonadeClientError):
+    """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -5314,7 +5368,10 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         for entry in self.health_check().get("all_models_loaded", []):
-            if not _model_ids_match(entry.get("model_name"), model_name):
+            if not (
+                _model_ids_match(entry.get("model_name"), model_name)
+                or _model_ids_match(entry.get("id"), model_name)
+            ):
                 continue
             launch = entry.get("launch_command") or []
             args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""
@@ -7219,9 +7276,9 @@ class LemonadeClient:
         options, so the saved backend must be one that loads on this machine —
         and a CPU pin saved by an older GAIA is replaced by the GPU here. On
         the user's own server, where nothing is saved, it is loaded whenever
-        it isn't resident.
+        it isn't resident. On macOS only the ubatch is saved.
         """
-        if not manages_embedder_backend(model_name):
+        if model_name not in EMBEDDER_MODELS:
             return
         if self.is_users_server():
             # Nothing is saved on a server the user runs, so a reload Lemonade
@@ -7755,15 +7812,61 @@ class LemonadeClient:
         if show_all:
             url += "?show_all=true"
         catalog = self._send_request("get", url, timeout=timeout)
-        for entry in catalog.get("data", []):
-            if entry.get("id"):
-                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+        self._check_model_list_shape(catalog)
+        self.remember_model_metadata(catalog["data"])
         record_cloud_models(catalog)
         return catalog
 
+    def remember_model_metadata(self, entries: Iterable[Dict[str, Any]]) -> None:
+        """Cache ``/models`` entries already read, exactly as ``list_models`` does.
+
+        Lets ``cloud_model_provider`` name a runtime-discovered provider for these
+        ids without reading the catalog again.
+        """
+        for entry in entries:
+            if entry.get("id"):
+                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+
+    def _check_model_list_shape(self, catalog: Any) -> None:
+        """Raise ``LemonadeClientError`` unless *catalog* is ``{"data": [{...}]}``."""
+        if not isinstance(catalog, dict):
+            got = f"a JSON {_json_type_name(catalog)}"
+        elif not isinstance(catalog.get("data"), list):
+            got = (
+                f"'data' as a JSON {_json_type_name(catalog['data'])}"
+                if "data" in catalog
+                else "an object with no 'data' field"
+            )
+        else:
+            bad = next(
+                (
+                    (i, e)
+                    for i, e in enumerate(catalog["data"])
+                    if not isinstance(e, dict)
+                ),
+                None,
+            )
+            if bad is None:
+                return
+            got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
+        raise LemonadeClientError(
+            f"The model list{self._from_server()} isn't in the expected shape: "
+            f"expected an object whose 'data' is a list of model objects, got "
+            f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
+            "that it is up to date; see "
+            "https://amd-gaia.ai/docs/reference/troubleshooting"
+        )
+
     def cloud_model_provider(self, model: str) -> Optional[str]:
-        """Return the provider for a built-in or previously discovered cloud model."""
-        return cloud_model_provider(model, self._model_metadata.get(model))
+        """Return the provider for a built-in or previously discovered cloud model.
+
+        The catalog is shared across clients, so a new client still recognises a
+        model another client discovered, before it has read the catalog itself.
+        """
+        metadata = self._model_metadata.get(model)
+        if metadata is None and is_cloud_model(model):
+            metadata = {"recipe": CLOUD_RECIPE}
+        return cloud_model_provider(model, metadata)
 
     def _from_server(self) -> str:
         """`` from the model server at host:port`` for an error, or ``""``.
@@ -9364,7 +9467,7 @@ class LemonadeClient:
                 prompt=prompt,
                 load_retries=load_retries,
             )
-        if manages_embedder_backend(model_name):
+        if model_name in EMBEDDER_MODELS:
             with _PINNED_BACKENDS_LOCK:
                 _PINNED_BACKENDS.add((self.base_url, model_name))
         for listener in list(_MODEL_LOAD_LISTENERS):
@@ -9409,8 +9512,8 @@ class LemonadeClient:
                      Overrides the default value for this model.
             save_options: If True, persists ctx_size and llamacpp_args to config file.
                          Model will use these settings on future loads.
-                         Always on for an embedder whose backend GAIA picks
-                         (:func:`manages_embedder_backend`). None (the default)
+                         Always on for GAIA's embedder (``EMBEDDER_MODELS``),
+                         so Lemonade's own reloads keep its ubatch. None (the default)
                          saves whenever *ctx_size* is given, except on a server
                          the user runs.
             prompt: If True, prompt user before downloading (default: True).
@@ -9442,7 +9545,11 @@ class LemonadeClient:
         managed_embedder = manages_embedder_backend(model_name)
         users_args: Optional[str] = None
         # An embedder load saves its options; never save the chat flags.
-        if llamacpp_args is None and ctx_size is not None and not managed_embedder:
+        if (
+            llamacpp_args is None
+            and ctx_size is not None
+            and model_name not in EMBEDDER_MODELS
+        ):
             # The chat flags are a speed-up; an unreadable catalog must not
             # block the load itself, which only needs POST /load.
             try:
@@ -9499,8 +9606,9 @@ class LemonadeClient:
                 backend = "cpu"
             if backend:
                 request_data["llamacpp_backend"] = backend
-            # Saved so Lemonade's own auto-loads (``/embeddings``) use it too;
-            # never into the config of a server the user runs.
+        if model_name in EMBEDDER_MODELS:
+            # Saved so Lemonade's own auto-loads (``/embeddings``) keep the
+            # ubatch too; never into the config of a server the user runs.
             save_options = not self.is_users_server()
         elif save_options is None:
             # Lemonade's auto-load after an eviction would otherwise auto-tune
@@ -10839,7 +10947,7 @@ def initialize_lemonade(
         # Initialize for chat agent
         status = initialize_lemonade(agent="chat")
 
-        # Initialize for code agent with larger context
+        # Initialize with a larger context window
         status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
     # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
@@ -10854,23 +10962,3 @@ def initialize_lemonade(
         verbose=verbose,
         quiet=quiet,
     )
-
-
-def print_agent_profiles():
-    """Print all available agent profiles and their requirements."""
-    print("\n📋 Available Agent Profiles:\n")
-    print(f"{'Agent':<12} {'Display Name':<20} {'Context Size':<15} {'Models'}")
-    print("-" * 80)
-
-    for name, profile in AGENT_PROFILES.items():
-        models = ", ".join(profile.models) if profile.models else "None"
-        print(
-            f"{name:<12} {profile.display_name:<20} {profile.min_ctx_size:<15} {models}"
-        )
-
-    print("\n📦 Available Models:\n")
-    print(f"{'Key':<20} {'Model ID':<40} {'Type'}")
-    print("-" * 80)
-
-    for key, model in MODELS.items():
-        print(f"{key:<20} {model.model_id:<40} {model.model_type.value}")

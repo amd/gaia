@@ -44,6 +44,8 @@ var paletteCommands = []paletteCommand{
 	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
+	{"/read-aloud", "Read the last reply aloud; again (or /read-aloud stop) stops it"},
+	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/image", "Choose the image model, size and steps; /image open shows the last image"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},

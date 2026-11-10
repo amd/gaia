@@ -427,7 +427,9 @@ class FileIOToolsMixin:
         def target_of(args: Dict[str, Any]) -> Path:
             return _project_target_for(self, args)
 
-        @tool
+        # read_file, write_file and edit_file replace FileSearchToolsMixin's
+        # (and FileSystemToolsMixin's read_file) when both are composed.
+        @tool(override=True)
         def read_file(
             file_path: str,
             offset: int = 0,
@@ -1170,7 +1172,10 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of, "overwriting"))
+        @tool(
+            preflight=read_first_preflight(self, target_of, "overwriting"),
+            override=True,
+        )
         def write_file(
             file_path: str,
             content: str,
@@ -1293,7 +1298,7 @@ class FileIOToolsMixin:
                     path_validator.audit_write("write", file_path, 0, "error", str(e))
                 return {"status": "error", "error": str(e)}
 
-        @tool(preflight=read_first_preflight(self, target_of))
+        @tool(preflight=read_first_preflight(self, target_of), override=True)
         def edit_file(
             file_path: str,
             old_content: str,

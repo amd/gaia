@@ -264,6 +264,15 @@ class ModelStatus(BaseModel):
     loaded: bool = False
 
 
+class PolicyNotice(BaseModel):
+    """Structured Local only notice translated by the Agent UI."""
+
+    code: str
+    severity: Literal["info", "warning"]
+    url: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SettingsResponse(BaseModel):
     """Current user settings."""
 
@@ -272,8 +281,8 @@ class SettingsResponse(BaseModel):
     context_size: Optional[int] = (
         None  # Persisted ctx_size override; None = use default
     )
-    # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
-    # on write; legacy-stored values are reported as "goal_driven".
+    # "manual" | "goal_driven". "autonomous" is unshipped (#2005), rejected on
+    # write, and migrated to "goal_driven" when the database opens.
     agent_mode: str = "goal_driven"
     # Dynamic tool loading. Effective value: env override
     # (GAIA_DYNAMIC_TOOLS) wins when set, else ~/.gaia/config.json.
@@ -281,6 +290,13 @@ class SettingsResponse(BaseModel):
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
+    # The shared policy file, not the Agent UI database. Local only clears
+    # saved cloud selections and removes runtime cloud keys when it is enabled.
+    network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
+    policy_warnings: List[str] = Field(default_factory=list)
+    # Structured informational or warning notices for the Agent UI; the UI
+    # translates these rather than rendering backend prose verbatim.
+    policy_notices: List[PolicyNotice] = Field(default_factory=list)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -320,6 +336,14 @@ class SettingsUpdateRequest(BaseModel):
             "prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides "
             "this at runtime when set. Omit the field to leave the persisted "
             "value unchanged."
+        ),
+    )
+    network_policy: Optional[Literal["cloud_allowed", "local_ai_only"]] = Field(
+        None,
+        description=(
+            "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud "
+            "models, clears saved cloud model choices, and removes cloud keys from "
+            "GAIA's running Lemonade server. Omit to leave the policy unchanged."
         ),
     )
 
@@ -709,6 +733,8 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    # Notices from indexing files into the document library during this turn.
+    library_notices: Optional[List[str]] = None
     # The user's Stop ended this reply before it finished.
     stopped: bool = False
 

@@ -4,12 +4,13 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageSettings } from '../ImageSettings';
-import * as api from '../../../services/api';
+import { ApiError } from '../../../services/api';
+import * as api from '../../../services/imageApi';
 import { useChatStore } from '../../../stores/chatStore';
 import { useModelStore } from '../../../stores/modelStore';
 
-vi.mock('../../../services/api', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../../services/api')>();
+vi.mock('../../../services/imageApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../services/imageApi')>();
     return { ...actual, getImageSettings: vi.fn(), updateImageSettings: vi.fn() };
 });
 
@@ -86,7 +87,7 @@ describe('ImageSettings', () => {
     });
 
     it('says why it could not load or save', async () => {
-        mockedApi.updateImageSettings.mockRejectedValue(new api.ApiError('x', 422, 'Z-Image-Turbo takes the sizes 512x512', null));
+        mockedApi.updateImageSettings.mockRejectedValue(new ApiError('x', 422, 'Z-Image-Turbo takes the sizes 512x512', null));
         render(<ImageSettings />);
         fireEvent.change(await screen.findByLabelText('Size'), { target: { value: '512x512' } });
         expect((await screen.findByRole('alert')).textContent).toBe(
@@ -95,7 +96,7 @@ describe('ImageSettings', () => {
     });
 
     it('says why it could not load instead of showing empty controls', async () => {
-        mockedApi.getImageSettings.mockRejectedValue(new api.ApiError('x', 500, 'config.json is not valid JSON', null));
+        mockedApi.getImageSettings.mockRejectedValue(new ApiError('x', 500, 'config.json is not valid JSON', null));
         render(<ImageSettings />);
         expect((await screen.findByRole('alert')).textContent).toContain('config.json is not valid JSON');
         expect(screen.queryByLabelText('Model')).toBeNull();
@@ -103,7 +104,7 @@ describe('ImageSettings', () => {
 
     it('says plainly when Lemonade is not answering, and loads again on Try again', async () => {
         const raw = "Could not read the image models from Lemonade at http://127.0.0.1:13305/api/v1: HTTPConnectionPool(host='127.0.0.1')";
-        mockedApi.getImageSettings.mockRejectedValueOnce(new api.ApiError('x', 503, raw, null));
+        mockedApi.getImageSettings.mockRejectedValueOnce(new ApiError('x', 503, raw, null));
         render(<ImageSettings />);
         const alert = await screen.findByRole('alert');
         expect(alert.textContent).toContain("Lemonade isn't answering");
