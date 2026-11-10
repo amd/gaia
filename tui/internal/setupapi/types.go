@@ -33,6 +33,29 @@ type Plan struct {
 	// VisionModel is the model the user chose to read images; nil is GAIA's
 	// choice.
 	VisionModel *string `json:"vision_model"`
+	// NPU is whether this PC has a Ryzen AI NPU and whether it can run a model
+	// yet, as the backend's own checks in npu_linux.py see it.
+	NPU NPU `json:"npu"`
+}
+
+// NPU is the plan's "npu" field: present is whether Lemonade reports one on
+// this PC at all, ready whether it can load a model today, and Problems what
+// stops it when it can't (an empty list when nothing does).
+//
+// A model that needs the NPU and finds it present but not ready is not a model
+// to drop: it is one to set the NPU up for. Only absent is "this PC has none".
+type NPU struct {
+	Present  bool         `json:"present"`
+	Ready    bool         `json:"ready"`
+	Problems []NPUProblem `json:"problems"`
+}
+
+// NPUProblem is one reason the NPU can't load a model yet, in words to show:
+// npu_linux.NpuProblem as the plan sends it.
+type NPUProblem struct {
+	Code  string `json:"code"`
+	Title string `json:"title"`
+	Fix   string `json:"fix"`
 }
 
 // Component is something setup fetches that isn't a model. SizeGB is nil when
