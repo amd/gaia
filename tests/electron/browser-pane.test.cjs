@@ -187,6 +187,16 @@ describe("tabs", () => {
     expect(wc.closeDevTools).toHaveBeenCalled();
   });
 
+  test("a page's Bluetooth device request is cancelled, never answered with a device", () => {
+    const { host } = makeHost();
+    const wc = viewOf(host, host.openTab("https://a.test/")).webContents;
+    const event = { preventDefault: jest.fn() };
+    const callback = jest.fn();
+    wc.emit("select-bluetooth-device", event, [{ deviceId: "AA:BB", deviceName: "Headset" }], callback);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(callback).toHaveBeenCalledWith("");
+  });
+
   test("Cmd or Ctrl+Shift+B inside a page asks the window to toggle the pane", () => {
     const { host, deps } = makeHost();
     const wc = viewOf(host, host.openTab("https://a.test/")).webContents;

@@ -1549,6 +1549,11 @@ class PaneHost {
     wc.on("will-prevent-unload", (event) => {
       if (live()) this.onPreventUnload(tab, event);
     });
+    // Unhandled, Electron picks the first device it finds; the pane offers none.
+    wc.on("select-bluetooth-device", (event, _devices, callback) => {
+      event.preventDefault();
+      callback("");
+    });
     wc.on("did-start-loading", update(() => { s.loading = true; }));
     wc.on("did-stop-loading", update(() => {
       s.loading = false;

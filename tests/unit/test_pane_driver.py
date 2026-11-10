@@ -491,3 +491,38 @@ def test_a_picked_element_is_acted_on_by_its_pick_stamp_in_the_main_frame(
     }
     # No snapshot first: a pick ref does not come from one.
     assert "evaluate" not in bridge.ops()
+
+
+# ------------------------------------------------------------ label reads
+
+
+@pytest.mark.parametrize("name", ["_PICK_LABEL_JS", "_LIVE_LABEL_JS"])
+def test_a_label_read_never_carries_a_password_fields_value(name):
+    """The confirmation gate's label reads skip a password's value, as the snapshot does."""
+    import shutil
+    import subprocess
+
+    from gaia.browser import pane_driver
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("needs node to run the page script")
+    script = getattr(pane_driver, name)
+    harness = f"""
+const make = (type) => ({{
+  tagName: "INPUT", type, value: "hunter2", innerText: "",
+  getAttribute: (n) => (n === "aria-label" ? "Sign-in secret" : null),
+}});
+let el;
+const document = {{ querySelector: () => el }};
+const read = {script};
+const out = [];
+for (const type of ["password", "PassWord", "text"]) {{ el = make(type); out.push(read("#x")); }}
+console.log(JSON.stringify(out));
+"""
+    result = subprocess.run(
+        [node, "-e", harness], capture_output=True, text=True, timeout=30, check=True
+    )
+    password, mixed_case, text = json.loads(result.stdout)
+    assert password == mixed_case == "Sign-in secret"
+    assert text == "Sign-in secret / hunter2"

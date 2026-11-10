@@ -58,7 +58,8 @@ from gaia.browser.snapshot import (
 _PICK_LABEL_JS = """(sel) => {
   const el = document.querySelector(sel);
   if (!el) return "";
-  const parts = [el.getAttribute("aria-label"), el.innerText, el.value, el.getAttribute("title")];
+  const secret = el.tagName === "INPUT" && String(el.type || "").toLowerCase() === "password";
+  const parts = [el.getAttribute("aria-label"), el.innerText, secret ? null : el.value, el.getAttribute("title")];
   const label = [...new Set(parts.filter((p) => typeof p === "string" && p.trim()))].join(" / ");
   return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
 }"""
@@ -108,7 +109,8 @@ class ScriptResult:
 _LIVE_LABEL_JS = """(sel) => {
   const el = document.querySelector(sel);
   if (!el) return null;
-  const parts = [el.getAttribute("aria-label"), el.innerText, el.value, el.getAttribute("title")];
+  const secret = el.tagName === "INPUT" && String(el.type || "").toLowerCase() === "password";
+  const parts = [el.getAttribute("aria-label"), el.innerText, secret ? null : el.value, el.getAttribute("title")];
   const label = [...new Set(parts.filter((p) => typeof p === "string" && p.trim()))].join(" / ");
   return String(label).replace(/\\s+/g, " ").trim().slice(0, 120);
 }"""

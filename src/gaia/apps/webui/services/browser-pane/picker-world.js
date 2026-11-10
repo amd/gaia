@@ -99,9 +99,13 @@
       ? labelled.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => n.innerText).join(" ")
       : "";
     const fromLabel = el.labels && el.labels.length ? el.labels[0].innerText : "";
+    // A password field is named by its label or placeholder, never by what was typed.
+    const secret = el.tagName.toLowerCase() === "input" && String(el.type || "").toLowerCase() === "password";
     return oneLine(
       el.getAttribute("aria-label") || byId || fromLabel || el.getAttribute("alt") || el.getAttribute("title") ||
-        (["input", "select", "textarea"].includes(el.tagName.toLowerCase()) ? el.getAttribute("placeholder") || el.value : el.innerText),
+        (["input", "select", "textarea"].includes(el.tagName.toLowerCase())
+          ? el.getAttribute("placeholder") || (secret ? "" : el.value)
+          : el.innerText),
       maxName
     );
   }

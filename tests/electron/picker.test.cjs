@@ -277,3 +277,32 @@ describe("PaneHost and the picker", () => {
     expect(isPickShortcut({ type: "keyDown", meta: true, shift: false, alt: false, key: "s" })).toBe(false);
   });
 });
+
+describe("the name a picked element is given", () => {
+  // nameOf as picker-world.js defines it, run against plain objects.
+  const source = fs.readFileSync(path.join(PANE, "picker-world.js"), "utf8");
+  const body = source.match(/ {2}function nameOf\(el\) \{[\s\S]*?\r?\n {2}\}\r?\n/)[0];
+  const oneLine = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
+  const nameOf = new Function("document", "maxName", "oneLine", `${body}\nreturn nameOf;`)(
+    { getElementById: () => null },
+    120,
+    oneLine
+  );
+  const input = (type, value, attrs = {}) => ({
+    tagName: "INPUT",
+    type,
+    value,
+    labels: [],
+    innerText: "",
+    getAttribute: (name) => (name in attrs ? attrs[name] : null),
+  });
+
+  test("a password field never reads out what was typed", () => {
+    expect(nameOf(input("password", "hunter2"))).toBe("");
+    expect(nameOf(input("PASSWORD", "hunter2", { placeholder: "Password" }))).toBe("Password");
+  });
+
+  test("any other field still falls back to its value", () => {
+    expect(nameOf(input("text", "Ada Lovelace"))).toBe("Ada Lovelace");
+  });
+});
