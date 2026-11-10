@@ -58,3 +58,63 @@ def test_missing_npx_logs_below_warning(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG):
         assert Context7Service.check_availability() is False
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def _write(path, size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * size)
+
+
+def _cache_lines(out):
+    """The rows of the GAIA caches section, without the header."""
+    section = out.split("=== GAIA caches", 1)[1].split("===", 2)[1]
+    return [line.split() for line in section.strip().splitlines() if line.strip()]
+
+
+def test_status_lists_every_cache_folder_with_its_size(
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog
+):
+    """#3221: status named only Context7 and printed no sizes."""
+    cache = tmp_path / ".gaia" / "cache"
+    _write(cache / "rag" / "doc.bin", 2048)
+    _write(cache / "rag" / "nested" / "more.bin", 1024)
+    _write(cache / "context7" / "library_x.json", 10)
+
+    _status(monkeypatch, True, caplog)
+    out = capsys.readouterr().out
+
+    assert f"=== GAIA caches ({cache}) ===" in out
+    assert _cache_lines(out) == [
+        ["rag", "3.0", "KB", "2", "files"],
+        ["context7", "10", "B", "1", "file"],
+        ["Total", "3.0", "KB", "3", "files"],
+    ]
+    assert "Context7 is AVAILABLE" in out, "the Context7 status still follows"
+
+
+def test_status_says_so_when_there_are_no_caches_yet(
+    isolated_cache, monkeypatch, capsys, caplog
+):
+    _status(monkeypatch, True, caplog)
+
+    assert "No caches yet." in capsys.readouterr().out
+
+
+def test_status_does_not_follow_a_link_out_of_the_cache(
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog
+):
+    elsewhere = tmp_path / "models"
+    _write(elsewhere / "huge.bin", 4096)
+    cache = tmp_path / ".gaia" / "cache"
+    _write(cache / "rag" / "doc.bin", 100)
+    try:
+        (cache / "models-link").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink without privileges")
+
+    _status(monkeypatch, True, caplog)
+
+    assert _cache_lines(capsys.readouterr().out) == [
+        ["rag", "100", "B", "1", "file"],
+        ["Total", "100", "B", "1", "file"],
+    ]
