@@ -26,6 +26,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 
