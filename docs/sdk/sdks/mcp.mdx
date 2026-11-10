@@ -220,6 +220,22 @@ The config format follows the [MCP client configuration](https://modelcontextpro
 If you already have an MCP config from another client (e.g. Claude Desktop), you can copy it directly.
 </Tip>
 
+Sessions the GAIA daemon hosts run from the daemon's own folder, so they read only the global file. `$GAIA_HOME/mcp_servers.json` replaces `~/.gaia/mcp_servers.json` when `GAIA_HOME` is set.
+
+### Timeouts
+
+A request waits 30 seconds for the server's reply, and GAIA waits 10 seconds for all servers to connect. A server that starts slowly (an `npx -y` or `uvx` package that downloads on first use) can set its own `timeout` (seconds, at most 600), which raises both. The connect wait is the longest `timeout` any server sets.
+
+```json
+"github": {
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-github"],
+  "timeout": 120
+}
+```
+
+A tool call waits for the longer of the server's `timeout` and the agent's per-tool limit less 5 seconds (`GAIA_AGENT_TOOL_TIMEOUT`, 180 seconds by default). Inside an agent turn the agent's limit still applies, so for a tool that needs longer, raise `GAIA_AGENT_TOOL_TIMEOUT` as well.
+
 ### Using config in your agent
 
 By default, `MCPClientMixin.__init__()` auto-loads both config files:
@@ -376,6 +392,16 @@ command for that is planned ([#977](https://github.com/amd/gaia/issues/977)).
 2. **Check permissions** — Understand what system access the server requires
 3. **Limit scope** — Restrict filesystem servers to specific directories rather than `/`
 4. **Audit environment variables** — Never pass secrets to servers you haven't reviewed
+
+### Tool confirmation
+
+GAIA asks you to confirm each MCP tool call before it runs, because a prompt injection hidden in a document, email, or web page can make the model emit a call you never intended. The gate fails closed: a tool skips confirmation only when its server declares `annotations.readOnlyHint: true` and the tool name has no mutating verb (`delete_file` still prompts). Servers with no annotations get no benefit of the doubt.
+
+<Warning>
+The name check catches servers that annotate incorrectly. It is not a defence against a malicious server, so vetting remains the control for that.
+</Warning>
+
+The Agent UI shows a permission modal, where **Allow this tool for the rest of this chat** lasts until you reload or restart GAIA; **Settings → Tools & Permissions** lists active grants. The CLI asks on the terminal and defaults to no. A run with no terminal to ask refuses the tool.
 
 ---
 

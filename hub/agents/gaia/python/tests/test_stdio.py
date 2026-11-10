@@ -13,8 +13,10 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from gaia_agent import stdio
@@ -1837,8 +1839,48 @@ def test_the_pump_queues_the_sentinel_even_when_stdin_itself_raises(monkeypatch)
 # ---------------------------------------------------------------------------
 #
 # tui/internal/client/factory.go pins these spellings as literal Go string
-# constants and the catalog appends --json-events. A rename passes every other
+# constants and the catalog appends --dev. A rename passes every other
 # Python test here and fails at spawn as a generic "exited (code 2)".
+
+#: tests/ -> python/ -> gaia/ -> agents/ -> hub/ -> repo root
+_TUI = Path(__file__).resolve().parents[5] / "tui" / "internal"
+
+
+def _go_flags_passed_to_the_flagship() -> dict:
+    """Every argv flag the Go TUI can hand the flagship, keyed by source file."""
+    factory = (_TUI / "client" / "factory.go").read_text(encoding="utf-8")
+    subprocess_go = (_TUI / "client" / "subprocess.go").read_text(encoding="utf-8")
+    catalog = (_TUI / "catalog" / "catalog.go").read_text(encoding="utf-8")
+    appended = r'append\([^\n]*?"(--[\w-]+)"'
+    return {
+        "factory.go consts": re.findall(
+            r'^const \w+Flag = "(--[\w-]+)"', factory, re.MULTILINE
+        ),
+        "factory.go appends": re.findall(appended, factory),
+        "subprocess.go appends": re.findall(appended, subprocess_go),
+        "catalog.go args": [
+            flag
+            for group in re.findall(
+                r"(?:BinaryArgs|DevArgs):\s*\[\]string\{([^}]*)\}", catalog
+            )
+            for flag in re.findall(r'"(--[\w-]+)"', group)
+        ],
+    }
+
+
+def test_the_parser_declares_every_flag_the_go_side_passes():
+    by_source = _go_flags_passed_to_the_flagship()
+    empty = [source for source, flags in by_source.items() if not flags]
+    assert not empty, f"no flags found in {empty}; the Go source moved"
+
+    parser = stdio.build_parser()
+    declared = {opt for action in parser._actions for opt in action.option_strings}
+    unknown = {
+        source: sorted(set(flags) - declared)
+        for source, flags in by_source.items()
+        if set(flags) - declared
+    }
+    assert not unknown, f"the Go TUI passes flags gaia_agent.stdio rejects: {unknown}"
 
 
 def test_the_parser_accepts_the_spellings_the_go_side_pins():

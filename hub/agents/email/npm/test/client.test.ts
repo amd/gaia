@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 /** Client request/response typing + error behavior, against a fake fetch. */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { EmailClient } from "../src/client.js";
@@ -705,5 +707,88 @@ describe("EmailClient", () => {
     }) as unknown as typeof fetch;
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     await client.health();
+  });
+});
+
+describe("EmailClient routes match openapi.email.json", () => {
+  const spec = JSON.parse(
+    readFileSync(new URL("../../python/openapi.email.json", import.meta.url), "utf8"),
+  ) as { paths: Record<string, Record<string, unknown>> };
+
+  // Served outside the exported email router: root probes, FastAPI's own
+  // document, and the include_in_schema=False HTML spec page.
+  const outsideTheArtifact = new Set([
+    "GET /health",
+    "GET /version",
+    "GET /openapi.json",
+    "GET /v1/email/spec",
+  ]);
+  const privateMethods = new Set(["constructor", "get", "post", "request", "requestRaw"]);
+
+  // Every public method, so a new one cannot skip this check.
+  const calls: Record<string, (c: EmailClient) => Promise<unknown>> = {
+    triage: (c) => c.triage({} as EmailTriageRequest),
+    triageBatch: (c) => c.triageBatch({} as BatchTriageRequest),
+    search: (c) => c.search({} as never),
+    prescan: (c) => c.prescan({} as never),
+    draft: (c) => c.draft({} as never),
+    send: (c) => c.send({} as never),
+    confirmAction: (c) => c.confirmAction({} as never),
+    archive: (c) => c.archive({} as never),
+    unarchive: (c) => c.unarchive({} as never),
+    quarantine: (c) => c.quarantine({} as never),
+    unquarantine: (c) => c.unquarantine({} as never),
+    listCalendarEvents: (c) => c.listCalendarEvents({ timeMin: "2026-01-01T00:00:00Z" }),
+    previewCalendarEvent: (c) => c.previewCalendarEvent({} as never),
+    createCalendarEvent: (c) => c.createCalendarEvent({} as never),
+    respondToCalendarEvent: (c) => c.respondToCalendarEvent({} as never),
+    query: (c) => c.query({} as never).next(),
+    respondToQuery: (c) => c.respondToQuery("run-1", "req-1", "yes"),
+    cancelQuery: (c) => c.cancelQuery("run-1"),
+    init: (c) => c.init(),
+    health: (c) => c.health(),
+    version: (c) => c.version(),
+    emailHealth: (c) => c.emailHealth(),
+    emailVersion: (c) => c.emailVersion(),
+    spec: (c) => c.spec(),
+    openapi: (c) => c.openapi(),
+  };
+
+  function specHas(method: string, path: string): boolean {
+    return Object.entries(spec.paths).some(
+      ([template, item]) =>
+        new RegExp(`^${template.replace(/\{[^}]+\}/g, "[^/]+")}$`).test(path) &&
+        method.toLowerCase() in item,
+    );
+  }
+
+  it("covers every public client method", () => {
+    const methods = Object.getOwnPropertyNames(EmailClient.prototype).filter(
+      (name) => !privateMethods.has(name),
+    );
+    expect(methods.sort()).toEqual(Object.keys(calls).sort());
+  });
+
+  it("sends every request to a method and path the sidecar declares", async () => {
+    const requests: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      requests.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+
+    for (const [name, call] of Object.entries(calls)) {
+      const before = requests.length;
+      // Only the outgoing request matters here; {} fails most response checks.
+      await call(client).catch(() => undefined);
+      expect(requests.length, `${name} sent no request`).toBeGreaterThan(before);
+    }
+
+    const undeclared = requests.filter((r) => {
+      if (outsideTheArtifact.has(r)) return false;
+      const [method, path] = r.split(" ");
+      return !specHas(method!, path!);
+    });
+    expect(undeclared).toEqual([]);
   });
 });
