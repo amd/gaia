@@ -447,9 +447,10 @@ async def upload_document_blob(
 
         # 5. Dedup by hash — if this content is already indexed, return the
         # existing doc and discard the partial. Fast path for "user dropped
-        # the same file twice."
+        # the same file twice." A row whose file is gone falls through, so
+        # add_document re-points it at this copy.
         existing = db.get_document_by_hash(file_hash)
-        if existing:
+        if existing and Path(existing.get("filepath") or "").is_file():
             logger.info(
                 "Blob upload dedup: %s matches existing doc %s",
                 display_name,

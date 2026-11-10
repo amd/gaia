@@ -169,6 +169,8 @@ class SkillTool:
     parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
     returns: Optional[dict[str, Any]] = None
     atomic: bool = False
+    #: Every call waits for the user's approval; no grant pre-authorizes it.
+    requires_confirmation: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to the frontmatter shape."""
@@ -180,6 +182,8 @@ class SkillTool:
             out["returns"] = dict(self.returns)
         if self.atomic:
             out["atomic"] = self.atomic
+        if self.requires_confirmation:
+            out["requires_confirmation"] = self.requires_confirmation
         return out
 
     @classmethod
@@ -234,6 +238,7 @@ class SkillTool:
             parameters=parameters,
             returns=dict(returns) if returns is not None else None,
             atomic=bool(data.get("atomic", False)),
+            requires_confirmation=bool(data.get("requires_confirmation", False)),
         )
 
 

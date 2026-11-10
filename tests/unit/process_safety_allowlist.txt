@@ -13,7 +13,7 @@ src/gaia/agents/base/console.py:swallowed_exception 1
 src/gaia/agents/base/tools.py:swallowed_exception 1
 src/gaia/agents/tools/browser_use_tools.py:swallowed_exception 1
 src/gaia/browser/driver.py:swallowed_exception 8
-src/gaia/cli.py:subprocess_no_timeout 3
+src/gaia/cli.py:subprocess_no_timeout 2
 src/gaia/cli_agent.py:subprocess_no_timeout 1
 src/gaia/daemon/forward.py:swallowed_exception 1
 src/gaia/eval/analyze_failures.py:swallowed_exception 1

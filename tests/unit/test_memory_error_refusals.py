@@ -23,20 +23,24 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
 
+from gaia import security
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools.browser_tools import BrowserToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.agents.tools.file_monitor_tools import FileToolsMixin
+from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
@@ -173,6 +177,78 @@ class TestRefusalsAreNotStored:
         assert mixin.indexed_files == set()
 
         host.run("index_document", {"file_path": str(doc)}, refusal)
+
+        assert _stored_errors(store) == []
+
+    @pytest.mark.parametrize(
+        "tool_name, args",
+        [
+            ("browse_directory", {"path": "{outside}"}),
+            ("tree", {"path": "{outside}"}),
+            ("file_info", {"path": "{doc}"}),
+            ("find_files", {"query": "notes", "scope": "{outside}"}),
+            ("read_file", {"file_path": "{doc}"}),
+            ("bookmark", {"action": "add", "path": "{doc}"}),
+            ("bookmark", {"action": "remove", "path": "{doc}"}),
+        ],
+    )
+    def test_a_refused_filesystem_path_is_not_stored(
+        self, host, store, tmp_path, tool_name, args
+    ):
+        allowed = tmp_path / "work"
+        allowed.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        doc = outside / "notes.txt"
+        doc.write_text("secret")
+        args = {k: v.format(outside=outside, doc=doc) for k, v in args.items()}
+        mixin = FileSystemToolsMixin()
+        mixin._path_validator = PathValidator(allowed_paths=[str(allowed)])
+        mixin._bookmarks = {}
+        mixin._bookmark_index = lambda: None
+        with _registered(mixin, "register_filesystem_tools") as registry:
+            refusal = registry[tool_name]["function"](**args)
+        assert refusal["status"] == "error", refusal
+        assert refusal["executed"] is False
+        assert refusal["error"].startswith("Access denied")
+        assert "secret" not in str(refusal)
+
+        host.run(tool_name, args, refusal)
+
+        assert _stored_errors(store) == []
+
+    @pytest.mark.parametrize("screen_refuses", [False, True])
+    def test_a_refused_download_is_not_stored(
+        self, host, store, tmp_path, monkeypatch, screen_refuses
+    ):
+        allowed = tmp_path / "work"
+        allowed.mkdir()
+        protected = tmp_path / "protected"
+        protected.mkdir()
+        monkeypatch.setattr(
+            security,
+            "BLOCKED_DIRECTORIES",
+            security.BLOCKED_DIRECTORIES | {str(protected.resolve())},
+        )
+        validator = PathValidator(allowed_paths=[str(allowed)])
+
+        class _Client:
+            def download(self, url, save_dir, filename, on_path_resolved):
+                on_path_resolved(Path(save_dir) / "credentials.json")
+                raise AssertionError("the screen must refuse first")
+
+        mixin = BrowserToolsMixin()
+        mixin._path_validator = validator
+        mixin._web_client = _Client()
+        save_to = allowed if screen_refuses else protected
+        with _registered(mixin, "register_browser_tools") as registry:
+            refusal = registry["download_file"]["function"](
+                url="https://example.test/f", save_to=str(save_to)
+            )
+        assert refusal["status"] == "error", refusal
+        assert refusal["executed"] is False
+
+        host.run("download_file", {"save_to": str(save_to)}, refusal)
 
         assert _stored_errors(store) == []
 
