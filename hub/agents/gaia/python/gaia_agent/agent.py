@@ -402,8 +402,9 @@ class GaiaAgent(
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
         {"install_skill", "capture_skill", "remove_skill"}
     )
-    # The calendar skill ships in this agent's bundled skills.
+    # The calendar and send-email skills ship in this agent's bundled skills.
     BUNDLES_CALENDAR_SKILL: ClassVar[bool] = True
+    BUNDLES_SEND_EMAIL_SKILL: ClassVar[bool] = True
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         if config is not None and kwargs:
