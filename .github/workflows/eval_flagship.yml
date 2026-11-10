@@ -44,9 +44,8 @@
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
-# lab-runner convention shared by test_email_agent_eval.yml and
-# email_scorecard_refresh.yml. Do NOT reintroduce
-# bash here: this workflow's first-ever execution died instantly on
+# lab-runner convention shared by email_scorecard_refresh.yml. Do NOT
+# reintroduce bash here: this workflow's first-ever execution died instantly on
 # `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
 # every other bash step in the job hit the same parser. Windows also breaks the
 # text-processing assumptions bash invites — the eval prints an `Output:` line
@@ -69,9 +68,7 @@
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
 # `::warning::` and returns 0 rather than pretending the regression did not
-# happen, and test_email_agent_eval.yml ships its gates in report mode until the
-# bars are trustworthy. Same idea, inverted default: report unless asked to
-# enforce.
+# happen. Same idea, inverted default: report unless asked to enforce.
 #
 # REPORT MODE COVERS "WORSE" AND "DIDN'T MEASURE" ALIKE — VISIBLY. `--compare`
 # scores only scenarios present on BOTH sides: scenarios that vanish from the
@@ -119,13 +116,12 @@
 # PREREQUISITES ON THE RUNNER. Lemonade is NOT assumed to be already running:
 # install-lemonade pins the runner to the expected LEMONADE_VERSION and
 # ensure-lemonade-running.ps1 starts it as a persistent Scheduled Task and warms
-# the model — exactly what test_email_agent_eval.yml and
-# email_scorecard_refresh.yml do. (An earlier revision of this file claimed those
-# two workflows assume a persistent server and start nothing; they do not, and
-# that claim is what left this job with no way to bring Lemonade up.) The GAIA UI
-# backend is separate and NOT persistent, so this workflow starts it itself — in
-# the SAME shell session as the evals, because a backgrounded child does not
-# survive a GitHub Actions step boundary.
+# the model — exactly what email_scorecard_refresh.yml does. (An earlier
+# revision of this file claimed the lab workflows assume a persistent server and
+# start nothing; they do not, and that claim is what left this job with no way
+# to bring Lemonade up.) The GAIA UI backend is separate and NOT persistent, so
+# this workflow starts it itself — in the SAME shell session as the evals,
+# because a backgrounded child does not survive a GitHub Actions step boundary.
 #
 # Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
 # only the chat model, but rag_quality and context_retention answer out of RAG
@@ -242,9 +238,8 @@ on:
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
 # split would buy nothing — the same shape as the phantom-job bug this repo has
-# already paid for once (a caller holding the group its callee needed; see
-# test_email_agent_eval.yml). Each lane declares its own group at job level,
-# where `matrix.lane` is in scope.
+# already paid for once (a caller holding the group its callee needed). Each
+# lane declares its own group at job level, where `matrix.lane` is in scope.
 #
 # `lemonade-eval` is gone from this file on purpose and must not come back. It
 # serialises by NAME across machines, which is right for the persistent pool the
@@ -314,22 +309,22 @@ env:
   # (httpx/requests in the eval, the agents and the backend); PowerShell's
   # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.
   NO_PROXY: 'localhost,127.0.0.1'
-  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself. Mirrors
-  # test_email_agent_eval.yml so the preflight probe and the agents agree.
+  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself, so the
+  # preflight probe and the agents agree.
   LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
   # The eval prints box-drawing characters and em dashes; the runner's default
   # console codepage is cp1252 and Python dies on the first one without this.
   PYTHONIOENCODING: 'utf-8'
   # Connector resolution blocks on the OS keyring in a headless runner, which
-  # hangs agent construction. Same guard as test_email_agent_eval.yml.
+  # hangs agent construction.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
   # The default for every lane; the memory and gaia_* lanes override all three at
   # job level (util/eval_lane_matrix.py).
   # Long-term memory surviving between categories makes a later category's score
-  # depend on an earlier one's run order (convention: test_chat_agent.yml,
-  # test_email_agent_eval.yml). The memory lane is the one place that state IS
-  # the subject, and it can opt back in safely because every category runs on
-  # its own fresh GAIA home (see the run step). Do not rely on the machine being
+  # depend on an earlier one's run order (convention: test_chat_agent.yml).
+  # The memory lane is the one place that state IS the subject, and it can opt
+  # back in safely because every category runs on its own fresh GAIA home (see
+  # the run step). Do not rely on the machine being
   # wiped: the runner's ~/.gaia survived between runs and leaked memory (rc16).
   #
   # Do NOT flip these here. Workflow scope would re-enable memory for every lane
@@ -751,7 +746,7 @@ jobs:
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
-    # found'. Same guard as test_email_agent_eval.yml.
+    # found'.
     #
     # `strix-halo` pins the SoC, and that is a correctness requirement, not a
     # preference: the pool spans Strix Point boxes as well (sjlab-stx-1,

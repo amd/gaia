@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -37,9 +37,23 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+let unhandled: string[] = [];
+
+/** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
+async function expectNoFixtureGap(page: Page): Promise<void> {
+    await expect(page.locator('body'), 'a screen shows a missing fixture').not.toContainText('no fixture for');
+}
+
+test.afterEach(async ({ page }) => {
+    const seen = unhandled;
+    unhandled = [];
+    expect(seen, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+    await expectNoFixtureGap(page);
+});
+
 async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await before?.(page);
     await useTheme(page, theme);
     await useLocale(page, locale);
@@ -398,13 +412,14 @@ for (const [title, locale, name] of [
 ] as const) {
     test(title, async ({ page }, info) => {
         await open(page, '', locale);
-        await page.route('**/api/files/upload', (route) =>
+        await page.route((url) => url.pathname === '/api/files/upload-media', (route) =>
             route.fulfill({
                 json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
             }),
         );
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
-        await expect(page.locator('.composer-attachment-state')).toBeVisible();
+        await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
+        await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -957,6 +972,7 @@ const leftoverEnglish = (root: Page) =>
 
 /** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
 async function shot(page: Page, name: string): Promise<void> {
+    await expectNoFixtureGap(page);
     const dir = process.env.GAIA_VISUAL_SHOTS;
     if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
 }
@@ -2165,7 +2181,10 @@ const WINDOW_CONTROLS_W = 138;
 
 for (const locale of ['ar', 'en']) {
     test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
-        await open(page, '', locale, withWindowsControls);
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await withoutFlagship(p);
+        });
         await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
         const notice = page.locator('.app-notice').first();
         await expect(notice.getByRole('button')).toBeVisible();
@@ -2212,7 +2231,7 @@ for (const locale of ['ar', 'en']) {
 }
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
-    await open(page);
+    await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
