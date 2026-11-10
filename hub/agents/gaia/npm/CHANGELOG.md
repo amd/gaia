@@ -8,9 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
-- **GAIA sounds more like a person.** Replies use contractions and match how
-  you write, with at most one emoji and only for tone, never in an error.
-  On Discord the emoji becomes a reaction on your message instead.
+- **GAIA uses emoji only when there's feeling.** A plain question gets none.
+  On Discord, the emoji becomes a reaction on your message, and replies there
+  read like a person texting.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
@@ -39,6 +39,16 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
+- **The agent leaves a locked file alone.** It no longer edits or unlocks a
+  file another program, the OS or you have locked; it says how to release the
+  lock and asks first, on every model and in any folder.
+- **`/index` reads a file outside the working folder, and `/resume` counts
+  only what loaded** (#6978). `/index <file>` grants the file it names before
+  indexing it, so a PDF elsewhere on disk indexes instead of being refused.
+  `/index <folder>` skips symbolic links and protected files such as
+  `credentials.json`, and `/index` refuses a protected file named directly.
+  `/resume` reports "N of M documents" and keeps only the documents that
+  actually indexed.
 - **The agent follows GAIA's own tool hints and tasks you paste, but not
   instructions planted in content.** Text in documents, pages, files, emails and
   other tool output still can't make it call a tool or dictate a reply, and a
