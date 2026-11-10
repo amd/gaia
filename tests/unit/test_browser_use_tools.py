@@ -969,3 +969,26 @@ def test_the_pane_skill_refuses_on_an_agent_that_would_not_ask(tmp_path):
         refusal = module._PanePreflight("browser_press")({"key": "Enter"})
     assert refusal["status"] == "error"
     assert "does not ask the user" in refusal["error"]
+
+
+# --- saved sign-in lookup ---------------------------------------------------
+
+
+def test_a_site_with_a_session_this_run_is_reported_signed_in():
+    a = _Agent()
+    a._authenticated_origins().add("https://bank.example")
+    assert a.browser_origin_is_authenticated("https://bank.example/accounts") is True
+    assert a.browser_origin_is_authenticated("https://other.example") is False
+
+
+def test_a_string_that_is_not_a_site_has_no_session():
+    assert _Agent().browser_origin_is_authenticated("not a url") is False
+
+
+def test_an_unexpected_lookup_failure_is_not_read_as_signed_out(monkeypatch):
+    def _broken(url):
+        raise RuntimeError("session store is broken")
+
+    monkeypatch.setattr(session_store, "origin_of", _broken)
+    with pytest.raises(RuntimeError, match="session store is broken"):
+        _Agent().browser_origin_is_authenticated("https://bank.example")

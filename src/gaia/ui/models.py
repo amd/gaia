@@ -283,8 +283,8 @@ class SettingsResponse(BaseModel):
     context_size: Optional[int] = (
         None  # Persisted ctx_size override; None = use default
     )
-    # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
-    # on write; legacy-stored values are reported as "goal_driven".
+    # "manual" | "goal_driven". "autonomous" is unshipped (#2005), rejected on
+    # write, and migrated to "goal_driven" when the database opens.
     agent_mode: str = "goal_driven"
     # Dynamic tool loading. Effective value: env override
     # (GAIA_DYNAMIC_TOOLS) wins when set, else ~/.gaia/config.json.

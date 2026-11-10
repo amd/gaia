@@ -1475,14 +1475,14 @@ class RAGToolsMixin:
                                 "error": (
                                     f"File '{file_path}' not found in indexed documents "
                                     f"and does not exist on disk. "
-                                    f"Use search_files to find it first."
+                                    f"Use search_file to find it first."
                                 ),
                             }
                         # After auto-indexing, verify we have a match
                         if not matching_files:
                             return {
                                 "status": "error",
-                                "error": f"File '{file_path}' not found in indexed documents. Use search_files to find it first.",
+                                "error": f"File '{file_path}' not found in indexed documents. Use search_file to find it first.",
                             }
                     if auto_indexed:
                         logger.info(
@@ -2090,11 +2090,16 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
-                # A file edited since it was indexed falls through and re-indexes.
+                # A file edited since it was indexed falls through and re-indexes,
+                # as does one whose images went unread and can be read now.
                 if (
-                    file_path in self.indexed_files
-                    or real_file_path in self.indexed_files
-                ) and self.rag.is_current(real_file_path):
+                    (
+                        file_path in self.indexed_files
+                        or real_file_path in self.indexed_files
+                    )
+                    and self.rag.is_current(real_file_path)
+                    and self.rag.unread_images_readable(real_file_path) is not True
+                ):
                     logger.debug(
                         "Skipping re-index for already-indexed file: %s", file_path
                     )
@@ -2140,6 +2145,9 @@ class RAGToolsMixin:
                             f". The document library was full, so it removed {names}; "
                             "questions about it will find nothing until it is indexed again"
                         )
+                    unread = result.get("unread_images_note")
+                    if unread:
+                        msg += f". {unread} Tell the user."
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
@@ -2157,6 +2165,11 @@ class RAGToolsMixin:
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
                         **({"evicted": evicted} if evicted else {}),
+                        **(
+                            {"unread_image_pages": result["unread_image_pages"]}
+                            if unread
+                            else {}
+                        ),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":
