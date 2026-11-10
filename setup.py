@@ -19,7 +19,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
-    "gaia-agent-chat",
     "gaia-agent-gaia",
 ]
 
@@ -71,8 +70,6 @@ setup(
         "gaia.agents.tools",
         "gaia.agents.tools._calendar",
         "gaia.agents.tools._email",
-        "gaia.agents.code_index",
-        "gaia.agents.code_index.tools",
         "gaia.governance",
         "gaia.factory",
         "gaia.factory.harvest",

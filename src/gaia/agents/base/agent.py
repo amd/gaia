@@ -8817,9 +8817,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -8851,6 +8853,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8887,7 +8895,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -9520,12 +9534,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 

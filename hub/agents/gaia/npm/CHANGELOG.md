@@ -49,6 +49,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   connections keep reading mail, and a calendar call names the command that adds
   the scope. Larger models only; Gemma 4 E4B doesn't get these tools. The calendar was
   tried on real Google and Outlook calendars but not yet measured by the agent evals.
+- **A large document that finishes indexing in the background stays attached
+  to the chat.** It is saved to the session as soon as it is searchable, and a
+  background index that fails is now reported instead of dropping out of
+  sight.
 
 ## [0.3.5]
 
