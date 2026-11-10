@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Read-only email tools for the flagship agent (Phase 0 of the email skill).
+"""Reading tools for the flagship agent (Phase 0 of the email skill).
 
 The backend tests drive a real ``httpx`` client over a ``MockTransport``, so
 they assert the *shape of the outgoing Graph request* — path, ``$select``,
@@ -445,7 +445,10 @@ def harness_factory():
 def test_grant_identity_is_the_namespaced_flagship_id():
     # Must match gaia.connectors.grants' namespacing for a wheel-installed agent.
     assert EMAIL_AGENT_ID == "installed:gaia"
-    assert MAIL_SCOPES == ("https://graph.microsoft.com/Mail.ReadWrite",)
+    assert MAIL_SCOPES == (
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+    )
 
 
 def test_list_inbox_tool_returns_structured_success(harness_factory):
@@ -740,7 +743,8 @@ def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
         _Bare()._build_email_backend()
     message = str(err.value)
     assert "calendar.events" in message
-    assert GMAIL_READONLY in message
+    assert "gmail.readonly" in message and "gmail.compose" in message
+    assert "gmail.modify" not in message
 
 
 def test_the_full_mailbox_scope_is_never_requested(mailbox_env):

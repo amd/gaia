@@ -315,12 +315,14 @@ against the committed baseline.
 
 **Phase 1** — organize + undo. Brings the action ledger and the batch threshold.
 
-**Phase 2** — draft, send, trash, behind confirmation.
+**Phase 2** — draft, send, trash, behind confirmation. Drafting, replying,
+forwarding and sending have shipped as the bundled `send-email` skill, which
+added `gmail.compose` to Google's consent; trash and organizing follow, and will need `gmail.modify`.
 
 **Phase 3** — briefing, tasks, scheduling. Needs daemon-managed jobs.
 
 **Phase 4** — Gmail / Google connector. The same five read tools, now backed by
-either mailbox. Google's consent declares `gmail.readonly` only, while the scope
+either mailbox. Google's consent declared `gmail.readonly` only at this phase, while the scope
 actually requested at token time resolves against what the connection already
 carries, so an existing `gmail.modify` user is never sent through a browser
 reconnect. When both mailboxes are usable, Gmail wins on registry order, and the

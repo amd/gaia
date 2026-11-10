@@ -1551,6 +1551,55 @@ def test_switch_reads_the_catalog_once_and_names_a_discovered_provider(lemonade_
     assert "not sending this conversation to any cloud provider" not in answer
 
 
+def test_model_status_tracks_cloud_and_local_switches(lemonade_http):
+    """The wire status and switch notice agree through repeated switches."""
+    agent = _ModelSwitchAgent()
+    for model, backend, remote in [
+        ("custom.gemma-4-31b-it", "fireworks", True),
+        ("Gemma-4-E4B-it-GGUF", "lemonade", False),
+        ("custom.gemma-4-31b-it", "fireworks", True),
+    ]:
+        events = _events(_model_run(agent, f"/model {model}"))
+        status = next(event for event in events if "model_id" in event)
+        assert status["model_id"] == model
+        assert status["model_backend"] == backend
+        assert status["model_remote"] is remote
+        assert ("(cloud)" in events[-1]["answer"]) is remote
+    assert len(lemonade_http) == 3
+
+
+@pytest.mark.parametrize(
+    "model, metadata, backend, remote",
+    [
+        (
+            "custom.gemma",
+            {"recipe": "cloud", "cloud_provider": "fireworks"},
+            "fireworks",
+            True,
+        ),
+        ("custom.gemma", {"recipe": "cloud", "cloud_provider": "amd"}, "amd", True),
+        ("custom.gemma", {"recipe": "llamacpp", "downloaded": True}, "lemonade", False),
+        ("Gemma-4-E4B-it-GGUF", {"downloaded": True}, "lemonade", False),
+        ("fireworks.gemma", {}, "fireworks", True),
+        ("amd.gemma", {}, "amd", True),
+    ],
+)
+def test_model_status_uses_live_catalog(
+    model, metadata, backend, remote, lemonade_http
+):
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    agent = _ModelSwitchAgent()
+    agent.chat.config.model = model
+    agent.chat.llm_client = LemonadeProvider(
+        model=model, model_metadata=[{"id": model, **metadata}]
+    )
+    event = stdio._model_state_event(agent)
+    assert event["model_backend"] == backend
+    assert event["model_remote"] is remote
+    assert lemonade_http == []
+
+
 def test_a_client_that_cannot_classify_still_completes_the_switch(
     monkeypatch, stub_lemonade
 ):
