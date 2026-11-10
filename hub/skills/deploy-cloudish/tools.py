@@ -251,9 +251,9 @@ def cloudish_create_key(alias: str = "", agent: str = "gaia") -> dict:
         agent: The product making the call, for Cloudish's own tracking.
 
     Returns:
-        ``{"apiKey": {"alias", "balance", ...}, "key", "claimUrl"}`` on
-        success, or ``{"error"}``. ``key`` authenticates every other tool;
-        ``claimUrl`` is for the user to open.
+        ``{"apiKey": {"alias", "balance", ...}, "key", "claimUrl",
+        "runway"}`` on success, or ``{"error"}``. ``key`` authenticates every
+        other tool; ``claimUrl`` is for the user to open.
     """
     body: Dict[str, Any] = {}
     if alias:
@@ -304,9 +304,11 @@ def cloudish_deploy(
         build_memory_gb: Build memory in GB (1, 2, 4, or 5). 0 uses the default.
 
     Returns:
-        The Cloudish response: ``{"project", "app", "subdomain"}`` for an
-        image deploy, ``{"project", "build"}`` for a source deploy, or
-        ``{"error"}``. A source deploy is not live until the build succeeds.
+        The Cloudish response: ``{"project", "app", "subdomain", "runway"}``
+        for an image deploy, ``{"project", "build", "sleep", "runway"}`` for a
+        source deploy, or ``{"error"}``. A source deploy is not live until the
+        build succeeds; the app then shows up as ``project.docker`` in
+        ``cloudish_status``.
     """
     if bool(image) == bool(context_dir):
         return _error(
@@ -383,8 +385,11 @@ def cloudish_status(api_key: str, owner: str, name: str) -> dict:
         name: The project name.
 
     Returns:
-        The project record, including ``subdomain.url``, ``app.status``,
-        ``app.resources``, ``creditsPerHour``, and ``runway``, or ``{"error"}``.
+        ``{"project": {...}}``, or ``{"error"}``. The app is
+        ``project.docker`` (its ``status``, ``resources`` and ``sleep``), its
+        URL is ``project.subdomain.url``, and its cost is
+        ``project.docker.resources.creditsPerHour``. Until an image registers,
+        ``project.docker`` is absent.
     """
     return _request("GET", _project_path(owner, name), api_key=api_key)
 
@@ -430,7 +435,8 @@ def cloudish_configure(
             after a sleep setting.
 
     Returns:
-        The updated project record, or ``{"error"}``.
+        ``{"project", "app"}`` with the new settings under ``app.sleep``, or
+        ``{"error"}``.
     """
     body: Dict[str, Any] = {}
     if always_on is not None:
@@ -477,8 +483,8 @@ def cloudish_set_secrets(
             ``{"OPENAI_API_KEY": "sk-..."}``.
 
     Returns:
-        The Cloudish response, or ``{"error"}``. Reading secrets returns
-        names only, never values.
+        ``{"secrets": [{"name", ...}]}`` — names only, never values — or
+        ``{"error"}``.
     """
     if not secrets:
         return _error("secrets must contain at least one name and value.")

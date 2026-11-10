@@ -89,7 +89,7 @@ This skill wraps its HTTP API. No local Docker daemon is involved, and no
 ## Before you deploy
 
 1. **Get a key.** Ask the user for a Cloudish API key if they have one. If they
-   do not, call `cloudish_create_key` and show them the returned `claim_url`; the
+   do not, call `cloudish_create_key` and show them the returned `claimUrl`; the
    key works immediately, and claiming attaches it to their account for the
    dashboard and credit top-ups. Treat the key as a secret: keep it out of chat
    output, source files, and logs, and pass it only to the tools below.
@@ -124,17 +124,20 @@ This skill wraps its HTTP API. No local Docker daemon is involved, and no
    limit", the build probably ran out of resources rather than hitting a
    Dockerfile bug: retry with a higher `build_cpu_cores` (0.5, 1, 2, or 3) and
    `build_memory_gb` (1, 2, 4, or 5).
-4. **Verify before claiming success.** A successful build registers the app, so
-   call `cloudish_status` for `subdomain.url` and `cloudish_logs` to confirm the
+4. **Verify before claiming success.** An image deploy returns `subdomain.url`
+   already. A source deploy registers the app only once the build has
+   `succeeded`; then call `cloudish_status`: the app is `project.docker`, its
+   URL is `project.subdomain.url`, and `project.docker.status` should read
+   `registered` or `running`. Either way, call `cloudish_logs` to confirm the
    process started and is listening. Opening the URL is good evidence when the
    environment can reach it; inability to open it is not by itself a failure.
 5. **Secrets and runtime changes are separate calls.** `cloudish_set_secrets`
    restarts a running app with the new values. `cloudish_configure` changes
    `always_on`, `sleep_after_minutes`, or `wake_every_minutes` without a rebuild.
-6. **Close the loop with the user.** Report the project path (`owner/name`), the
-   URL, whether the app is always-on or sleeping, its size and
-   `creditsPerHour` from status, and anything left for them: claiming the key,
-   DNS for a custom domain, or adding credit.
+6. **Close the loop with the user.** Report the project path (`project.path`),
+   the URL, whether the app is always-on or sleeping (`project.docker.sleep`),
+   its size and `project.docker.resources.creditsPerHour`, and anything left for
+   them: claiming the key, DNS for a custom domain, or adding credit.
 
 ## Honest limits
 
