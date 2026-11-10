@@ -557,7 +557,7 @@ describe("dev QA mode", () => {
     const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
     expect(main).toContain("const devQa = resolveDevQaMode({ isPackaged: app.isPackaged, env: process.env });");
     expect(main).toContain("if (!devQa) registerProtocolHandler();");
-    expect(main).toContain("if (devQa) showingInstallScreen = false;");
+    expect(main).toContain("if (!devQa) showingInstallScreen = !backendInstaller.isBackendCurrent();");
     expect(main).toContain("const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();");
     expect(main).toContain("if (!devQa) await cleanupOrphanedBackend();");
     expect(main).toMatch(/if \(!devQa\) \{\r?\n\s+try \{\r?\n[^]*?backend\.pid/);

@@ -1333,9 +1333,8 @@ app.whenReady().then(async () => {
   });
 
   // Decided before the window has a page, so a current backend never sees this screen.
-  showingInstallScreen = !backendInstaller.isBackendCurrent();
   // Dev QA mode runs GAIA_BIN's backend and never installs one.
-  if (devQa) showingInstallScreen = false;
+  if (!devQa) showingInstallScreen = !backendInstaller.isBackendCurrent();
   if (showingInstallScreen) await loadApp();
 
   // Both write to the user's ~/.gaia, so dev QA mode skips them.
