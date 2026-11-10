@@ -3736,8 +3736,14 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 for doc_path in session.indexed_documents:
                     if os.path.exists(doc_path):
                         try:
-                            self.rag.index_document(doc_path)
-                            self.indexed_files.add(doc_path)
+                            result = self.rag.index_document(doc_path)
+                            if result.get("success"):
+                                self.indexed_files.add(doc_path)
+                            else:
+                                logger.warning(
+                                    f"Failed to reindex {doc_path}: "
+                                    f"{result.get('error', 'Unknown error')}"
+                                )
                         except Exception as e:
                             logger.warning(f"Failed to reindex {doc_path}: {e}")
             elif session.indexed_documents:
