@@ -136,13 +136,15 @@ describe("TrayManager without a tray host", () => {
     expect(mgr.closeAction).toBe("quit");
   });
 
-  test("the notice points at the dock, not a tray that isn't there", () => {
+  test("the notice points at the dock or overview, not a tray that isn't there", () => {
     setPlatform("linux");
     const mgr = newTray();
     mgr.config.tray = { ...ON };
     mgr.setHost({ available: false, reason: "no-host" });
     const { message, detail } = mgr.closeNoticeText();
-    expect(message).toBe("GAIA is still running in the dock.");
+    expect(message).toBe("GAIA is still running, minimized.");
+    // Fedora's GNOME shows no dock outside the overview.
+    expect(detail).toMatch(/dock or the Activities overview/);
     expect(detail).toMatch(/right-click GAIA there and choose Quit/);
     expect(`${message} ${detail}`).not.toMatch(/tray|AppIndicator/i);
   });

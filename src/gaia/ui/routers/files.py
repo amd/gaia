@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
+from gaia.env import child_env
 from gaia.upload_names import upload_copy_name
 from gaia.utils.user_folders import documents_dir
 
@@ -87,6 +88,10 @@ SEARCH_MAX_ENTRIES = 20_000
 SEARCH_TIME_BUDGET_SEC = 10.0
 # Extra wait for a walk stuck inside one blocking read (e.g. a cloud mount).
 SEARCH_STALL_GRACE_SEC = 1.0
+# Setup allowance on top of the outer cap: resolving the user's document
+# folders happens before the scan budget starts, and must not trip the cap
+# on a loaded machine (#6974).
+SEARCH_SETUP_ALLOWANCE_SEC = 1.0
 
 router = APIRouter(tags=["files"])
 
@@ -470,7 +475,7 @@ async def open_file_or_folder(request: OpenFileRequest):
                 subprocess.Popen(["open", str(target)])
         else:
             target = resolved if resolved.is_dir() else resolved.parent
-            subprocess.Popen(["xdg-open", str(target)])
+            subprocess.Popen(["xdg-open", str(target)], env=child_env())
 
         return {"status": "ok", "path": str(resolved)}
     except Exception as e:
@@ -503,7 +508,7 @@ def _launch_file(resolved: Path) -> dict:
         elif platform.system() == "Darwin":
             subprocess.Popen(["open", str(resolved)])
         else:
-            subprocess.Popen(["xdg-open", str(resolved)])
+            subprocess.Popen(["xdg-open", str(resolved)], env=child_env())
     except OSError as e:
         logger.error("Failed to open file %s: %s", resolved, e)
         raise HTTPException(
@@ -597,7 +602,6 @@ async def search_files(
         """Blocking filesystem scan -- runs in a thread. Returns ``truncated``."""
         seen_paths: set = set()
         start_time = _time.monotonic()
-        deadline = start_time + SEARCH_TIME_BUDGET_SEC
         visited = 0
         truncated = False
 
@@ -688,6 +692,8 @@ async def search_files(
             )
             if is_within_document_roots(directory)
         ]
+        # Start the clock after location setup so it can't eat the scan budget.
+        deadline = _time.monotonic() + SEARCH_TIME_BUDGET_SEC
         for loc in priority_dirs:
             if len(matching_files) >= max_results:
                 break
@@ -726,7 +732,9 @@ async def search_files(
     try:
         truncated = await asyncio.wait_for(
             asyncio.wrap_future(walk),
-            timeout=SEARCH_TIME_BUDGET_SEC + SEARCH_STALL_GRACE_SEC,
+            timeout=SEARCH_SETUP_ALLOWANCE_SEC
+            + SEARCH_TIME_BUDGET_SEC
+            + SEARCH_STALL_GRACE_SEC,
         )
     except asyncio.TimeoutError:
         truncated = True

@@ -204,7 +204,6 @@ _ENTRY_POINTS_HELP = [
     ("gaia.mcp.servers.tui_mcp", "main", None),
     ("gaia.mcp.servers.engineering_mcp", "main", ["--help"]),
     ("gaia.connectors.cli", "main", ["--help"]),
-    ("gaia_agent_chat.app", "main", None),
     ("gaia_agent_email.server", "main", ["--help"]),
     ("gaia_agent_email.mcp_server", "main", None),
 ]
@@ -352,7 +351,6 @@ _ENTRY_POINTS_STATIC = [
     ("src/gaia/daemon/server.py", "run"),
     ("src/gaia/api/app.py", "main"),
     ("src/gaia/chat/app.py", "main"),
-    ("src/gaia/apps/llm/app.py", "cli_main"),
 ]
 
 

@@ -12,8 +12,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
-tkml_version = "5.0.4"
-
 # Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
 # util/list_agent_packages.py for build_agent_package.yml and
 # util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
@@ -21,7 +19,6 @@ tkml_version = "5.0.4"
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
-    "gaia-agent-chat",
     "gaia-agent-gaia",
 ]
 
@@ -72,8 +69,6 @@ setup(
         "gaia.agents.base",
         "gaia.agents.tools",
         "gaia.agents.tools._email",
-        "gaia.agents.code_index",
-        "gaia.agents.code_index.tools",
         "gaia.governance",
         "gaia.factory",
         "gaia.factory.harvest",
@@ -96,14 +91,6 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
-        "gaia.eval": [
-            "webapp/*.json",
-            "webapp/*.js",
-            "webapp/*.md",
-            "webapp/public/*.html",
-            "webapp/public/*.css",
-            "webapp/public/*.js",
-        ],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The

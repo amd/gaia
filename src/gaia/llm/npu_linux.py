@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gaia.env import child_env
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -165,6 +166,15 @@ def _access_problem(node: Path, group: Optional[str]) -> NpuProblem:
     )
 
 
+def access_problem(node: Path) -> NpuProblem:
+    """Why this account can't open *node*, with the group that grants it."""
+    try:
+        group = _group_name(node.stat().st_gid)
+    except OSError:
+        group = None
+    return _access_problem(node, group)
+
+
 def _memlock_problem(limit: str) -> NpuProblem:
     """Too little locked memory: fixable from GAIA, waiting for a restart, or
     still low after one, which only the NPU guide's steps can untangle."""
@@ -218,7 +228,7 @@ def _can_open(node: Path) -> bool:
     return os.access(node, os.R_OK | os.W_OK)
 
 
-def _bound_devices(root: Path) -> List[Tuple[str, Path]]:
+def bound_devices(root: Path) -> List[Tuple[str, Path]]:
     """``(accel name, PCI device dir)`` for each NPU bound to ``amdxdna``."""
     return [
         (accel.name, accel / "device")
@@ -317,7 +327,7 @@ def host_problems(
     """
     if not (root / "sys/module/amdxdna").exists():
         return [_driver_problem()]
-    devices = _bound_devices(root)
+    devices = bound_devices(root)
     if not devices:
         return [_device_problem()]
     found: List[NpuProblem] = []
@@ -332,11 +342,7 @@ def host_problems(
     if not present:
         found.append(_device_problem())
     elif not any(_can_open(node) for node in present):
-        try:
-            group = _group_name(present[0].stat().st_gid)
-        except OSError:
-            group = None
-        found.append(_access_problem(present[0], group))
+        found.append(access_problem(present[0]))
     hard = _own_memlock_hard() if memlock_hard is _READ else memlock_hard
     if hard is not None and hard < memlock_needed_bytes():
         found.append(_memlock_problem(_limit_text(hard)))
@@ -408,6 +414,7 @@ def validate(flm: Path) -> List[NpuProblem]:
     try:
         result = subprocess.run(
             [str(flm), "validate", "--json"],
+            env=child_env(),
             capture_output=True,
             text=True,
             errors="replace",

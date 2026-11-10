@@ -20,6 +20,8 @@ import pytest
 
 from gaia.schedule import sinks
 
+pytestmark = pytest.mark.real_sinks
+
 # Patch targets — module-scoped imports in gaia.schedule.sinks.
 _REQUESTS = "gaia.schedule.sinks.requests"
 _PLATFORM_SYSTEM = "gaia.schedule.sinks.platform.system"
