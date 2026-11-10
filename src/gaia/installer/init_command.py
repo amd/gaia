@@ -754,7 +754,7 @@ def check_setup_status(
         older = (
             status.version
             if status.running and status.version != embedded.version
-            else None if status.installed else embedded.older_installed_version()
+            else None if status.installed else embedded.other_installed_version()
         )
         if older:
             return SetupStatus(
@@ -918,20 +918,29 @@ def check_setup_status(
 
 
 def _terminal_installer_agent() -> Optional[Path]:
-    """The flagship install.sh / install.ps1 put in GAIA's bin dir, else None.
+    """The flagship an installer shipped outside the hub, else None.
 
-    Those installers ship it there, on PATH, with no hub sentinel; the TUI runs
-    it from PATH.
+    install.sh / install.ps1 put it in GAIA's bin dir. The terminal packages
+    ship it with the frozen gaia: beside it (Windows setup) or on PATH (.deb,
+    .rpm, .pkg). None of them write a hub sentinel; the TUI runs it from any
+    of these places. A pip install's PATH is not trusted for it.
     """
     from gaia.home import gaia_home
 
     name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
-    path = gaia_home() / "bin" / name
-    if not path.is_file():
-        return None
-    if sys.platform != "win32" and not os.access(path, os.X_OK):
-        return None
-    return path
+    candidates = [gaia_home() / "bin" / name]
+    if is_frozen():
+        candidates.append(Path(sys.executable).parent / name)
+        on_path = shutil.which("gaia-agent")
+        if on_path:
+            candidates.append(Path(on_path))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if sys.platform != "win32" and not os.access(path, os.X_OK):
+            continue
+        return path
+    return None
 
 
 def _agent_ready_for_check(agent_id: str) -> bool:

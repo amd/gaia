@@ -240,6 +240,16 @@ export interface ConnectorRow {
     } | null;
 }
 
+/** A catalog connector whose live state the backend failed to read; its summary raised. */
+export interface UnavailableConnectorRow {
+    id: string;
+    display_name: string;
+    error: 'unavailable';
+}
+
+/** One entry of GET /api/connectors. */
+export type ConnectorListEntry = ConnectorRow | UnavailableConnectorRow;
+
 /**
  * One field in a connector's first-time setup form. Mirrors
  * ``gaia.connectors.spec.ConfigField`` on the backend.
@@ -459,6 +469,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Notices from adding indexed files to the document library. */
+    libraryNotices?: string[];
 }
 
 /** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */

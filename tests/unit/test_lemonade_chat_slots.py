@@ -226,6 +226,13 @@ def _health(entry):
         ),
         (
             {
+                "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "--parallel", "2"],
+            },
+            2,
+        ),
+        (
+            {
                 "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
                 "launch_command": ["llama-server", "-np=3"],
             },

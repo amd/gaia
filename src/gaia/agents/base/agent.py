@@ -54,10 +54,9 @@ from gaia.agents.base.completion import (
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
-    TerminalConfirmationMixin,
     edit_is_inside,
     edit_target,
-    terminal_is_interactive,
+    someone_can_answer,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -1515,6 +1514,8 @@ _THIS_TURN_PATTERN = re.compile(
     r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
 )
 # "Executing the final write now.": a step in the present tense, due this turn.
+# Also "Proceeding with step 1.": announcing a numbered step of a plan that
+# was laid out instead of being run (#6914).
 _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
     r"(?:executing|running|performing|writing|applying|calling|fetching"
@@ -1522,7 +1523,8 @@ _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"(?!\s+\w+ly\b)"
     r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
     r"|gives?|happens?|follows?)\b)"
-    r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
+    r"(?:[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$"
+    r"|[^.!?:]{0,60}\bwith\s+step\s*\d+\s*[.!]?\s*$)",
     re.IGNORECASE,
 )
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
@@ -1645,6 +1647,7 @@ _PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$
 _ASKS_GO_AHEAD_PATTERN = re.compile(
     r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
     r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|ready when you are|just say go"
     r"|confirm\w*|proceed\w*|approv\w*|once you"
     r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
     r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
@@ -2343,6 +2346,48 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     if target == prompt_args["file_path"]:
         return prompt_args
     return {**prompt_args, "file_path": target}
+
+
+def _record_refused_write(
+    agent: Any, tool_name: str, tool_args: Any, result: Any
+) -> None:
+    """Put a write the path sandbox refused on this turn's ledger as final.
+
+    Code run through ``run_python`` or the shell isn't confined by the
+    sandbox, so the ledger is what keeps it off a path a write tool was just
+    refused. getattr throughout: test stubs copy ``_execute_tool``.
+    """
+    ledger = getattr(agent, "_denied_effects", None)
+    if ledger is None or not isinstance(result, dict):
+        return
+    if result.get("status") != "error" or not isinstance(tool_args, dict):
+        return
+    registry = getattr(agent, "_tools_registry", None) or {}
+    preflight = (registry.get(tool_name) or {}).get("preflight")
+    target_of = getattr(preflight, "target_of", None)
+    read_validator = getattr(agent, "_read_validator", None)
+    validator = read_validator() if callable(read_validator) else None
+    if validator is None or not callable(target_of):
+        return
+    try:
+        target = os.path.abspath(str(target_of(tool_args)))
+        real = os.path.realpath(target)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        logger.debug("could not resolve the refused write's target: %s", e)
+        return
+    # A "read it first" or a size limit is a step to take, not a refusal.
+    if validator.is_path_allowed(real, prompt_user=False) and not (
+        validator.is_write_blocked(real)[0]
+    ):
+        return
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(result.get("error") or "refused by the path sandbox"),
+        kinds={PATH},
+        refused=True,
+        paths=[target, real],
+    )
 
 
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
@@ -3695,18 +3740,7 @@ Do NOT wrap conversational replies in JSON.
             return False
         if self._path_access_refusal_unasked(path):
             return True
-        console = self.console
-        # A background run or an unattended sidecar query denies every prompt.
-        if getattr(console, "background_mode", False) is True:
-            return True
-        if getattr(console, "nobody_answers", False) is True:
-            return True
-        if getattr(console, "blocking_confirmation", False):
-            return False
-        # A terminal console asks only on an interactive terminal; others deny.
-        return not (
-            isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
-        )
+        return not someone_can_answer(self.console)
 
     def _path_access_without_asking(self, path: Path) -> Optional[bool]:
         """The answer to a path-access question no one needs to be asked, or None."""
@@ -7716,6 +7750,7 @@ Do NOT wrap conversational replies in JSON.
                     refused=isinstance(refusal, dict)
                     and refusal.get("tier") == "refuse",
                 )
+            _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # A "no" covers the effect, not the tool: another route to it is asked
@@ -7752,6 +7787,7 @@ Do NOT wrap conversational replies in JSON.
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
+            _record_refused_write(self, tool_name, tool_args, outside)
             return outside
         auto_approves = None
         if outside is not None:
@@ -7947,6 +7983,7 @@ Do NOT wrap conversational replies in JSON.
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:

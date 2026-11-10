@@ -28,7 +28,7 @@ Unlike unit tests that check individual functions, Agent Eval tests the **full s
 <Steps>
   <Step title="Install eval dependencies">
     ```bash
-    uv pip install -e ".[eval]"
+    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python
     ```
   </Step>
 
@@ -309,6 +309,15 @@ gaia eval agent --compare eval/results/run_A/scorecard.json eval/results/run_B/s
 ```
 
 The comparison shows per-scenario deltas, regressions (PASS to FAIL), and improvements (FAIL to PASS).
+
+<Warning>
+`--save-baseline` overwrites `eval/results/baseline.json`, which is committed to the
+repository. It writes the new scorecard whenever the flag is set, even for a run
+where every scenario fails or errors, and the command still exits 0. Only pass
+it after a run you've checked, and review
+`git diff eval/results/baseline.json` before committing. If a bad run replaced it,
+restore it with `git checkout -- eval/results/baseline.json`.
+</Warning>
 
 ### Auto-Fix Mode
 

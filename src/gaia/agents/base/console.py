@@ -25,6 +25,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.env import child_env
 from gaia.llm.surface_hints import surface_wording
 
 logger = logging.getLogger(__name__)
@@ -235,6 +236,22 @@ def terminal_is_interactive() -> bool:
             # ValueError: stream closed (pytest capture, detached subprocess).
             return False
     return True
+
+
+def someone_can_answer(console: Any) -> bool:
+    """Whether a person can answer a prompt on *console* right now.
+
+    Never on a background run or an unattended sidecar query; always on a
+    console that waits for an explicit decision; on a terminal console, only
+    when the terminal is interactive. Every other console denies.
+    """
+    if getattr(console, "background_mode", False) is True:
+        return False
+    if getattr(console, "nobody_answers", False) is True:
+        return False
+    if getattr(console, "blocking_confirmation", False):
+        return True
+    return isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
 
 
 def _shorten(value: str) -> str:
@@ -1738,7 +1755,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
         else:
@@ -1757,7 +1779,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(["xdg-open", str(path)], check=False)
+                            subprocess.run(
+                                ["xdg-open", str(path)],
+                                env=child_env(),
+                                check=False,
+                                timeout=30,
+                            )
                 except (KeyboardInterrupt, EOFError):
                     pass
 

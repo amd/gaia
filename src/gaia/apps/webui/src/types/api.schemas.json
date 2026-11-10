@@ -2745,6 +2745,20 @@
         "title": "Id",
         "type": "integer"
       },
+      "library_notices": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Library Notices"
+      },
       "rag_sources": {
         "anyOf": [
           {

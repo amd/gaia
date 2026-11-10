@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -37,9 +37,23 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+let unhandled: string[] = [];
+
+/** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
+async function expectNoFixtureGap(page: Page): Promise<void> {
+    await expect(page.locator('body'), 'a screen shows a missing fixture').not.toContainText('no fixture for');
+}
+
+test.afterEach(async ({ page }) => {
+    const seen = unhandled;
+    unhandled = [];
+    expect(seen, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+    await expectNoFixtureGap(page);
+});
+
 async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await before?.(page);
     await useTheme(page, theme);
     await useLocale(page, locale);
@@ -398,13 +412,14 @@ for (const [title, locale, name] of [
 ] as const) {
     test(title, async ({ page }, info) => {
         await open(page, '', locale);
-        await page.route('**/api/files/upload', (route) =>
+        await page.route((url) => url.pathname === '/api/files/upload-media', (route) =>
             route.fulfill({
                 json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
             }),
         );
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
-        await expect(page.locator('.composer-attachment-state')).toBeVisible();
+        await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
+        await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -660,7 +675,18 @@ for (const locale of ['ar', 'en']) {
                 json: {
                     messages: [
                         { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the Q1 plan.', created_at: OLD_FILE.at, rag_sources: null },
-                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The plan has three goals.', created_at: OLD_FILE.at, rag_sources: null },
+                        {
+                            id: 2,
+                            session_id: ANSWER_SESSION,
+                            role: 'assistant',
+                            content: 'The plan has three goals.',
+                            created_at: OLD_FILE.at,
+                            rag_sources: null,
+                            library_notices: [
+                                'schedule-fall.xlsx was kept in your documents library for this chat.',
+                                'run.exe couldn\'t be added to your documents (.exe files are not supported).',
+                            ],
+                        },
                     ],
                     total: 2,
                 },
@@ -678,6 +704,8 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.msg-stats-ts')).toHaveText(month);
         await expect(page.getByText('q1-summary.csv')).toBeVisible();
         await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await expect(page.locator('.library-notices')).toContainText('schedule-fall.xlsx');
+        await expect(page.locator('.library-notices')).toContainText('run.exe');
         await page.getByText('The plan has three goals.').hover();
         await shot(page, `dates-${locale}-answer`);
         expect(await audit(page)).toEqual([]);
@@ -944,6 +972,7 @@ const leftoverEnglish = (root: Page) =>
 
 /** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
 async function shot(page: Page, name: string): Promise<void> {
+    await expectNoFixtureGap(page);
     const dir = process.env.GAIA_VISUAL_SHOTS;
     if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
 }
@@ -1143,6 +1172,24 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
             await shot(page, `connectors-${locale}-top`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connector GAIA could not read shows as unavailable, and search keeps working', async ({ page }) => {
+            const server = (name: string) => ({
+                id: name.toLowerCase(), display_name: name, type: 'mcp_server', description: `${name} tools`,
+                configured: false, configurable: true, enabled: true, mcp_env_keys: [], oauth_setup_fields: [],
+            });
+            await openConnectors(page, [
+                { id: 'microsoft', display_name: 'Microsoft', error: 'unavailable' },
+                ...['Git', 'Notion', 'Postgres', 'Memory', 'Filesystem', 'Fetch'].map(server),
+            ]);
+            const broken = page.locator('details[open] .connector-tile', { hasText: 'Microsoft' });
+            await expect(broken).toBeVisible();
+            await shot(page, `connectors-${locale}-unavailable`);
+            expect(await audit(page)).toEqual([]);
+            await page.locator('.connectors-section input[type=search]').fill('o');
+            await expect(page.locator('.connector-tile', { hasText: 'Notion' })).toBeVisible();
+            await expect(broken).toBeVisible();
         });
 
         test('every group and a tile open, with no button inside a button', async ({ page }) => {
@@ -2134,7 +2181,10 @@ const WINDOW_CONTROLS_W = 138;
 
 for (const locale of ['ar', 'en']) {
     test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
-        await open(page, '', locale, withWindowsControls);
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await withoutFlagship(p);
+        });
         await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
         const notice = page.locator('.app-notice').first();
         await expect(notice.getByRole('button')).toBeVisible();
@@ -2152,8 +2202,36 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the chat-create error sits below the window controls and is not a drag handle (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await p.route((u) => u.pathname === '/api/sessions', async (route) => {
+                if (route.request().method() === 'POST') return route.fulfill({ json: SESSIONS[0] });
+                return route.fallback();
+            });
+            await p.route(`**/api/chat/permissions/${SESSIONS[0].id}`, async (route) => {
+                if (route.request().method() === 'GET') return route.fallback();
+                return route.fulfill({ status: 500, json: { detail: 'The permission service did not answer' } });
+            });
+        });
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const error = page.locator('.toast-dismissible');
+        await expect(error).toBeVisible();
+        const { top, region } = await error.evaluate((el) => ({
+            top: el.getBoundingClientRect().top,
+            region: getComputedStyle(el).getPropertyValue('-webkit-app-region'),
+        }));
+        expect(top).toBeGreaterThanOrEqual(48);
+        expect(region).toBe('no-drag');
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
-    await open(page);
+    await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
@@ -2785,6 +2863,64 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+/** Text where an object arrives crashes the screen that renders it, so each placement's fallback shows. */
+const BROKEN = { not: 'text' };
+const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (page: Page) => Promise<void> }> = {
+    main: {
+        hash: `#${ANSWER_SESSION}`,
+        before: (page) => page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+            route.fulfill({ json: { messages: [{ id: 1, session_id: ANSWER_SESSION, role: 'user', content: BROKEN, created_at: NOW.toISOString(), rag_sources: null }] } })),
+    },
+    sidebar: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/sessions', (route) =>
+            route.fulfill({ json: { sessions: [{ ...SESSIONS[0], title: BROKEN }], total: 1 } })),
+    },
+    window: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+    },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [placement, crash] of Object.entries(CRASHES)) {
+        test(`a crashed ${placement} shows its own fallback (${locale})`, async ({ page }, info) => {
+            const errors: string[] = [];
+            page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+            await open(page, crash.hash, locale, crash.before);
+            const fallback = page.getByRole('alert').filter({ has: page.locator('.error-boundary-title') });
+            await expect(fallback).toBeVisible();
+            await expect(fallback).toHaveCount(1);
+            expect(errors.some((e) => e.includes(`[ErrorBoundary] ${placement === 'window' ? 'app' : placement} failed to render`))).toBe(true);
+
+            const box = (await fallback.boundingBox())!;
+            const title = (await fallback.locator('.error-boundary-title').boundingBox())!;
+            if (placement === 'window') {
+                await expect(fallback).toHaveText(locale === 'ar' ? /أعد التحميل للمتابعة/ : /Reload to continue/);
+                expect(box.width).toBe(1400);
+                expect(box.height).toBe(900);
+                expect(Math.abs(title.y + title.height / 2 - 450)).toBeLessThan(80);
+            } else {
+                await expect(fallback).toHaveText(locale === 'ar' ? /بقية التطبيق لا تزال تعمل/ : /The rest of the app still works/);
+            }
+            if (placement === 'sidebar') {
+                expect(box.width).toBeLessThanOrEqual(261);
+                expect((await page.locator('.main-content').boundingBox())!.width).toBeGreaterThan(1100);
+                await expect(page.getByLabel(locale === 'ar' ? /رسالة/ : 'Message').first()).toBeVisible();
+            }
+            if (placement === 'main') {
+                await expect(page.locator('aside.sb')).toBeVisible();
+                const main = (await page.locator('.main-content').boundingBox())!;
+                expect(box.x).toBeGreaterThanOrEqual(main.x);
+                expect(box.x + box.width).toBeLessThanOrEqual(main.x + main.width + 1);
+            }
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
         });
     }
 }

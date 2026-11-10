@@ -467,6 +467,12 @@ def build_model_tiers(full_label: str) -> List[ModelTier]:
     ]
 
 
+def _distribution_version(entry_point: Any) -> Optional[str]:
+    """The version of the installed package *entry_point* comes from, if known."""
+    dist = getattr(entry_point, "dist", None)
+    return dist.version if dist is not None else None
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -513,6 +519,9 @@ class AgentRegistration:
     #: this is how a caller tells "instantiate it here" from "relay to the
     #: daemon" without keeping a second list of agent ids (#4161).
     is_sidecar: bool = False
+    #: The installed package's version for an agent found through an entry
+    #: point (a ``pip install``), so ``gaia agent status`` can show it.
+    version: Optional[str] = None
     category: str = "general"
     tags: List[str] = field(default_factory=list)
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
@@ -844,6 +853,7 @@ class AgentRegistry:
             registration,
             namespaced_agent_id=namespaced_id,
             source="installed",
+            version=registration.version or _distribution_version(entry_point),
             factory=_wrap_factory_with_namespaced_id(
                 registration.factory, namespaced_id
             ),

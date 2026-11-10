@@ -753,6 +753,9 @@ const messages: Messages = {
     'prompt.title.tool': 'هل تسمح بـ {tool}؟',
     'prompt.title.toolId': 'هل تسمح لـ GAIA باستخدام {tool}؟',
     'prompt.needsOk': 'يحتاج GAIA إلى موافقتك قبل {tool}.',
+    'prompt.trust.title': 'هل تثق بتعليمات هذا المجلد ومهاراته؟',
+    'prompt.trust.ask': 'سيضع GAIA ملفات CLAUDE.md وAGENTS.md والمهارات الموجودة في هذا المجلد في موجّه النموذج، الآن وفي كل مرة تعمل فيه.',
+    'prompt.trust.allow': 'الثقة بهذا المجلد',
     'prompt.path.title.file': 'هل تسمح لـ GAIA باستخدام هذا الملف؟',
     'prompt.path.title.folder': 'هل تسمح لـ GAIA باستخدام هذا المجلد؟',
     'prompt.path.title.location': 'هل تسمح لـ GAIA باستخدام هذا الموقع؟',
@@ -1732,6 +1735,9 @@ const messages: Messages = {
     'settings.connectors.servers': 'خوادم MCP',
     'settings.connectors.serversHint': 'أضف أدوات من خدمات أخرى.',
     'settings.connectors.agentServers': 'خوادم الوكلاء المخصصين',
+    'settings.connectors.unavailable': 'غير متاحة',
+    'settings.connectors.unavailableHint': 'تعذّر على GAIA قراءة هذه الموصلات. أعد تشغيل GAIA. إذا تكرر ذلك، احفظ تقرير استكشاف الأخطاء من الإعدادات ← الخصوصية وأرفقه بتقرير الخطأ.',
+    'settings.connectors.unavailableStatus': 'تعذّر التحميل',
     'settings.connectors.notRevoked': 'قُطع الاتصال محليًا، لكن المزوّد لم يؤكد الإلغاء ({reason}). قد يظل ظاهرًا كمتصل في أذونات التطبيقات بحسابك.',
     'settings.connectors.localOnly': 'قُطع الاتصال محليًا. {reason}',
     'settings.connectors.noRevokeApi': 'قُطع الاتصال محليًا. لا يوفر هذا المزوّد واجهة لإلغاء الوصول عن بُعد — أزل GAIA من صفحة التطبيقات المتصلة بحسابك لإلغائه بالكامل.',
@@ -2655,6 +2661,11 @@ const messages: Messages = {
     'resources.error': 'تعذّرت قراءة استخدام هذا الجهاز. جارٍ إعادة المحاولة…',
     'resources.settings': 'إظهار استخدام الموارد في المحادثات',
     'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU والشبكة على هذا الجهاز، يُحدَّث كل ثانية.',
+    'errorBoundary.title': 'حدث خطأ ما',
+    'errorBoundary.body': 'واجه هذا الجزء من GAIA خطأً. بقية التطبيق لا تزال تعمل.',
+    'errorBoundary.bodyWindow': 'واجه GAIA خطأً. أعد التحميل للمتابعة.',
+    'errorBoundary.retry': 'إعادة المحاولة',
+    'errorBoundary.reload': 'إعادة التحميل',
 };
 
 export const ar: Locale = {

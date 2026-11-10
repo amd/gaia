@@ -11,8 +11,6 @@ an unstructured errno string the model cannot act on.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -26,10 +24,6 @@ def tools(tmp_path):
     mixin = FileIOToolsMixin()
     mixin.console = None
     mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
-    mixin._validate_python_syntax = MagicMock(
-        return_value={"is_valid": True, "errors": []}
-    )
-    mixin._parse_python_code = MagicMock()
 
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()

@@ -270,6 +270,7 @@ _CHAT_SCHEMA_COLUMNS = {
     "messages": {
         "agent_steps",
         "inference_stats",
+        "library_notices",
         "model_messages",
         "search_text",
         "stopped",
@@ -470,6 +471,7 @@ class ChatDatabase:
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
         self._add_column("messages", "turn_summary", "TEXT")
+        self._add_column("messages", "library_notices", "TEXT")
         # 1 when the user's Stop ended this reply, so a reload still says so.
         self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
@@ -955,6 +957,7 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
         stopped: bool = False,
     ) -> int:
@@ -968,14 +971,15 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, stopped)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -988,6 +992,7 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
                     int(stopped),
                 ),
             )
@@ -1016,6 +1021,7 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
         stopped: bool = False,
     ) -> int:
@@ -1035,6 +1041,7 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             if msg_id is not None:
@@ -1047,8 +1054,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary, stopped)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1061,6 +1068,7 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
                     int(stopped),
                 ),
             )
@@ -1126,6 +1134,11 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("library_notices"):
+                try:
+                    msg["library_notices"] = json.loads(msg["library_notices"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["library_notices"] = None
             if msg.get("turn_summary"):
                 try:
                     msg["turn_summary"] = json.loads(msg["turn_summary"])

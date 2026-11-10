@@ -1867,7 +1867,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_env_url_ignored` | _(unset)_ | The `LEMONADE_BASE_URL` value GAIA's own server was chosen over in the Agent UI's setup. GAIA ignores that variable (and `LEMONADE_API_KEY`) while it still holds this value. `gaia config set lemonade_env_url_ignored ""` lets it apply again |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
-| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
+| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't), after you trust the folder when asked. `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
@@ -2155,9 +2155,9 @@ and no admin rights. `gaia init` installs and starts it; a Lemonade you installe
 yourself is left alone unless you choose to use it (see
 [Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
-GAIA keeps its own server current. When an update to GAIA targets a newer
-Lemonade, the next start replaces the older one, downloading it if needed; you
-run nothing.
+GAIA keeps its own server on the version it targets. When an update to GAIA
+targets a different Lemonade version, the next start replaces the installed one,
+downloading the pinned version if needed; you run nothing.
 
 ```bash
 gaia lemonade embedded start      # download if needed, then run
@@ -2325,21 +2325,6 @@ gaia eval agent --iterations 5                     # Run each scenario 5 times f
 gaia eval agent --fix                              # Auto-fix failures with Claude Code
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
-
-Generate a report:
-```bash
-gaia report -d ./eval_results
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d, --eval-dir` | `./output/evaluations` | Directory containing `.eval.json` files to analyze |
-| `-o, --output-file` | `LLM_Evaluation_Report.md` | Output filename for the markdown report |
-| `--summary-only` | off | Only display the summary on the console; don't save a report file |
-
-<Warning>
-  `gaia report` is registered but not currently dispatched ([#3488](https://github.com/amd/gaia/issues/3488)) — it prints top-level help and exits 0 instead of generating a report.
-</Warning>
 
 Visualize llama.cpp performance logs:
 ```bash

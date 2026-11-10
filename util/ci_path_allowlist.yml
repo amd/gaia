@@ -38,11 +38,6 @@ dependencies:
       build-installers.yml, which triggers on setup.py and pyproject.toml.
     pyproject.toml: >-
       Same reason as setup.py.
-    src/gaia/apps/webui/package.json: >-
-      Read only by util/release_tag.py's RC stamp in build_core.yml, which
-      build-installers.yml triggers on.
-    src/gaia/apps/webui/package-lock.json: >-
-      Same reason as package.json.
 
   build-installers.yml:
     src/gaia/apps/webui/**: >-

@@ -753,6 +753,9 @@ export const enMessages = {
     'prompt.title.tool': 'Allow {tool}?',
     'prompt.title.toolId': 'Allow GAIA to use {tool}?',
     'prompt.needsOk': 'GAIA needs your OK before {tool}.',
+    'prompt.trust.title': "Trust this folder's instructions and skills?",
+    'prompt.trust.ask': "GAIA would put this folder's CLAUDE.md, AGENTS.md and skills in the model's prompt, now and every time you work in it.",
+    'prompt.trust.allow': 'Trust this folder',
     'prompt.path.title.file': 'Let GAIA use this file?',
     'prompt.path.title.folder': 'Let GAIA use this folder?',
     'prompt.path.title.location': 'Let GAIA use this location?',
@@ -1732,6 +1735,9 @@ export const enMessages = {
     'settings.connectors.servers': 'MCP servers',
     'settings.connectors.serversHint': 'Add tools from other services.',
     'settings.connectors.agentServers': 'Custom agent servers',
+    'settings.connectors.unavailable': 'Unavailable',
+    'settings.connectors.unavailableHint': "GAIA couldn't read these connectors. Restart GAIA. If it keeps happening, save a troubleshooting report under Settings → Privacy and attach it to a bug report.",
+    'settings.connectors.unavailableStatus': "Couldn't load",
     'settings.connectors.notRevoked': "Disconnected locally, but the provider did not confirm the revoke ({reason}). It may still show as connected in your account's app permissions.",
     'settings.connectors.localOnly': 'Disconnected locally. {reason}',
     'settings.connectors.noRevokeApi': "Disconnected locally. This provider has no API to revoke access remotely — remove GAIA from your account's connected-apps page if you want to fully revoke it.",
@@ -2655,6 +2661,11 @@ export const enMessages = {
     'resources.error': "Can't read this PC's usage. Trying again…",
     'resources.settings': 'Show resource usage in chats',
     'resources.settingsHint': 'CPU, memory, GPU, NPU and network use on this PC, updated every second.',
+    'errorBoundary.title': 'Something went wrong',
+    'errorBoundary.body': 'This part of GAIA hit an error. The rest of the app still works.',
+    'errorBoundary.bodyWindow': 'GAIA hit an error. Reload to continue.',
+    'errorBoundary.retry': 'Try again',
+    'errorBoundary.reload': 'Reload',
 } as const;
 
 export const en: Locale = {
