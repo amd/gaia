@@ -53,7 +53,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\gaia-tui` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
@@ -135,7 +135,7 @@ dismiss the warning, then go to **System Settings → Privacy & Security** and c
 Contributors who want the binary from a checkout, rather than the installer:
 
 ```bash
-cd tui && make build     # -> tui/bin/gaia-tui
+cd tui && make build     # -> tui/bin/gaia-tui (.exe on Windows)
 ```
 
 This builds `gaia-tui` only. `gaia-agent` still has to come from an installer or a
@@ -252,7 +252,7 @@ Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
 The Lemonade step installs Lemonade and stops, downloading nothing — and so does
 every retry of it, and the key on a Lemonade row that is installed but not
-running. `p` still opens the full provider panel at any point, to pick a
+running. `p` still opens the full provider panel at any point on the flagship agent, to pick a
 specific model rather than the default.
 
 #### Choose your models
@@ -599,6 +599,8 @@ names the update command.
 | `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
 | `Ctrl+Y` | Copy the whole answer |
 | `Ctrl+B` | Copy the last code block in the answer |
+| `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
+| `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
 | `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
 
 ### Reading a turn
@@ -813,6 +815,10 @@ says what it would have run, so you can run it yourself.
 | `a` | Run it, and stop asking about that kind of command for the rest of the session. The prompt names exactly what `a` covers: `pytest (runs the test code it finds)` covers every spelling of a test run (`python -m pytest`, `cd proj && pytest 2>&1 \| tail`), never a different program. A command that runs code it does not show says so — `make (runs the Makefile's commands)`, `pip install (runs the package's setup code)`, `python -m explore (runs that Python module)` — and `python (any script)` and `Python snippets (run_python)` cover any Python code. Anything that runs code from the agent's own scratch folder never offers `a`: a script there, a shell command run there or naming a path there, or a script handed one. Writing there never asks, so each run is answered on its own. Deletes never offer `a` |
 | `n` / `Esc` | Don't run it. The agent is told you said no |
 
+An email prompt too long for the screen scrolls with `↑`/`↓`/`PgUp`/`PgDn`, and
+`y` only works once its last line has been on screen, because you are approving
+exactly what goes out. `n` and `Esc` work throughout.
+
 A prompt nobody answers expires after 10 minutes. The agent is told it **timed
 out**, not that you refused, so it asks whether you still want it rather than
 giving up on something you never saw.
@@ -915,7 +921,7 @@ being ignored.
 
 To run a turn somewhere other than this machine — Fireworks AI or your
 organisation's AMD LLM Gateway — choose it at the first-run question, press **p**
-at the readiness gate, or type `/provider`. See [AI providers](/guides/ai-providers).
+at the readiness gate (flagship agent only), or type `/provider`. See [AI providers](/guides/ai-providers).
 
 ## When GAIA asks permission
 

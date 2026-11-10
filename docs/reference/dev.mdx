@@ -33,7 +33,7 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
+| **OS** | Windows 11 Pro 24H2 / Ubuntu 24.04+ | - |
 | **RAM** | 16GB | 64GB |
 | **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
 | **Storage** | 20GB free | - |
@@ -436,9 +436,8 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 
 | Source | Fields that follow it |
 |---|---|
-| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
-| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL; the `gaia-agent-gaia>=` floor of the deprecated chat shim |
-| `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
+| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
 
 `--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's
 `stamp_version.py`, and the hand edits to the Terminal UI manifest and the navbar.
@@ -446,10 +445,8 @@ Those scripts still work, and release workflows still call them.
 `--stamp vX.Y.Z-rcN` writes a release candidate's versions into the same files
 as `util/release_tag.py stamp`, with the same result.
 
-The flagship and chat agents keep their own versions until they join core's
-([#5172](https://github.com/amd/gaia/issues/5172)). Until then, two fields print as
-`HELD` and don't fail: the chat agent's `__init__.py` version and the flagship npm
-lockfile's root version.
+The flagship agent keeps its own version until it joins core's
+([#5172](https://github.com/amd/gaia/issues/5172)).
 
 ### The flagship agent in a core release
 
@@ -486,6 +483,10 @@ approval, and keeps the result off every stable channel:
   and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
+  `GAIA_RC_FLAGSHIP_URL` points a candidate core at another copy of those
+  assets (a `file://` directory works); the release pipeline uses it so the
+  frozen core's real-engine check installs the flagship from the same run,
+  before the pre-release exists.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`

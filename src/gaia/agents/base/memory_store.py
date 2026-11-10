@@ -292,16 +292,64 @@ _STEM_STOPWORDS = frozenset(
     "there here also just like user users user's".split()
 )
 
+# Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
+# and ``C++`` / ``C#`` are not ``C``.  Separators inside dates, phone numbers,
+# and ranges remain word separators, so their historical format-insensitive
+# matching is preserved (``1990-05-14`` still matches ``1990/05/14``).
+_MEMORY_TOKEN_RE = re.compile(
+    r"""
+    (?<![a-z0-9_])[+-][0-9]+
+    | [a-z][a-z0-9]*[+#]+(?![a-z0-9_])
+    | [a-z0-9']+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_MEMORY_SYMBOL_RE = re.compile(
+    r"(?<![a-z0-9_])[+-][0-9]+|[a-z][a-z0-9]*[+#]+(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _memory_tokens(text: str) -> list[str]:
+    """Tokens for memory identity comparisons, preserving meaningful symbols."""
+    return _MEMORY_TOKEN_RE.findall(text.lower())
+
+
+def _symbol_base(token: str) -> str | None:
+    """Return the plain value of a signed number or language suffix token."""
+    if not _MEMORY_SYMBOL_RE.fullmatch(token):
+        return None
+    return token[1:] if token[0] in "+-" else token.rstrip("+#")
+
+
+def _has_symbol_conflict(words1: set[str], words2: set[str]) -> bool:
+    """Whether matching plain values carry different meaningful symbols."""
+    variants: list[dict[str, set[str]]] = []
+    for words in (words1, words2):
+        by_base: dict[str, set[str]] = {}
+        for word in words:
+            base = _symbol_base(word) or word
+            by_base.setdefault(base, set()).add(word)
+        variants.append(by_base)
+
+    for base in variants[0].keys() & variants[1].keys():
+        left, right = variants[0][base], variants[1][base]
+        if left != right and any(
+            _symbol_base(word) is not None for word in left | right
+        ):
+            return True
+    return False
+
 
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
-    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
-    7" are different memories.
+    Numeric and symbolic tokens are kept whole, however short: ``-5`` and
+    ``5`` are different memories, as are ``C`` and ``C++``.
     """
     stems = set()
-    for w in re.findall(r"[a-z0-9']+", text.lower()):
-        if any(ch.isdigit() for ch in w):
+    for w in _memory_tokens(text):
+        if any(ch.isdigit() for ch in w) or w.endswith(("+", "#")):
             stems.add(w)
         elif len(w) >= 3 and w not in _STEM_STOPWORDS:
             stems.add(w[:4])
@@ -358,9 +406,12 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+_SAME_WORDS_RE = re.compile(_MEMORY_SYMBOL_RE.pattern + r"|[a-z0-9]+", re.IGNORECASE)
+
+
 def _same_words(text: str) -> str:
-    """*text*'s words in order, ignoring case and punctuation."""
-    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+    """*text*'s words in order, ignoring case and punctuation but not signs."""
+    return " ".join(_SAME_WORDS_RE.findall(text.lower()))
 
 
 def _word_overlap(text1: str, text2: str) -> float:
@@ -370,10 +421,14 @@ def _word_overlap(text1: str, text2: str) -> float:
 
     A subset of a longer text still counts as a match — appropriate for dedup.
     """
-    words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
-    words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
+    if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
+        words1 = set(_memory_tokens(text1))
+        words2 = set(_memory_tokens(text2))
+    else:
+        words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
+        words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
-    if not words1 or not words2:
+    if not words1 or not words2 or _has_symbol_conflict(words1, words2):
         return 0.0
 
     intersection = words1 & words2
@@ -3917,6 +3972,81 @@ class MemoryStore:
                 rowcount = self._conn.execute(
                     "UPDATE procedures SET superseded_by = ? WHERE id = ?",
                     (superseded_by, skill_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def record_skill_outcome(
+        self,
+        skill_ids: List[str],
+        success: bool,
+        *,
+        erase_count: int | None = None,
+    ) -> dict[str, tuple[int, int, int]]:
+        """Count one outcome on each procedure that was in context for it.
+
+        Adds one to ``attempt_count``, and to ``success_count`` when *success*,
+        on top of the counts the row was born with, and one to
+        ``provenance.outcomes``, the outcomes recorded since it was learned.
+        What makes an outcome is the caller's definition
+        (``ProceduralMemoryMixin._record_procedure_outcome``).
+
+        Args:
+            skill_ids: procedures recalled into the turn; duplicates count once.
+            success: whether the turn's outcome was a success.
+            erase_count: :meth:`erase_count` when the turn began; if all memory
+                was erased since, nothing is written.
+
+        Returns:
+            ``{skill_id: (success_count, attempt_count, outcomes)}`` after the
+            update, for the ids that still exist (one forgotten since recall is
+            skipped).
+        """
+        ids = list(dict.fromkeys(skill_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure outcome not stored: all memory was "
+                    "erased after the turn began"
+                )
+                return {}
+            try:
+                self._conn.execute(
+                    "UPDATE procedures SET attempt_count = attempt_count + 1, "
+                    "success_count = success_count + ?, "
+                    "provenance = json_set(COALESCE(provenance, '{}'), '$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1) "
+                    f"WHERE id IN ({placeholders})",
+                    (int(bool(success)), *ids),
+                )
+                rows = self._conn.execute(
+                    "SELECT id, success_count, attempt_count, "
+                    "json_extract(provenance, '$.outcomes') FROM procedures "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {row[0]: (int(row[1]), int(row[2]), int(row[3])) for row in rows}
+
+    def disable_skill(self, skill_id: str) -> bool:
+        """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._locked():
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET enabled = 0 WHERE id = ?", (skill_id,)
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0

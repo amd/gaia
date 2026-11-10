@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
+    MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
     GoalCluster,
     GoalEmbedRejected,
@@ -368,6 +369,7 @@ class ProceduralMemoryMixin:
                     when_to_use=row["when_to_use"],
                     body=row["markdown_body"],
                     tools_required=row.get("tools_required") or [],
+                    skill_id=procedure_id,
                 )
             )
             recalled_ids.append(procedure_id)
@@ -558,6 +560,83 @@ class ProceduralMemoryMixin:
         skills, config = self._recall_skills_for_turn(goal)
         self._recalled_skills = skills
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
+        # A body the prompt dropped was never in context, so its outcome is not its own.
+        self._recalled_skill_ids = [
+            s.skill_id
+            for s in skills
+            if s.skill_id and f"## {s.name}\n" in self._recalled_skill_prompt
+        ]
+
+    def _note_person_decision(self, tool_name: str, approved: bool) -> None:
+        """Record a person's answer to a confirmation prompt for *tool_name*.
+
+        Called by the agent loop. Ignored outside a turn (no list to add to).
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        if decisions is not None:
+            decisions.append((tool_name, bool(approved)))
+
+    def _record_procedure_outcome(self) -> None:
+        """Count this turn on each procedure recalled into it (#2865).
+
+        A procedure's outcome is a person's answers to this turn's prompts for
+        the tools it lists in ``tools_required``: any decline makes it a failed
+        attempt, approvals with no decline a successful one. A prompt for some
+        other tool, and a turn nobody was asked about, count nothing. Once a
+        procedure has ``MIN_OUTCOMES_TO_RETIRE`` outcomes since it was learned,
+        a failure that leaves it below the success rate it was learned at
+        disables it.
+
+        Consumes the turn's decisions, so a turn is counted once.
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        self._turn_person_decisions = None
+        store = getattr(self, "_memory_store", None)
+        if not decisions or store is None or getattr(self, "_incognito", False):
+            return
+        in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
+        by_outcome: Dict[bool, List[str]] = {True: [], False: []}
+        for skill in getattr(self, "_recalled_skills", []):
+            if skill.skill_id not in in_context:
+                continue
+            tools = set(skill.tools_required)
+            answers = [ok for tool, ok in decisions if tool in tools]
+            if answers:
+                by_outcome[all(answers)].append(skill.skill_id)
+        if not (by_outcome[True] or by_outcome[False]):
+            return
+
+        from gaia.agents.base.memory import (
+            _load_memory_settings,  # deferred (cycle break)
+        )
+
+        erase_count = getattr(self, "_turn_erase_count", None)
+        if by_outcome[True]:
+            done = store.record_skill_outcome(
+                by_outcome[True], True, erase_count=erase_count
+            )
+            logger.info("[MemoryMixin] procedure outcome: success for %s", sorted(done))
+        if not by_outcome[False]:
+            return
+        failed = store.record_skill_outcome(
+            by_outcome[False], False, erase_count=erase_count
+        )
+        logger.info("[MemoryMixin] procedure outcome: failure for %s", sorted(failed))
+        bar = load_synthesis_config(_load_memory_settings()).min_success_rate
+        for skill_id, (successes, attempts, outcomes) in failed.items():
+            if outcomes < MIN_OUTCOMES_TO_RETIRE or successes / attempts >= bar:
+                continue
+            if store.disable_skill(skill_id):
+                logger.warning(
+                    "[MemoryMixin] procedure %s disabled: its record fell to "
+                    "%d/%d, below the %.0f%% it was learned at, after people "
+                    "declined its steps. It is no longer recalled; a new run "
+                    "of the same goal can learn a replacement",
+                    skill_id,
+                    successes,
+                    attempts,
+                    bar * 100,
+                )
 
     # ==================================================================
     # Skill Synthesis (procedural memory)

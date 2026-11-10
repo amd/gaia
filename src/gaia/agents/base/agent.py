@@ -43,7 +43,12 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -54,10 +59,9 @@ from gaia.agents.base.completion import (
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
-    TerminalConfirmationMixin,
     edit_is_inside,
     edit_target,
-    terminal_is_interactive,
+    someone_can_answer,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -148,6 +152,7 @@ from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
     describe_registry,
+    tool_build,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -1514,6 +1519,8 @@ _THIS_TURN_PATTERN = re.compile(
     r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
 )
 # "Executing the final write now.": a step in the present tense, due this turn.
+# Also "Proceeding with step 1.": announcing a numbered step of a plan that
+# was laid out instead of being run (#6914).
 _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
     r"(?:executing|running|performing|writing|applying|calling|fetching"
@@ -1521,7 +1528,8 @@ _PROGRESSIVE_STEP_PATTERN = re.compile(
     r"(?!\s+\w+ly\b)"
     r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
     r"|gives?|happens?|follows?)\b)"
-    r"[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$",
+    r"(?:[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$"
+    r"|[^.!?:]{0,60}\bwith\s+step\s*\d+\s*[.!]?\s*$)",
     re.IGNORECASE,
 )
 _UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
@@ -1644,6 +1652,7 @@ _PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$
 _ASKS_GO_AHEAD_PATTERN = re.compile(
     r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
     r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|ready when you are|just say go"
     r"|confirm\w*|proceed\w*|approv\w*|once you"
     r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
     r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
@@ -2249,10 +2258,10 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -2342,6 +2351,48 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     if target == prompt_args["file_path"]:
         return prompt_args
     return {**prompt_args, "file_path": target}
+
+
+def _record_refused_write(
+    agent: Any, tool_name: str, tool_args: Any, result: Any
+) -> None:
+    """Put a write the path sandbox refused on this turn's ledger as final.
+
+    Code run through ``run_python`` or the shell isn't confined by the
+    sandbox, so the ledger is what keeps it off a path a write tool was just
+    refused. getattr throughout: test stubs copy ``_execute_tool``.
+    """
+    ledger = getattr(agent, "_denied_effects", None)
+    if ledger is None or not isinstance(result, dict):
+        return
+    if result.get("status") != "error" or not isinstance(tool_args, dict):
+        return
+    registry = getattr(agent, "_tools_registry", None) or {}
+    preflight = (registry.get(tool_name) or {}).get("preflight")
+    target_of = getattr(preflight, "target_of", None)
+    read_validator = getattr(agent, "_read_validator", None)
+    validator = read_validator() if callable(read_validator) else None
+    if validator is None or not callable(target_of):
+        return
+    try:
+        target = os.path.abspath(str(target_of(tool_args)))
+        real = os.path.realpath(target)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        logger.debug("could not resolve the refused write's target: %s", e)
+        return
+    # A "read it first" or a size limit is a step to take, not a refusal.
+    if validator.is_path_allowed(real, prompt_user=False) and not (
+        validator.is_write_blocked(real)[0]
+    ):
+        return
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(result.get("error") or "refused by the path sandbox"),
+        kinds={PATH},
+        refused=True,
+        paths=[target, real],
+    )
 
 
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
@@ -2914,13 +2965,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2929,7 +2988,25 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
@@ -3018,7 +3095,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
-        self._register_tools()
+        with tool_build():
+            self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
@@ -3047,8 +3125,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -3059,7 +3135,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -3088,7 +3164,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
@@ -3693,18 +3769,7 @@ Do NOT wrap conversational replies in JSON.
             return False
         if self._path_access_refusal_unasked(path):
             return True
-        console = self.console
-        # A background run or an unattended sidecar query denies every prompt.
-        if getattr(console, "background_mode", False) is True:
-            return True
-        if getattr(console, "nobody_answers", False) is True:
-            return True
-        if getattr(console, "blocking_confirmation", False):
-            return False
-        # A terminal console asks only on an interactive terminal; others deny.
-        return not (
-            isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
-        )
+        return not someone_can_answer(self.console)
 
     def _path_access_without_asking(self, path: Path) -> Optional[bool]:
         """The answer to a path-access question no one needs to be asked, or None."""
@@ -7079,6 +7144,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _skill_tool_scope(self, tool_name: str) -> Any:
+        """Bind a loaded skill's tool to this agent, as its body is when it runs.
+
+        A skill's preflight and approval prompt need the agent too, and a skill
+        tool has no ``self``; any other tool gets a no-op context.
+        """
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill is None:
+            return contextlib.nullcontext()
+        from gaia.skills.context import bind
+
+        return bind(self, skill)
+
     def _policy_refusal(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -7107,7 +7186,8 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args or {})
+            with self._skill_tool_scope(tool_name):
+                refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -7682,7 +7762,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, RESOLVED_PATH_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -7714,6 +7801,7 @@ Do NOT wrap conversational replies in JSON.
                     refused=isinstance(refusal, dict)
                     and refusal.get("tier") == "refuse",
                 )
+            _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # A "no" covers the effect, not the tool: another route to it is asked
@@ -7734,9 +7822,17 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        prompt_args = _with_resolved_target(
-            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
-        )
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        prompt_args = _with_resolved_target(prompt_args, preflight)
+        # A tool whose arguments don't say what will happen shows what will,
+        # on top of whatever the host already added to the prompt.
+        prompt_args_of = getattr(preflight, "prompt_args_of", None)
+        if callable(prompt_args_of):
+            with self._skill_tool_scope(tool_name):
+                shown = prompt_args_of(tool_args)
+            prompt_args = (
+                {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
+            )
         if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
             resolved_path = prompt_args.get("file_path")
             if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
@@ -7750,6 +7846,7 @@ Do NOT wrap conversational replies in JSON.
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
+            _record_refused_write(self, tool_name, tool_args, outside)
             return outside
         auto_approves = None
         if outside is not None:
@@ -7776,9 +7873,11 @@ Do NOT wrap conversational replies in JSON.
             }
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above. So is a call
-        # only a person may approve.
+        # only a person may approve, or one approved on its exact text.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
+            prompt_args.get(RISK_NOTE_ARG)
+            or prompt_args.get(NEEDS_PERSON_ARG)
+            or prompt_args.get(EXACT_TEXT_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
@@ -7799,7 +7898,21 @@ Do NOT wrap conversational replies in JSON.
                 self._confirmation_wait_s = (
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
+            # Only a prompt a person answered is an outcome for memory.
+            prompt_answered = getattr(self.console, "take_prompt_answered", None)
+            note_decision = getattr(self, "_note_person_decision", None)
+            if (
+                callable(prompt_answered)
+                and prompt_answered(tool_name)
+                and callable(note_decision)
+            ):
+                note_decision(tool_name, bool(approved))
             if not approved:
+                # What a preflight prepared for this prompt must not outlive a no.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:
@@ -7936,6 +8049,7 @@ Do NOT wrap conversational replies in JSON.
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:
@@ -8762,9 +8876,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -8796,6 +8912,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8832,7 +8954,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -9465,12 +9593,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 
@@ -10783,7 +10906,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -10796,7 +10919,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )

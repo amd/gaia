@@ -53,6 +53,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.frozen import is_frozen
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
@@ -1260,8 +1261,7 @@ def resolve_installable_version(
         raise CoreTooOldError(
             f"No published version of '{agent_id}' runs on GAIA {core}: the "
             f"oldest needs GAIA {required} or newer. Upgrade with "
-            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
-            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            f"{catalog_mod.core_upgrade_hint()}, then install '{agent_id}' again.",
             required=required,
             core=core,
         )
@@ -1276,8 +1276,8 @@ def resolve_installable_version(
         )
         raise CoreTooOldError(
             f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
-            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
-            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            f"GAIA {core}. Upgrade with {catalog_mod.core_upgrade_hint()}, "
+            f"then retry.{hint}",
             required=floor,
             core=core,
         )
@@ -1716,6 +1716,7 @@ def _machine_gate(
         manifest.get("requirements"),
         download_size_bytes=artifact.get("size_bytes", 0),
         install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
     )
     if not report.compatible:
         blockers = "; ".join(report.blockers)
@@ -1835,6 +1836,14 @@ def install(
                 manifest, version, platform_key=platform_key
             )
             artifact_kind = artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL)
+            if artifact_kind == ARTIFACT_KIND_WHEEL and is_frozen():
+                raise InstallError(
+                    f"'{agent_id}' {resolved_version} ships as a Python package, "
+                    "and this GAIA build can't install packages: it runs agents "
+                    "that ship as binaries. A wheel agent needs GAIA installed "
+                    "from PyPI or source; see "
+                    "https://amd-gaia.ai/docs/guides/custom-agent."
+                )
             effective_platform_key = platform_key or current_platform_key()
 
             # --- compatibility / disk gate ---
@@ -2491,8 +2500,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))

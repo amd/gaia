@@ -24,6 +24,8 @@ function loadInstaller(
     refresh = { code: 0 },
     appVersion = null,
     venvVersion = "0.25.0",
+    venv = true,
+    pip = { code: 0 },
   } = {}
 ) {
   const files = new Map();
@@ -36,15 +38,17 @@ function loadInstaller(
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     const refreshing = argv[0] === "init";
+    const installing = argv[0] === "pip";
     queueMicrotask(() => {
       if (refreshing && refresh.stderr) child.stderr.emit("data", Buffer.from(refresh.stderr));
-      child.emit("exit", refreshing ? refresh.code : 0);
+      if (installing && pip.stderr) child.stderr.emit("data", Buffer.from(pip.stderr));
+      child.emit("exit", refreshing ? refresh.code : installing ? pip.code : 0);
     });
     return child;
   });
   const fakeFs = {
     ...fs,
-    existsSync: (file) => String(file).includes("/venv") || files.has(String(file)),
+    existsSync: (file) => (venv && String(file).includes("/venv")) || files.has(String(file)),
     readFileSync: (file, enc) => {
       if (files.has(String(file))) return files.get(String(file));
       if (appVersion && String(file).endsWith("package.json")) {
@@ -91,7 +95,8 @@ function loadInstaller(
         return {
           spawn,
           execSync: jest.fn(),
-          spawnSync: jest.fn(() => ({ status: 0, stdout: "GAIA version 0.25.0" })),
+          // Without the venv, no `gaia` is on PATH either.
+          spawnSync: jest.fn(() => ({ status: venv ? 0 : 1, stdout: "GAIA version 0.25.0" })),
         };
       }
       return require(name);
@@ -299,6 +304,91 @@ describe("whether a launch needs the install screen", () => {
 
     expect(installer.isBackendCurrent()).toBe(false);
     expect(state()).toMatchObject(previous);
+  });
+});
+
+describe("too little disk space for an update", () => {
+  const LOW = 1024 ** 3;
+
+  test("refuses with what to free, and leaves the working install ready", async () => {
+    const { installer, spawn, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { freeBytes: LOW }
+    );
+
+    const err = await installer
+      .ensureBackend({ version: "0.25.1", isPackaged: false })
+      .then(() => null, (e) => e);
+
+    expect(err).toBeInstanceOf(installer.InstallError);
+    expect(err.reason).toBe("disk");
+    expect(err.message).toMatch(/Required: 2048 MB, available: 1024 MB/);
+    expect(err.message).toMatch(/Your installed GAIA 0\.25\.0 was not changed\./);
+    expect(err.suggestion).toMatch(/Free at least 1024 MB more at \/fixture/);
+    expect(pipRuns(spawn)).toHaveLength(0);
+    expect(state()).toMatchObject({ state: "ready", version: "0.25.0" });
+  });
+
+  test("an install from before the state file existed stays without a failure record", async () => {
+    const { installer, state } = loadInstaller(null, { freeBytes: LOW });
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toBeNull();
+  });
+
+  test("a launch with nothing to update starts, however full the disk", async () => {
+    const { installer, spawn, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { freeBytes: LOW }
+    );
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+
+  test("a first install has nothing to keep, so it is recorded as failed", async () => {
+    const { installer, state } = loadInstaller(null, { freeBytes: LOW, venv: false });
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toMatchObject({ state: "failed", stage: "pre-checks" });
+  });
+
+  test("an install that already failed stays failed", async () => {
+    const { installer, state } = loadInstaller(
+      { state: "failed", stage: "install-package", version: "0.25.1" },
+      { freeBytes: LOW }
+    );
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toMatchObject({ state: "failed" });
+  });
+
+  test.each([
+    "error: Failed to write to target: No space left on device (os error 28)",
+    "error: failed to write: There is not enough space on the disk. (os error 112)",
+  ])("uv running out of space part way is a disk failure: %s", async (stderr) => {
+    const { installer, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { pip: { code: 2, stderr } }
+    );
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk", stage: "install-package" });
+
+    // uv may have replaced some of the old packages, so this install is not kept as ready.
+    expect(state()).toMatchObject({ state: "failed" });
   });
 });
 

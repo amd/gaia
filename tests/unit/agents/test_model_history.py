@@ -397,3 +397,85 @@ def test_restoration_uses_actual_agent_native_tool_property(agent):
     _restore_model_history(agent, db, session, "follow up")
     assert agent.conversation_history[-1]["content"] == "prior answer"
     db.close()
+
+
+def _budget_agent():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        model_id="M-GGUF",
+        system_prompt="You are GAIA.",
+        _openai_tools=[],
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=3000)),
+    )
+
+
+def _with_memory_context(tokens, question="next question"):
+    return history.frame_user_message(" ".join(["note"] * tokens), question)
+
+
+def _sized_turn(index, words=250):
+    return [
+        {"role": "user", "content": f"question-{index}"},
+        {"role": "assistant", "content": " ".join(["word"] * words)},
+    ]
+
+
+def test_memory_context_lowers_the_history_budget_by_its_size(monkeypatch):
+    from gaia.agents.base.turn_metrics import count_tokens
+
+    monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
+    agent = _budget_agent()
+    framed = _with_memory_context(2000)
+    memory_tokens = count_tokens(framed) - count_tokens("next question")
+
+    plain = history.history_budget(agent, "next question")
+    with_memory = history.history_budget(agent, framed)
+
+    assert memory_tokens >= 2000
+    assert abs((plain - with_memory) - memory_tokens) <= 10
+
+
+def _fixed_token_counter(monkeypatch):
+    # CI may lack tiktoken data and fall back to a larger estimate; pin the size.
+    monkeypatch.setattr(history, "count_tokens", lambda text: len(text) // 4)
+
+
+def test_history_admitted_before_the_memory_context_is_refit(monkeypatch):
+    _fixed_token_counter(monkeypatch)
+    monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
+    agent = _budget_agent()
+    turns = [_sized_turn(i) for i in range(8)]
+    messages = [message for turn in turns for message in turn]
+    assert history.select_history(turns, history.history_budget(agent, "q")) == (
+        messages
+    )
+
+    plain = history.fit_history_to_turn(agent, messages, "next question")
+    refit = history.fit_history_to_turn(agent, messages, _with_memory_context(2000))
+
+    assert plain is messages
+    assert refit[-2:] == turns[-1]
+    assert "question-0" not in json.dumps(refit)
+    assert len(refit) < len(messages)
+
+
+def test_process_query_budgets_history_against_the_query_it_sends(agent, monkeypatch):
+    _fixed_token_counter(monkeypatch)
+    seen = []
+
+    def budget(_agent, query):
+        seen.append(query)
+        return 600 - history.count_tokens(query)
+
+    monkeypatch.setattr(history, "history_budget", budget)
+    agent.conversation_history = [m for i in range(4) for m in _sized_turn(i, 40)]
+    chat = _stub_chat(agent, "Done.")
+    framed = _with_memory_context(400, "what next")
+
+    agent.process_query(framed, max_steps=2)
+
+    assert seen == [framed]
+    sent = json.dumps(chat.send_messages.call_args_list[0].kwargs["messages"])
+    assert "question-3" in sent
+    assert "question-0" not in sent

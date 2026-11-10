@@ -377,9 +377,15 @@ jobs:
   # We pass publish_to_release=false so build-installers does NOT create its
   # own draft release — publish.yml's github-release job is the single
   # source of truth for what gets published, gated on the approval step.
+  # An RC waits for rc-flagship: its frozen core's real-engine check installs
+  # that build, since the pre-release it would read is what this run publishes.
   build-desktop-installers:
     name: Build Desktop Installers
-    needs: validate
+    needs: [validate, rc-flagship]
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: write   # build-installers uploads workflow artifacts
       id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
@@ -389,6 +395,7 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
       skip_source_tests: ${{ needs.validate.outputs.is_rc == 'true' }}
+      flagship: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || '' }}
 
   # ── Release candidate: the flagship agent from this commit ──────────
   # The hub's flagship is whatever release_agent_gaia.yml last published, which
@@ -1070,6 +1077,35 @@ jobs:
           fi
           sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
+
+      # The frozen gaia install.sh and install.ps1 fetch, so the one-line install
+      # needs no Python or PyPI either. This run froze it for the desktop
+      # installers (gaia-core-*) and the terminal packages (tui-gaia-core-*,
+      # which alone has the best-effort Intel Mac and Linux Arm builds).
+      - name: Download the gaia core builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*gaia-core-*'
+          path: core-builds
+
+      - name: Attach and checksum the gaia core
+        run: |
+          set -euo pipefail
+          attached=()
+          for p in win32-x64 darwin-arm64 linux-x64 darwin-x64 linux-arm64; do
+            f="$(find core-builds -name "gaia-core-${p}.tar.gz" | head -n1)"
+            if [ -z "${f}" ]; then
+              if [ "${p}" = darwin-x64 ] || [ "${p}" = linux-arm64 ]; then
+                echo "::warning::no ${p} gaia core this release (a best-effort build): install.sh there has nothing to fetch."
+                continue
+              fi
+              echo "::error::the release is missing the ${p} gaia core. install.sh / install.ps1 fetch it from the release, so it must not ship without it."
+              exit 1
+            fi
+            cp "${f}" "release-assets/gaia-core-${p}.tar.gz"
+            attached+=("gaia-core-${p}.tar.gz")
+          done
+          (cd release-assets && sha256sum "${attached[@]}" > gaia-core-SHA256SUMS.txt && cat gaia-core-SHA256SUMS.txt)
 
       # After the checksum step, which covers the terminal binaries only.
       - name: Download the combined Windows setup

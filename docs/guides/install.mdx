@@ -10,11 +10,10 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
 ## What you'll need
 
-- A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** (Debian/Ubuntu/Fedora/Arch)
-- **2 GB** of free disk space for the app and its Python environment. A model that runs on this PC needs more: about 6 GB for Gemma 4 E4B, or about 30 GB on PCs that get Qwen3.6. A cloud model (Fireworks AI or the AMD LLM Gateway) downloads under 1 GB
+- A computer running **Windows 10/11**, **macOS 14+** (Apple Silicon), or **Linux** with glibc 2.38 or newer (Ubuntu 24.04+, Fedora 39 to 44, or a current Arch). Ubuntu 22.04, Debian 12 and RHEL 9 are too old for GAIA's AI engine
+- About **1 GB** of free disk space for the app. A model that runs on this PC needs more: about 6 GB for Gemma 4 E4B, or about 30 GB on PCs that get Qwen3.6. A cloud model (Fireworks AI or the AMD LLM Gateway) downloads under 1 GB
 - **16 GB** of RAM or more to run a model on this PC. On a 16 GB PC, close other large apps first: the model needs about 8 GB free (see [Not enough free memory](/reference/troubleshooting#not-enough-free-memory))
-- An **internet connection** for the first launch (the app downloads its Python backend automatically)
-- About **5 minutes** to install and set up the backend, plus the model download if you choose to run one on this PC
+- An **internet connection** for setup, which downloads GAIA's model server, the GAIA agent, and the model you pick
 
 ## Download
 
@@ -25,7 +24,7 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
     | Choice | What you get | Shortcut it adds |
     |---|---|---|
     | **GAIA Agent UI** (desktop app) | A window with chat, your documents and files, and every tool call shown as it runs. To start it when you sign in to Windows, turn that on in the app's Settings → General. | **GAIA**, on the desktop and Start menu |
-    | **GAIA Terminal UI** (terminal) | `gaia-tui` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/tui). | **GAIA Terminal UI**, on the desktop and Start menu |
+    | **GAIA Terminal UI** (terminal) | `gaia-tui` and `gaia` on your PATH, with a GAIA profile and font for Windows Terminal. See [Terminal UI](/guides/tui). | **GAIA Terminal UI**, on the desktop and Start menu |
 
     1. On [amd-gaia.ai](https://amd-gaia.ai/#install), click **Install GAIA for Windows**. The file is `gaia-<version>-win-x64-setup.exe`.
     2. Run it. It needs no administrator rights — everything installs for your account only.
@@ -91,6 +90,8 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     AppImages are self-contained and require no installation. Move it anywhere convenient (e.g., `~/Applications/`).
 
+    On launch GAIA adds itself to your app grid by writing `gaia-desktop.desktop` to `~/.local/share/applications/`, so the desktop shows its window with GAIA's name and icon. Move the AppImage and the next launch updates it.
+
   </Tab>
 </Tabs>
 
@@ -124,21 +125,11 @@ To uninstall silently, run each component's `QuietUninstallString` from `HKCU\So
 
 ## First-launch setup (desktop app)
 
-The first time you launch the desktop app, its window opens right away and sets up the Python backend inside it. It downloads no model. You'll see these stages:
+The desktop app ships its backend: a `gaia` executable inside the app, so it installs no Python and downloads no package on your PC. The first launch goes straight to the setup screen, where you pick and download a model.
 
-1. **Pre-flight checks** (~5 seconds) — verifies free disk space (2 GB) and network connectivity
-2. **Download `uv`** (~30 seconds) — installs the `uv` Python package manager
-3. **Create Python environment** (~30 seconds) — downloads Python 3.12 and creates a virtualenv at `~/.gaia/venv/`
-4. **Install GAIA backend** (~3-5 minutes) — installs the `amd-gaia[ui]` Python package and its dependencies
-5. **Verify** (~5 seconds) — confirms the `gaia` command runs
+An app update carries a new backend with it. After one, the app updates the GAIA agent on its first launch, with a **Try again** button if that fails. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
 
-**Subsequent launches are instant** — the app reuses the installed environment.
-
-If a step fails, the window shows the error with a **Try again** button, and **Details** shows the end of the install log.
-
-After an app update, the same screen updates the backend and then the GAIA agent. Your models stay as they are. If the agent update fails, **Try again** picks it up, and the next launch does too.
-
-Before it updates the backend, the app stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds. The service has no window, so if it won't stop, the screen says so: restart your PC, then choose **Try again**.
+Before an update replaces the app, its installer stops GAIA's background service (the GAIA daemon) and the agents it runs, because Windows can't replace files a running program holds.
 
 ### Choose where chat runs
 
@@ -161,17 +152,9 @@ The app then opens on its setup screen, which asks where chat should run:
 If a step fails, the screen shows the error `gaia init` reported, with a **Try
 again** button and the command to run in a terminal instead.
 
-### What if the install fails?
+### What if the app can't start its backend?
 
-If the install fails, you'll see an error dialog with:
-- A short explanation of what went wrong
-- A **Retry** button
-- A **Manual install instructions** link to the troubleshooting guide
-- A **Quit** button
-
-The full install log is at `~/.gaia/electron-install.log` — attach it when reporting issues.
-
-See the [installation troubleshooting guide](/reference/install-troubleshooting) for common failure modes.
+If the app's `gaia` is missing, the window says so; reinstall GAIA. See the [installation troubleshooting guide](/reference/install-troubleshooting) for common failure modes.
 
 ## Use a Lemonade you already run
 
@@ -280,7 +263,7 @@ anything from earlier that it still needs.
 **Desktop app (Agent UI).** It checks 10 seconds after launch and every 4 hours. A
 found release shows as a chip in the corner with **Update now**; once it has
 downloaded, the chip offers the restart, whenever suits you. Quitting GAIA also
-installs it. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. Before the chip offers the restart, GAIA also downloads the new version's Python backend, so the first launch after the restart doesn't download it again and doesn't depend on the package server. If that download couldn't finish, GAIA asks you to connect before it restarts, and an install on quit waits until you're online. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
+installs it. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. The update carries the new version's backend, so the first launch after the restart downloads nothing for it. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
 
 - **Install updates automatically** — off by default. On, releases download in the
   background and you're asked only to restart.
@@ -351,19 +334,19 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal UI** — the terminal. Removes `gaia-tui`, `gaia-agent`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-tui`, `gaia-agent`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
-Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open a terminal (PowerShell or `cmd`) and run:
+Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open PowerShell before you uninstall and run the `gaia` inside the desktop app (with the terminal installed, plain `gaia uninstall --purge` does the same):
 ```powershell
-~\.gaia\venv\Scripts\gaia uninstall --purge
+& "$env:LOCALAPPDATA\Programs\gaia-desktop\resources\core\gaia.exe" uninstall --purge
 ```
 
 ### macOS
 Drag the **GAIA** app from Applications to the Trash. Empty the Trash.
 
-To also remove your data, run from a terminal:
+To also remove your data, run this from a terminal first, while the app is still in Applications:
 ```bash
-~/.gaia/venv/bin/gaia uninstall --purge
+/Applications/GAIA.app/Contents/Resources/core/gaia uninstall --purge
 ```
 
 ### Linux (Debian/Ubuntu)
@@ -372,16 +355,13 @@ sudo apt remove gaia-desktop
 ```
 
 Both `apt remove` and `apt purge` preserve your personal data in `~/.gaia`.
-To also remove your data, run as your own user:
+To also remove your data, run this as your own user before you remove the package:
 ```bash
-~/.gaia/venv/bin/gaia uninstall --purge
+/opt/GAIA/resources/core/gaia uninstall --purge
 ```
 
 ### Linux (AppImage)
-Delete the `.AppImage` file. To also remove your data:
-```bash
-~/.gaia/venv/bin/gaia uninstall --purge
-```
+Delete the `.AppImage` file. Its app-grid entry hides itself once the file is gone; to remove it too, delete `~/.local/share/applications/gaia-desktop.desktop` and `~/.local/share/icons/hicolor/256x256/apps/gaia-desktop.png`. To also remove your data, delete `~/.gaia/`.
 
 ### Tiered cleanup with `gaia uninstall`
 
@@ -400,13 +380,15 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | What | Location |
 |---|---|
 | Electron app | Platform-specific (Program Files / /Applications / /opt/GAIA) |
-| Python environment | `~/.gaia/venv/` |
+| Backend (`gaia`) | Inside the app, in `resources/core/` |
 | Chat database | `~/.gaia/chat/gaia_chat.db` |
 | Document Library uploads | `~/.gaia/documents/` |
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links on Linux and macOS, copies of the launchers on Windows), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
+| The frozen `gaia` the one-line installer runs (Linux and macOS) | `~/.gaia/core/` |
+| The copy of its `gaia` an AppImage runs, which outlives the AppImage's mount | `~/.gaia/app-core/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
@@ -423,7 +405,7 @@ The installer above is for using GAIA. To build agents, work on GAIA itself, or 
 
 | You want | Use |
 |---|---|
-| The Python CLI and SDK, plus the terminal UI, in one command | Windows: `irm https://amd-gaia.ai/install.ps1 \| iex` · Linux/macOS: `curl -fsSL https://amd-gaia.ai/install.sh \| sh` |
+| The `gaia` CLI, plus the terminal UI, in one command, with no Python needed | Windows: `irm https://amd-gaia.ai/install.ps1 \| iex` · Linux/macOS: `curl -fsSL https://amd-gaia.ai/install.sh \| sh` |
 | The Python package only | `uv pip install amd-gaia` — see [Setup](/setup) and the [Quickstart](/quickstart) |
 | The desktop app from npm | `npm install -g @amd-gaia/agent-ui`, then `gaia-ui` — see [Agent UI](/guides/agent-ui) |
 | The desktop app's own installer | `gaia-agent-ui-<version>-<arch>` files on [GitHub Releases](https://github.com/amd/gaia/releases/latest) |

@@ -56,6 +56,9 @@ MIN_OCCURRENCES: int = 3
 #: A cluster must be at least this successful (success_count / attempt_count).
 MIN_SUCCESS_RATE: float = 0.80
 
+#: Outcomes a procedure must record after it is learned before it can be retired.
+MIN_OUTCOMES_TO_RETIRE: int = 3
+
 #: Cosine threshold on goal embeddings, for clustering (and, in Phase 2, recall).
 SIMILARITY_TAU: float = 0.82
 
@@ -181,12 +184,15 @@ class DistilledProcedure:
         body: the full Markdown procedure, including a ``## Edge cases`` section.
         tools_required: registry tool names the procedure consumes (recipe
             contract; maps to ``metadata.gaia.tools_required``).
+        skill_id: the ``procedures`` row a recalled procedure came from; None
+            for a freshly distilled one.
     """
 
     name: str
     when_to_use: str
     body: str
     tools_required: List[str] = field(default_factory=list)
+    skill_id: Optional[str] = field(default=None, compare=False)
 
     @classmethod
     def parse(cls, intermediate_md: str) -> Optional["DistilledProcedure"]:

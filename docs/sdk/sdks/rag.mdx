@@ -193,8 +193,13 @@ leaves the searchable index unchanged, so retrying does not duplicate chunks.
 Calling `index_document()` again on a document that changed since it was
 indexed re-indexes it (the result has `reindexed: True`); an unchanged one
 returns `already_indexed: True` without re-embedding. `is_current(path)` tells
-you which without indexing. If replacement fails, the call reports the error
-and the previously indexed version remains available for queries.
+you which without indexing, and `freshness(path)` does so cheaply enough to
+call before every query (it hashes only when the file's size or timestamps
+moved). If replacement fails, the call reports the error and the previously
+indexed version remains available for queries. The agent's document search
+tools run this check themselves, so they never answer from an edited file's
+old text. `reindex_document(path)`, which the file watcher calls, takes the same
+path: searches keep answering from the old version while the new one embeds.
 
 Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
 takes minutes. Pass `progress_callback=lambda done, total: ...` to
@@ -360,7 +365,7 @@ key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
-`max_chunks` controls how many chunks are sent to the LLM:
+`max_chunks` controls how many chunks are sent to the LLM. Identical chunks count once, so a document indexed under two names doesn't take two places; its chunk lists both files.
 
 | max_chunks | Effect | Best for |
 |------------|--------|----------|
@@ -411,7 +416,9 @@ print(response.source_files)
 
 # Per-chunk metadata
 for meta in response.chunk_metadata:
-    print(f"File: {meta['source']}, Page: {meta.get('page', 'N/A')}")
+    print(f"File: {meta['source_file']}, score: {meta['relevance_score']:.2f}")
+    # Every file holding this exact text, when the same document was indexed twice
+    print(meta["source_files"])
 
 # Stats (if available)
 if response.stats:
@@ -1055,7 +1062,7 @@ except PermissionError as e:
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+**Security Consideration:** Without `allowed_paths`, RAG reads only the working directory, and `index_document` refuses any other file with `file_unreadable`. A caller that names a file grants it first with `path_validator.add_allowed_path(path)`, as `quick_rag()` and the chat agent's `/index` do. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
 
 `allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write), and the agent's `index_document` / `index_directory` tools apply them too. Calling `RAGSDK.index_document` directly checks the scope only.
 </Warning>

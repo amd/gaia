@@ -235,7 +235,7 @@ Create `launch-tui.ps1`. Every line matters:
 
 ```powershell
 $root = '<ABSOLUTE PATH TO YOUR WORKTREE>'
-$env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
+$env:PYTHONPATH = "$root\src;$root\hub\agents\gaia\python"
 $env:GAIA_TUI_HOME = '<A PRIVATE TEMP DIR — NOT ~/.gaia/tui>'
 $env:GAIA_MEMORY_DB = '<A PRIVATE TEMP FILE — NOT ~/.gaia/memory.db>'
 $env:GAIA_AGENT_LOG = '<A PRIVATE TEMP FILE — NOT ~/.gaia/logs/gaia-agent.log>'

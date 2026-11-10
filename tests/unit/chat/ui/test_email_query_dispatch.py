@@ -24,8 +24,8 @@ import pytest
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest

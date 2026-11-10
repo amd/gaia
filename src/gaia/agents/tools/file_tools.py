@@ -68,6 +68,38 @@ from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
+
+def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool:
+    """Return whether a canonical implementation already owns *tool_name*.
+
+    File-search is composed with the file-I/O and filesystem mixins in several
+    profiles. Those mixins provide the authoritative implementations for the
+    overlapping generic tools; checking the registry before defining another
+    closure makes the result independent of registrar order.
+    """
+    from gaia.agents.base.tools import _BUILD_NAMES, _TOOL_REGISTRY
+
+    # The process-wide registry outlives an Agent.  Only reuse a canonical
+    # implementation that was registered earlier in this same build; an entry
+    # left by a different Agent belongs to that Agent's workspace and policy.
+    build = _BUILD_NAMES.get()
+    if build is None or tool_name not in build:
+        return False
+
+    entry = _TOOL_REGISTRY.get(tool_name)
+    function = entry.get("function") if entry else None
+    return getattr(function, "__module__", None) == module_name
+
+
+def _tool_or_reuse(tool_name: str, canonical_module: str, **kwargs):
+    """Register a tool unless its canonical sibling is already registered."""
+    from gaia.agents.base.tools import tool
+
+    if _canonical_tool_already_registered(tool_name, canonical_module):
+        return lambda function: function
+    return tool(**kwargs)
+
+
 #: Root-level operating-system trees a deep search walks last, so they cannot
 #: spend the budget before user folders. Applied only at a filesystem root,
 #: never to a named folder such as ``~/Library``.
@@ -297,6 +329,7 @@ _ORDINAL_QUARTER_RE = re.compile(
     re.I,
 )
 _RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
+_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b", re.I)
 
 
 def _parse_date_value(value: str):
@@ -329,6 +362,31 @@ def _parse_date_value(value: str):
             continue
         return ym, ym
     return None
+
+
+def _cell_month_span(value):
+    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None.
+
+    A quarter, year or month cell ('2025-Q1', '2025') spans its whole period;
+    any other date dateutil can read spans its one month. A quarter without a
+    year ('Q1') is None: dateutil would read it as the 1st of this month.
+    """
+    if isinstance(value, datetime):
+        ym = value.strftime("%Y-%m")
+        return ym, ym
+    text = str(value).strip()
+    span = _parse_date_value(text)
+    if span is not None:
+        return span
+    if _QUARTER_TOKEN_RE.search(text):
+        return None
+    from dateutil import parser as date_parser
+
+    try:
+        ym = date_parser.parse(text, fuzzy=True).strftime("%Y-%m")
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return ym, ym
 
 
 def parse_date_range(date_range: str):
@@ -1098,8 +1156,12 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
+        # FileIOToolsMixin is canonical whenever this profile also has file I/O.
+        # Keep FileSearchToolsMixin's version for doc-only profiles, but reuse
+        # the already-registered implementation when composition order puts the
+        # canonical mixin first.
+        @_tool_or_reuse(
+            "read_file", "gaia.agents.tools.file_io_tools", atomic=True, override=True
         )
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
@@ -1532,7 +1594,9 @@ class FileSearchToolsMixin:
         def _workspace_target(args: Dict[str, Any]) -> Path:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
-        @tool(
+        @_tool_or_reuse(
+            "write_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
@@ -1898,7 +1962,9 @@ class FileSearchToolsMixin:
 
         # --- New tool definitions ---
 
-        @tool(
+        @_tool_or_reuse(
+            "edit_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
@@ -2101,9 +2167,10 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory. Keep the
+        # historical FileSearch schema here; changing the owner changes the
+        # model-facing arguments and needs a separate eval-backed change.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:
@@ -2455,9 +2522,10 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows dated in this period (optional).
-                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
-                    day, or range ('2025-01 to 2025-06'). Else an error.
+                date_range: Rows dated in this period (optional): quarter
+                    ('2025-Q1', "Q1'25"), year, month, day, or range
+                    ('2025-01 to 2025-06'). Cells may use these forms. Else an
+                    error.
                 sheet: Workbook sheet to analyze (optional; default the sheet
                     the workbook opens on). Ignored for CSV/TSV.
 
@@ -2582,8 +2650,6 @@ class FileSearchToolsMixin:
 
                 # --- Date range filtering ---
                 if date_range:
-                    from dateutil import parser as date_parser
-
                     parsed_range = parse_date_range(date_range)
                     if parsed_range is None:
                         return {
@@ -2629,20 +2695,35 @@ class FileSearchToolsMixin:
                     date_col_filter = date_col_candidates[0]
 
                     filtered = []
+                    unreadable = []
+                    dated = 0
                     for row in rows:
                         dv = row.get(date_col_filter)
                         if dv is None or str(dv).strip() == "":
                             continue
-                        try:
-                            if isinstance(dv, datetime):
-                                dt = dv
-                            else:
-                                dt = date_parser.parse(str(dv), fuzzy=True)
-                            row_ym = dt.strftime("%Y-%m")
-                            if start_ym <= row_ym <= end_ym:
-                                filtered.append(row)
-                        except (ValueError, TypeError, OverflowError):
+                        span = _cell_month_span(dv)
+                        if span is None:
+                            unreadable.append(str(dv))
                             continue
+                        dated += 1
+                        if start_ym <= span[0] and span[1] <= end_ym:
+                            filtered.append(row)
+                    if unreadable and not dated:
+                        examples = ", ".join(repr(v) for v in unreadable[:3])
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"date_range {date_range!r} could not be applied: "
+                                f"no value in column '{date_col_filter}' reads as "
+                                f"a date (e.g. {examples}). Cells must hold a "
+                                "quarter ('2025-Q1', 'Q1 2025'), year, month "
+                                "('2025-03') or date. Call again without "
+                                "date_range, using group_by="
+                                f"'{date_col_filter}' to split the rows by it."
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
                     rows = filtered
                     if not rows:
                         return {
@@ -2652,6 +2733,11 @@ class FileSearchToolsMixin:
                             "date_filter_applied": date_range,
                             "date_filter_parsed": {"start": start_ym, "end": end_ym},
                             "date_column": date_col_filter,
+                            **(
+                                {"date_rows_unreadable": len(unreadable)}
+                                if unreadable
+                                else {}
+                            ),
                             "message": (
                                 f"No rows in column '{date_col_filter}' fall "
                                 f"between {start_ym} and {end_ym} (inclusive), "
@@ -2692,6 +2778,8 @@ class FileSearchToolsMixin:
                     result["date_filter_applied"] = date_range
                     result["date_filter_parsed"] = {"start": start_ym, "end": end_ym}
                     result["date_column"] = date_col_filter
+                    if unreadable:
+                        result["date_rows_unreadable"] = len(unreadable)
 
                 # Infer column types
                 column_types = {}

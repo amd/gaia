@@ -98,6 +98,12 @@ answer, so it can be piped or captured; progress, warnings and logs go to
 stderr. GAIA starts Lemonade Server through the daemon if it is not running, so
 there is nothing to launch first.
 
+Where the agent ships as its own program, as in the desktop app, the terminal
+installers and the one-line installer, `gaia -p` and `gaia chat` run it through
+GAIA's background service in the current folder. Confirmation-gated tools are
+refused there, so `--dangerously-skip-permissions`, `--full-access` and
+`--base-url` work only with the agent package installed, as in a source checkout.
+
 ```bash
 gaia -p "Summarize README.md in three bullets"
 gaia -p "Reply with exactly: pong" --model amd.DeepSeek-V4.1-Flash
@@ -253,7 +259,9 @@ Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — 
 ### Confirming dangerous tools
 
 Shell commands, file writes, and an agent's own destructive tools (email send /
-forward / permanent delete, calendar RSVP) prompt before they run:
+forward / permanent delete, calendar RSVP, the flagship's calendar create,
+change and cancel, and its mail send, reply, forward and draft edits) prompt
+before they run:
 
 ```
 ⚠️  Confirm: send_now
@@ -714,7 +722,8 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon,
 and any agent sidecar it left running, before deleting its state, removes `~/.gaia/bin`
 (`gaia-tui`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
-there, and on Windows the `gaia` launchers the installer copies there), and
+there, and on Windows the frozen `gaia` the installer puts there), `~/.gaia/core` and an
+AppImage's `~/.gaia/app-core`, and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
 `~/.zshrc`, `~/.bashrc`, `~/.bash_profile` or `~/.profile`, or the `~\.gaia\bin` entry
 on the Windows user PATH (and `~\.gaia\venv\Scripts`, which earlier installers added). The rest of each file and every
@@ -743,7 +752,7 @@ gaia kill [OPTIONS]
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `--lemonade` | flag | Kill Lemonade Server and child processes |
+| `--lemonade` | flag | Stop the Lemonade Server GAIA uses: GAIA's own server with its child processes, or, by its port, the server `LEMONADE_BASE_URL` or setup chose when it runs on this machine. Only a process identified as Lemonade is killed: any other program on that port is left running and named. Exits 0 if it isn't running, 1 if it can't be stopped |
 | `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 | `--daemons` | flag | List every running GAIA daemon with its pid, age and home folder, and stop the orphaned ones |
 
@@ -1860,7 +1869,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_env_url_ignored` | _(unset)_ | The `LEMONADE_BASE_URL` value GAIA's own server was chosen over in the Agent UI's setup. GAIA ignores that variable (and `LEMONADE_API_KEY`) while it still holds this value. `gaia config set lemonade_env_url_ignored ""` lets it apply again |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
-| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
+| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't), after you trust the folder when asked. `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
@@ -1890,9 +1899,12 @@ It applies everywhere GAIA sends a prompt or a key:
   cloud provider, enter a gateway token, or switch to a cloud model.
 - The web-search tool that answers through Perplexity's cloud AI is turned off.
 
-Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway or Claude)
-from `default_model` and `last_model` in `config.json`, and prints what it cleared
-and the local model GAIA uses instead. `gaia config show` lists the policy file and the current level.
+Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway, Claude, or
+any other gateway model Lemonade lists) from `default_model` and `last_model` in
+`config.json`, and prints what it cleared and the local model GAIA uses instead. A
+saved id that only Lemonade can identify as cloud is checked against its model list;
+if Lemonade can't be reached, that id stays saved and the command warns that it
+wasn't checked. `gaia config show` lists the policy file and the current level.
 
 What it does not cover:
 
@@ -2148,9 +2160,9 @@ and no admin rights. `gaia init` installs and starts it; a Lemonade you installe
 yourself is left alone unless you choose to use it (see
 [Use a Lemonade you already run](#use-a-lemonade-you-already-run)).
 
-GAIA keeps its own server current. When an update to GAIA targets a newer
-Lemonade, the next start replaces the older one, downloading it if needed; you
-run nothing.
+GAIA keeps its own server on the version it targets. When an update to GAIA
+targets a different Lemonade version, the next start replaces the installed one,
+downloading the pinned version if needed; you run nothing.
 
 ```bash
 gaia lemonade embedded start      # download if needed, then run
@@ -2318,21 +2330,6 @@ gaia eval agent --iterations 5                     # Run each scenario 5 times f
 gaia eval agent --fix                              # Auto-fix failures with Claude Code
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
-
-Generate a report:
-```bash
-gaia report -d ./eval_results
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d, --eval-dir` | `./output/evaluations` | Directory containing `.eval.json` files to analyze |
-| `-o, --output-file` | `LLM_Evaluation_Report.md` | Output filename for the markdown report |
-| `--summary-only` | off | Only display the summary on the console; don't save a report file |
-
-<Warning>
-  `gaia report` is registered but not currently dispatched ([#3488](https://github.com/amd/gaia/issues/3488)) — it prints top-level help and exits 0 instead of generating a report.
-</Warning>
 
 Visualize llama.cpp performance logs:
 ```bash
@@ -2528,7 +2525,7 @@ Scores RAG retrieval (recall@k, MRR) separately from answer accuracy, on real do
 ```bash
 gaia eval retrieval --suite pr                     # Offline, retrieval only: the PR gate
 gaia eval retrieval --suite pr --gate tests/fixtures/eval_baselines/rag-retrieval/pr.json
-gaia eval retrieval --suite full --judge           # FinanceBench, AMD docs, XQuAD, scale tiers, answers
+gaia eval retrieval --suite full --judge           # AMD docs, XQuAD, scale tiers, answers
 gaia eval retrieval --fetch-only                   # Download and verify the corpora
 ```
 
@@ -2537,14 +2534,13 @@ gaia eval retrieval --fetch-only                   # Download and verify the cor
 | `--component` | `rag` | `rag` (document Q&A) or `code` (code search, [its own options](#evaluation-commands)) |
 | `--suite` | `pr` | `pr` (offline, deterministic) or `full` |
 | `--repo-root` | the current directory | gaia checkout holding `eval/retrieval/` and the committed documents; needed when gaia is installed as a wheel and you run from elsewhere |
-| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `financebench`, `xquad` |
+| `--datasets` | the suite's | Subset of `repo_docs`, `technical_docs`, `xquad` |
 | `--retrieval-only` | off | Skip answer generation |
 | `--judge` / `--judge-model` | off | Grade free-form answers with Claude; otherwise they are unscored |
 | `--model` | RAG default | Chat model that answers |
 | `--scale-tiers` / `--no-scale` | `10,100,1000` (full) | Corpus sizes for the scale phase |
 | `--no-hard-cases` | off | Skip the hard cases |
 | `--xquad-languages` / `--xquad-per-language` | `en,de,es,ru,zh,ar,hi` / `40` | Multilingual slice |
-| `--financebench-docs` | all | Keep the questions over the first N filings |
 | `--no-vlm` | off | Do not read PDF images with the VLM (`pr` never does); otherwise the VLM must read a test image before the run starts |
 | `--offline` | off | Never download; fail if a file is not cached |
 | `--fetch-only` | off | Download and verify every corpus file, then stop |
@@ -2813,13 +2809,14 @@ Skills are discovered from these roots, highest precedence first:
 <Tabs>
   <Tab title="list">
     ```bash
-    gaia skill list [--json] [--root ROOT]
+    gaia skill list [--json] [--root ROOT] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
     | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-project` \| `claude-import` |
+    | `--agent-dir DIR` | Also discover the skills an agent package bundles in `DIR/skills/`, as root `agent-bundled`. Repeatable. Exits `2` if `DIR/skills/` does not exist |
 
     ```
     NAME                         VERSION    TIER          ROOT           TOOLS
@@ -2832,13 +2829,14 @@ Skills are discovered from these roots, highest precedence first:
 
   <Tab title="info">
     ```bash
-    gaia skill info <name> [--json] [--body]
+    gaia skill info <name> [--json] [--body] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON (including the full frontmatter) instead of text |
     | `--body` | Also print the Markdown instructions |
+    | `--agent-dir DIR` | Also look in the skills an agent package bundles in `DIR/skills/`. Repeatable |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
   </Tab>

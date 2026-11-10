@@ -4,8 +4,10 @@
 /**
  * backend-installer.cjs — Shared GAIA Python backend bootstrap logic.
  *
- * Single source of truth for installing / upgrading the GAIA Python backend
- * (`~/.gaia/venv` with `amd-gaia[ui]==<pinned-version>`). Called from both:
+ * Single source of truth for the GAIA backend the app runs. A packaged app
+ * runs the frozen `gaia` it ships (<resources>/core) and installs nothing; run
+ * from source, it installs `~/.gaia/venv` with `amd-gaia[ui]==<pinned-version>`.
+ * Called from both:
  *
  *   - `bin/gaia-ui.cjs`  (the npm CLI entry point)
  *   - `main.cjs`         (the Electron app, on first-run bootstrap)
@@ -17,7 +19,7 @@
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
  *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
- *   - stopRunningDaemon(opts)        → Promise<void>  (before the venv is touched)
+ *   - stopRunningDaemon(opts)        → Promise<void>  (before its files are replaced)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
@@ -34,7 +36,6 @@
 "use strict";
 
 const { spawn, spawnSync, execFileSync } = require("child_process");
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -54,6 +55,16 @@ const GAIA_BIN = IS_WINDOWS
 const GAIA_PYTHON_BIN = IS_WINDOWS
   ? path.join(GAIA_VENV, "Scripts", "python.exe")
   : path.join(GAIA_VENV, "bin", "python");
+
+// The frozen `gaia` a packaged app ships (installer/core/freeze.py). A packaged
+// app runs only this one; the venv below is for running the app from source.
+const BUNDLED_GAIA_BIN = process.resourcesPath
+  ? path.join(process.resourcesPath, "core", IS_WINDOWS ? "gaia.exe" : "gaia")
+  : null;
+// Not ~/.gaia/core: install.sh unpacks its own gaia there.
+const APPIMAGE_CORE_ROOT = path.join(GAIA_HOME, "app-core");
+// Written last, so a copy a quit cut short is redone.
+const APPIMAGE_CORE_DONE = ".copied";
 
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
@@ -77,55 +88,6 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // PyPI, so retry a transient network failure a few times before giving up.
 const INSTALL_MAX_ATTEMPTS = 3;
 const INSTALL_RETRY_BACKOFF_MS = 3000;
-
-// ── Bundled `uv` binary ──────────────────────────────────────────────────────
-//
-// Issue #782 / T3: the AppImage now ships a pinned `uv` under
-// `extraResources` (see electron-builder.yml). At runtime we copy it into
-// `~/.gaia/bin/uv` with atomic-rename + SHA256 verification. The previous
-// `curl | sh` path is retained only as an unpackaged-dev fallback so
-// contributors running from source keep working.
-//
-// When bumping uv, update:
-//   - .github/workflows/build-installers.yml (tarball .tar.gz SHA256 — archive)
-//   - BUNDLED_UV_SHA256 below (extracted binary SHA256, linux-x64/win-x64 only)
-//
-// IMPORTANT: per-platform verification strategy differs:
-//   - linux-x64 / win-x64: BUNDLED_UV_SHA256 pins the raw extracted-binary
-//     digest (no post-build modification) — deterministic across CI runs.
-//   - mac-arm64: NOT pinned here. electron-builder code-signs the bundled uv
-//     during packaging (ad-hoc `identity=-` when no Developer ID cert is
-//     configured, which is every CI build today), and ad-hoc codesign output
-//     depends on the codesign/Xcode toolchain baked into the GitHub-hosted
-//     `macos-latest` runner image — which floats and is NOT reproducible
-//     across CI runs (observed: macos-15-arm64 vs macos-26-arm64 images
-//     produced two different digests for byte-identical source). A fixed
-//     SHA256 pin is therefore not deterministic on macOS and would fail
-//     ~half of CI runs and brick first-launch on user machines whenever the
-//     runner image rolls. Instead, ensureUv() and the dmg-structural-smoke
-//     test both run `codesign --verify --strict` against the bundled binary
-//     — this validates the on-disk signature is intact/untampered without
-//     depending on the exact signing bytes, and still fails loud on
-//     corruption or an actually-invalid signature.
-const BUNDLED_UV_VERSION = "0.5.14";
-const BUNDLED_UV_SHA256 = {
-  "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
-  // The Windows extracted uv.exe SHA is populated by CI during the
-  // build step. The placeholder MUST be replaced in CI before packaging
-  // so runtime verification remains strict.
-  "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
-  // mac-arm64: intentionally absent. See the comment block above — the
-  // post-codesign digest is not deterministic across CI runner images, so
-  // mac-arm64 is verified via codesignVerify() (identity/signature validity)
-  // instead of a fixed SHA256 pin. bundledUvPlatformKey() still returns
-  // "mac-arm64"; callers must not treat a missing entry here as "unpinned
-  // platform" for darwin — see ensureUv()/installBundledUv().
-};
-
-const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
-const MANAGED_UV_BIN = IS_WINDOWS
-  ? path.join(MANAGED_UV_DIR, "uv.exe")
-  : path.join(MANAGED_UV_DIR, "uv");
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -457,10 +419,59 @@ function commandExists(cmd) {
   return result.status === 0;
 }
 
+/** The `gaia` this packaged app ships, or null when it ships none. */
+function shippedGaiaBin() {
+  return BUNDLED_GAIA_BIN && fs.existsSync(BUNDLED_GAIA_BIN) ? BUNDLED_GAIA_BIN : null;
+}
+
+/** Where an AppImage keeps its copy of the shipped core for this version. */
+function appImageCoreDir() {
+  return path.join(APPIMAGE_CORE_ROOT, toPep440(appVersion()));
+}
+
 /**
- * Find the gaia binary — prefer the managed venv, fall back to PATH.
+ * The shipped `gaia` as the app runs it, or null until it can run. An
+ * AppImage's files vanish when the app quits, and the daemon outlives the app,
+ * so an AppImage runs a copy under ~/.gaia once ensureBundledCore has made it.
+ */
+function bundledGaiaBin() {
+  const shipped = shippedGaiaBin();
+  if (!shipped || !process.env.APPIMAGE) return shipped;
+  const dir = appImageCoreDir();
+  return fs.existsSync(path.join(dir, APPIMAGE_CORE_DONE)) ? path.join(dir, path.basename(shipped)) : null;
+}
+
+/** bundledGaiaBin, after copying an AppImage's core out of its mount. */
+async function ensureBundledCore() {
+  const shipped = shippedGaiaBin();
+  if (!shipped || !process.env.APPIMAGE) return shipped;
+  const ready = bundledGaiaBin();
+  if (ready) return ready;
+  const dir = appImageCoreDir();
+  log(`Copying the backend out of the AppImage to ${dir}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  await fs.promises.cp(path.dirname(shipped), dir, { recursive: true, verbatimSymlinks: true });
+  fs.writeFileSync(path.join(dir, APPIMAGE_CORE_DONE), appVersion());
+  const copy = bundledGaiaBin();
+  const older = listDir(APPIMAGE_CORE_ROOT).filter((name) => name !== path.basename(dir));
+  if (older.length) {
+    // A daemon from an older copy reads its files as it runs, so it stops first.
+    await stopRunningDaemon({ gaiaBin: copy });
+    for (const name of older) {
+      fs.rmSync(path.join(APPIMAGE_CORE_ROOT, name), { recursive: true, force: true });
+    }
+  }
+  return copy;
+}
+
+/**
+ * Find the gaia binary. A packaged app runs only the one it ships; from
+ * source, the managed venv, else PATH.
  */
 function findGaiaBin() {
+  if (shippedGaiaBin()) {
+    return bundledGaiaBin();
+  }
   if (fs.existsSync(GAIA_BIN)) {
     return GAIA_BIN;
   }
@@ -633,9 +644,9 @@ function liveDaemonPid() {
  * stop that fails with no daemon running (a broken venv, say) must not block
  * the reinstall that repairs it.
  */
-async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } = {}) {
-  if (!fs.existsSync(GAIA_BIN) || !fs.existsSync(GAIA_PYTHON_BIN)) return;
-  const result = await runCommand(GAIA_BIN, ["daemon", "stop"], {
+async function stopRunningDaemon({ gaiaBin = GAIA_BIN, timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } = {}) {
+  if (!fs.existsSync(gaiaBin) || (gaiaBin === GAIA_BIN && !fs.existsSync(GAIA_PYTHON_BIN))) return;
+  const result = await runCommand(gaiaBin, ["daemon", "stop"], {
     stageLabel: "daemon",
     timeoutMs,
     signal,
@@ -666,7 +677,7 @@ async function stopRunningDaemon({ timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } 
   const why = result.timedOut
     ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
     : `could not be stopped (gaia daemon stop exit ${result.code})`;
-  log(`To stop it by hand: ${GAIA_BIN} daemon stop`);
+  log(`To stop it by hand: ${gaiaBin} daemon stop`);
   throw new InstallError(
     `GAIA's background service (the GAIA daemon, pid ${pid}) ${why}, so its files can't be updated.`,
     {
@@ -1188,7 +1199,7 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion, reason, lockedFiles } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles, keepState } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
@@ -1197,6 +1208,8 @@ class InstallError extends Error {
     this.reason = reason || null;
     // The files another program held open, for main to find who holds them.
     this.lockedFiles = lockedFiles || null;
+    // Nothing was touched, so the recorded state still holds.
+    this.keepState = Boolean(keepState);
   }
 }
 
@@ -1208,8 +1221,37 @@ class InstallCancelled extends Error {
   }
 }
 
+/** ENOSPC on POSIX (os error 28) and ERROR_DISK_FULL on Windows (os error 112). */
+function isDiskFullError(output) {
+  return /No space left on device|not enough space on the disk|os error (28|112)\b/i.test(output || "");
+}
+
+/**
+ * The pre-check found too little space to install. `keep`: a working install
+ * is in place and the refusal leaves it, and its recorded state, untouched.
+ */
+function lowDiskError(disk, { keep, installedVersion }) {
+  const mb = (bytes) => Math.round(bytes / (1024 * 1024));
+  const requiredMb = mb(disk.requiredBytes);
+  const freeMb = disk.freeBytes != null ? mb(disk.freeBytes) : null;
+  const need = freeMb != null ? `${requiredMb - freeMb} MB more` : `${requiredMb} MB`;
+  const kept = keep ? ` Your installed GAIA${installedVersion ? ` ${installedVersion}` : ""} was not changed.` : "";
+  return new InstallError(
+    `Not enough free disk space${keep ? " to update GAIA" : ""}. Required: ${requiredMb} MB${
+      freeMb != null ? `, available: ${freeMb} MB` : ""
+    }.${kept}`,
+    {
+      stage: STAGES.PRE_CHECKS,
+      reason: FAILURE_REASONS.DISK,
+      suggestion: `Free at least ${need} at ${path.dirname(GAIA_HOME)}, then try again.`,
+      keepState: keep,
+    }
+  );
+}
+
 /** Which FAILURE_REASONS a uv failure's output shows, or null. */
 function failureReason(output) {
+  if (isDiskFullError(output)) return FAILURE_REASONS.DISK;
   if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
   if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
   if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
@@ -1217,437 +1259,81 @@ function failureReason(output) {
 }
 
 /**
- * Which `extraResources` subdirectory holds the bundled uv for this host.
- * Returns null for platforms we don't yet ship a binary for (falls through
- * to the dev fallback).
- */
-function bundledUvPlatformKey() {
-  if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
-  if (process.platform === "win32" && process.arch === "x64") return "win-x64";
-  if (process.platform === "darwin" && process.arch === "arm64") return "mac-arm64";
-  return null;
-}
-
-/**
- * Stream-SHA256 a file. Returns lowercase hex.
- */
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolve(hash.digest("hex")));
-  });
-}
-
-/**
- * Verify a macOS binary's code signature is structurally intact via
- * `codesign --verify --strict`. Used in place of a fixed SHA256 pin for
- * mac-arm64 (see the BUNDLED_UV_SHA256 comment) — ad-hoc-signed binaries
- * (identity=-, which is every CI build today) pass this check, but a
- * corrupted, tampered, or actually-unsigned binary fails it. This does NOT
- * depend on the specific bytes any given codesign/Xcode toolchain produces,
- * so it is stable across GitHub-hosted runner image rollovers where a fixed
- * digest pin is not.
- *
- * @param {string} binPath
- * @returns {{ ok: boolean, output: string }}
- */
-function codesignVerify(binPath) {
-  const result = spawnSync("codesign", ["--verify", "--strict", binPath], {
-    encoding: "utf8",
-  });
-  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-  return { ok: result.status === 0, output };
-}
-
-/**
- * Resolve the bundled uv binary path inside the Electron resources dir.
- * Returns null if this isn't an Electron-packaged runtime (no
- * `process.resourcesPath`) or if the host platform isn't bundled.
- */
-function findBundledUvResource() {
-  const key = bundledUvPlatformKey();
-  if (!key) return null;
-  const resourcesPath = process.resourcesPath;
-  if (!resourcesPath) return null;
-  const candidate = path.join(
-    resourcesPath,
-    "vendor",
-    "uv",
-    key,
-    IS_WINDOWS ? "uv.exe" : "uv"
-  );
-  return fs.existsSync(candidate) ? candidate : null;
-}
-
-/**
- * Atomically install the bundled uv into ~/.gaia/bin/uv after verifying it.
- * Returns the installed path.
- *
- * Verification strategy differs by platform (see the BUNDLED_UV_SHA256
- * comment): mac-arm64 uses `codesign --verify --strict` (darwin only —
- * post-codesign SHA256 is not deterministic across CI runner images);
- * linux-x64 / win-x64 use the SHA256 pin in BUNDLED_UV_SHA256, which IS
- * deterministic for those platforms (no post-build re-signing).
- *
- * Writes to `uv.tmp-<pid>-<rand>` with mode 0o700, verifies, `chmod +x`,
- * then `fs.rename()` (atomic on same filesystem).
- */
-async function installBundledUv(sourcePath, platformKey) {
-  const isDarwin = platformKey === "mac-arm64";
-  const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!isDarwin && (!expected || expected.startsWith("<"))) {
-    // Enforce strict verification: builds MUST populate the expected SHA
-    // for packaged binaries. Failing fast prevents shipping an unverified
-    // uv binary which would be a supply-chain regression.
-    throw new InstallError(
-      `No bundled uv checksum registered for platform ${platformKey}. Build must populate BUNDLED_UV_SHA256.${platformKey}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  ensureGaiaHome();
-  try {
-    fs.mkdirSync(MANAGED_UV_DIR, { recursive: true });
-  } catch (err) {
-    throw new InstallError(
-      `Could not create ${MANAGED_UV_DIR}: ${err.message}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  const rand = crypto.randomBytes(6).toString("hex");
-  const tmpPath = path.join(
-    MANAGED_UV_DIR,
-    `uv.tmp-${process.pid}-${rand}${IS_WINDOWS ? ".exe" : ""}`
-  );
-
-  // Copy source → tmp with restrictive mode.
-  await new Promise((resolve, reject) => {
-    const rs = fs.createReadStream(sourcePath);
-    const ws = fs.createWriteStream(tmpPath, { mode: 0o700 });
-    rs.on("error", reject);
-    ws.on("error", reject);
-    ws.on("finish", resolve);
-    rs.pipe(ws);
-  });
-
-  if (isDarwin) {
-    // chmod BEFORE codesign --verify: codesign needs the execute bit to
-    // resolve the binary's designated requirement on some toolchains.
-    try {
-      fs.chmodSync(tmpPath, 0o700);
-    } catch (err) {
-      log(`Warning: chmod on tmp uv failed: ${err.message}`);
-    }
-    const { ok, output } = codesignVerify(tmpPath);
-    if (!ok) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Bundled uv failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-        }
-      );
-    }
-    log("Bundled uv passed codesign --verify --strict");
-  } else {
-    let actual;
-    try {
-      actual = await sha256File(tmpPath);
-    } catch (err) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Could not hash copied uv binary: ${err.message}`,
-        { stage: STAGES.ENSURE_UV }
-      );
-    }
-
-    if (actual !== expected) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-        }
-      );
-    }
-
-    try {
-      if (!IS_WINDOWS) fs.chmodSync(tmpPath, 0o700);
-    } catch (err) {
-      log(`Warning: chmod on tmp uv failed: ${err.message}`);
-    }
-  }
-
-  try {
-    // rename() is atomic on the same filesystem on POSIX; on Windows
-    // it requires the target not to exist, so unlink first.
-    if (IS_WINDOWS && fs.existsSync(MANAGED_UV_BIN)) {
-      try { fs.unlinkSync(MANAGED_UV_BIN); } catch { /* ignore */ }
-    }
-    fs.renameSync(tmpPath, MANAGED_UV_BIN);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw new InstallError(
-      `Could not install uv to ${MANAGED_UV_BIN}: ${err.message}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  log(`Installed bundled uv v${BUNDLED_UV_VERSION} → ${MANAGED_UV_BIN}`);
-  return MANAGED_UV_BIN;
-}
-
-/**
- * Prepend ~/.gaia/bin to this process's PATH so child spawns see our
- * managed uv before any system-wide install.
- */
-function addManagedBinToPath() {
-  if (
-    process.env.PATH &&
-    !process.env.PATH.split(path.delimiter).includes(MANAGED_UV_DIR)
-  ) {
-    process.env.PATH = `${MANAGED_UV_DIR}${path.delimiter}${process.env.PATH}`;
-    log(`Prepended ${MANAGED_UV_DIR} to PATH for this process`);
-  }
-}
-
-/**
- * Ensure `uv` is available. Preference order (per issue #782 / T3):
- *   1. Managed copy at ~/.gaia/bin/uv already verified (warm-install fast path):
- *      SHA256 pin on linux-x64/win-x64, `codesign --verify --strict` on mac-arm64.
- *   2. Bundled binary in process.resourcesPath/vendor/uv/<platform>/uv:
- *      copy atomically to ~/.gaia/bin/uv with the same platform-appropriate
- *      verification.
- *   3. DEV-ONLY fallback (app.isPackaged === false OR no resourcesPath):
- *      the original `curl | sh` from astral.sh. Not a shipped-user path.
- *   4. System `uv` on PATH (last resort — unverified version).
+ * Ensure `uv` is available. Only running the app from source gets here: a
+ * packaged app ships its backend. Uses the uv on PATH, else installs it from
+ * astral.sh.
  *
  * Throws InstallError on failure.
  */
-async function ensureUv({ onProgress, isPackaged, signal } = {}) {
+async function ensureUv({ onProgress, signal } = {}) {
   const report = makeProgressReporter(onProgress);
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
-  const platformKey = bundledUvPlatformKey();
-  const isDarwin = platformKey === "mac-arm64";
-  const expectedSha = platformKey ? BUNDLED_UV_SHA256[platformKey] : null;
-
-  // Fast path: warm install already on disk and still passes verification.
-  if (isDarwin && fs.existsSync(MANAGED_UV_BIN)) {
-    const { ok, output } = codesignVerify(MANAGED_UV_BIN);
-    if (ok) {
-      log(`Managed uv at ${MANAGED_UV_BIN} passed codesign --verify --strict — reusing`);
-      addManagedBinToPath();
-      report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
-      return;
-    }
-    log(`Managed uv failed codesign verification (${output || "no output"}) — replacing`);
-  } else if (expectedSha && fs.existsSync(MANAGED_UV_BIN)) {
-    try {
-      const actual = await sha256File(MANAGED_UV_BIN);
-      if (actual === expectedSha) {
-        log(`Managed uv at ${MANAGED_UV_BIN} passed SHA256 check — reusing`);
-        addManagedBinToPath();
-        report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
-        return;
-      }
-      log(
-        `Managed uv hash mismatch (expected ${expectedSha}, got ${actual}) — replacing`
-      );
-    } catch (err) {
-      log(`Could not verify managed uv: ${err.message} — replacing`);
-    }
-  }
-
-  // Bundled path (the shipped-user path — AppImage, NSIS, DMG).
-  const bundled = findBundledUvResource();
-  if (bundled && platformKey) {
-    report(STAGES.ENSURE_UV, 30, "Installing bundled uv");
-    log(`Using bundled uv from ${bundled}`);
-
-    // Verify the source resource before copying — catches installer
-    // corruption before we touch the user's home. mac-arm64 uses
-    // codesign --verify --strict (see BUNDLED_UV_SHA256 comment for why a
-    // fixed digest isn't viable there); other platforms use the SHA256 pin,
-    // which CI must have populated — a missing/placeholder value is a
-    // build-time error, rejected at runtime here.
-    if (isDarwin) {
-      const { ok, output } = codesignVerify(bundled);
-      if (!ok) {
-        throw new InstallError(
-          `Bundled uv resource failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
-          {
-            stage: STAGES.ENSURE_UV,
-            suggestion:
-              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-          }
-        );
-      }
-    } else {
-      const srcHash = await sha256File(bundled);
-      if (srcHash !== expectedSha) {
-        throw new InstallError(
-          `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
-          {
-            stage: STAGES.ENSURE_UV,
-            suggestion:
-              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-          }
-        );
-      }
-    }
-    await installBundledUv(bundled, platformKey);
-    addManagedBinToPath();
-    report(STAGES.ENSURE_UV, 100, "uv installed (bundled)");
-    return;
-  }
-
-  // DEV-ONLY fallback for contributors running from source (no
-  // extraResources, no packaged app). Never fires for end users.
-  const isDev = isPackaged === false || !process.resourcesPath;
-  if (isDev) {
-    if (commandExists("uv")) {
-      log("uv already on PATH (dev) — using system install");
-      report(STAGES.ENSURE_UV, 100, "uv is already installed (system)");
-      return;
-    }
-
-    log("[dev] No bundled uv and no system uv — falling back to curl|sh installer");
-    let result;
-    if (IS_WINDOWS) {
-      result = await runCommand(
-        "powershell",
-        [
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "irm https://astral.sh/uv/install.ps1 | iex",
-        ],
-        { stageLabel: "uv-install-dev", signal }
-      );
-    } else {
-      result = await runCommand(
-        "bash",
-        ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-        { stageLabel: "uv-install-dev", signal }
-      );
-    }
-
-    if (result.code !== 0) {
-      throw new InstallError(
-        `Could not install uv automatically (exit code ${result.code}).`,
-        {
-          stage: STAGES.ENSURE_UV,
-          code: result.code,
-          suggestion: IS_WINDOWS
-            ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
-            : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
-        }
-      );
-    }
-
-    if (!commandExists("uv")) {
-      const candidates = [
-        path.join(os.homedir(), ".local", "bin"),
-        path.join(os.homedir(), ".cargo", "bin"),
-      ];
-      for (const uvDir of candidates) {
-        if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-          process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-          log(`Added ${uvDir} to PATH for this process`);
-        }
-      }
-    }
-
-    if (!commandExists("uv")) {
-      throw new InstallError(
-        "uv installed but not found on PATH. A shell restart may be required.",
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
-        }
-      );
-    }
-
-    report(STAGES.ENSURE_UV, 100, "uv installed (dev fallback)");
-    return;
-  }
-
-  // Packaged Windows rescue: try the Astral PowerShell installer even when
-  // running a packaged build. This provides an automated recovery path for
-  // end users on clean machines that don't have uv and where the installer
-  // build unexpectedly omitted a bundled binary. It is a last-resort and
-  // non-fatal attempt; on failure we fall through to the generic error.
-  if (IS_WINDOWS && !isDev) {
-    log("Packaged Windows: attempting automated uv installer (rescue)");
-    try {
-      const rescue = await runCommand(
-        "powershell",
-        [
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "irm https://astral.sh/uv/install.ps1 | iex",
-        ],
-        { stageLabel: "uv-install-packaged-rescue", signal }
-      );
-      if (rescue.code === 0) {
-        // Ensure common install locations are present on PATH for this
-        // process in case the installer placed uv in a user-local bin.
-        const candidates = [
-          path.join(os.homedir(), ".local", "bin"),
-          path.join(os.homedir(), ".cargo", "bin"),
-        ];
-        for (const uvDir of candidates) {
-          if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-            process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-            log(`Added ${uvDir} to PATH for this process`);
-          }
-        }
-        if (commandExists("uv")) {
-          log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
-          addManagedBinToPath();
-          report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
-          return;
-        }
-        log("Packaged Windows: uv installer ran but uv not found on PATH");
-      } else {
-        log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
-      }
-    } catch (rescueErr) {
-      if (rescueErr instanceof InstallCancelled) throw rescueErr;
-      log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
-    }
-  }
-
-  // Packaged build, but we somehow don't have a bundled binary for this
-  // platform AND no system uv. Last-ditch: accept an unverified system uv
-  // if present; otherwise fail with a clear message.
   if (commandExists("uv")) {
-    log(
-      `No bundled uv for ${process.platform}-${process.arch}, using system uv on PATH (unverified)`
-    );
-    report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+    log("uv already on PATH (dev) — using system install");
+    report(STAGES.ENSURE_UV, 100, "uv is already installed (system)");
     return;
   }
 
-  throw new InstallError(
-    `GAIA could not find or install its Python helper (uv) required to provision the backend.`,
-    {
-      stage: STAGES.ENSURE_UV,
-      suggestion:
-        "GAIA attempted automatic recovery but could not install uv. Please either: (a) click 'Install uv' in the dialog to let GAIA try again, or (b) install uv from https://astral.sh/uv and re-launch GAIA.",
+  log("No uv on PATH — installing it from astral.sh");
+  let result;
+  if (IS_WINDOWS) {
+    result = await runCommand(
+      "powershell",
+      [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "irm https://astral.sh/uv/install.ps1 | iex",
+      ],
+      { stageLabel: "uv-install", signal }
+    );
+  } else {
+    result = await runCommand(
+      "bash",
+      ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+      { stageLabel: "uv-install", signal }
+    );
+  }
+
+  if (result.code !== 0) {
+    throw new InstallError(
+      `Could not install uv automatically (exit code ${result.code}).`,
+      {
+        stage: STAGES.ENSURE_UV,
+        code: result.code,
+        suggestion: IS_WINDOWS
+          ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
+          : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
+      }
+    );
+  }
+
+  if (!commandExists("uv")) {
+    const candidates = [
+      path.join(os.homedir(), ".local", "bin"),
+      path.join(os.homedir(), ".cargo", "bin"),
+    ];
+    for (const uvDir of candidates) {
+      if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+        process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+        log(`Added ${uvDir} to PATH for this process`);
+      }
     }
-  );
+  }
+
+  if (!commandExists("uv")) {
+    throw new InstallError(
+      "uv installed but not found on PATH. A shell restart may be required.",
+      {
+        stage: STAGES.ENSURE_UV,
+        suggestion:
+          "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
+      }
+    );
+  }
+
+  report(STAGES.ENSURE_UV, 100, "uv installed");
 }
 
 // ── Backend install ──────────────────────────────────────────────────────────
@@ -2079,8 +1765,12 @@ function _prefetchMarker(pep440) {
   return path.join(PREFETCH_DIR, `${pep440}.ready`);
 }
 
-/** True when an earlier prefetch left everything `version` needs in uv's cache. */
+/**
+ * True when `version`'s backend needs no download: an app that ships its
+ * backend gets it with the update, otherwise a prefetch left it in uv's cache.
+ */
 function isBackendPrefetched(version) {
+  if (shippedGaiaBin()) return true;
   return Boolean(version) && fs.existsSync(_prefetchMarker(toPep440(version)));
 }
 
@@ -2091,6 +1781,10 @@ function isBackendPrefetched(version) {
  * Throws with uv's own words when the download fails.
  */
 async function prefetchBackend(appVersion, { isPackaged } = {}) {
+  if (isPackaged) {
+    log("This app ships its own backend, so the update carries it and there is nothing to prefetch");
+    return;
+  }
   if (process.env.GAIA_LOCAL_WHEEL) {
     log("GAIA_LOCAL_WHEEL is set: the next launch installs that wheel, so there is nothing to prefetch");
     return;
@@ -2154,7 +1848,14 @@ function _lastLines({ stdout, stderr }) {
  */
 function isBackendCurrent() {
   // A local wheel is reinstalled on every launch, as ensureBackend says.
-  if (process.env.GAIA_LOCAL_WHEEL) return false;
+  if (process.env.GAIA_LOCAL_WHEEL && !shippedGaiaBin()) return false;
+  if (shippedGaiaBin()) {
+    // The core is always current; an app version is done once it refreshed the agent.
+    if (!bundledGaiaBin()) return false;
+    const prev = getState();
+    if (!prev) return !fs.existsSync(FLAGSHIP_SENTINEL);
+    return prev.state === STATES.READY && toPep440(prev.version || "") === toPep440(appVersion());
+  }
   const bin = findGaiaBin();
   if (!bin) return false;
   const prev = getState();
@@ -2168,6 +1869,10 @@ function isBackendCurrent() {
  * `gaia --version`, which starts Python and can take 20 s+ on a busy PC.
  */
 function getInstalledVersion(gaiaBin) {
+  // Built with the app, from the same commit.
+  if (shippedGaiaBin() && gaiaBin === bundledGaiaBin()) {
+    return toPep440(appVersion());
+  }
   if (gaiaBin === GAIA_BIN) {
     // existsSync follows the venv's python symlink, so a removed base interpreter reads as missing.
     if (!fs.existsSync(GAIA_PYTHON_BIN)) {
@@ -2243,6 +1948,19 @@ async function ensureBackend(opts = {}) {
   openLog({ truncate: true });
 
   try {
+    const bundled = await ensureBundledCore();
+    if (bundled) {
+      log(`Using the GAIA backend this app ships: ${bundled}`);
+      await refreshAgent(bundled, opts);
+      return bundled;
+    }
+    if (opts.isPackaged) {
+      throw new InstallError("This GAIA install is missing its backend.", {
+        stage: STAGES.VERIFY,
+        suggestion: `Reinstall GAIA from https://amd-gaia.ai/#install. Expected it at ${BUNDLED_GAIA_BIN}.`,
+      });
+    }
+
     const preChecks = await runPreChecks({ onProgress: opts.onProgress });
 
     // Handle a pre-existing partial install first (before disk/network fails
@@ -2263,31 +1981,6 @@ async function ensureBackend(opts = {}) {
       } else if (prev.state === STATES.READY) {
         log("Previous state: ready");
       }
-    }
-
-    // Disk check failure: fatal, surface as InstallError.
-    if (!preChecks.disk.ok) {
-      const freeMb =
-        preChecks.disk.freeBytes != null
-          ? Math.round(preChecks.disk.freeBytes / (1024 * 1024))
-          : null;
-      const requiredMb = Math.round(
-        preChecks.disk.requiredBytes / (1024 * 1024)
-      );
-      const err = new InstallError(
-        `Not enough free disk space. Required: ${requiredMb} MB${
-          freeMb != null ? `, available: ${freeMb} MB` : ""
-        }.`,
-        {
-          stage: STAGES.PRE_CHECKS,
-          reason: FAILURE_REASONS.DISK,
-          suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
-            GAIA_HOME
-          )} and try again.`,
-        }
-      );
-      setState(STATES.FAILED, { stage: STAGES.PRE_CHECKS, message: err.message });
-      throw err;
     }
 
     // Network check is ADVISORY, never fatal. A failed HEAD probe is most often
@@ -2325,8 +2018,9 @@ async function ensureBackend(opts = {}) {
       prev.stage === LEGACY_SETUP_STAGE ||
       prev.stage === STAGES.VERIFY ||
       prev.stage === STAGES.AGENT_REFRESH;
+    let installedVersion = null;
     if (existingBin) {
-      const installedVersion = getInstalledVersion(existingBin);
+      installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
       if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
@@ -2350,6 +2044,12 @@ async function ensureBackend(opts = {}) {
       );
     } else {
       log("GAIA backend not found — installing from scratch");
+    }
+
+    // Checked only once there is something to install, so a full disk never stops a current install.
+    if (!preChecks.disk.ok) {
+      const keep = Boolean(existingBin) && packageFinished && prev?.state !== STATES.FAILED;
+      throw lowDiskError(preChecks.disk, { keep, installedVersion });
     }
 
     await installBackend(opts);
@@ -2378,6 +2078,10 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
     if (err instanceof InstallError) {
+      if (err.keepState) {
+        log(`Install refused; the recorded state is unchanged: ${err.message}`);
+        throw err;
+      }
       setState(STATES.FAILED, {
         stage: err.stage || null,
         message: err.message,

@@ -440,6 +440,10 @@ class EmbeddingUnavailableError(RuntimeError):
 
 _CACHE_LOCK_NAME = "rag-cache"
 
+#: A file written this close to when its stat was taken may be rewritten
+#: within the same timestamp tick, so that stat alone is not trusted.
+_RACY_STAT_NS = 2_000_000_000
+
 
 def _cache_lock_target(cache_path: str) -> Path:
     """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
@@ -823,6 +827,8 @@ class RAGSDK:
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
         # {file_path: _content_key of the bytes that were indexed}
         self.file_content_keys = {}
+        # {file_path: (_stat_key, ns it was taken)} of those same bytes
+        self.file_stat_keys = {}
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1121,8 +1127,8 @@ class RAGSDK:
         The content hash (not mtime/size) makes same-size edits and sub-second
         rewrites invalidate; the path hash names each path's own entry, though
         :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
-        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
-        then fails at extraction.
+        unreadable file gets a path-only ``<hash>_notfound`` key, which
+        :meth:`index_document` refuses to index or cache under.
 
         Raises:
             PermissionError: With ``raise_locked``, when the read is refused as
@@ -1143,6 +1149,35 @@ class RAGSDK:
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    @staticmethod
+    def _stat_key(file_path: str) -> Tuple[int, ...]:
+        """Size, mtime, inode and (POSIX) ctime: what an edit almost always moves.
+
+        Raises:
+            OSError: When the file cannot be stat'ed.
+        """
+        st = os.stat(file_path)
+        key = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if os.name != "nt":
+            # Windows has no change time; POSIX ctime moves on every write.
+            key += (st.st_ctime_ns,)
+        return key
+
+    def _taken_stat(self, file_path: str) -> Optional[Tuple[Tuple[int, ...], int]]:
+        """``(_stat_key, ns)``, taken before the bytes it vouches for are hashed."""
+        taken_at = time.time_ns()
+        try:
+            return self._stat_key(file_path), taken_at
+        except OSError:
+            return None
+
+    def _record_stat(self, file_path: str, taken) -> None:
+        """Keep *taken* as the indexed bytes' stat. Call with ``_state_lock`` held."""
+        if taken is None:
+            self.file_stat_keys.pop(file_path, None)
+        else:
+            self.file_stat_keys[file_path] = taken
 
     def document_scripts(self, file_path: str) -> List[str]:
         """Writing systems that make up at least 10% of an indexed file's letters.
@@ -1788,8 +1823,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
@@ -3560,6 +3595,7 @@ These positions indicate where to split the text."""
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
                 self.file_content_keys.pop(file_path, None)
+                self.file_stat_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -3595,7 +3631,13 @@ These positions indicate where to split the text."""
         wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
-        Reindex a document (remove old chunks and add new ones).
+        Re-index a document that may have changed on disk.
+
+        Same path as :meth:`index_document` on an edited file: the new
+        version is extracted and embedded without the index lock, so searches
+        keep answering from the old version until it is swapped in. If the
+        re-index fails, the old version stays indexed. Unchanged bytes are not
+        re-embedded; the result then has ``already_indexed: True``.
 
         Args:
             file_path: Path to document to reindex
@@ -3605,62 +3647,14 @@ These positions indicate where to split the text."""
         Returns:
             Dict with indexing results and statistics (same as index_document)
         """
-        file_path = str(Path(file_path).absolute())
-        with self._state_lock:
-            previous_state = {
-                name: getattr(self, name).copy()
-                for name in (
-                    "chunks",
-                    "indexed_files",
-                    "chunk_to_file",
-                    "file_to_chunk_indices",
-                    "file_indices",
-                    "file_embeddings",
-                    "file_metadata",
-                    "file_access_times",
-                    "file_index_times",
-                    "file_content_keys",
-                )
-            }
-            previous_state.update(
-                index=self.index, _access_counter=self._access_counter
-            )
-            # Keep remove+reindex under the same lock so readers never observe a
-            # gap where the document disappeared between generations. Query
-            # paths snapshot state quickly under this same lock and then do the
-            # expensive work outside it.
-            # Remove old version if it exists
-            if file_path in self.indexed_files:
-                self.log.info(f"Removing old version of {file_path}")
-                if not self.remove_document(file_path):
-                    return {
-                        "success": False,
-                        "error": "Failed to remove old version",
-                        "file_name": Path(file_path).name,
-                    }
-
-            # Index the new version
-            self.log.info(f"Indexing new version of {file_path}")
-            succeeded = False
-            result = None
-            try:
-                result = self.index_document(
-                    file_path,
-                    progress_callback=progress_callback,
-                    wait_callback=wait_callback,
-                )
-                succeeded = bool(result.get("success"))
-                if succeeded:
-                    result["reindexed"] = True
-                return result
-            finally:
-                if not succeeded:
-                    # Removal builds a fresh index, so the old generation is intact.
-                    for name, value in previous_state.items():
-                        setattr(self, name, value)
-                    if result is not None:
-                        result["total_indexed_files"] = len(self.indexed_files)
-                        result["total_chunks"] = len(self.chunks)
+        result = self.index_document(
+            file_path,
+            progress_callback=progress_callback,
+            wait_callback=wait_callback,
+        )
+        if result.get("success") and not result.get("already_indexed"):
+            result["reindexed"] = True
+        return result
 
     def is_current(self, file_path: str) -> bool:
         """Whether *file_path* is indexed from the bytes it holds now.
@@ -3676,6 +3670,51 @@ These positions indicate where to split the text."""
         if indexed_key is None:
             return False
         return self._content_key(file_path) == indexed_key
+
+    def freshness(self, file_path: str) -> str:
+        """How *file_path* compares to the bytes it was indexed from; cheap to call.
+
+        Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
+        program holds it), ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        when the file's size, mtime, inode or (POSIX) ctime moved since it was
+        indexed, or when it was written within 2s of that stat. On Windows, an
+        edit that later restores both size and mtime is caught by
+        :meth:`is_current`, not here.
+        """
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                return "not_indexed"
+            indexed_key = self.file_content_keys.get(file_path)
+            recorded = self.file_stat_keys.get(file_path)
+        taken_at = time.time_ns()
+        try:
+            stat_key = self._stat_key(file_path)
+        except FileNotFoundError:
+            return "missing"
+        except OSError:
+            stat_key = None
+        if (
+            stat_key is not None
+            and recorded is not None
+            and recorded[0] == stat_key
+            and recorded[1] - stat_key[1] >= _RACY_STAT_NS
+        ):
+            return "current"
+        if indexed_key is None:
+            return "changed"
+        try:
+            key = self._content_key(file_path, raise_locked=True)
+        except PermissionError:
+            return "locked"
+        if key.endswith("_notfound"):
+            return "unreadable" if os.path.lexists(file_path) else "missing"
+        if key != indexed_key:
+            return "changed"
+        with self._state_lock:
+            if stat_key is not None and self._indexed_from(file_path, key):
+                self.file_stat_keys[file_path] = (stat_key, taken_at)
+        return "current"
 
     def _indexed_from(self, file_path: str, content_key: str) -> bool:
         """Whether *file_path* is indexed from the bytes *content_key* names.
@@ -3787,28 +3826,34 @@ These positions indicate where to split the text."""
         )
         return chunks_ok and files_ok, evicted_files
 
-    def _has_indexing_capacity(self) -> bool:
+    def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
 
         This is a read-only check — it does not evict. When eviction is
         enabled, capacity is available if there is at least one document
         that could be evicted. When disabled, capacity requires being
-        under the limits.
+        under the limits. *replacing* names an indexed file about to be
+        swapped out, so its current generation is not counted.
         """
+        num_files = len(self.indexed_files)
+        num_chunks = len(self.chunks)
+        if replacing is not None and replacing in self.indexed_files:
+            num_files -= 1
+            num_chunks -= len(self.file_to_chunk_indices.get(replacing, []))
         files_at_limit = (
             self.config.max_indexed_files > 0
-            and len(self.indexed_files) >= self.config.max_indexed_files
+            and num_files >= self.config.max_indexed_files
         )
         chunks_at_limit = (
             self.config.max_total_chunks > 0
-            and len(self.chunks) >= self.config.max_total_chunks
+            and num_chunks >= self.config.max_total_chunks
         )
 
         if not files_at_limit and not chunks_at_limit:
             return True  # Under both limits
 
         # At limit — can we evict to make room?
-        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+        if self.config.enable_lru_eviction and num_files > 0:
             return True  # Eviction can free space (post-index)
 
         # At limit with no eviction possible
@@ -3973,6 +4018,7 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
+        replacing = False
         with self._state_lock:
             was_indexed = file_path in self.indexed_files
         if was_indexed:
@@ -3981,16 +4027,14 @@ These positions indicate where to split the text."""
             except PermissionError as e:
                 return self._document_locked(stats, file_path, e)
             with self._state_lock:
-                changed = not self._indexed_from(file_path, current_key)
-            if changed:
+                replacing = not self._indexed_from(file_path, current_key)
+            if replacing:
+                # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
-                return self.reindex_document(
-                    file_path, progress_callback, wait_callback
-                )
 
         with self._state_lock:
             # Check if already indexed
-            if file_path in self.indexed_files:
+            if file_path in self.indexed_files and not replacing:
                 if self.config.show_stats:
                     print(f"📋 Document already indexed: {Path(file_path).name}")
                 self.log.info(f"Document already indexed: {file_path}")
@@ -4002,7 +4046,7 @@ These positions indicate where to split the text."""
                 return stats
 
             # Pre-flight: check capacity before investing in indexing
-            if not self._has_indexing_capacity():
+            if not replacing and not self._has_indexing_capacity():
                 msg = (
                     f"Memory limit reached: {len(self.indexed_files)} files "
                     f"(max: {self.config.max_indexed_files}), "
@@ -4018,10 +4062,16 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
+        taken = self._taken_stat(file_path)
         try:
             content_key = self._content_key(file_path, raise_locked=True)
         except PermissionError as e:
             return self._document_locked(stats, file_path, e)
+        if content_key.endswith("_notfound"):
+            # PDF, DOCX, XLSX and PPTX are opened by their own libraries, so
+            # extraction can succeed on a file we could not hash. Caching that
+            # under the path-only key would serve the first version forever.
+            return self._document_unhashable(stats, file_path)
         cache_path = self._cache_of_same_bytes(
             self._get_cache_path(file_path, content_key), content_key
         )
@@ -4077,13 +4127,10 @@ These positions indicate where to split the text."""
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
                         return stats
-                    if not self._drop_other_generation(file_path, stats):
-                        return stats
-
                     # Re-check capacity under the lock because another writer
                     # may have indexed or evicted documents while we were
                     # loading this cache entry from disk.
-                    if not self._has_indexing_capacity():
+                    if not self._has_indexing_capacity(replacing=file_path):
                         msg = (
                             f"Memory limit reached: {len(self.indexed_files)} files "
                             f"(max: {self.config.max_indexed_files}), "
@@ -4096,6 +4143,12 @@ These positions indicate where to split the text."""
                             print(f"❌ {msg}")
                         stats["error"] = msg
                         stats["memory_limit_reached"] = True
+                        return stats
+
+                    # Everything that can fail runs before the old generation
+                    # is dropped, so a failed re-index keeps serving it.
+                    file_index = self._create_faiss_index(file_embeddings)
+                    if not self._drop_other_generation(file_path, stats):
                         return stats
 
                     if self.index is None:
@@ -4120,8 +4173,6 @@ These positions indicate where to split the text."""
                                 f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
 
-                    file_index = self._create_faiss_index(file_embeddings)
-
                     if self.index is None:
                         self.index = new_index
                     else:
@@ -4143,6 +4194,7 @@ These positions indicate where to split the text."""
 
                     self.indexed_files.add(file_path)
                     self.file_content_keys[file_path] = content_key
+                    self._record_stat(file_path, taken)
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -4165,6 +4217,8 @@ These positions indicate where to split the text."""
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if replacing:
+                    stats["reindexed"] = True
                 if evicted:
                     stats["evicted"] = evicted
                 if not limits_ok:
@@ -4256,14 +4310,11 @@ These positions indicate where to split the text."""
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     return stats
-                if not self._drop_other_generation(file_path, stats):
-                    return stats
-
                 # This second capacity check is intentional: the optimistic
                 # pre-flight above avoids expensive extraction work, while this
                 # locked check protects against TOCTOU drift after extraction
                 # and chunking finish.
-                if not self._has_indexing_capacity():
+                if not self._has_indexing_capacity(replacing=file_path):
                     msg = (
                         f"Memory limit reached: {len(self.indexed_files)} files "
                         f"(max: {self.config.max_indexed_files}), "
@@ -4276,6 +4327,29 @@ These positions indicate where to split the text."""
                         print(f"❌ {msg}")
                     stats["error"] = msg
                     stats["memory_limit_reached"] = True
+                    return stats
+
+                # Everything that can fail runs before the old generation
+                # is dropped, so a failed re-index keeps serving it.
+                if self.config.show_stats:
+                    print("🔍 Building per-file search index...")
+
+                file_index = self._create_faiss_index(file_embeddings)
+
+                # Persist before publishing any searchable state or ownership maps.
+                if self.config.show_stats:
+                    print("💾 Caching processed chunks...")
+                cache_data = {
+                    "chunks": new_chunks,
+                    "full_text": text,
+                    "metadata": file_metadata,
+                }
+                self._save_cache(cache_path, cache_data)
+                self._save_extracted_markdown(
+                    file_path, text, file_metadata, content_key
+                )
+
+                if not self._drop_other_generation(file_path, stats):
                     return stats
 
                 if self.index is None:
@@ -4301,24 +4375,6 @@ These positions indicate where to split the text."""
                             f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
 
-                if self.config.show_stats:
-                    print("🔍 Building per-file search index...")
-
-                file_index = self._create_faiss_index(file_embeddings)
-
-                # Persist before publishing any searchable state or ownership maps.
-                if self.config.show_stats:
-                    print("💾 Caching processed chunks...")
-                cache_data = {
-                    "chunks": new_chunks,
-                    "full_text": text,
-                    "metadata": file_metadata,
-                }
-                self._save_cache(cache_path, cache_data)
-                self._save_extracted_markdown(
-                    file_path, text, file_metadata, content_key
-                )
-
                 if self.index is None:
                     self.index = new_index
                 else:
@@ -4338,6 +4394,7 @@ These positions indicate where to split the text."""
 
                 self.indexed_files.add(file_path)
                 self.file_content_keys[file_path] = content_key
+                self._record_stat(file_path, taken)
 
                 # Track index time for LRU
                 current_time = time.time()
@@ -4371,6 +4428,8 @@ These positions indicate where to split the text."""
 
             # Update final stats
             stats["success"] = True
+            if replacing:
+                stats["reindexed"] = True
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
@@ -4427,6 +4486,22 @@ These positions indicate where to split the text."""
         self.log.warning(f"{message} ({error})")
         stats["error"] = message
         stats["error_type"] = "file_locked"
+        return stats
+
+    def _document_unhashable(
+        self, stats: Dict[str, Any], file_path: str
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose bytes could not be read to hash."""
+        message = (
+            f"Could not read {Path(file_path).name} to check its contents, so it "
+            "was not indexed. It may be missing, unreadable, or outside the "
+            "folders GAIA is allowed to read. Fix that and index it again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.warning(message)
+        stats["error"] = message
+        stats["error_type"] = "file_unreadable"
         return stats
 
     def _index_failed(
@@ -4573,12 +4648,25 @@ These positions indicate where to split the text."""
         chunks = snapshot["retrieved_chunks"]
         scores = snapshot["scores"]
 
+        duplicates = snapshot.get("duplicate_indices") or [[] for _ in chunks]
+
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk_idx, chunk, score) in enumerate(
-            zip(snapshot["retrieved_indices"], chunks, scores)
+        for i, (chunk_idx, chunk, score, copies) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores, duplicates)
         ):
             source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
+            # Every file holding this exact text, the best match first.
+            source_paths = list(
+                dict.fromkeys(
+                    path
+                    for path in (
+                        snapshot["chunk_to_file"].get(idx, "unknown")
+                        for idx in [chunk_idx, *copies]
+                    )
+                    if path != "unknown"
+                )
+            )
 
             metadata.append(
                 {
@@ -4589,6 +4677,8 @@ These positions indicate where to split the text."""
                         else "unknown"
                     ),
                     "source_path": source_file,
+                    "source_files": [Path(path).name for path in source_paths],
+                    "source_paths": source_paths,
                     "relevance_score": float(score),
                     "chunk_length": len(chunk),
                     "estimated_tokens": len(chunk) // 4,  # Rough token estimate
@@ -4620,21 +4710,39 @@ These positions indicate where to split the text."""
         k = min(self.config.max_chunks, len(chunks_snapshot))
         if self.config.show_stats:
             print(f"  🎯 Finding {k} most relevant chunks...")
-        # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
-
-        retrieved_indices = []
-        retrieved_chunks = []
-        scores = []
-        for idx, dist in zip(indices[0], distances[0]):
-            idx = int(idx)
-            # FAISS can surface stale or invalid positions relative to the
-            # captured chunk snapshot; skip anything outside the snapshot.
-            if idx < 0 or idx >= len(chunks_snapshot):
-                continue
-            retrieved_indices.append(idx)
-            retrieved_chunks.append(chunks_snapshot[idx])
-            scores.append(1.0 / (1.0 + float(dist)))
+        # A document indexed under two names would fill the top k with copies,
+        # so identical chunks count once: fetch more until k distinct remain.
+        fetch = k
+        while True:
+            # pylint: disable=no-value-for-parameter
+            distances, indices = index_snapshot.search(
+                query_embedding.astype("float32"), fetch
+            )
+            retrieved_indices = []
+            retrieved_chunks = []
+            scores = []
+            duplicate_indices: List[List[int]] = []
+            position: Dict[str, int] = {}
+            for idx, dist in zip(indices[0], distances[0]):
+                idx = int(idx)
+                # FAISS can surface stale or invalid positions relative to the
+                # captured chunk snapshot; skip anything outside the snapshot.
+                if idx < 0 or idx >= len(chunks_snapshot):
+                    continue
+                chunk = chunks_snapshot[idx]
+                if chunk in position:
+                    duplicate_indices[position[chunk]].append(idx)
+                    continue
+                if len(retrieved_chunks) == k:
+                    continue
+                position[chunk] = len(retrieved_chunks)
+                retrieved_indices.append(idx)
+                retrieved_chunks.append(chunk)
+                scores.append(1.0 / (1.0 + float(dist)))
+                duplicate_indices.append([])
+            if len(retrieved_chunks) == k or fetch >= len(chunks_snapshot):
+                break
+            fetch = min(len(chunks_snapshot), fetch * 2)
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
@@ -4648,6 +4756,8 @@ These positions indicate where to split the text."""
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
         snapshot["scores"] = scores
+        # Other positions holding each retrieved chunk's exact text.
+        snapshot["duplicate_indices"] = duplicate_indices
         return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
@@ -4701,11 +4811,7 @@ Answer:"""
         if include_metadata and chunk_metadata:
             # Get unique source files
             source_files = list(
-                set(
-                    m["source_file"]
-                    for m in chunk_metadata
-                    if m["source_file"] != "unknown"
-                )
+                set(name for m in chunk_metadata for name in m["source_files"])
             )
 
             query_metadata = {
@@ -4866,6 +4972,9 @@ def quick_rag(pdf_path: str, question: str, **kwargs) -> str:
 
     config = RAGConfig(**kwargs)
     rag = RAGSDK(config)
+    # Naming the file is the grant to read it, as in AgentSDK._index_named_document.
+    if "allowed_paths" not in kwargs and os.path.isfile(pdf_path):
+        rag.path_validator.add_allowed_path(pdf_path)
 
     result = rag.index_document(pdf_path)
     if not result.get("success"):
