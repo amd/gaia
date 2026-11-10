@@ -438,7 +438,7 @@ class TestApiUnitValidation:
 
     @respx.mock
     def test_health_endpoint_returns_component_status(self, monkeypatch):
-        """Test that /health reports API, loaded LLM, and RAG status."""
+        """Test that /health reports only the components it actually probes."""
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
         respx.get("http://lemonade.test/api/v1/health").mock(
             return_value=httpx.Response(
@@ -468,7 +468,6 @@ class TestApiUnitValidation:
                     "model": "Gemma-4-E4B-it-GGUF",
                     "url": "http://lemonade.test/api/v1",
                 },
-                "rag": {"status": "not_configured"},
             },
         }
 
@@ -866,7 +865,7 @@ class TestHealthEndpoint:
             "unavailable",
             "error",
         )
-        assert data["components"]["rag"] == {"status": "not_configured"}
+        assert set(data["components"]) == {"api", "llm"}
 
 
 # =============================================================================

@@ -730,7 +730,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Install core + chat + gaia (editable)
+      - name: Install core + gaia (editable)
         shell: bash
         run: |
           set -euo pipefail

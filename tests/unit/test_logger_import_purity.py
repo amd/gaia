@@ -204,7 +204,6 @@ _ENTRY_POINTS_HELP = [
     ("gaia.mcp.servers.tui_mcp", "main", None),
     ("gaia.mcp.servers.engineering_mcp", "main", ["--help"]),
     ("gaia.connectors.cli", "main", ["--help"]),
-    ("gaia_agent_chat.app", "main", None),
 ]
 
 

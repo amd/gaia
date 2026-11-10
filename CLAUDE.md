@@ -445,7 +445,7 @@ want to test an installed wheel.
 
 **Changes that REQUIRE eval coverage (a local run, or categories named in the PR for the next RC):**
 
-- GaiaAgent / ChatAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
+- GaiaAgent / ChatAgent system prompts (`_get_system_prompt()`) or any mixin prompt fragment
 - The base agent's `_compose_system_prompt`, prompt-assembly order, or `_format_tools_for_prompt`
 - Tool registration, tool docstrings, or the JSON tool schema sent to Lemonade
 - Error classification (`LemonadeError` subclasses, `_classify_chat_exception`, `_extract_lemonade_user_message`) or the agent-loop catchall
@@ -684,7 +684,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; `hub/agents/chat/` is a deprecated re-export shim for one release (#6099) |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
 docker, blender, sd, emr, routing) were **deleted**. Most of their capability is now the flagship's

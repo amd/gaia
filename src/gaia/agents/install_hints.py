@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Shared "agent wheel not installed" messaging.
 
-The ``gaia-agent-*`` wheels (gaia, chat, email) are built
+The ``gaia-agent-*`` wheels (gaia, email) are built
 and packaged (``hub/agents/<id>/python/``) but are not published to PyPI
 (#1179 / #1513). Until they are, ``pip install gaia-agent-<id>`` and
 ``pip install "amd-gaia[agents]"`` both fail on a clean environment (#2240)
@@ -30,7 +30,6 @@ from urllib.request import url2pathname
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
-    "gaia-agent-chat": "chat",
     "gaia-agent-gaia": "gaia",
 }
 
@@ -38,7 +37,6 @@ _AGENT_SOURCE_SUBDIRS = {
 # Needed because wheel names use hyphens but package directories use underscores,
 # and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
 _WHEEL_TOP_LEVEL_PACKAGE = {
-    "gaia-agent-chat": "gaia_agent_chat",
     "gaia-agent-gaia": "gaia_agent",
 }
 
@@ -332,7 +330,7 @@ def agent_not_installed_message(
     """Build the standard "agent not installed" error text for ``wheel``.
 
     ``subject`` is the complete first sentence, without a trailing period,
-    e.g. ``"The chat agent is not installed"`` or ``"The drafting eval needs
+    e.g. ``"The GAIA agent is not installed"`` or ``"The drafting eval needs
     the email agent"``. ``next_step`` is an optional trailing instruction,
     e.g. ``"Then re-run `gaia chat`."``.
 

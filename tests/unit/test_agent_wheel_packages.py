@@ -35,11 +35,6 @@ UTIL_DIR = REPO_ROOT / "util"
 # removed in the agent-collapse (its only AGENT_MODELS entry went with it).
 INFRA_ONLY_AGENT_IDS: set[str] = set()
 
-# Deprecated re-export shims that register no id of their own: gaia-agent-chat
-# re-exports ChatAgent from the flagship for one release, and its old ids
-# resolve to the flagship through the registry's legacy aliases (#6099).
-SHIM_ONLY_AGENT_IDS: set[str] = {"chat"}
-
 if str(UTIL_DIR) not in sys.path:
     sys.path.insert(0, str(UTIL_DIR))
 
@@ -57,7 +52,7 @@ def test_production_agent_list_nonempty(packages):
     ids = {p.agent_id for p in packages}
     # Spot-check the surviving hub agents; the helper enforces the full set
     # exists on disk, so this just sanity-checks the mapping direction.
-    assert {"chat", "gaia"} <= ids
+    assert {"gaia"} <= ids
 
 
 def test_dist_name_and_directory_convention(packages):
@@ -163,7 +158,7 @@ def test_pyproject_declares_gaia_agent_entry_point(packages):
     class-path from the API server, not via the registry entry point (#1102).
     """
     for p in packages:
-        if p.agent_id in INFRA_ONLY_AGENT_IDS | SHIM_ONLY_AGENT_IDS:
+        if p.agent_id in INFRA_ONLY_AGENT_IDS:
             continue
         pyproject = (p.path / "pyproject.toml").read_text(encoding="utf-8")
         assert (

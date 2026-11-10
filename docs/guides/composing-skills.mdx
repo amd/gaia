@@ -219,12 +219,16 @@ Skill set 'library' active (chosen by: explicit) — loaded 3 of 3 declared
 skill(s): review-basics, api-compatibility, changelog-discipline
 ```
 
-And from the CLI:
+And from the CLI. `gaia skill` does not know which agent you mean, so point
+`--agent-dir` at the package directory that holds `agent.py` and `skills/`:
 
 ```bash
-gaia skill list          # every discovered skill, with its root and precedence
-gaia skill info api-compatibility
+gaia skill list --agent-dir my_agent          # every discovered skill, with its root
+gaia skill info api-compatibility --agent-dir my_agent
 ```
+
+The bundled skills show with root `agent-bundled`. Without `--agent-dir`, the
+CLI searches only `~/.gaia/skills` and the `.claude/skills` folders.
 
 Switching sets mid-session is one call — the previous set's skills are unloaded
 first, so a stale set never lingers in the prompt:

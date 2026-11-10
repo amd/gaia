@@ -238,3 +238,137 @@ func TestAnEmptyFollowUpIsRefusedBeforeTheNetwork(t *testing.T) {
 	stop()
 	collect(t, ch)
 }
+
+// heldRun is startedRun with the caller's context and the run's ending chosen
+// by the test: `end` is written once the stream is released, or nothing at all.
+func heldRun(t *testing.T, f *fakeRelay, ctx context.Context, end string) (*SSEClient, <-chan interface{}, func()) {
+	t.Helper()
+	release := make(chan struct{})
+	var once sync.Once
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"working"}`)
+		flush()
+		<-release
+		if end != "" {
+			frame(w, end)
+			flush()
+		}
+	}
+	c := f.clientFor(t, "gaia")
+	ch, err := c.Send(ctx, "triage my inbox")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	stop := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(stop)
+	return c, ch, stop
+}
+
+// nextTurnContext sends one more turn and returns the context it pushed.
+func nextTurnContext(t *testing.T, f *fakeRelay, c *SSEClient) []Turn {
+	t.Helper()
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"second"}`)
+		flush()
+	}
+	ch, err := c.Send(context.Background(), "and now?")
+	if err != nil {
+		t.Fatalf("next Send: %v", err)
+	}
+	collect(t, ch)
+	return f.lastQuery().Context
+}
+
+func assertFollowUpCarried(t *testing.T, got []Turn, note string) {
+	t.Helper()
+	want := []Turn{
+		{Role: "user", Content: "triage my inbox"},
+		{Role: "user", Content: "only the unread ones"},
+		{Role: "assistant", Content: note},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("pushed context = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("pushed context[%d] = %v, want %v (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// Esc after a follow-up was confirmed: the user was told it landed and still
+// sees it on screen, so the next turn must carry it — with the question it
+// amended, since that question was never answered either.
+func TestADeliveredFollowUpSurvivesACancelledTurn(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.15"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, ch, stop := heldRun(t, f, ctx, "")
+
+	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err != nil {
+		t.Fatalf("SendFollowUp: %v", err)
+	}
+	cancel()
+	collect(t, ch)
+	stop()
+
+	assertFollowUpCarried(t, nextTurnContext(t, f, c), unansweredCancelled)
+}
+
+func TestADeliveredFollowUpSurvivesAnErrorTerminal(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.15"
+	c, ch, stop := heldRun(t, f, context.Background(),
+		`{"type":"error","detail":"model server went away","status":503}`)
+
+	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err != nil {
+		t.Fatalf("SendFollowUp: %v", err)
+	}
+	stop()
+	collect(t, ch)
+
+	assertFollowUpCarried(t, nextTurnContext(t, f, c), unansweredErrored)
+}
+
+func TestADeliveredFollowUpSurvivesAStreamThatEndsWithoutATerminal(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.15"
+	c, ch, stop := heldRun(t, f, context.Background(), "")
+
+	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err != nil {
+		t.Fatalf("SendFollowUp: %v", err)
+	}
+	stop()
+	collect(t, ch)
+
+	assertFollowUpCarried(t, nextTurnContext(t, f, c), unansweredErrored)
+}
+
+// The fix must not start recording abandoned turns: with nothing delivered
+// mid-turn, a cancelled or failed turn still leaves no trace.
+func TestAnUnansweredTurnWithoutFollowUpsLeavesNoTrace(t *testing.T) {
+	for name, end := range map[string]string{
+		"cancelled": "",
+		"error":     `{"type":"error","detail":"boom","status":500}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = "2.15"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c, ch, stop := heldRun(t, f, ctx, end)
+			if end == "" {
+				cancel()
+			} else {
+				stop()
+			}
+			collect(t, ch)
+			stop()
+
+			if got := nextTurnContext(t, f, c); len(got) != 0 {
+				t.Fatalf("an unanswered turn with no follow-ups entered the context: %v", got)
+			}
+		})
+	}
+}
