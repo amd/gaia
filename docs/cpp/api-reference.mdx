@@ -713,6 +713,13 @@ absolute URL, in which case the configured base URL is ignored. HTTPS requires
 an OpenSSL-enabled build (see [HTTPS Support](#https-support)); an `https://`
 URL on an HTTP-only build raises rather than downgrading.
 
+Each client keeps its connection to a server open and reuses it, so an HTTPS
+server costs one TLS set-up per client rather than one per request. Keep the
+`HttpClient` for as long as you talk to the server instead of building one per
+call. A connection idle for longer than `HttpClientConfig::keepAliveIdleSec`
+(30 by default) is reopened, and a stream ended early by its callback closes
+its connection.
+
 ### VectorIndex
 
 Flat (brute-force) vector search over `float32` embeddings, with save/load
