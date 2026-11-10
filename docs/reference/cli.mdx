@@ -2326,21 +2326,6 @@ gaia eval agent --fix                              # Auto-fix failures with Clau
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
 
-Generate a report:
-```bash
-gaia report -d ./eval_results
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d, --eval-dir` | `./output/evaluations` | Directory containing `.eval.json` files to analyze |
-| `-o, --output-file` | `LLM_Evaluation_Report.md` | Output filename for the markdown report |
-| `--summary-only` | off | Only display the summary on the console; don't save a report file |
-
-<Warning>
-  `gaia report` is registered but not currently dispatched ([#3488](https://github.com/amd/gaia/issues/3488)) — it prints top-level help and exits 0 instead of generating a report.
-</Warning>
-
 Visualize llama.cpp performance logs:
 ```bash
 gaia perf-vis ./logs/llama-server.log
