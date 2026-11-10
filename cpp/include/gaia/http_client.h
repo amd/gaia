@@ -112,6 +112,10 @@ struct GAIA_API HttpClientConfig {
     /// https only: custom CA bundle path (empty → system trust store).
     std::string caCertPath;
 
+    /// A kept connection idle for longer than this is reopened rather than
+    /// reused, since a server may have dropped it without saying so.
+    int keepAliveIdleSec = 30;
+
     /// Log method and URL to stderr.
     bool debug = false;
 };
@@ -129,7 +133,13 @@ struct GAIA_API HttpClientConfig {
 /// HTTPS requires an OpenSSL-enabled build (auto-detected by CMake); an https
 /// URL on an HTTP-only build throws HttpError rather than downgrading.
 ///
-/// Not thread-safe: use one instance per thread.
+/// The connection to each server is kept open and reused by later requests,
+/// so an https server costs one TLS set-up per client, not one per request.
+/// Reuse only happens within one HttpClient: keep the instance, don't
+/// rebuild it per call.
+///
+/// Requests may run on several threads at once (one that finds the kept
+/// connection busy opens its own); changing configuration may not.
 class GAIA_API HttpClient {
 public:
     /// @throws std::invalid_argument if a configured timeout is not positive

@@ -254,6 +254,19 @@ private:
             res.set_content(req.body, "text/plain");
         });
 
+        // Reports the client's source port, which names the connection used.
+        auto peer = [](const httplib::Request& req, httplib::Response& res) {
+            res.set_content(std::to_string(req.remote_port), "text/plain");
+        };
+        server_->Get("/test/peer", peer);
+        server_->Post("/test/peer", peer);
+
+        // Same, then the server closes the connection.
+        server_->Get("/test/peer-close", [](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Connection", "close");
+            res.set_content(std::to_string(req.remote_port), "text/plain");
+        });
+
         // Responds after a delay — drives read-timeout tests.
         server_->Get("/test/slow", [](const httplib::Request&, httplib::Response& res) {
             std::this_thread::sleep_for(std::chrono::seconds(2));
