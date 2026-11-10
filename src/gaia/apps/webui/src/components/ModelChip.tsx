@@ -80,6 +80,7 @@ export function ModelChip() {
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
     const queued = useModelStore((s) => s.queued);
+    const currentModel = queued ?? active?.model;
     const queue = useModelStore((s) => s.queue);
     const queueError = useModelStore((s) => s.queueError);
     const rememberNames = useModelStore((s) => s.rememberNames);
@@ -91,6 +92,7 @@ export function ModelChip() {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [groups, setGroups] = useState<ProviderModels[] | null>(null);
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
@@ -116,6 +118,8 @@ export function ModelChip() {
     const close = useCallback(() => setOpen(false), []);
     // Set when a fresh list lands after opening, so focus moves to the current model once.
     const focusOnLoad = useRef(false);
+    // Set when the Fireworks list expands, so focus moves to its first newly visible model.
+    const focusFirstShown = useRef<string | null>(null);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -150,6 +154,7 @@ export function ModelChip() {
     useEffect(() => {
         if (open) {
             setPendingCloud(null);
+            setShowAllFireworksModels(false);
             setActiveRow(null);
             setInfoRow(null);
             void load();
@@ -164,6 +169,21 @@ export function ModelChip() {
         row.focus();
         row.scrollIntoView?.({ block: 'nearest' });
     }, [open, groups]);
+
+    useEffect(() => {
+        const providerId = focusFirstShown.current;
+        if (!open || !groups || !providerId || !showAllFireworksModels) return;
+        const group = groups.find((g) => g.provider.id === providerId);
+        const firstShown = group?.models.find((m) => m.rank === null && !sameModelId(currentModel, m.id));
+        if (!firstShown) return;
+        const row = Array.from(list.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])
+            .find((candidate) => candidate.dataset.row === firstShown.id);
+        if (!row) return;
+        focusFirstShown.current = null;
+        setActiveRow(firstShown.id);
+        row.focus();
+        row.scrollIntoView?.({ block: 'nearest' });
+    }, [open, groups, showAllFireworksModels, currentModel]);
 
     useEffect(() => {
         if (pendingCloud) consent.current?.scrollIntoView?.({ block: 'nearest' });
@@ -296,11 +316,22 @@ export function ModelChip() {
     }, [groups, pickAfterDownload, requestsPending, choose]);
 
     // The row Tab lands on: the last one focused, else the current model, else the first.
+    const fireworksCollapsed = (provider: ProviderInfo, models: ProviderModel[]) =>
+        provider.id === 'fireworks' && !showAllFireworksModels && models.some((m) => m.rank !== null);
+    const fireworksVisibleModels = (provider: ProviderInfo, models: ProviderModel[]) =>
+        fireworksCollapsed(provider, models)
+            ? models.filter((m) => m.rank !== null || sameModelId(currentModel, m.id))
+            : models;
+    const fireworksHasHiddenModels = (provider: ProviderInfo, models: ProviderModel[]) =>
+        fireworksCollapsed(provider, models)
+        && models.some((m) => m.rank === null && !sameModelId(currentModel, m.id));
     const pickable = groups?.flatMap(({ provider, models }) => [
         ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
-        ...models.filter((m) => switching === null && !isDownloading(m)).map((m) => m.id),
+        ...fireworksVisibleModels(provider, models)
+            .filter((m) => switching === null && !isDownloading(m))
+            .map((m) => m.id),
+        ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
     ]) ?? [];
-    const currentModel = queued ?? active?.model;
     const tabRow = activeRow && pickable.includes(activeRow)
         ? activeRow
         : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
@@ -392,7 +423,7 @@ export function ModelChip() {
                         {!groupError && models.length === 0 && provider.models_discovered !== false && (
                             <div className="popover-message">No models yet.</div>
                         )}
-                        {models.map((m) => {
+                        {fireworksVisibleModels(provider, models).map((m) => {
                             const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
@@ -424,7 +455,7 @@ export function ModelChip() {
                                                 {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
                                             </span>
                                             <span className="popover-item-body">
-                                                <span className="popover-item-title">{modelName}</span>
+                                                <span className="popover-item-title is-model">{modelName}</span>
                                             </span>
                                         </button>
                                         <InfoBubble
@@ -467,6 +498,23 @@ export function ModelChip() {
                                 </Fragment>
                             );
                         })}
+                        {fireworksHasHiddenModels(provider, models) && (
+                            <button
+                                type="button"
+                                className="popover-item"
+                                {...rowProps(`showall:${provider.id}`)}
+                                aria-selected={false}
+                                onClick={() => {
+                                    focusFirstShown.current = provider.id;
+                                    setShowAllFireworksModels(true);
+                                }}
+                            >
+                                <span className="popover-item-check" />
+                                <span className="popover-item-body">
+                                    <span className="popover-item-title">{t('settings.model.showAll')}</span>
+                                </span>
+                            </button>
+                        )}
                     </div>
                 ))}
                 </div>

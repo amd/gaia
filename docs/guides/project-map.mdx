@@ -147,7 +147,7 @@ spends about half again as many input tokens.
 
 | `project_context` | What the model gets |
 |-------------------|---------------------|
-| `auto` (default) | Claude served by Anthropic (`--use-claude`, the gateway's `amd.Claude-*`, `anthropic/claude-*` or Bedrock's `us.anthropic.claude-*`) gets everything below. A local model merely named after Claude, such as `user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF`, does not. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
+| `auto` (default) | Claude served by Anthropic (`--use-claude`, the gateway's `amd.Claude-*`, `anthropic/claude-*` or Bedrock's `us.anthropic.claude-*`) gets everything below, once you trust the folder (see [Trusting a folder](#trusting-a-folder)). A local model merely named after Claude, such as `user.Claude-3.7-Sonnet-Reasoning-Gemma3-12B-GGUF`, does not. Every other model, including any GAIA does not recognise, gets none of it: its prompt is the same as in a folder with no `CLAUDE.md`, `AGENTS.md` or `.claude/skills` |
 | `full` | Every model gets everything below |
 | `off` | No model gets any of it |
 
@@ -228,8 +228,16 @@ session there.
 - **`project_context full`** is your own choice, so it never asks, and
   **`off`** never loads. Only `auto` consults the saved answers.
 
-A folder with none of these files is never asked about. To forget an answer,
-delete its entry from `project_trust.json`, or the whole file.
+The answer belongs to the folder, not to what is in it. GAIA saves it under the
+folder's path, with links resolved, and not against the files themselves, so a
+`git pull` that adds or changes a `CLAUDE.md`, an `AGENTS.md` or a skill brings
+no new question: a trusted folder loads the new files from its next session on,
+and a declined one stays off. Working in a subfolder of a repository uses the
+repository's answer. A moved or renamed folder, or a second clone, is a new path,
+so GAIA asks about it again.
+
+A folder with none of these files is never asked about until one appears. To
+forget an answer, delete its entry from `project_trust.json`, or the whole file.
 
 ## Caching
 

@@ -610,7 +610,13 @@ textarea:focus-visible {
     max-width: min(560px, calc(100vw - 32px));
     width: max-content;
     pointer-events: all;
+    -webkit-app-region: no-drag;
     animation: toastIn var(--duration-spring) var(--ease-spring);
+}
+
+/* In the desktop app, clear of the title bar and its window buttons. */
+:root[data-titlebar] .toast-dismissible {
+    top: calc(var(--titlebar-h) + 8px);
 }
 
 .toast-dismiss {

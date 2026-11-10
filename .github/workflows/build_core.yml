@@ -226,3 +226,78 @@ jobs:
           name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
           path: gaia-core-${{ matrix.key }}.tar.gz
           if-no-files-found: error
+
+  # Ubuntu 24.04 is the Linux floor: Lemonade's engine needs glibc 2.38.
+  # The freshly frozen gaia, on the hosts users have, sets up a REAL Lemonade
+  # and answers one chat turn: no fake server, no source install. The freeze
+  # job's smoke test runs with Lemonade unreachable, inside a glibc-floor
+  # container, so it cannot see a library the bundle leaks into lemond.
+  real-engine:
+    name: Real engine (${{ matrix.label }})
+    needs: freeze
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: Windows, os: windows-latest, key: win32-x64, exe: gaia.exe}
+          - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
+          - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
+          - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+    steps:
+      - name: Is this platform wanted
+        id: want
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          KEY: ${{ matrix.key }}
+        run: |
+          case " ${PLATFORMS} " in
+            *" ${KEY} "*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT"; echo "${KEY} was not built" ;;
+          esac
+
+      - name: Prepare the Fedora container
+        if: steps.want.outputs.run == 'true' && matrix.container
+        # What a Fedora desktop has and lemond or its llama.cpp backend link.
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False tar gzip findutils which procps-ng
+          libatomic openssl-libs libdrm libzstd zlib-ng-compat libstdc++ libgomp vulkan-loader
+
+      - uses: actions/checkout@v7
+        if: steps.want.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          sparse-checkout: installer/core/real_engine_check.sh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v8
+        if: steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: ${{ runner.temp }}/core-tgz
+
+      - name: Unpack the frozen gaia
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/core"
+          # Relative paths: GNU tar on Windows reads "C:" as a remote host.
+          cd "${RUNNER_TEMP}"
+          tar -C core -xzf "core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
+
+      - name: Set up and chat through a real Lemonade
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        run: bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
+
+      - uses: actions/upload-artifact@v7
+        if: failure() && steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}real-engine-logs-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/real-engine/gaia-home/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14

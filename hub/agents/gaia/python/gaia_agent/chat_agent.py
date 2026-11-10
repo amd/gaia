@@ -329,7 +329,8 @@ def _python_script_run_context(
     needs ``src/`` on the path, which this does not add.
     """
     script = Path(script).resolve()
-    env = child_env()
+    # The frozen interpreter is this bundle relaunched, and needs its libraries.
+    env = child_env(same_bundle=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
     if project_dir is None:
@@ -2532,7 +2533,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "allowed project.",
                         "has_errors": True,
                     }
-                env = child_env()
+                env = child_env(same_bundle=True)
                 env["PYTHONIOENCODING"] = "utf-8"
                 if project:
                     existing = env.get("PYTHONPATH")
@@ -3102,6 +3103,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
                     result = subprocess.run(
                         ["wmctrl", "-l"],
+                        env=child_env(),
                         capture_output=True,
                         stdin=subprocess.DEVNULL,
                         text=True,
