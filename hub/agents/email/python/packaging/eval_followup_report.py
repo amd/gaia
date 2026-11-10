@@ -41,8 +41,8 @@ from pathlib import Path
 from gaia.eval.followup_quality import (
     default_followup_thresholds_path,
     generate_detections,
-    load_default_followup_thresholds,
     load_followup_corpus,
+    load_followup_thresholds,
     score_generations,
     summarize_followups,
 )
@@ -93,8 +93,9 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    thresholds = load_default_followup_thresholds()
-    print(f"[FOLLOWUP-EVAL] manifest: {default_followup_thresholds_path()}")
+    thresholds_path = default_followup_thresholds_path()
+    thresholds = load_followup_thresholds(thresholds_path)
+    print(f"[FOLLOWUP-EVAL] manifest: {thresholds_path}")
     print(
         f"[FOLLOWUP-EVAL] enforce={thresholds.enforce} "
         f"f1_min={thresholds.f1_min} recall_min={thresholds.recall_min} "

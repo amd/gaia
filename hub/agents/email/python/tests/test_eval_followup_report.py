@@ -106,7 +106,7 @@ def _install_fakes(monkeypatch, summary):
     monkeypatch.setattr(mod, "load_followup_corpus", fake_load_corpus)
     monkeypatch.setattr(mod, "score_generations", fake_score)
     monkeypatch.setattr(mod, "summarize_followups", fake_summarize)
-    monkeypatch.setattr(mod, "load_default_followup_thresholds", fake_thresholds)
+    monkeypatch.setattr(mod, "load_followup_thresholds", fake_thresholds)
     return fake_generate, fake_load_corpus, fake_score, fake_summarize, fake_thresholds
 
 
@@ -128,11 +128,13 @@ def test_runs_and_scores_with_no_judge_credential(monkeypatch):
 def test_thresholds_come_from_the_committed_manifest(monkeypatch):
     """Bars are loaded from the manifest, never inlined in the script."""
     _install_fakes(monkeypatch, _summary(_gate(False)))
-    fake_thresholds = mod.load_default_followup_thresholds
+    fake_thresholds = mod.load_followup_thresholds
 
     assert mod.main([]) == 0
 
-    fake_thresholds.assert_called_once_with()
+    # The upstream loader takes the manifest path as an argument
+    # (gaia.eval.followup_quality.load_followup_thresholds).
+    fake_thresholds.assert_called_once_with(mod.default_followup_thresholds_path())
 
 
 def test_report_records_the_loaded_bars_and_the_gate_verdict(monkeypatch):
@@ -142,7 +144,7 @@ def test_report_records_the_loaded_bars_and_the_gate_verdict(monkeypatch):
     assert mod.main([]) == 0
 
     report = json.loads(_report_path().read_text(encoding="utf-8"))
-    assert set(["model", "corpus", "detector", "summary"]).issubset(report.keys())
+    assert {"model", "corpus", "detector", "summary"}.issubset(report.keys())
     # Round-tripped through JSON, so compare by value (the fixture carries no
     # non-JSON types — a difference here would mean the script mutated it).
     assert report["summary"] == summary
