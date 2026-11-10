@@ -93,6 +93,30 @@ describe('paths with spaces', () => {
     });
 
     it.each([
+        'C:\\Users\\Kalin\\OneDrive - AMD\\_drafts\\plan.md',
+        'C:\\My Old Docs\\_drafts\\plan.md',
+        'C:\\Program Files (x86)\\Common Files\\GAIA\\gaia.exe',
+        'C:\\My Old Docs\\_drafts\\my plan.md',
+    ])('links %s as one path, in the answer and the user\'s message', (path) => {
+        renderAnswer(`Saved to ${path} just now.`);
+        expect(links().map((l) => l.textContent)).toEqual([path]);
+        document.body.innerHTML = '';
+        const message: Message = {
+            id: 2, session_id: 's', role: 'user', content: `Summarize ${path}`, created_at: '', rag_sources: null,
+        };
+        render(<MessageBubble message={message} />);
+        expect(links().map((l) => l.textContent)).toEqual([path]);
+        fireEvent.click(links()[0]);
+        expect(mockedApi.openFileOrFolder).toHaveBeenCalledWith(path);
+    });
+
+    it('links a path with several spaces inside Arabic prose', () => {
+        const path = 'C:\\Users\\Kalin\\OneDrive - AMD\\_drafts\\plan.md';
+        renderAnswer(`احفظ الملف في ${path} ثم أغلق.`);
+        expect(links().map((l) => l.textContent)).toEqual([path]);
+    });
+
+    it.each([
         ['a folder another separator follows', 'Installed to C:\\Program Files\\GAIA\\gaia.exe today.', 'C:\\Program Files\\GAIA\\gaia.exe'],
         ['a trailing folder separator', 'Look in C:\\Program Files\\GAIA\\ first.', 'C:\\Program Files\\GAIA\\'],
         ['a sentence after a folder', 'Saved to C:\\out\\Q3 and then closed.', 'C:\\out\\Q3'],

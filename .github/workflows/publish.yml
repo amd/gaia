@@ -8,7 +8,8 @@
 # Flow:
 #   validate → build (pypi + npm + desktop installers + terminal installers,
 #              parallel; the Windows setup follows the desktop and terminal builds)
-#            → ci-green (the tagged commit passed CI; parallel with the builds)
+#            → ci-green (the tagged commit passed CI; parallel with the builds;
+#              on an RC it only reports, see the job)
 #     → approve (single manual gate for a final; none for an RC)
 #       → publish (pypi + npm, parallel)
 #         → post-publish smoke test (PyPI install verification)
@@ -344,10 +345,12 @@ jobs:
           fi
 
       - name: Run backend tests
+        # A final only: tests never hold a release candidate.
+        if: needs.validate.outputs.is_rc != 'true'
         # No silent fallback (CLAUDE.md "No Silent Fallbacks"): this is the only
-        # pytest run on the release path -- test_unit.yml triggers on pushes to
-        # main, not on a v* tag -- so a swallowed failure here publishes a broken
-        # build. The `|| echo` and `2>/dev/null` this replaces made the step green
+        # pytest run on a final's release path -- test_unit.yml triggers on
+        # pushes to main, not on a v* tag -- so a swallowed failure here
+        # publishes a broken build. The `|| echo` and `2>/dev/null` this replaces made the step green
         # whether the tests passed, failed, or never ran at all.
         #
         # [api] as well as [dev]: gaia.ui imports fastapi, which only the api/ui
@@ -385,6 +388,7 @@ jobs:
     with:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
+      skip_source_tests: ${{ needs.validate.outputs.is_rc == 'true' }}
 
   # ── Release candidate: the flagship agent from this commit ──────────
   # The hub's flagship is whatever release_agent_gaia.yml last published, which
@@ -406,12 +410,13 @@ jobs:
 
   # ── The tagged commit passed CI ─────────────────────────────────────
   # The test workflows ran when this commit reached main, not on the tag, and
-  # most of those runs were cancelled by the next merge. util/check_release_ci.py
-  # requires a passing run of each required check on this exact commit,
-  # dispatches any that has none against the tag, and waits. Parallel with the
-  # builds, so it only adds time when CI is slower than they are. An RC needs
-  # only its RC_CRITICAL set and reports the rest as warnings; a final needs
-  # FINAL_REQUIRED, everything.
+  # most of those runs were cancelled by the next merge. For a final,
+  # util/check_release_ci.py requires a passing run of each FINAL_REQUIRED
+  # check on this exact commit, dispatches any that has none against the tag,
+  # and waits. Parallel with the builds, so it only adds time when CI is slower
+  # than they are. An RC is never held by tests: the script reads each check
+  # once, reports its state as a warning, and exits 0, and approve-publish does
+  # not need this job to pass on an RC.
   ci-green:
     name: Tagged commit passed CI
     needs: validate
@@ -433,10 +438,10 @@ jobs:
           python3 util/check_release_ci.py --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --tag "${TAG_NAME}"
 
   # ── Stage 3: Approve (single manual gate, finals only) ──────────────
-  # All builds and CI must pass before anything publishes. A final waits for a
-  # reviewer in the "publish" environment; an RC runs in "publish-rc", which has
-  # none. pypi and npm keep their own environments: the trusted publishers are
-  # bound to those names.
+  # All builds, and for a final CI too, must pass before anything publishes. A
+  # final waits for a reviewer in the "publish" environment; an RC runs in
+  # "publish-rc", which has none. pypi and npm keep their own environments: the
+  # trusted publishers are bound to those names.
 
   approve-publish:
     name: Approve Publishing
@@ -446,7 +451,7 @@ jobs:
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
       needs.build-desktop-installers.result == 'success' &&
-      needs.ci-green.result == 'success' &&
+      (needs.validate.outputs.is_rc == 'true' || needs.ci-green.result == 'success') &&
       needs.tui-installers-complete.result == 'success' &&
       (needs.validate.outputs.is_rc == 'true' || needs.windows-setup.outputs.ok == 'true') &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
@@ -1030,7 +1035,7 @@ jobs:
       # ── Desktop installers ─────────────────────────────────────────
       # The reusable build-installers workflow uploaded each platform's
       # artifacts to "<platform>-installer" workflow-run artifacts. Pull
-      # them here and add to release-assets/ so the softprops step
+      # them here and add to release-assets/ so the release step
       # below includes them in the published release.
       # The terminal hub. Until these are release assets the binary exists
       # only as a CI artifact that expires in 14 days, so nothing can install it
@@ -1065,6 +1070,35 @@ jobs:
           fi
           sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
+
+      # The frozen gaia install.sh and install.ps1 fetch, so the one-line install
+      # needs no Python or PyPI either. This run froze it for the desktop
+      # installers (gaia-core-*) and the terminal packages (tui-gaia-core-*,
+      # which alone has the best-effort Intel Mac and Linux Arm builds).
+      - name: Download the gaia core builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*gaia-core-*'
+          path: core-builds
+
+      - name: Attach and checksum the gaia core
+        run: |
+          set -euo pipefail
+          attached=()
+          for p in win32-x64 darwin-arm64 linux-x64 darwin-x64 linux-arm64; do
+            f="$(find core-builds -name "gaia-core-${p}.tar.gz" | head -n1)"
+            if [ -z "${f}" ]; then
+              if [ "${p}" = darwin-x64 ] || [ "${p}" = linux-arm64 ]; then
+                echo "::warning::no ${p} gaia core this release (a best-effort build): install.sh there has nothing to fetch."
+                continue
+              fi
+              echo "::error::the release is missing the ${p} gaia core. install.sh / install.ps1 fetch it from the release, so it must not ship without it."
+              exit 1
+            fi
+            cp "${f}" "release-assets/gaia-core-${p}.tar.gz"
+            attached+=("gaia-core-${p}.tar.gz")
+          done
+          (cd release-assets && sha256sum "${attached[@]}" > gaia-core-SHA256SUMS.txt && cat gaia-core-SHA256SUMS.txt)
 
       # After the checksum step, which covers the terminal binaries only.
       - name: Download the combined Windows setup
@@ -1159,25 +1193,38 @@ jobs:
           python -m pip install --quiet pyyaml
           python util/check_release_assets.py --dir release-assets
 
-      - name: Create GitHub Release
-        if: needs.validate.outputs.is_rc != 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-
-      - name: Create GitHub pre-release (release candidate)
-        if: needs.validate.outputs.is_rc == 'true'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            release-assets/*
-            dist/**
-          body_path: RELEASE_BODY.md
-          prerelease: true
-          make_latest: false
+      # Create the release as a draft, upload assets idempotently, then publish
+      # it. GitHub's installation API limit can be exhausted by the tag-triggered
+      # eval and benchmark workflows; the helper waits for the reported reset and
+      # resumes from the release's existing assets instead of restarting the
+      # whole release or failing after PyPI/npm have already published.
+      - name: Create GitHub Release with bounded rate-limit retry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          IS_RC: ${{ needs.validate.outputs.is_rc }}
+        run: |
+          set -euo pipefail
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=(--asset "$asset")
+          done < <(find release-assets dist -type f -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no GitHub Release assets were built"
+            exit 1
+          fi
+          args=(
+            --repo "${GITHUB_REPOSITORY}"
+            --tag "${TAG_NAME}"
+            --title "${TAG_NAME}"
+            --notes-file RELEASE_BODY.md
+            "${assets[@]}"
+          )
+          if [ "${IS_RC}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          python3 util/github_release_retry.py "${args[@]}"
 
   # ── Attach the terminal installers ─────────────────────────────────
   # The macOS .pkg and Linux .deb/.rpm, plus gaia-installers-SHA256SUMS.txt

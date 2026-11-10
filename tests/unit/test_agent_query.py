@@ -319,3 +319,19 @@ def test_run_query_trace_captures_stream_with_no_terminal_event(monkeypatch, tmp
     assert doc["terminal_type"] is None
     # The CLI-synthesized terminal error is recorded alongside the real events.
     assert [e["type"] for e in doc["events"]] == ["tool_call", "error"]
+
+
+def test_a_final_answer_marked_failed_is_a_failed_run():
+    """The agent reports a failed model call as a final answer marked failed;
+    a script must not read that as success."""
+    import io
+
+    from gaia.daemon.agent_query import ConsoleRenderer
+
+    renderer = ConsoleRenderer(out=io.StringIO(), err=io.StringIO())
+    renderer.render(
+        {"type": "final", "answer": "Couldn't reach the LLM.", "failed": True}
+    )
+    assert renderer.final_failed is True
+    renderer.render({"type": "final", "answer": "pong"})
+    assert renderer.final_failed is False

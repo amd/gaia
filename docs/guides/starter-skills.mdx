@@ -227,8 +227,10 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
   grant doesn't cover — `gh auth token` prints a credential, `gh alias`/`gh
   extension` run arbitrary code, `gh api -X POST` is an unbounded write — are
   never pre-approved: each shows its exact text and a risk line and runs only
-  on a one-time yes, with no "always". Deletes (`gh repo delete`, `gh api -X
-  DELETE`) are refused outright.
+  on a one-time yes, with no "always". Anything that ends or deletes someone
+  else's work (`gh issue close`, `gh pr close`, `gh pr merge`, `gh repo delete`,
+  `gh api -X DELETE`) is refused outright, with no prompt. GAIA tells you so
+  and gives you the command to run yourself.
 
 ### rss-digest
 
@@ -372,6 +374,12 @@ gaia skill info gpu-restock-watch
   catalogue tells the model to load both. A name that is not installed is
   ignored, and no starter skill uses it today. See
   [Companion skills](/spec/agent-skills#companion-skills).
+- **`loads_with` names tools only your skill drives**, so GAIA loads the skill
+  when a model calls one of them without loading it first. It applies only to
+  skills bundled with GAIA that ship no code; any other skill waits for
+  `load_skill`. Each name must also be in `tools_required`. `analyze-recording` lists `analyze_transcript` and
+  `export_transcript`. See
+  [Skills that load with their tools](/spec/agent-skills#skills-that-load-with-their-tools).
 - **Never put a secret in a skill file.** Reference it as a
   `requirements.env_vars` entry and configure it through
   `gaia connectors configure`.

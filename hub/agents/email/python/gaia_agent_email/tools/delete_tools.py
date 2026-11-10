@@ -25,14 +25,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.tools import tool
+from gaia_agent_email import action_store
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import (
     NO_MAILBOX_CONNECTED_MESSAGE,
     _format_message_for_llm,
 )
-from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger

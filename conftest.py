@@ -189,6 +189,10 @@ _EXIT_WITH_PID_ENV = "GAIA_DAEMON_EXIT_WITH_PID"
 #: The developer's real GAIA home, read before any test patches ``Path.home``.
 _REAL_GAIA_HOME = Path.home() / ".gaia"
 
+#: Bound before any test patches ``os.path.realpath``: a test that breaks it
+#: must not break the guards, which coverage also reaches via sqlite3.connect.
+_REALPATH = os.path.realpath
+
 _REAL_HOME_MESSAGE = (
     "This test would {action} the GAIA in your real home, {home}: {harm} "
     "Point it at a tmp folder instead: set GAIA_HOME (a daemon also needs "
@@ -207,8 +211,8 @@ _DB_HINT = "A database a test opens itself belongs under tmp_path."
 
 
 def _is_real_gaia_home(path: Path) -> bool:
-    real = os.path.normcase(str(_REAL_GAIA_HOME.resolve()))
-    candidate = os.path.normcase(str(Path(path).resolve()))
+    real = os.path.normcase(_REALPATH(_REAL_GAIA_HOME))
+    candidate = os.path.normcase(_REALPATH(path))
     return candidate == real or candidate.startswith(real + os.sep)
 
 
@@ -266,6 +270,10 @@ def pytest_configure(config):  # noqa: D103 — pytest hook
         "markers",
         "embedded_start: let LemonadeManager.start_embedded_if_stopped run "
         "(its own dependencies must be mocked)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "npu_host_probe: let gaia.llm.npu_linux read this machine's NPU setup",
     )
 
 
@@ -366,6 +374,22 @@ _EMBEDDED_ACTIONS = (
 
 
 _REAL_WHICH = shutil.which
+
+
+@pytest.fixture(autouse=True)
+def _no_npu_host_probe(request, monkeypatch):
+    """Judge an NPU in a ``/system-info`` payload by the payload alone.
+
+    On a Linux runner the real checks would read that machine's sysfs, which
+    has no NPU, and turn every test NPU into one that isn't set up. Opt a test
+    in with @pytest.mark.npu_host_probe.
+    """
+    from gaia.llm import npu_linux
+
+    npu_linux.forget()
+    if request.node.get_closest_marker("npu_host_probe"):
+        return
+    monkeypatch.setattr(npu_linux, "problems", lambda: [])
 
 
 @pytest.fixture(autouse=True)
@@ -533,7 +557,7 @@ def _off_real_home(path: Path) -> Path:
     """*path* moved from the real ``~/.gaia`` into ``_TEST_GAIA_HOME``."""
     if not _is_real_gaia_home(path):
         return path
-    relative = Path(path).resolve().relative_to(_REAL_GAIA_HOME.resolve())
+    relative = Path(_REALPATH(path)).relative_to(_REALPATH(_REAL_GAIA_HOME))
     return _TEST_GAIA_HOME / relative
 
 

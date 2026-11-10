@@ -33,6 +33,7 @@ import json
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools._email.phishing import (
     SUSPICIOUS_GUIDANCE,
     annotate,
@@ -474,6 +475,9 @@ class EmailToolsMixin:
             else:
                 logger.warning("email tool failed during %s: %s", action, exc)
             payload = {"error": str(exc), "action": action, "success": False}
+            if refusal:
+                # A per-turn budget, not a mailbox fault: memory must not learn it.
+                payload.update(NOT_EXECUTED)
             payload.update(extra)
             return json.dumps(payload, indent=2)
 

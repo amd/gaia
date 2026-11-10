@@ -760,6 +760,20 @@ describe("getState() extended state", () => {
     const state = mod.getState();
     expect(state.pinnedVersion).toBe("v0.20.0");
   });
+
+  test("with GAIA_DISABLE_UPDATE=1, Settings gets the version and the disabled status", async () => {
+    process.env.GAIA_DISABLE_UPDATE = "1";
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:get-status");
+    expect(state.status).toBe(mod.STATES.DISABLED);
+    expect(state.currentVersion).toBe(electronMock.app.getVersion());
+    expect(electronMock.ipcMain._handlers.has("gaia:update:check")).toBe(false);
+
+    mod.destroy();
+    expect(electronMock.ipcMain._handlers.has("gaia:update:get-status")).toBe(false);
+  });
 });
 
 // ── Tests: IPC handler registration ───────────────────────────────────────────

@@ -53,11 +53,16 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
-| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\GAIA Terminal Hub` |
+| Windows x64 | `gaia-<version>-win-x64-setup.exe` | double-click, tick **GAIA Terminal UI** | `%LOCALAPPDATA%\Programs\gaia-tui` |
 | macOS Apple silicon | `gaia-<version>-darwin-arm64.pkg` | double-click | `/usr/local/bin` |
 | macOS Intel | `gaia-<version>-darwin-x64.pkg` | double-click | `/usr/local/bin` |
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
+
+On macOS and Linux the package carries only those two binaries. The first time you
+open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
+`~/.gaia`. That takes about two minutes and needs internet. The one-line installer
+(`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
 
 On Windows this is the one GAIA installer: on **Choose Components**, tick
 **Terminal** — and the desktop app too, if you want both. [Install GAIA](/guides/install)
@@ -247,7 +252,7 @@ Press `Enter` and the step runs right there. The row it is working on shows it,
 and the line underneath says what is happening in words — never a log line.
 The Lemonade step installs Lemonade and stops, downloading nothing — and so does
 every retry of it, and the key on a Lemonade row that is installed but not
-running. `p` still opens the full provider panel at any point, to pick a
+running. `p` still opens the full provider panel at any point on the flagship agent, to pick a
 specific model rather than the default.
 
 #### Choose your models
@@ -378,8 +383,8 @@ these sentences read the same as in the Agent UI. `Esc` leaves, which cancels th
 A download isn't proof it works, so the last part runs each job for real: the
 model server answers, the chat model loads and answers, the vision model names a
 test image's colour, the embedder makes an embedding, each extra you ticked does
-its job, and GAIA answers one real chat. Each test shows as a row, and setup is
-ready only when the ones it needs have passed.
+its job, and GAIA answers one real chat on the model your chat will open on. Each
+test shows as a row, and setup is ready only when the ones it needs have passed.
 
 ```
   Testing everything                                 step 3 of 3 · part 3 of 3
@@ -691,6 +696,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
+| `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
@@ -794,9 +801,10 @@ A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
 with invisible or line-break characters (the prompt couldn't show what runs), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
---hard`, `git clean`, `rm` outside the project), and folders no approval can
-open (credential folders, the system temp folder, a whole drive or your home
-folder). The agent
+--hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
+end someone else's work (`gh issue close`, `gh pr merge`), and folders no
+approval can open (credential folders, the system temp folder, a whole drive or
+your home folder). The agent
 says what it would have run, so you can run it yourself.
 
 | Key | What it does |
@@ -907,7 +915,7 @@ being ignored.
 
 To run a turn somewhere other than this machine — Fireworks AI or your
 organisation's AMD LLM Gateway — choose it at the first-run question, press **p**
-at the readiness gate, or type `/provider`. See [AI providers](/guides/ai-providers).
+at the readiness gate (flagship agent only), or type `/provider`. See [AI providers](/guides/ai-providers).
 
 ## When GAIA asks permission
 

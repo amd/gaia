@@ -59,6 +59,7 @@ DEFERRED: dict[str, str] = {
     "rss-digest": "Requires live feeds; non-deterministic ground truth.",
     "source-watch": "Requires live web fetch and stored state across runs.",
     "transcribe-meeting": "Requires audio input; belongs with the audio tests.",
+    "analyze-recording": "Requires audio input; belongs with the audio tests.",
 }
 
 

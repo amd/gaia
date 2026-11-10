@@ -181,9 +181,20 @@ jobs:
   # it would install a front end with nothing behind it. win-arm64 and
   # linux-arm64 are permanently in that set; darwin-x64 lands in it whenever the
   # best-effort Intel sidecar build is skipped.
+  # The frozen gaia each package ships beside gaia-tui, so setup and the daemon
+  # need no Python on the PC.
+  core:
+    if: inputs.installers
+    uses: ./.github/workflows/build_core.yml
+    with:
+      # linux-arm64 builds no package; publish.yml attaches it for install.sh.
+      platforms: 'darwin-arm64 darwin-x64 linux-x64 linux-arm64'
+      version: ${{ inputs.version }}
+      artifact_prefix: ${{ inputs.artifact_prefix }}tui-
+
   tui-installers:
     name: Build installers (${{ matrix.label }})
-    needs: tui-build
+    needs: [tui-build, core]
     if: inputs.installers
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -219,9 +230,15 @@ jobs:
           pattern: gaia-agent-*
           path: flagship
 
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ inputs.artifact_prefix }}tui-gaia-core-*
+          path: core-download
+
       # One staging directory per target, holding what both build scripts
-      # consume: gaia-tui, gaia-agent, LICENSE.md. A staging directory that is
-      # absent afterwards means "no installer for this platform".
+      # consume: gaia-tui, gaia-agent, LICENSE.md and core/ (the frozen gaia). A
+      # staging directory that is absent afterwards means "no installer for
+      # this platform".
       #
       # fetch_sidecar.py verifies the sidecar against the digest COMMITTED in
       # hub/agents/gaia/npm/binaries.lock.json, never one served by the hub that
@@ -230,10 +247,22 @@ jobs:
         env:
           PLATFORMS: ${{ matrix.platforms }}
           SIDECAR: ${{ inputs.sidecar }}
+          CORE_PREFIX: ${{ inputs.artifact_prefix }}tui-
         run: |
           set -euo pipefail
           for p in ${PLATFORMS}; do
-            mkdir -p "stage/${p}"
+            core="core-download/${CORE_PREFIX}gaia-core-${p}/gaia-core-${p}.tar.gz"
+            if [ ! -f "${core}" ]; then
+              # Only the best-effort Intel Mac freeze may be missing.
+              if python -c "import sys; sys.path.insert(0, 'util'); import flagship_rc_assets as f; sys.exit(0 if sys.argv[1] in f.OPTIONAL_PLATFORMS else 1)" "${p}"; then
+                echo "::warning::no installer will be built for ${p} — this run froze no gaia core for it (best-effort platform)."
+                continue
+              fi
+              echo "::error::no gaia core was built for ${p}, a required platform."
+              exit 1
+            fi
+            mkdir -p "stage/${p}/core"
+            tar -xzf "${core}" -C "stage/${p}/core"
             cp "bin/gaia-${p}" "stage/${p}/gaia-tui"
             cp LICENSE.md "stage/${p}/LICENSE.md"
             chmod +x "stage/${p}/gaia-tui"
@@ -404,9 +433,13 @@ jobs:
           # end to end. The x64 package is verified by its payload listing --
           # running it would need Rosetta, which the runner may not have.
           sudo installer -pkg "dist/${arm64_pkg}" -target /
-          for b in gaia-tui gaia-agent; do
+          for b in gaia-tui gaia-agent gaia; do
             test -x "/usr/local/bin/${b}" || { echo "::error::${b} did not land in /usr/local/bin"; exit 1; }
           done
+          # The frozen core: setup and the daemon need it, and no Python.
+          got="$(gaia --version 2>&1)"
+          echo "gaia --version -> ${got}"
+          case "${got}" in *[0-9].[0-9]*) ;; *) echo "::error::the packaged gaia did not start: ${got}"; exit 1 ;; esac
           test -f /usr/local/share/doc/gaia-tui/LICENSE.md \
             || { echo "::error::the package did not install LICENSE.md"; exit 1; }
           command -v gaia-tui >/dev/null || { echo "::error::gaia-tui is not on PATH"; exit 1; }
@@ -415,6 +448,7 @@ jobs:
           case "${got}" in *"${VERSION}"*) ;; *) echo "::error::gaia-tui did not report ${VERSION}"; exit 1 ;; esac
           pkgutil --pkg-info ai.amd.gaia.terminal-hub
           pkgutil --pkg-info ai.amd.gaia.terminal-hub.docs
+          pkgutil --pkg-info ai.amd.gaia.terminal-hub.core
 
           after_dirs="$(stat -f '%N %Su:%Sg %Lp' ${WATCHED})"
           echo "--- after install ---"
@@ -441,7 +475,7 @@ jobs:
             # Each component's Payload is rooted at its own install location, so
             # the binaries sit directly under it -- and a `usr` there would mean
             # a component reclaimed the parent directories.
-            for b in gaia-tui gaia-agent LICENSE.md; do
+            for b in gaia-tui gaia-agent LICENSE.md gaia _internal; do
               test -n "$(find "${x64_tmp}/expanded" -path "*/Payload/${b}" -print -quit)" \
                 || { echo "::error::the x64 package does not carry ${b}"; exit 1; }
             done
@@ -455,10 +489,11 @@ jobs:
 
           # A .pkg ships no uninstaller by macOS convention, so removal is the
           # documented manual one: delete the files and forget the receipt.
-          sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-          sudo rm -rf /usr/local/share/doc/gaia-tui
+          sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaia
+          sudo rm -rf /usr/local/share/doc/gaia-tui /usr/local/lib/gaia
           sudo pkgutil --forget ai.amd.gaia.terminal-hub
           sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
+          sudo pkgutil --forget ai.amd.gaia.terminal-hub.core
           test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui survived removal"; exit 1; }
           echo "OK - installed, ran, removed"
 
@@ -503,6 +538,8 @@ jobs:
             dpkg --compare-versions "${PKG_VERSION}" "${ORDER}" "${BASE}" || fail "dpkg: expected ${PKG_VERSION} ${ORDER} ${BASE}"
             executable /usr/bin/gaia-tui
             executable /usr/bin/gaia-agent
+            executable /usr/lib/gaia/gaia
+            gaia --version | tee /tmp/core || fail "the packaged gaia did not start"
             command -v gaia-tui || fail "gaia-tui not on PATH"
             gaia-tui version | tee /tmp/v
             grep -qF "${VERSION}" /tmp/v || fail "gaia-tui version: expected ${VERSION}, got $(cat /tmp/v)"
@@ -511,6 +548,8 @@ jobs:
             dpkg -r gaia
             absent /usr/bin/gaia-tui
             absent /usr/bin/gaia-agent
+            absent /usr/bin/gaia
+            absent /usr/lib/gaia
             [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"
             echo 'OK - deb installed, ran, removed, user data intact'
           EOF
@@ -524,6 +563,8 @@ jobs:
             expect "rpm.vercmp(${PKG_VERSION}, ${BASE})" "$(rpm --eval "%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}")" "${RPMCMP}"
             executable /usr/bin/gaia-tui
             executable /usr/bin/gaia-agent
+            executable /usr/lib/gaia/gaia
+            gaia --version | tee /tmp/core || fail "the packaged gaia did not start"
             command -v gaia-tui || fail "gaia-tui not on PATH"
             gaia-tui version | tee /tmp/v
             grep -qF "${VERSION}" /tmp/v || fail "gaia-tui version: expected ${VERSION}, got $(cat /tmp/v)"
@@ -532,6 +573,8 @@ jobs:
             rpm -e gaia
             absent /usr/bin/gaia-tui
             absent /usr/bin/gaia-agent
+            absent /usr/bin/gaia
+            absent /usr/lib/gaia
             [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"
             echo 'OK - rpm installed, ran, removed, user data intact'
           EOF

@@ -9,6 +9,8 @@ import {
     requiresFreshConsent,
     repeatedAllowCount,
     PATH_ACCESS_TOOL,
+    PROJECT_TRUST_TOOL,
+    permissionPromptText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -16,6 +18,7 @@ import { isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
+import { MarkedText, markLtr } from './MarkedText';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -137,6 +140,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
         ? splitCommandSummary(notification.summary ?? '')
         : null;
+    const isPath = notification.tool === PATH_ACCESS_TOOL;
+    const { heading, question } = permissionPromptText(notification, t, markLtr);
 
     const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
@@ -191,15 +196,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
             <div className="perm-card-head">
                 <ShieldQuestion size={16} className="perm-card-icon" aria-hidden="true" />
                 <div className="perm-card-text">
-                    {/* The card's text is English; <bdi> keeps its punctuation at the end in a right-to-left UI. */}
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
-                        <bdi>
-                            {notification.tool === PATH_ACCESS_TOOL
-                                ? notification.title
-                                : notification.toolLabel
-                                    ? <>Allow {notification.toolLabel}?</>
-                                    : <>Allow GAIA to use <code dir="ltr">{notification.tool}</code>?</>}
-                        </bdi>
+                        <MarkedText text={heading} />
                     </h2>
                     {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{detail}</pre>}
                     {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{detail}</code></p>}
@@ -213,7 +211,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
                     {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
                     {!detail && !code && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
-                    {freshConsent && notification.message && <p className="perm-card-detail"><bdi>{notification.message}</bdi></p>}
+                    {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title={t('prompt.timer')}>{formatCountdown(remaining)}</span>
@@ -244,7 +242,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                 <div className="perm-card-actions">
                     <button type="button" className="perm-btn is-primary" onClick={() => answer('allow')} disabled={busy}>
                         {/* Granting a path lasts for the chat, as the question says. */}
-                        {t(notification.tool === PATH_ACCESS_TOOL ? 'prompt.allowForChat' : 'prompt.allowOnce')}
+                        {t(notification.tool === PROJECT_TRUST_TOOL ? 'prompt.trust.allow' : isPath ? 'prompt.allowForChat' : 'prompt.allowOnce')}
                     </button>
                     {scope && (
                         <button

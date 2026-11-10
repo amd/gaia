@@ -402,6 +402,10 @@ def offline_refusal(
     elif name.startswith("browser_"):
         if not url_is_local:
             what = "the browser"
+    elif name == "transcribe_media":
+        hosts = _remote_hosts(args)
+        if hosts:
+            what = f"{name} (it would download from {hosts[0]})"
     elif registry_entry is not None and registry_entry.get("_mcp_server"):
         what = f"the {registry_entry['_mcp_server']} connector"
     else:

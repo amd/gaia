@@ -37,6 +37,9 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
             "search_email",
             "read_email",
             "list_mail_folders",
+            "get_thread",
+            "list_connected_mailboxes",
+            "list_waiting_on_you",
         }
     ),
     "calendar": frozenset(

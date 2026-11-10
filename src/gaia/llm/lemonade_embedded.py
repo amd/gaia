@@ -429,6 +429,38 @@ def _exit_details(pid: int) -> Tuple[Optional[int], Optional[float]]:
     return None, None
 
 
+#: Lines of lemond's own output quoted when it exits during start.
+_STARTUP_ERROR_LINES = 6
+_STARTUP_TAIL_BYTES = 256 * 1024
+_STARTUP_LINE_CHARS = 500
+#: lemond's own error levels, and the dynamic loader's refusals.
+_STARTUP_ERROR_RE = re.compile(
+    r"\[(?:error|critical|fatal)\]|error while loading shared libraries"
+    r"|version `[^']+' not found|cannot open shared object",
+    re.IGNORECASE,
+)
+_STARTUP_WARNING_RE = re.compile(r"\b(?:error|failed|cannot|denied|abort)", re.I)
+
+
+def _startup_output(log_path: Path, offset: int, known: Tuple[str, ...]) -> str:
+    """The end of what lemond wrote to *log_path* after *offset*, errors first."""
+    with open(log_path, "rb") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        start = offset if offset <= size else 0
+        fh.seek(max(start, size - _STARTUP_TAIL_BYTES))
+        text = fh.read().decode("utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line for line in lines if _STARTUP_ERROR_RE.search(line)]
+    if not errors:
+        errors = [line for line in lines if _STARTUP_WARNING_RE.search(line)]
+    picked = [
+        line[:_STARTUP_LINE_CHARS] for line in (errors or lines)[-_STARTUP_ERROR_LINES:]
+    ]
+    from gaia.llm.failure_record import redact
+
+    return redact("\n".join(picked), known)
+
+
 def _describe_exit_code(code: Optional[int]) -> str:
     if code is None:
         return "exit code unavailable"
@@ -805,6 +837,8 @@ class EmbeddedLemonade:
         self.version = version
         self.root = (home or gaia_home()) / "lemonade"
         self.progress_callback = progress_callback
+        # Where this start's output begins in lemond.log, to quote its error.
+        self._spawn_log_offset = 0
 
     # -- paths ------------------------------------------------------------
 
@@ -874,27 +908,37 @@ class EmbeddedLemonade:
         """
         return self.daemon_path.is_file()
 
-    def replaces_older_install(self) -> bool:
-        """Whether an older version is unpacked, which this one upgrades.
+    def is_incomplete(self) -> bool:
+        """Whether this version was unpacked but its ``lemond`` is gone.
 
-        GAIA keeps its own server on the version it targets, so a start
-        installs over an older one instead of asking the user to.
+        Still GAIA's server to start: setup repairs it, and a system install
+        on the default port is not the one this machine was set up with.
+        """
+        return self.dist_dir.is_dir() and not self.daemon_path.is_file()
+
+    def replaces_other_install(self) -> bool:
+        """Whether another parseable version is unpacked for replacement.
+
+        GAIA keeps its private server on the pinned version. A newer build may
+        be incompatible with the current GAIA release too, so both upgrades and
+        downgrades repair it without making the user reinstall manually.
         """
         target = parse_version(self.version)
         dist = self.root / "dist"
         if target is None or not dist.is_dir():
             return False
         return any(
-            (found := parse_version(entry.name)) is not None and found < target
+            (found := parse_version(entry.name)) is not None and found != target
             for entry in dist.iterdir()
             if entry.is_dir()
         )
 
-    def older_installed_version(self) -> Optional[str]:
-        """The newest other version unpacked here, or None.
+    def other_installed_version(self) -> Optional[str]:
+        """The newest parseable version other than the pinned one, or None.
 
-        A GAIA upgrade that moves the pinned version leaves the previous one in
-        ``dist/``: that machine was set up and needs an update, not first-run setup.
+        A GAIA update can move the pinned version in either direction. Any
+        complete, different install means this machine needs repair rather than
+        first-run setup.
         """
         dist = self.root / "dist"
         if not dist.is_dir():
@@ -903,11 +947,11 @@ class EmbeddedLemonade:
         found = [
             d.name
             for d in dist.iterdir()
-            if d.name != self.version and (d / name).is_file()
+            if d.name != self.version
+            and parse_version(d.name) is not None
+            and (d / name).is_file()
         ]
-        return max(
-            found, key=lambda v: [int(n) for n in re.findall(r"\d+", v)], default=None
-        )
+        return max(found, key=lambda v: parse_version(v) or (), default=None)
 
     # -- install ----------------------------------------------------------
 
@@ -1850,7 +1894,7 @@ class EmbeddedLemonade:
         install_if_missing: bool = True,
         owner_pid: Optional[int] = None,
         owner_started: Optional[float] = None,
-        upgrade_older: bool = False,
+        upgrade_mismatch: bool = False,
     ) -> EmbeddedStatus:
         """Start the private daemon and wait for it to answer.
 
@@ -1862,9 +1906,9 @@ class EmbeddedLemonade:
             install_if_missing: Download the artifact when it is not unpacked.
             owner_pid: The GAIA daemon starting it, recorded as its owner.
             owner_started: That daemon's process start time.
-            upgrade_older: Download this version, even when
-                *install_if_missing* is false, if it replaces an older one
-                that is installed or running.
+            upgrade_mismatch: Download this version, even when
+                *install_if_missing* is false, if it replaces another
+                parseable version that is installed or running.
 
         Returns:
             Status of the running instance.
@@ -1880,21 +1924,21 @@ class EmbeddedLemonade:
                 install_if_missing,
                 owner_pid,
                 owner_started,
-                upgrade_older,
+                upgrade_mismatch,
             )
 
-    def is_older(self, version: Optional[str]) -> bool:
-        """Whether *version* predates the one this instance targets."""
+    def is_version_mismatch(self, version: Optional[str]) -> bool:
+        """Whether a parseable *version* differs from this instance's target."""
         found, target = parse_version(version), parse_version(self.version)
-        return found is not None and target is not None and found < target
+        return found is not None and target is not None and found != target
 
     def _ensure_installed(
-        self, install_if_missing: bool, upgrade_older: bool, upgrading: bool
+        self, install_if_missing: bool, upgrade_mismatch: bool, upgrading: bool
     ) -> None:
         if self.is_installed():
             return
-        replaces = upgrading or self.replaces_older_install()
-        if not install_if_missing and not (upgrade_older and replaces):
+        replaces = upgrading or self.replaces_other_install()
+        if not install_if_missing and not (upgrade_mismatch and replaces):
             raise EmbeddedLemonadeError(
                 f"Embedded Lemonade {self.version} is not installed at "
                 f"{self.dist_dir}. Run `gaia lemonade embedded start` "
@@ -1909,14 +1953,14 @@ class EmbeddedLemonade:
         install_if_missing: bool,
         owner_pid: Optional[int],
         owner_started: Optional[float],
-        upgrade_older: bool,
+        upgrade_mismatch: bool,
     ) -> EmbeddedStatus:
         existing = self._status(reap=False)
-        if existing.running and self.is_older(existing.version):
-            # Download first, so a failed download leaves the old server up.
+        if existing.running and self.is_version_mismatch(existing.version):
+            # Download first, so a failed repair leaves the running server up.
             try:
                 self._ensure_installed(
-                    install_if_missing, upgrade_older, upgrading=True
+                    install_if_missing, upgrade_mismatch, upgrading=True
                 )
             except EmbeddedLemonadeError as e:
                 raise EmbeddedLemonadeError(
@@ -1957,7 +2001,7 @@ class EmbeddedLemonade:
                 f"`gaia lemonade embedded stop`, then start again."
             )
 
-        self._ensure_installed(install_if_missing, upgrade_older, upgrading=False)
+        self._ensure_installed(install_if_missing, upgrade_mismatch, upgrading=False)
 
         self._reap_orphaned_backends()
         self.write_config()
@@ -2055,6 +2099,11 @@ class EmbeddedLemonade:
             str(port),
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
+        if sys.platform.startswith("linux"):
+            from gaia.llm.npu_linux import raise_memlock_soft_limit
+
+            # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
+            raise_memlock_soft_limit()
 
         # Own group/session so the server outlives the CLI process that spawned
         # it. A hidden console, not none: lemond's llama/whisper/kokoro children
@@ -2063,6 +2112,7 @@ class EmbeddedLemonade:
 
         self.root.mkdir(parents=True, exist_ok=True)
         with open(self.log_path, "ab") as logfile:
+            self._spawn_log_offset = logfile.tell()
             process = popen_outliving_job(
                 argv,
                 env=env,
@@ -2115,11 +2165,7 @@ class EmbeddedLemonade:
                     taken = False
                 if taken:
                     raise _PortTaken(port)
-                raise EmbeddedLemonadeError(
-                    f"Embedded Lemonade exited immediately (code "
-                    f"{process.returncode}) on port {port}. Read "
-                    f"{self.log_path} for the daemon's own error, then retry."
-                )
+                raise EmbeddedLemonadeError(self._exit_message(process, port, api_key))
             if self._health(port, api_key) is not None:
                 return
             time.sleep(0.25)
@@ -2128,6 +2174,20 @@ class EmbeddedLemonade:
             f"{port} within {timeout:.0f}s. Read {self.log_path} for what "
             f"it was doing, then retry."
         )
+
+    def _exit_message(self, process: subprocess.Popen, port: int, api_key: str) -> str:
+        """Why lemond quit during start, quoting its own last errors."""
+        head = (
+            f"Embedded Lemonade exited immediately "
+            f"({_describe_exit_code(process.returncode)}) on port {port}."
+        )
+        try:
+            said = _startup_output(self.log_path, self._spawn_log_offset, (api_key,))
+        except OSError as e:
+            return f"{head} Its log {self.log_path} could not be read ({e})."
+        if not said:
+            return f"{head} It wrote nothing before exiting. Full log: {self.log_path}"
+        return f"{head} Lemonade said:\n{said}\nFull log: {self.log_path}"
 
     def _discard(self, process: subprocess.Popen) -> None:
         """Kill a start that failed and forget it, unless another took over."""

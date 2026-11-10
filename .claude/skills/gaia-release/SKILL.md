@@ -256,7 +256,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    after the notes passed the Python validator (see the escaping rule in step 3). Its error is
    misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
    docs.json navigation but the file does not exist` — the file exists, it just never parsed.
-   Pre-existing parse errors under `docs/plans/` and `docs/superpowers/` are reported but
+   Pre-existing parse errors under `docs/plans/` are reported but
    non-fatal; leave them alone.
 
 ### Gate 1 — show the user the draft
@@ -416,7 +416,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 | `release_components.yml` | publishes only the terminal's raw binaries to the Agent Hub (R2), where the flagship lock pins them, behind the `agent-publish` approval; attaches nothing on a tag | does not run — the catalog has no pre-release channel |
 | Website | stable downloads | a collapsed "Try the release candidate" entry, hidden once the final ships |
 | Flagship agent (`gaia-agent`) | the hub's, from `release_agent_gaia.yml` | frozen from the RC's commit by `rc-flagship`, attached to the pre-release; the RC core installs it from there and never from the hub |
-| `release` branch, release-notes bot | run | skipped |
+| `release` branch, post-release notes check (`claude.yml` `release-notes`) | run | skipped |
 | Release notes | `docs/releases/v<version>.mdx` | the same file — no RC-specific notes |
 
 `version.py` stays `<version>`; the pipeline stamps the RC suffix from the tag (`util/release_tag.py`), so the final can be tagged on the RC's commit with no further version bump. Every tag, RC or final, carries the terminal's `.pkg` (arm64 + x64) and `.deb`/`.rpm` with `gaia-installers-SHA256SUMS.txt` — for an RC named `gaia-X.Y.Z-rc.N-darwin-<arch>.pkg`, `gaia_X.Y.Z-rc.N_amd64.deb` and `gaia-X.Y.Z-rc.N.x86_64.rpm`: `publish.yml`'s `tui-installers` builds them (around the RC's own flagship, or for a final the one the lock pins), `approve-publish` refuses to publish unless every leg installed cleanly, and `github-release-installers` attaches them. Inside, an RC's `.deb`/`.rpm` say `X.Y.Z~rc.N`, so the final upgrades over them (`installer/tui/linux/README.md`). Every tag also carries the one-step Windows setup (`gaia-<npm version>-win-x64-setup.exe`, built by `publish.yml`'s `windows-setup` around that run's own desktop app build — never published to R2), the desktop app installers, the raw terminal binaries, and the wheel/sdist. A failed setup turns the run red via `windows-setup-missing`: a final publishes nothing until it passes, and an RC ships without it and says so in its notes. `release-assets-complete` then reads the published release and fails the run, naming each file, if a promised installer is not on it (`util/check_release_assets.py`). `release_components.yml` no longer attaches anything on a tag, so a green publish run is what proves a complete release. None of the installer jobs takes an environment, so a final's installers never wait on `release_components.yml`'s `agent-publish` approval.
@@ -437,7 +437,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git push origin v<version>-rc1
    ```
 
-3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds and `ci-green` pass. Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
+3. **Monitor exactly as in Phase 5, minus the approval:** an RC publishes as soon as its builds pass; `ci-green` only reports CI on an RC (warnings, never a block). Tagging `-rc(N+1)` does not cancel `-rcN`; if `-rcN` is still building, it stops itself right before publishing (red, "superseded by"), so only the newest RC reaches `next`. `redeploy-website` asks the website to rebuild so the RC entry appears (it does the same for a final).
 
 4. **Personal test pass** on a machine that does not already have the release installed (CLAUDE.md: test from the user's real initial state):
    ```bash
@@ -493,16 +493,16 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
 
    The flow is: `validate → build (build-pypi + build-npm + build-desktop-installers + tui-installers → windows-setup) + ci-green → approve-publish (manual gate for a final; none for an RC) → publish (publish-pypi + publish-npm) → post-publish-smoke → github-release (attaches the Windows setup) → github-release-installers (the .pkg/.deb/.rpm) → release-assets-complete + redeploy-website`. The installer jobs run for a final too and take no environment, so `approve-publish` is the final's only approval in this run. Surface the run URL.
 
-   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it requires depends on the tag, and that file is the only list:
+   `ci-green` (`util/check_release_ci.py`) checks CI on the tagged commit. What it does depends on the tag, and that file is the only list:
 
-   | | Required (blocks) | Advisory (job-summary warning only) |
+   | | Blocks publishing | Reported only (job summary + warning) |
    |---|---|---|
-   | **RC** `vX.Y.Z-rcN` (`RC_CRITICAL`) | `lint.yml`; `test_unit.yml` jobs `Unit Tests (Linux, py3.12)` and `Import Every Module (Linux, py3.10)` | the macOS, Windows and offline-integration jobs of `test_unit.yml`; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; `test_npu_agent_chat.yml` |
-   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`) | every job of `lint.yml`, `test_unit.yml`, `test_gaia_cli_linux.yml`, `test_npu_agent_chat.yml` (an agent turn on the NPU, Windows and Linux), plus `release_train_dryrun.yml` | none |
+   | **RC** `vX.Y.Z-rcN` (`RC_REPORTED`) | nothing — tests never hold a candidate | `lint.yml`; the Linux and import-floor jobs of `test_unit.yml`; its macOS, Windows and offline-integration jobs; `test_gaia_cli_linux.yml`; `release_train_dryrun.yml`; the Windows and Linux jobs of `test_npu_agent_chat.yml` |
+   | **Final** `vX.Y.Z` (`FINAL_REQUIRED`, `FINAL_ADVISORY`) | every job of `lint.yml`, `test_unit.yml` (from a dispatched or nightly run only: push and merge-queue runs select tests, so the gate dispatches one), `test_gaia_cli_linux.yml`; the Windows job of `test_npu_agent_chat.yml` (an agent turn on the NPU); plus `release_train_dryrun.yml` | the Linux job of `test_npu_agent_chat.yml`, read once with no dispatch or wait, until the Linux Strix Halo runners lock enough memory for the NPU model (#6764) |
 
-   The candidate's own builds (`build-pypi`, `build-npm`, `build-desktop-installers` with its smoke jobs, `rc-flagship`, `tui-installers-complete`) are required too, by `approve-publish`; they build and smoke-test the same artifacts the dry run does, so an RC never waits on the hour-long dry run. Evals never gate (`eval_flagship.yml` reports separately).
+   On an RC the gate reads each check once, with no dispatch and no wait, writes each one's state (passed / failed / still running / no run on this commit) to the job summary with a `::warning::` for each that is not green, and exits 0; `approve-publish` does not need `ci-green` on an RC either. What still holds an RC is its own build and the smoke tests of those artifacts (`build-pypi`, `build-npm`, `build-desktop-installers` with its installer smoke jobs, `rc-flagship`, `tui-installers-complete`). The two source-tree test runs inside the build (`build-npm`'s backend pytest and the installers' custom-agent MCP harness) run on finals only. Evals never gate (`eval_flagship.yml` reports separately).
 
-   Most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. Advisory checks are read once and never dispatched or waited for. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. Advisory failures don't stop an RC but the final requires them, so fix them before tagging the final.
+   On a final, most main commits have no runs of their own (the next merge cancels them), so a required check with none is dispatched once against the tag and waited for, up to ~80 min alongside the builds. The gate never starts a dry run: before tagging a final, run it on the candidate's commit (`gh workflow run release_train_dryrun.yml --repo amd/gaia --ref v<version>-rcN -f rc_tag=v<version>-rcN`) and let it pass, or the final fails and prints the command. An RC's warnings are the final's blockers, except the Linux NPU row, so fix them before tagging the final.
 
 ---
 
@@ -547,6 +547,8 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    gh release view v<version> --repo amd/gaia
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
+
+   **Then bring the Full Changelog up to the tag.** The notes are written before the tag, so they cannot list the notes commit itself or anything merged after it. `claude.yml`'s `release-notes` job runs once the final publishes and only reads: it fails, and files one issue keyed `release-notes/v<version>`, when `docs/releases/v<version>.mdx` is missing at the tag or the published body's `**N commits**` (or its listed lines) disagrees with `git log <previous-final>..v<version>`. It never writes notes, bumps `version.py`, pushes, or edits the release. To clear it: regenerate the list against the tag with the Phase 1 recipe, merge that in a PR, run `gh release edit v<version> --repo amd/gaia --notes-file <body>` with the corrected body, and re-run the job; a green run closes the issue.
 
 3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — reuse the `What's New` bullets near-verbatim plus any Bug Fix worth surfacing. Same *Notes format* rules apply: bullets, plain, factual, no emoji.
 

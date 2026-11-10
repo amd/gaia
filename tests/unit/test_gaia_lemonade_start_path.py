@@ -173,7 +173,12 @@ class TestResolver:
 
     def test_no_embedded_install_means_system(self, machine):
         machine.embedded.daemon_path.unlink()
+        machine.embedded.dist_dir.rmdir()
         assert gaia_runs_lemonade() is False
+
+    def test_an_install_missing_lemond_is_still_gaias_own(self, machine):
+        machine.embedded.daemon_path.unlink()
+        assert gaia_runs_lemonade() is True
 
     def _only_this_version_on_disk(self, machine, version: str):
         machine.embedded.daemon_path.unlink()
@@ -195,8 +200,14 @@ class TestResolver:
         assert LemonadeManager.start_embedded_if_stopped() is True
         _assert_started_gaias_own(machine)
 
-    def test_only_a_newer_install_is_not_gaias_own(self, machine):
+    def test_only_a_newer_install_is_still_gaias_own(self, machine):
+        # A newer build is repaired back to the pinned one on start (#6794).
         self._only_this_version_on_disk(machine, "2999.1.0")
+        assert gaia_runs_lemonade() is True
+        assert "GAIA updates its own" in describe_upgrade_hint()
+
+    def test_an_unparseable_install_is_not_gaias_own(self, machine):
+        self._only_this_version_on_disk(machine, "not-a-version")
         assert gaia_runs_lemonade() is False
         assert "lemonade-server.ai" in describe_upgrade_hint()
 

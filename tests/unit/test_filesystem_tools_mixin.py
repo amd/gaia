@@ -6,6 +6,7 @@
 import datetime
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -40,7 +41,7 @@ def _make_mock_agent_and_tools():
 
     registered_tools = {}
 
-    def mock_tool(atomic=True):
+    def mock_tool(atomic=True, **_kwargs):
         def decorator(func):
             registered_tools[func.__name__] = func
             return func
@@ -758,15 +759,17 @@ class TestFindFiles:
         mock_index.query_files.assert_not_called()
 
     def test_find_index_fallback(self, tmp_path):
-        """Falls back to filesystem search when index query fails."""
+        """A failing index is reported, and the disk is searched instead."""
         _populate_directory(tmp_path)
         mock_index = MagicMock()
-        mock_index.query_files.side_effect = Exception("Index corrupted")
+        mock_index.query_files.side_effect = sqlite3.DatabaseError(
+            "database disk image is malformed"
+        )
         self.agent._fs_index = mock_index
 
         result = self.find(query="file_a", scope=str(tmp_path))
-        # Should still find the file via filesystem fallback
         assert "file_a.txt" in result
+        assert "file index failed" in result
 
     def test_sort_by_size(self, tmp_path):
         """sort_by='size' sorts results by file size."""
@@ -1440,7 +1443,7 @@ class TestParseSizeRangeDirect:
                 self._tools = {}
                 self._bookmarks = {}
 
-        def mock_tool(atomic=True):
+        def mock_tool(atomic=True, **_kwargs):
             def decorator(func):
                 return func
 

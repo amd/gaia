@@ -80,10 +80,10 @@ def test_valid_schedules_read_exactly(
         ("at 9", "'9' could be morning or evening — say 9am, 9pm or 9:00."),
         ("daily 9am", "Put 'at' before the time, like 'daily at 9am'."),
         ("every other tuesday", "'every other tuesday' isn't supported yet"),
-        ("tomorrow at noon", "gaia schedule add --at"),
-        ("next friday", "gaia schedule add --at"),
-        ("in 5 minutes", "gaia schedule add --at"),
-        ("on 10/25 at 9am", "gaia schedule add --at"),
+        ("tomorrow at noon", "it can't run just once"),
+        ("next friday", "it can't run just once"),
+        ("in 5 minutes", "it can't run just once"),
+        ("on 10/25 at 9am", "it can't run just once"),
         ("on feb 30 at 9am", "February 30 isn't a date."),
         ("every month", "Monthly and yearly schedules aren't supported yet"),
         ("every 1s", "'every 1s' is too often"),
@@ -179,9 +179,9 @@ async def test_api_reports_why_a_schedule_is_rejected(api):
     await scheduler.shutdown()
     assert parsed.status_code == 200
     assert parsed.json()["valid"] is False
-    assert "gaia schedule add --at" in parsed.json()["description"]
+    assert "can't run just once" in parsed.json()["description"]
     assert created.status_code == 400
-    assert "gaia schedule add --at" in created.json()["detail"]
+    assert "can't run just once" in created.json()["detail"]
     assert scheduler.list_tasks() == []
 
 

@@ -71,6 +71,7 @@ from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
+from gaia.config import GaiaConfig
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
 from gaia.project_context import project_context_setting
@@ -253,25 +254,11 @@ class GaiaAgentConfig(ChatAgentConfig):
     dynamic_skills: bool = True
     dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
 
-    # Per-turn semantic tool selection, off by default as in the Agent UI. On,
-    # it churned the offered set at its cap every turn: the changed tool list
-    # broke the backend's prompt cache (17s to first token on "17 times 23" vs
-    # 0.4s with every tool offered) and the right tool was often not offered —
-    # a local CSV question got web tools and fetched a stranger's page.
-    # Overridable via GAIA_DYNAMIC_TOOLS.
-    dynamic_tools: bool = False
-
-    # 16 CORE (FULL_CORE_TOOLS) + 13 dynamic slots. The inherited 14 was sized
-    # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
-    # bundle, so the flagship would truncate a cohesion group mid-pull instead
-    # of loading it. Swept offline against nine representative queries with 13
-    # CORE: 13 dynamic slots lands every matched bundle whole, 9 cut the web
-    # bundle in half on a research question, and 17 buys nothing further. Bump
-    # this literal when FULL_CORE_TOOLS grows so the dynamic share stays 13;
-    # per-session workspace CORE additions (e.g. the shell in a repo) don't
-    # need a bump here — _resolve_dynamic_tools_max() grows the cap by
-    # len(_workspace_core_tools()) automatically.
-    dynamic_tools_max: int = 29
+    # Start on the core tools in short form and move to every tool at most once,
+    # so a first turn reads far less and the backend's prompt cache breaks at most
+    # once a session. Follows ``dynamic_tools`` in ~/.gaia/config.json. Overridable
+    # via GAIA_DYNAMIC_TOOLS.
+    dynamic_tools: bool = field(default_factory=lambda: GaiaConfig.load().dynamic_tools)
 
     # List every installed skill in the system prompt so the model loads one
     # when the work fits, and the user never has to know a skill's name. On for
@@ -495,12 +482,6 @@ class GaiaAgent(
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
 
-    def _select_tools_for_turn(self, user_input):
-        selected = super()._select_tools_for_turn(user_input)
-        if self.config.developer_mode and selected is not None:
-            return sorted(set(selected) | set(ENGINEERING_TOOL_NAMES))
-        return selected
-
     def close(self) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
@@ -579,16 +560,17 @@ class GaiaAgent(
         return not get_profile_spec(profile).early_return
 
     def _workspace_core_tools(self) -> FrozenSet[str]:
-        """The shell, always on when this session works in a code repository.
+        """The engineering tools in developer mode, and the shell in a repository.
 
         Coding requests rarely read like shell requests ("skip these tests on
         PRs"), so semantic selection left a repo session without a shell even
         though the project map tells the model which commands it accepts.
         """
+        tools = set(ENGINEERING_TOOL_NAMES) if self.config.developer_mode else set()
         root = self._project_map_root()
         if root and is_code_repository(root):
-            return frozenset({"run_shell_command"})
-        return frozenset()
+            tools.add("run_shell_command")
+        return frozenset(tools)
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
 
@@ -658,9 +640,9 @@ class GaiaAgent(
             )
         return active
 
-    def _recalled_skill_tools(self) -> List[str]:
-        """The inherited SKILL signal, plus ``remember_skill_lesson`` when a
-        skill is loaded.
+    def _standing_skill_tools(self) -> List[str]:
+        """The active skills' tools, plus ``remember_skill_lesson`` when a skill
+        is loaded.
 
         Semantic selection cannot rank this tool. Someone correcting a skill
         talks about their meeting brief, not about skills, so the query never
@@ -673,12 +655,12 @@ class GaiaAgent(
         having called nothing at all.
 
         Conditional rather than CORE, because the flagship ships with no skills
-        and a tool that can only refuse is prompt tax. It rides the SKILL signal
-        rather than adding a second mechanism: cap-bound, ahead of semantic, and
-        empty on every off-state, so a build with nothing loaded — or with
-        learning switched off — stays byte-identical.
+        and a tool that can only refuse is prompt tax. It joins the list like any
+        skill's tool, never as a jump, and is absent on every off-state, so a
+        build with nothing loaded — or with learning switched off — stays
+        byte-identical.
         """
-        tools = super()._recalled_skill_tools()
+        tools = super()._standing_skill_tools()
         if not getattr(self, "loaded_skills", None):
             return tools
         enabled = getattr(self, "learned_skills_enabled", None)
@@ -687,6 +669,12 @@ class GaiaAgent(
         if "remember_skill_lesson" not in tools:
             tools.append("remember_skill_lesson")
         return tools
+
+    def _drop_skill_tools(self, names: List[str]) -> None:
+        """Take ``remember_skill_lesson`` off too when the last skill leaves."""
+        if not self.loaded_skills:
+            names = [*names, "remember_skill_lesson"]
+        super()._drop_skill_tools(names)
 
     def _select_skills_for_turn(self, user_input: str) -> Optional[List[str]]:
         """This turn's active skill-body subset, or ``None`` for "render all".

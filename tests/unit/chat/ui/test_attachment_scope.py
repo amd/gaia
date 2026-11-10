@@ -3,7 +3,7 @@
 """Attaching a file never asks permission for GAIA's own upload copy.
 
 On rc13 the Agent UI asked "Let GAIA use this file?" for
-``home\\chat\\uploads\\<uuid>.pdf`` right after the user picked
+``home\\chat\\uploads\\<copy>.pdf`` right after the user picked
 ``kestrel-plan.pdf``. The grant must still be tight: only a regular file
 directly inside the uploads folder, linked the way the composer links it.
 """

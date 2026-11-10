@@ -39,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     LemonadeUpstreamTimeoutError,
     _classify_lemonade_response,
 )
+from gaia.llm.surface_hints import surface_wording
 from gaia.ui._chat_helpers import _classify_chat_exception
 
 # ── Provider side: response-payload classification ──────────────────────
@@ -117,12 +118,10 @@ def test_upstream_timeout_user_message_is_actionable() -> None:
     # No silent fallback to a smaller model — must not appear in the remediation.
     assert "qwen3-0.6b" not in msg.lower()
     assert "smaller model" not in msg.lower()
-    # Concrete next steps the user can actually run.
-    # `gaia kill` only: the other branch of this `or` named a command
-    # Lemonade 10.7 removed, so the assertion would have kept passing
-    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
-    # started").
-    assert "gaia kill" in msg
+    # The apps say what to do in the app; only the CLI names `gaia kill`.
+    assert "close GAIA and open it again" in msg
+    assert "gaia kill" not in msg
+    assert "gaia kill" in surface_wording(msg, "cli")
 
 
 # ── UI side: exception-string classification ────────────────────────────
@@ -178,7 +177,8 @@ def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
     assert classified.model_id == "Qwen3.5-35B-A3B-GGUF"
     # The missing model id and a concrete remediation must both be surfaced.
     assert "Qwen3.5-35B-A3B-GGUF" in classified.user_message
-    assert "gaia init" in classified.user_message
+    assert "Settings > Setup" in surface_wording(classified.user_message, "agent_ui")
+    assert "gaia init" in surface_wording(classified.user_message, "cli")
 
 
 def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:
@@ -376,11 +376,7 @@ def test_agent_extract_lemonade_user_message_typed_direct() -> None:
     msg = agent._extract_lemonade_user_message(exc)
     assert msg is not None
     assert "didn't respond in time" in msg
-    # `gaia kill` only: the other branch of this `or` named a command
-    # Lemonade 10.7 removed, so the assertion would have kept passing
-    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
-    # started").
-    assert "gaia kill" in msg
+    assert "close GAIA and open it again" in msg
 
 
 def test_agent_extract_lemonade_user_message_typed_in_cause_chain() -> None:

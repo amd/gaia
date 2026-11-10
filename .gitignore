@@ -211,6 +211,7 @@ release_info.json
 
 # Binaries the desktop build fetches into its extraResources
 src/gaia/apps/webui/build/vendor/
+src/gaia/apps/webui/build/core/
 
 # version
 version.txt

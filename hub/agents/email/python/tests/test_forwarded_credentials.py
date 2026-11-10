@@ -20,7 +20,6 @@ import time
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-
 from gaia_agent_email import caller_auth, forwarded_credentials
 from gaia_agent_email.api_routes import require_caller_token
 from gaia_agent_email.connection_intake_routes import router as intake_router

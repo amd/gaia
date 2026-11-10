@@ -429,7 +429,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider = str(model_id or "").lower().split(".", 1)[0]
@@ -438,7 +438,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     from gaia.llm.local_only import CloudDisabledError
 
     try:
-        return ensure_authenticated(provider)
+        return reconnect_provider(provider)
     except CloudDisabledError as e:
         logger.warning(str(e))
         return False
@@ -516,7 +516,8 @@ def pull_model(probe_base: str, model_id: str) -> None:
     fix could not succeed. Found on a machine whose chat model already worked.
 
     A gateway-hosted model has no weights at all and raises ``RuntimeError``
-    before any request goes out. An unknown ``user.`` id raises ``ValueError``.
+    before any request goes out. A ``user.`` id GAIA doesn't know is pulled by
+    name when Lemonade's model list has it, and raises ``ValueError`` otherwise.
 
     Raises ``requests.RequestException``, ``ValueError`` or ``RuntimeError`` on
     failure; the caller surfaces it as a loud ``✗`` line.
@@ -529,15 +530,31 @@ def pull_model(probe_base: str, model_id: str) -> None:
     from gaia.llm.lemonade_client import (
         lemonade_auth_headers,
         pull_request_body,
+        registered_model_ids,
         resolve_lemonade_api_key,
     )
 
-    payload = pull_request_body(model_id)
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base))
+    try:
+        payload = pull_request_body(model_id)
+    except ValueError:
+        if not model_id.lower().startswith("user."):
+            raise
+        # A ``user.`` model registered in Lemonade directly is pulled by name.
+        listing = requests.get(
+            f"{probe_base}/models",
+            params={"show_all": "true"},
+            headers=headers,
+            timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
+        )
+        listing.raise_for_status()
+        registered = registered_model_ids(listing.json())
+        payload = pull_request_body(model_id, registered=registered)
 
     resp = requests.post(
         f"{probe_base}/pull",
         json=payload,
-        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
+        headers=headers,
         timeout=PULL_TIMEOUT,
     )
     resp.raise_for_status()

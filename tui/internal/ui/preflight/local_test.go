@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -479,10 +481,90 @@ func TestMissingCLISetupCheckDoesNotSuggestGaiaInit(t *testing.T) {
 	}
 }
 
-// A terminal-only install has no `gaia` CLI. Pressing enter on a setup step
-// said to run setup in a terminal and showed `gaia init`: the same missing CLI.
-func TestSetupWithoutTheCLINamesTheInstaller(t *testing.T) {
+// stubCLIInstall makes a missing CLI installable (or not) without the network,
+// and counts the installs.
+func stubCLIInstall(t *testing.T, can bool, install func(io.Writer) error) *int {
+	t.Helper()
+	calls := 0
+	origInstall, origCan := installCLI, canInstallCLI
+	installCLI = func(_ context.Context, out io.Writer) error {
+		calls++
+		return install(out)
+	}
+	canInstallCLI = func() bool { return can }
+	t.Cleanup(func() { installCLI, canInstallCLI = origInstall, origCan })
+	return &calls
+}
+
+// The .pkg, .deb and .rpm install only gaia-tui and gaia-agent, so setup found
+// no CLI and stopped at step 1 (#6659). It now installs the CLI and carries on.
+func TestSetupInstallsAMissingCLIThenRuns(t *testing.T) {
+	stubLemonadeNotInstalled(t, true)
+	installed := false
+	stubGaiaInit(t, func() (string, error) {
+		if !installed {
+			return "", gaiainit.ErrNoCLI
+		}
+		return argsStub(t, 0), nil
+	})
+	calls := stubCLIInstall(t, true, func(out io.Writer) error {
+		fmt.Fprintln(out, "The gaia command is installed")
+		installed = true
+		return nil
+	})
+	var shown []string
+	onProgress := func(p Progress) { shown = append(shown, p.Text) }
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixInstallServer, onProgress)
+
+	if !res.OK() {
+		t.Fatalf("setup with no CLI failed: %+v", res)
+	}
+	if *calls != 1 {
+		t.Errorf("the CLI was installed %d times, want once", *calls)
+	}
+	if args := setupArgs(t, res); !strings.Contains(args, "--skip-models") {
+		t.Errorf("after the CLI install, setup ran %q; want step 1", args)
+	}
+	if len(shown) == 0 || !strings.Contains(shown[0], "Python part") {
+		t.Errorf("the screen never said GAIA was installing its Python part: %q", shown)
+	}
+	if !slices.Contains(res.Log, "The gaia command is installed") {
+		t.Errorf("the installer's output is not in the setup log: %q", res.Log)
+	}
+}
+
+func TestAFailedCLIInstallNamesTheInstallCommand(t *testing.T) {
 	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+	stubCLIInstall(t, true, func(out io.Writer) error {
+		fmt.Fprintln(out, "Failed to install GAIA package")
+		return errors.New("the installer stopped (exit status 1)")
+	})
+
+	res := localRunner{}.Fix(context.Background(), localCfg(), FixRunSetup, nil)
+
+	if res.OK() {
+		t.Fatal("a failed CLI install reported success")
+	}
+	d := res.Diagnosis
+	if d.Command != gaiainit.InstallCommand || d.Where == "" {
+		t.Errorf("a failed CLI install suggests %q (where %q), want the installer", d.Command, d.Where)
+	}
+	if !strings.Contains(d.Cause, "Python part") || !strings.Contains(d.Cause, "exit status 1") {
+		t.Errorf("the cause %q does not say what failed", d.Cause)
+	}
+	if !strings.Contains(d.Remedy, "new terminal") {
+		t.Errorf("remedy %q must send the user to a new terminal", d.Remedy)
+	}
+	if !slices.Contains(res.Log, "Failed to install GAIA package") {
+		t.Errorf("the installer's output is not behind d: %q", res.Log)
+	}
+}
+
+// install.ps1 has no CLI-only mode, so Windows keeps naming the installer.
+func TestSetupWithoutTheCLIOnWindowsNamesTheInstaller(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) { return "", gaiainit.ErrNoCLI })
+	calls := stubCLIInstall(t, false, func(io.Writer) error { return nil })
 
 	for _, kind := range []FixKind{FixInstallServer, FixRunSetup} {
 		d := localRunner{}.Fix(context.Background(), localCfg(), kind, nil).Diagnosis
@@ -499,6 +581,9 @@ func TestSetupWithoutTheCLINamesTheInstaller(t *testing.T) {
 		if d.Cause == "" || d.Cause[0] < 'A' || d.Cause[0] > 'Z' {
 			t.Errorf("fix %v cause %q must read as a sentence after \"Setup stopped. \"", kind, d.Cause)
 		}
+	}
+	if *calls != 0 {
+		t.Errorf("Windows ran the CLI installer %d times", *calls)
 	}
 }
 
