@@ -256,10 +256,12 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
         provider, connection_scopes=conn_scopes, granted_scopes=granted
     )
     if scope is None:
+        # A grant replaces, so naming only mail would strip a calendar grant.
+        union = sorted(set(granted) | {capable[0]})
         return None, (
             "connected and readable, but this agent holds no matching grant. "
             f"Run `gaia connectors grants grant {provider} {EMAIL_AGENT_ID} "
-            f"--scopes {capable[0]}` (a ledger write — no browser needed)"
+            f"--scopes {' '.join(union)}` (a ledger write — no browser needed)"
         )
     return scope, "ready"
 

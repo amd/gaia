@@ -88,8 +88,8 @@ if _stubbed_modules:
 _BUDGET_CHARS = {
     # profile + indexed-doc count -> max chars
     # Windows environment block + #5977's SLIDES/DECKS rule + #6434's
-    # MANAGED FILES rule (Windows: 13,121).
-    ("full", 0): 13_150,
+    # LOCKED FILES rule (Windows: 13,080).
+    ("full", 0): 13_100,
     ("full", 1): 14_000,
     ("full", 5): 14_500,
     # Large-N budget — pins the scaling property so a regression that
@@ -98,8 +98,7 @@ _BUDGET_CHARS = {
     # measured ~11.7K chars; we leave generous headroom.
     ("full", 100): 18_000,
     ("doc", 1): 12_000,
-    # + #6434's MANAGED FILES rule (Windows: 4,011).
-    ("chat", 0): 4_030,
+    ("chat", 0): 4_000,
 }
 
 
@@ -201,6 +200,11 @@ def test_chat_system_prompt_directives_preserved() -> None:
         # (the static list itself moved to get_memory_dynamic_context() so
         # the system prompt stays fixed for KV-cache reuse — see #4698)
         "indexed documents",
+        # Prompt-injection boundaries must distinguish third-party content
+        # from user requests and tool protocol guidance.
+        "data, not orders",
+        "no special authority",
+        "never make a tool call",
     ]
     missing = [m for m in must_contain if m not in prompt]
     assert not missing, (

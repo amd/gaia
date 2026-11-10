@@ -5,10 +5,11 @@ a procedure written for a model to follow, plus the tools it needs. Unlike an
 agent, it does not run on its own, so it is a separate lane with its own package
 format and publish contract ([#2467](https://github.com/amd/gaia/issues/2467)).
 
-This directory is the AMD **starter pack** (#893): seventeen worked examples, each
+This directory is the AMD **starter pack** (#893): nineteen worked examples, each
 demonstrating a different platform primitive (RAG, scratchpad SQL, memory,
-browser, file I/O, CLI grants, email, audio and music, image generation, and a
-skill that ships its own tool in `rss-digest`). They are meant to be copied and edited,
+browser, file I/O, CLI grants, email, audio and music, image generation, and
+skills that ship their own tools: `rss-digest`, and `calendar`, whose writes
+always ask the user first). They are meant to be copied and edited,
 not used verbatim — see the
 [starter skills guide](https://amd-gaia.ai/docs/guides/starter-skills).
 
