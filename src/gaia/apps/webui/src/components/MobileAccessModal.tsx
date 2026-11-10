@@ -7,6 +7,7 @@ import type { TunnelStatus } from '../types';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { log } from '../utils/logger';
 import { useT } from '../i18n/useT';
 import './MobileAccessModal.css';
@@ -41,6 +42,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
     useEscapeToClose(isOpen, onClose);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, isOpen);
+    useDialogFocus(dialogRef, isOpen);
 
     // Fetch current tunnel status using centralized API client
     const fetchStatus = useCallback(async () => {

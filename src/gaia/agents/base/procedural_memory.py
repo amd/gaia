@@ -25,8 +25,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
+    MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
     GoalCluster,
+    GoalEmbedRejected,
     SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
@@ -38,6 +40,9 @@ from gaia.llm.lemonade_client import SIDE_SLOT, no_thinking_kwargs
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: llama-server's reply to an input longer than the embedder's batch.
+_EMBED_TOO_LARGE = "too large to process"
 
 _INCOMPLETE_MARKER = (
     "… INCOMPLETE — the remaining steps were cut to fit; this is not the "
@@ -364,6 +369,7 @@ class ProceduralMemoryMixin:
                     when_to_use=row["when_to_use"],
                     body=row["markdown_body"],
                     tools_required=row.get("tools_required") or [],
+                    skill_id=procedure_id,
                 )
             )
             recalled_ids.append(procedure_id)
@@ -554,6 +560,83 @@ class ProceduralMemoryMixin:
         skills, config = self._recall_skills_for_turn(goal)
         self._recalled_skills = skills
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
+        # A body the prompt dropped was never in context, so its outcome is not its own.
+        self._recalled_skill_ids = [
+            s.skill_id
+            for s in skills
+            if s.skill_id and f"## {s.name}\n" in self._recalled_skill_prompt
+        ]
+
+    def _note_person_decision(self, tool_name: str, approved: bool) -> None:
+        """Record a person's answer to a confirmation prompt for *tool_name*.
+
+        Called by the agent loop. Ignored outside a turn (no list to add to).
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        if decisions is not None:
+            decisions.append((tool_name, bool(approved)))
+
+    def _record_procedure_outcome(self) -> None:
+        """Count this turn on each procedure recalled into it (#2865).
+
+        A procedure's outcome is a person's answers to this turn's prompts for
+        the tools it lists in ``tools_required``: any decline makes it a failed
+        attempt, approvals with no decline a successful one. A prompt for some
+        other tool, and a turn nobody was asked about, count nothing. Once a
+        procedure has ``MIN_OUTCOMES_TO_RETIRE`` outcomes since it was learned,
+        a failure that leaves it below the success rate it was learned at
+        disables it.
+
+        Consumes the turn's decisions, so a turn is counted once.
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        self._turn_person_decisions = None
+        store = getattr(self, "_memory_store", None)
+        if not decisions or store is None or getattr(self, "_incognito", False):
+            return
+        in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
+        by_outcome: Dict[bool, List[str]] = {True: [], False: []}
+        for skill in getattr(self, "_recalled_skills", []):
+            if skill.skill_id not in in_context:
+                continue
+            tools = set(skill.tools_required)
+            answers = [ok for tool, ok in decisions if tool in tools]
+            if answers:
+                by_outcome[all(answers)].append(skill.skill_id)
+        if not (by_outcome[True] or by_outcome[False]):
+            return
+
+        from gaia.agents.base.memory import (
+            _load_memory_settings,  # deferred (cycle break)
+        )
+
+        erase_count = getattr(self, "_turn_erase_count", None)
+        if by_outcome[True]:
+            done = store.record_skill_outcome(
+                by_outcome[True], True, erase_count=erase_count
+            )
+            logger.info("[MemoryMixin] procedure outcome: success for %s", sorted(done))
+        if not by_outcome[False]:
+            return
+        failed = store.record_skill_outcome(
+            by_outcome[False], False, erase_count=erase_count
+        )
+        logger.info("[MemoryMixin] procedure outcome: failure for %s", sorted(failed))
+        bar = load_synthesis_config(_load_memory_settings()).min_success_rate
+        for skill_id, (successes, attempts, outcomes) in failed.items():
+            if outcomes < MIN_OUTCOMES_TO_RETIRE or successes / attempts >= bar:
+                continue
+            if store.disable_skill(skill_id):
+                logger.warning(
+                    "[MemoryMixin] procedure %s disabled: its record fell to "
+                    "%d/%d, below the %.0f%% it was learned at, after people "
+                    "declined its steps. It is no longer recalled; a new run "
+                    "of the same goal can learn a replacement",
+                    skill_id,
+                    successes,
+                    attempts,
+                    bar * 100,
+                )
 
     # ==================================================================
     # Skill Synthesis (procedural memory)
@@ -770,18 +853,22 @@ class ProceduralMemoryMixin:
             store, pending, erase_count
         )
 
-        # CLUSTER — embedder failure RE-RAISES here (fail-loud).
+        # CLUSTER — embedder failure RE-RAISES here (fail-loud), except a goal
+        # the embedder refuses as too long, which only that session pays for.
+        rejected: List[Tuple[Dict, GoalEmbedRejected]] = []
         clusters = (
             cluster_by_goal(
                 pending,
-                self._embed_text,
+                self._embed_goal,
                 similarity_tau=config.similarity_tau,
                 min_occurrences=config.min_occurrences,
                 min_success_rate=config.min_success_rate,
+                on_rejected=lambda session, err: rejected.append((session, err)),
             )
             if pending
             else []
         )
+        consumed_now.update(self._mark_rejected_goals(store, rejected, erase_count))
         result["clusters"] = len(clusters)
 
         calls = 0
@@ -965,6 +1052,58 @@ class ProceduralMemoryMixin:
         )
         consumed = set(ids)
         return [s for s in pending if s["session_id"] not in consumed], consumed
+
+    def _embed_goal(self, goal: str) -> np.ndarray:
+        """Embed a session goal; raise ``GoalEmbedRejected`` if it is too long.
+
+        Any other failure (Lemonade down, model missing) re-raises unchanged.
+        """
+        try:
+            return self._embed_text(goal)
+        except RuntimeError as e:
+            if _EMBED_TOO_LARGE not in str(e):
+                raise
+            raise GoalEmbedRejected(str(e)) from e
+
+    @staticmethod
+    def _mark_rejected_goals(
+        store,
+        rejected: List[Tuple[Dict, GoalEmbedRejected]],
+        erase_count: Optional[int] = None,
+    ) -> Set[str]:
+        """Consume the episodes whose goal the embedder refused.
+
+        Left pending, each would be re-sent and refused on every session
+        start and would pin the watermark below it.
+
+        Returns:
+            The consumed session ids.
+        """
+        by_goal: Dict[str, Tuple[List[str], GoalEmbedRejected]] = {}
+        for session, err in rejected:
+            by_goal.setdefault(str(session["goal"]), ([], err))[0].append(
+                session["session_id"]
+            )
+        consumed: Set[str] = set()
+        for goal, (ids, err) in by_goal.items():
+            store.mark_sessions_synthesized(
+                ids,
+                "unusable",
+                goal=goal,
+                detail=f"the embedder refused the goal as too long: {str(err)[:300]}",
+                erase_count=erase_count,
+            )
+            consumed.update(ids)
+        if consumed:
+            logger.warning(
+                "[MemoryMixin] skill synthesis: the embedder refused %d goal(s) as "
+                "too long (e.g. %r); %d episode(s) skipped. "
+                "MemoryStore.reset_synthesis_progress() retries them",
+                len(by_goal),
+                next(iter(by_goal))[:80],
+                len(consumed),
+            )
+        return consumed
 
     @staticmethod
     def _mark_cluster_consumed(

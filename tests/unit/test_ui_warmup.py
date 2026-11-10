@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -48,6 +49,30 @@ def test_a_repeat_right_after_a_warm_up_is_debounced():
     warmer.request("a")
     warmer.wait(5)
     assert warmer.request("b") is False
+
+
+def test_a_fresh_request_skips_the_debounce():
+    calls = []
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {"seconds": 0.1})
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.request("model pick", fresh=True) is True
+    warmer.wait(5)
+    assert calls == [1, 1]
+
+
+def test_a_fresh_request_during_a_warm_up_runs_once_it_ends():
+    job, release, calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("a")
+    assert warmer.request("model pick", fresh=True) is False
+    assert warmer.request("model pick", fresh=True) is False
+    release.set()
+    deadline = time.monotonic() + 5
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert warmer.wait(5)
+    assert calls == [1, 1]
 
 
 def test_never_starts_while_a_chat_turn_runs():
@@ -104,6 +129,149 @@ def test_a_turn_waits_for_the_running_warm_up(monkeypatch):
     release.set()
     t.join(5)
     assert waited.is_set()
+
+
+def test_a_cloud_turn_does_not_wait_for_the_local_warm_up(monkeypatch):
+    """It does not use the model the warm-up is loading (#6582)."""
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    try:
+        waited = threading.Event()
+
+        def turn():
+            warmup.wait_for_warm_up(timeout=5, model="fireworks.deepseek-v4p1-flash")
+            waited.set()
+
+        t = threading.Thread(target=turn)
+        t.start()
+        assert waited.wait(5), "the cloud turn waited on the local warm-up"
+        assert not warmer.wait(0), "the warm-up should still be running"
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def _warming(monkeypatch, target=None):
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    if target:
+        warmer.set_target(target, "gpu")
+    return warmer, release
+
+
+def _turn(model):
+    waited = threading.Event()
+
+    def run():
+        warmup.wait_for_warm_up(timeout=5, model=model)
+        waited.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    return waited
+
+
+@pytest.mark.parametrize("model", ["Qwen3.6-35B-A3B-GGUF", "user.qwen3.6-35b-a3b-gguf"])
+def test_a_turn_on_the_warmed_model_waits_and_keeps_it(monkeypatch, model):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    waited = _turn(model)
+    assert not waited.wait(0.3), "the turn must not race the warm-up"
+    assert not warmer.cancel.is_set(), "the turn's own model must stay warming"
+    release.set()
+    assert waited.wait(5)
+    assert warmer.snapshot()["state"] == warmup.READY
+
+
+def test_a_default_model_turn_waits_for_the_warm_up(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    waited = _turn(None)
+    assert not waited.wait(0.3)
+    assert not warmer.cancel.is_set()
+    release.set()
+    assert waited.wait(5)
+
+
+def test_a_turn_on_another_local_model_stops_the_warm_up(monkeypatch):
+    """Waiting would only end with the warm-up loading over the turn's model."""
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert waited.wait(5), "the turn waited on another model's warm-up"
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_turn_on_another_model_waits_out_a_load_under_way(monkeypatch):
+    """A load can't be stopped; starting the turn's own alongside it would find
+    the memory still held and shrink the turn's window or refuse it."""
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert not waited.wait(0.3), "the turn raced the warm-up's model load"
+        assert warmer.cancel.is_set(), "the warm-up must still stop after the load"
+        warmer.set_phase("priming")
+        assert waited.wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_cloud_turn_does_not_wait_out_a_local_load(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        assert _turn("fireworks.deepseek-v4p1-flash").wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_turn_before_the_warm_up_names_its_model_stops_once_it_does(monkeypatch):
+    warmer, release = _warming(monkeypatch)
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert not waited.wait(0.3), "the warmed model may still be the turn's"
+        warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+        assert waited.wait(5)
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_cloud_turn_stops_the_local_warm_up(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    try:
+        assert _turn("fireworks.deepseek-v4p1-flash").wait(5)
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_new_warm_up_forgets_the_last_turns_model(monkeypatch):
+    job, release, _calls = _gate_job(None)
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+    assert _turn("Gemma-4-E4B-it-GGUF").wait(5)
+    release.set()
+    warmer.wait(5)
+    release.clear()
+    assert warmer.request("b")
+    try:
+        warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+        assert not warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
 
 
 def test_the_status_names_the_model_and_device_being_loaded():
@@ -332,6 +500,7 @@ def ui_flagship(monkeypatch, tmp_path):
 
         client = agent.chat.llm_client
         monkeypatch.setattr(client, "chat", fake_chat)
+        monkeypatch.setattr(client._backend, "slot_count", lambda _model: 3)
         for name, value in (
             ("get_last_usage", None),
             ("get_last_ttft_seconds", None),
@@ -367,8 +536,9 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
     from gaia.ui.database import resolved_default_model
 
     result = warmup._warm_new_chat_prefix(db)
-    assert result is not None and len(requests) == 1
-    warm = requests[-1]
+    assert result is not None and len(requests) == 2
+    warm, full = requests
+    assert len(warm[1]) < len(full[1])
 
     session = {"model": resolved_default_model(), "agent_type": "gaia", "device": "gpu"}
     model_id, device_ctx = chat.resolve_session_model(session, "gaia", None, registry)
@@ -386,7 +556,6 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
             library_paths=[],
             allowed=chat._compute_allowed_paths([]),
             session_id="0f6c2d0e-real-session",
-            dynamic_tools=False,
             memory_incognito=chat._memory_off(session, db),
         ),
     )
@@ -419,3 +588,37 @@ def test_a_turn_never_races_a_warm_up_that_overruns(monkeypatch):
             warmup_mod.wait_for_warm_up(timeout=0.3)
     finally:
         release.set()
+
+
+def test_a_stopped_warm_up_loads_and_primes_nothing(ui_flagship, monkeypatch):
+    """A turn on another model named while the agent was built stops it."""
+    chat, _registry, requests, _agents, db = ui_flagship
+    loads = []
+    monkeypatch.setattr(chat, "_maybe_load_expected_model", loads.append)
+    cancel = threading.Event()
+
+    result = warmup._warm_new_chat_prefix(
+        db, lambda model, device: cancel.set(), cancel
+    )
+    assert result is None
+    assert loads == [] and requests == []
+
+
+def test_a_warm_up_stopped_mid_prompt_is_skipped(ui_flagship, monkeypatch):
+    from gaia.chat.sdk import LLMCallCancelled
+
+    chat, _registry, _requests, agents, db = ui_flagship
+    real_create = _registry.create_agent
+
+    def create(*args, **kwargs):
+        agent = real_create(*args, **kwargs)
+
+        def stopped(cancel=None, progress=None):
+            assert cancel is not None, "the warm-up must be stoppable"
+            raise LLMCallCancelled("stopped mid-prompt")
+
+        monkeypatch.setattr(agent, "warm_up", stopped)
+        return agent
+
+    monkeypatch.setattr(_registry, "create_agent", create)
+    assert warmup._warm_new_chat_prefix(db, None, threading.Event()) is None

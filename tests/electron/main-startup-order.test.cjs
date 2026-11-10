@@ -201,8 +201,14 @@ describe("the window opens before anything slow", () => {
     expect(MAIN).not.toMatch(/createProgressWindow|showFailureDialog|isBootstrapping/);
   });
 
-  test("a quit releases an install waiting on Try again", () => {
-    expect(functionBody("cleanup")).toContain("engineInstall.stop()");
+  test("a quit stops the install, or releases one waiting on Try again, and waits for it", () => {
+    const body = functionBody("cleanup");
+    expect(body).toContain("const installStopped = engineInstall ? engineInstall.stop() : null;");
+    expect(body).toContain("await Promise.all([installStopped, ");
+  });
+
+  test("SIGTERM is wired to quit past the work-in-progress question", () => {
+    expect(MAIN).toContain("quitOnTermSignal({ proc: process, app, guard: quitGuard });");
   });
 
   test("a failed install is shown even after a start in the tray", () => {

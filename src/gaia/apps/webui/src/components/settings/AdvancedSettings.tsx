@@ -5,7 +5,7 @@ import { useEffect, useState, useRef, useCallback, type ReactNode } from 'react'
 import { ChevronDown, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import * as api from '../../services/api';
 import { log } from '../../utils/logger';
-import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
+import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
@@ -199,7 +199,7 @@ export function AdvancedSettings() {
                                 </div>
                                 <button
                                     className="btn-model-action btn-model-action--download"
-                                    onClick={() => downloadModel(false)}
+                                    onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
                                     {isDownloadingModel ? (
@@ -219,7 +219,7 @@ export function AdvancedSettings() {
                                         {wrongModel ? t('settings.advanced.wrongModel') : t('settings.advanced.smallContext')}
                                     </span>
                                     <span className="model-action-desc">
-                                        {t('settings.advanced.loadHint', { name: modelName ?? '', size: `${(MIN_CONTEXT_SIZE / 1024).toFixed(0)}K` })}
+                                        {t('settings.advanced.loadHint', { name: modelName ?? '' })}
                                     </span>
                                 </div>
                                 <button
@@ -269,7 +269,7 @@ export function AdvancedSettings() {
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
                                         className="btn-force-redownload"
-                                        onClick={() => downloadModel(true)}
+                                        onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
                                         {isDownloadingModel ? (

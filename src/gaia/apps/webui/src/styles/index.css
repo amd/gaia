@@ -316,6 +316,13 @@ a:hover { text-decoration: underline; }
 
 /* Arabic script needs more room between lines than Latin at the same size. */
 :root[lang="ar"] #root { line-height: 1.7; }
+/* Arabic letters join: tracking set for Latin caps pulls a word apart into separate letters. */
+:root[lang="ar"] #root * { letter-spacing: normal; }
+/* The mono faces have no Arabic; without a sans before `monospace`, Arabic falls to a
+   fixed-width face and its letters come apart. Latin keeps the mono face. */
+:root[lang="ar"] {
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', 'Segoe UI', 'Noto Sans Arabic', 'Noto Naskh Arabic', Tahoma, monospace;
+}
 .md-content :is(.md-p, .md-li, .md-blockquote, td, th):dir(rtl),
 .composer-input:dir(rtl) {
     line-height: 1.85;
@@ -592,6 +599,37 @@ textarea:focus-visible {
     pointer-events: none;
 }
 
+/* An error someone has to read and act on: it stays until they dismiss it, up
+   top so it never covers the chat box its message can point to. */
+.toast-dismissible {
+    top: 16px;
+    bottom: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(560px, calc(100vw - 32px));
+    width: max-content;
+    pointer-events: all;
+    -webkit-app-region: no-drag;
+    animation: toastIn var(--duration-spring) var(--ease-spring);
+}
+
+/* In the desktop app, clear of the title bar and its window buttons. */
+:root[data-titlebar] .toast-dismissible {
+    top: calc(var(--titlebar-h) + 8px);
+}
+
+.toast-dismiss {
+    display: inline-flex;
+    flex: none;
+    padding: 4px;
+    background: none;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    cursor: pointer;
+}
+
 /* ── Animations ──────────────────────────────────────────────────── */
 
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
@@ -706,6 +744,29 @@ textarea:focus-visible {
     color: var(--text-primary);
 }
 
+/* Shown in place of a screen that failed to render (ErrorBoundary.tsx). */
+.error-boundary {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-primary);
+}
+.error-boundary-title { font-size: 15px; font-weight: 600; }
+.error-boundary-body { color: var(--text-secondary); font-size: var(--fs-ui); }
+.error-boundary-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.error-boundary-compact {
+    flex: 0 0 var(--sidebar-w);
+    max-width: 40vw;
+    background: var(--bg-sidebar);
+    border-inline-end: 1px solid var(--border);
+}
+.error-boundary-window { height: 100%; }
+
 /* ── Responsive: Mobile (<= 768px) ─────────────────────────────── */
 @media (max-width: 768px) {
     .sidebar-toggle { display: flex; }
@@ -762,12 +823,12 @@ textarea:focus-visible {
 /* A Latin name in a right-to-left UI: dir="auto" makes it truncate at its end,
    and this keeps it on the label's own edge. */
 :root[dir="rtl"] :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: right;
 }
 /* The mirror: an Arabic name in a left-to-right UI stays on the left. */
 :root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
-    .new-chat-folder-name, .sp-item-name, .connection-banner__text)[dir="auto"] {
+    .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: left;
 }
 /* Windows: minimize, maximize and close sit at the top right. */

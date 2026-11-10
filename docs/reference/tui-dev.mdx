@@ -39,7 +39,7 @@ Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
 
 ```bash
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build          # -> tui/bin/gaia-tui
+cd tui && make build          # -> tui/bin/gaia-tui (.exe on Windows)
 ```
 
 Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
@@ -319,7 +319,8 @@ NOT READY: profile 'gaia' needs setup
 <Warning>
 `user.`-prefixed models are **custom registrations**: pulling one requires
 `checkpoint` + `recipe` (+ `embedding` for an embedder, and `mmproj` / `vision`
-/ `reasoning` when the model needs them). Built-in models are the opposite —
+/ `reasoning` when the model needs them), unless Lemonade already lists it —
+then it is pulled by name. Built-in models are the opposite —
 pulling one *with* a recipe makes Lemonade treat it as a new registration and
 400 (#1655). `gaia init` sends those fields, and `readiness.pull_model` and
 the Agent UI Download button share one body (`pull_request_body`). A gateway

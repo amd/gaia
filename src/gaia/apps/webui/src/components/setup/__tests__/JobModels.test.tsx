@@ -54,6 +54,19 @@ describe('models by job: support labels', () => {
         render(<Harness plan={plan([big, GEMMA_CHAT, EMBED])} />);
         expect(chat(/Qwen3\.6-35B-A3B/).closest('li')).toHaveTextContent('Needs about 27.1 GB; this PC has 16.0 GB. It may be very slow or fail to load.');
     });
+
+    it("says an NPU model can't run here, rather than calling it too big, and can't be picked", () => {
+        const npu = entry({
+            id: 'gemma4-it-e4b-FLM', name: 'Gemma 4 E4B (NPU)', recipe: 'flm', gaia_model: true,
+            fits: false, need_gb: 10.2, capacity_gb: 64, fit_reason: 'needs an AMD Ryzen AI NPU and its driver', fit_code: 'npu',
+        });
+        // Already the chat model (an older pick), so the NPU rows show.
+        render(<Harness plan={plan([{ ...npu, planned: true, selected: true }, GEMMA_CHAT, EMBED])} />);
+        const row = chat(/Gemma 4 E4B \(NPU\)/).closest('li');
+        expect(row).toHaveTextContent('Runs only on a Ryzen AI NPU, and this PC has none that can run it.');
+        expect(row).not.toHaveTextContent(/Needs about|more memory/);
+        expect(chat(/Gemma 4 E4B \(NPU\)/)).toBeDisabled();
+    });
 });
 
 describe('models by job: reading images', () => {

@@ -16,10 +16,12 @@ $ErrorActionPreference = 'Stop'
 $Setup = (Resolve-Path $Setup).Path
 $repo = (Resolve-Path "$PSScriptRoot\..\..\..").Path
 
-# The folder and registry ids keep the legacy "Terminal Hub" name so upgrades
-# land in place; only the display name is "GAIA Terminal UI".
-$tuiDir    = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
-$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+$tuiDir    = "$env:LOCALAPPDATA\Programs\gaia-tui"
+$tuiArp    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui'
+# Where an earlier setup installed the terminal, under the ids it used.
+$legacyDir = "$env:LOCALAPPDATA\Programs\GAIA Terminal Hub"
+$legacyArp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub'
+$legacyKey = 'HKCU:\Software\GAIA\TerminalHub'
 # electron-builder's identity for appId ai.amd.gaia; the .nsi pins the same.
 $uiGuid    = '071ff68a-44b8-5d94-b099-f93e99d1c3f3'
 $uiKey     = "HKCU:\Software\$uiGuid"
@@ -159,20 +161,39 @@ try {
 }
 
 # ── 2. Terminal only ───────────────────────────────────────────────────────
-# Plant the old-named shortcuts an earlier setup left, so the install below
-# proves an upgrade removes them rather than leaving both names.
+# Plant what an earlier setup left under the legacy ids -- shortcuts, folder,
+# Installed-apps entry, settings key and PATH entry -- so the install below
+# proves an upgrade moves off them rather than leaving both.
 New-Item -ItemType Directory -Force -Path "$startMenu\GAIA" | Out-Null
 foreach ($l in $legacyLnks) { Set-Content -Path $l -Value 'stale' }
+New-Item -ItemType Directory -Force -Path $legacyDir | Out-Null
+foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') { Set-Content -Path "$legacyDir\$f" -Value 'stale' }
+New-Item -Path $legacyKey -Force | Out-Null
+Set-ItemProperty -Path $legacyKey -Name InstallDir -Value $legacyDir
+New-Item -Path $legacyArp -Force | Out-Null
+Set-ItemProperty -Path $legacyArp -Name DisplayName -Value 'GAIA Terminal Hub'
+$pathBefore = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path
+$planted = if ($pathBefore) { "$pathBefore;$legacyDir" } else { $legacyDir }
+New-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value $planted -PropertyType ExpandString -Force | Out-Null
 $rc = Invoke-Setup @('/S', '/COMPONENTS=tui')
 if ($rc -ne 0) { throw "terminal-only install exited $rc" }
+if (Test-Path $legacyDir) { throw "the legacy folder was left behind: $legacyDir" }
+if (Test-Path $legacyArp) { throw "the legacy Installed-apps entry was left behind" }
+if (Test-Path $legacyKey) { throw "the legacy settings key was left behind" }
+$regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
+if ($regPath -like "*$legacyDir*") { throw "the legacy folder was left on the user PATH" }
 
 if (Test-Path $uiDefault) {
     throw "a terminal-only install wrote to $uiDefault - the desktop app's folder"
 }
 if (Test-Path $uiKey) { throw "a terminal-only install installed the desktop app" }
-foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
+foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'gaia.exe', '_internal', 'Uninstall.exe') {
     if (-not (Test-Path "$tuiDir\$f")) { throw "$f did not land in $tuiDir" }
 }
+# The frozen core the terminal runs setup and the daemon with: no Python needed.
+$coreVersion = & "$tuiDir\gaia.exe" --version 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) { throw "the installed gaia.exe did not start: $coreVersion" }
+Write-Host "gaia --version -> $coreVersion"
 # The registry PATH, not $env:PATH: this process inherited its environment
 # before the install, so it cannot see the change.
 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
@@ -283,7 +304,7 @@ $u = Start-Process -FilePath "$tuiDir\Uninstall.exe" -ArgumentList '/S' -PassThr
 if ($u.ExitCode -ne 0) { throw "the terminal's uninstaller exited $($u.ExitCode)" }
 Wait-Gone $tuiDir
 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
-if ($regPath -like "*Programs\GAIA Terminal Hub*") { throw "the terminal's folder was left on the user PATH" }
+if ($regPath -like "*$tuiDir*") { throw "the terminal's folder was left on the user PATH" }
 if (Test-Path $tuiArp) { throw "the terminal's Installed-apps entry survived its uninstall" }
 if (Test-Path "$desktop\$tuiName.lnk") { throw "the terminal's desktop shortcut survived its uninstall" }
 foreach ($f in $lock.fonts) {

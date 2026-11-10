@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -579,8 +580,24 @@ def compare_versions(a: str, b: str) -> int:
 # Core-version gate (min_gaia_version)
 # ---------------------------------------------------------------------------
 
-#: What a user runs to get a newer GAIA core.
+#: What a pip-installed GAIA runs to get a newer core.
 CORE_UPGRADE_COMMAND = "pip install --upgrade amd-gaia"
+
+
+def core_upgrade_hint() -> str:
+    """How to get a newer GAIA core, true for this kind of install.
+
+    The apps ship a frozen gaia that pip cannot touch; it updates with them.
+    """
+    if getattr(sys, "frozen", False):
+        return (
+            "update GAIA (the app updates itself, or download the latest from "
+            "https://amd-gaia.ai/#install)"
+        )
+    return (
+        f"`{CORE_UPGRADE_COMMAND}` (or re-run the installer from https://amd-gaia.ai)"
+    )
+
 
 # The core's own version is PEP 440 (0.25.0, 0.25.0rc3, 0.25.0.dev1, ...).
 _CORE_VERSION_RE = re.compile(

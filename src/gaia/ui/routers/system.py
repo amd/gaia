@@ -17,11 +17,13 @@ from pydantic import BaseModel, Field
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
+    UnknownUserModelError,
     _is_local_url,
     _model_ids_match,
     cloud_model_provider,
     lemonade_auth_headers,
     pull_request_body,
+    registered_model_ids,
     resolve_effective_ctx_size,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -29,7 +31,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 
-from .. import warmup
+from .. import security, warmup
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
@@ -112,6 +114,35 @@ async def _lemonade_post(
                 )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("%s failed: %s", log_context, exc)
+
+
+async def _pull_body(model_name: str) -> Dict[str, Any]:
+    """``pull_request_body``, asking Lemonade about a ``user.`` id GAIA didn't add.
+
+    Raises ``RuntimeError`` when the model list can't be read, and whatever
+    ``pull_request_body`` raises when the model can't be pulled.
+    """
+    try:
+        return pull_request_body(model_name)
+    except UnknownUserModelError:
+        pass  # Lemonade may list it by name; ask it before refusing.
+    import httpx  # pylint: disable=import-outside-toplevel
+
+    base_url = resolve_lemonade_base_url()
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/models", params={"show_all": "true"}, headers=headers
+            )
+            resp.raise_for_status()
+            registered = registered_model_ids(resp.json())
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError(
+            f"Can't download '{model_name}': the local model server didn't "
+            f"say whether it has this model ({exc}). Try again in a moment."
+        ) from exc
+    return pull_request_body(model_name, registered=registered)
 
 
 # ── Download progress tracking ──────────────────────────────────────────────
@@ -209,32 +240,22 @@ def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
 
 
 async def _auto_load_after_download(model_name: str) -> None:
-    """Issue a Lemonade ``/v1/load`` for ``model_name`` at our default ctx.
+    """Issue a Lemonade ``/v1/load`` for ``model_name`` at the window chat uses.
 
-    Called from ``_stream_lemonade_pull`` once the pull completes so the
-    user doesn't have to take a second action ("model downloaded — now go
-    click Load") to actually start chatting. We use the same
-    ``DEFAULT_CONTEXT_SIZE`` (32K) the rest of GAIA expects, otherwise
-    Lemonade falls back to its own much smaller default and the next
-    chat hits the "ctx too small" reload branch.
+    Called from ``_stream_lemonade_pull`` only when the requester opts in
+    with ``load_after``. The window is ``resolve_ctx_size(model_name)``, the
+    one the chat pre-flight asks for, so the first chat doesn't reload it.
 
     Skipped while a chat is answering, so a download never cuts an answer
     off. A failed load is logged and shows in ``/api/system/status``.
     """
-    logger.info(
-        "Auto-load after download: %s (ctx_size=%d)",
-        model_name,
-        DEFAULT_CONTEXT_SIZE,
-    )
+    logger.info("Auto-load after download: %s", model_name)
     # A chat answering on another model keeps it: the new one loads next turn.
     if _chats_answering():
         logger.info("Auto-load of %s skipped: a chat is answering", model_name)
         return
     await asyncio.to_thread(
-        _load_through_the_slot,
-        model_name,
-        DEFAULT_CONTEXT_SIZE,
-        f"Auto-load {model_name}",
+        _load_through_the_slot, model_name, None, f"Auto-load {model_name}"
     )
 
 
@@ -244,7 +265,9 @@ def _install_npu_backend(model_name: str) -> None:
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
 
 
-async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
+async def _stream_lemonade_pull(
+    model_name: str, force: bool, load_after: bool = False
+) -> None:
     """Issue ``POST /v1/pull?stream=true`` and feed the SSE event stream
     into ``_download_progress[model_name]``.
 
@@ -284,7 +307,7 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
 
     try:
         try:
-            payload = pull_request_body(model_name)
+            payload = await _pull_body(model_name)
         except (RuntimeError, ValueError) as exc:
             _set_download_progress(
                 model_name,
@@ -430,18 +453,17 @@ async def _stream_lemonade_pull(model_name: str, force: bool) -> None:
                                 },
                             )
                             logger.info("Pull stream complete: %s", model_name)
-                            # Kick off auto-load so the user doesn't have to
-                            # manually click "Load" after a multi-minute pull.
-                            # We hand off to a separate task because the load
-                            # itself can take ~30 s (the 4B GGUFs warm-load
-                            # quickly, but mmap + KV-cache alloc is real work)
-                            # and we want this stream's TTL eviction to fire
-                            # on schedule rather than waiting on the load.
-                            load_task = asyncio.create_task(
-                                _auto_load_after_download(model_name)
-                            )
-                            _background_tasks.add(load_task)
-                            load_task.add_done_callback(_background_tasks.discard)
+                            if load_after:
+                                # The missing-model banner opts in because
+                                # there is no active model for the pull to
+                                # displace. Settings downloads deliberately
+                                # leave the current model untouched until the
+                                # user chooses it.
+                                load_task = asyncio.create_task(
+                                    _auto_load_after_download(payload["model_name"])
+                                )
+                                _background_tasks.add(load_task)
+                                load_task.add_done_callback(_background_tasks.discard)
                         elif ev == "error":
                             err_msg = (
                                 data.get("error")
@@ -594,9 +616,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # Always named, not only once a model is loaded: the UI's load and download
     # actions target this. None only when an unreadable config hides it.
     status.default_model_name = db.get_setting("custom_model") or default_model
-    status.default_model_is_cloud = bool(
-        cloud_model_provider(status.default_model_name)
-    )
+    from .._chat_helpers import _ui_cloud_provider
+
+    status.default_model_is_cloud = bool(_ui_cloud_provider(status.default_model_name))
 
     # Check Lemonade Server. Each call has a generous timeout (the health
     # check 10 s: a busy LLM answers it slowly); _STATUS_PROBE_BUDGET_S
@@ -644,27 +666,14 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             ctx, chat_entry.get("max_context_window")
                         )
 
-                # Fetch model catalog for size, labels, and fallback context size
+                # Catalog for size and labels; its ctx_size is the saved option,
+                # not the loaded window.
                 models_resp = await client.get(f"{base_url}/models", headers=_auth)
                 if models_resp.status_code == 200:
                     for m in models_resp.json().get("data", []):
                         if m.get("id") == status.model_loaded:
                             status.model_size_gb = m.get("size")
                             status.model_labels = m.get("labels")
-                            # Only use catalog ctx_size when health data didn't
-                            # provide it (e.g. model not yet fully loaded) —
-                            # clamped the same way as the health-derived value
-                            # above.
-                            if status.model_context_size is None and not (
-                                chat_entry and chat_entry.get("recipe") == "cloud"
-                            ):
-                                ctx = m.get("recipe_options", {}).get("ctx_size")
-                                if ctx is not None:
-                                    status.model_context_size = (
-                                        resolve_effective_ctx_size(
-                                            ctx, m.get("max_context_window")
-                                        )
-                                    )
                         if "embed" in m.get("id", "").lower():
                             status.embedding_model_loaded = True
 
@@ -695,11 +704,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     # frontend can name it precisely in the warning banner.
                     status.default_model_name = custom_model or default_model
 
-                # When no LLM is loaded, check if the expected model is downloaded.
+                # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
                 # yet pulled to disk.
-                if not status.model_loaded and status.default_model_name:
+                expected_missing = (
+                    not status.model_loaded or not status.expected_model_loaded
+                )
+                if (
+                    expected_missing
+                    and status.default_model_name
+                    and not status.default_model_is_cloud
+                ):
                     _target = status.default_model_name
                     try:
                         catalog_resp = await client.get(
@@ -981,13 +997,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
 
 @router.post("/api/system/warm-up", response_model=WarmUpStatus)
-async def request_warm_up():
+async def request_warm_up(fresh: bool = False):
     """Prime the prompt a new chat's first turn sends; returns the warm-up state.
 
     Called when the user opens a new chat. Debounced and single-flight, so a
     repeat call while one runs, or just after one finished, changes nothing.
+    ``?fresh=true`` retries a picked model's load: it skips the debounce and
+    runs after a warm-up already under way.
     """
-    warmup.request_warm_up("new chat")
+    if fresh:
+        warmup.request_warm_up("model pick retry", fresh=True)
+    else:
+        warmup.request_warm_up("new chat")
     return WarmUpStatus(**warmup.warm_up_status())
 
 
@@ -1072,12 +1093,13 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     return status
 
 
-def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
-    """Return ``(effective, locked)`` for the Beta dynamic tool loader (#1798).
+def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
+    """Return ``(effective, locked)`` for dynamic tool loading.
 
     ``GAIA_DYNAMIC_TOOLS`` wins when set (``locked=True`` ⇒ the frontend
     reflects the effective value and disables the toggle, never a silent
-    no-op); otherwise the persisted ``dynamic_tools`` setting is authoritative.
+    no-op); otherwise ``dynamic_tools`` in ``~/.gaia/config.json`` decides, the
+    one place every agent process reads, the flagship's sidecar included.
     Delegates the env parse to ``dynamic_tools_env_override`` so the UI and
     ``ChatAgent._resolve_dynamic_tools_enabled`` share one truthy set.
     """
@@ -1085,12 +1107,12 @@ def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
     # (no cycle, no module-load cost). The helper lives in the core tool_loader
     # (not an agent wheel) so this core UI setting works without one installed.
     from gaia.agents.base.tool_loader import dynamic_tools_env_override
+    from gaia.config import GaiaConfig
 
-    persisted = db.get_setting("dynamic_tools", "false") == "true"
     override = dynamic_tools_env_override()
     if override is not None:
         return override, True
-    return persisted, False
+    return GaiaConfig.load().dynamic_tools, False
 
 
 @router.get("/api/settings", response_model=SettingsResponse)
@@ -1100,7 +1122,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     logger.debug(
         "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
         "dynamic_tools=%s (locked=%s)",
@@ -1111,6 +1133,8 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         dynamic_tools_locked,
     )
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import cloud_blocked
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1118,12 +1142,15 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
     )
 
 
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
-    request: SettingsUpdateRequest, db: ChatDatabase = Depends(get_db)
+    request: SettingsUpdateRequest,
+    http_request: Request,
+    db: ChatDatabase = Depends(get_db),
 ):
     """Update user settings.
 
@@ -1194,15 +1221,46 @@ async def update_settings(
     ):
         # Persist the user's intent even while GAIA_DYNAMIC_TOOLS locks the
         # effective value — so their choice applies once the env var is unset.
-        db.set_setting("dynamic_tools", "true" if request.dynamic_tools else "false")
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_key("dynamic_tools", request.dynamic_tools)
         logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
+
+    policy_warnings: List[str] = []
+    policy_notices: List[Dict[str, Any]] = []
+    if (
+        "network_policy" in request.model_fields_set
+        and request.network_policy is not None
+    ):
+        security.require_local_pc(http_request)
+        from gaia.llm import local_only
+
+        try:
+            result = local_only.apply_policy(request.network_policy)
+        except (ValueError, OSError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        policy_warnings = result["warnings"]
+        policy_notices = result["notices"]
+        if result["policy"] is local_only.NetworkPolicy.LOCAL_AI_ONLY:
+            # Preserve a local custom model; only a cloud selection would keep
+            # the UI pointing at a model the shared cleanup has removed.
+            from .._chat_helpers import _ui_cloud_provider
+
+            custom = (db.get_setting("custom_model") or "").strip()
+            if custom and (
+                _ui_cloud_provider(custom) or custom.lower().startswith("claude")
+            ):
+                db.set_setting("custom_model", None)
+        logger.info("Network policy set: %s", result["policy"].value)
 
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
-    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting()
     model_status = await _check_model_status(custom_model) if custom_model else None
+    from gaia.llm.local_only import cloud_blocked
+
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
@@ -1210,6 +1268,9 @@ async def update_settings(
         agent_mode=agent_mode,
         dynamic_tools=dynamic_tools,
         dynamic_tools_locked=dynamic_tools_locked,
+        network_policy="local_ai_only" if cloud_blocked() else "cloud_allowed",
+        policy_warnings=policy_warnings,
+        policy_notices=policy_notices,
     )
 
 
@@ -1331,19 +1392,29 @@ class LoadModelRequest(BaseModel):
 _last_load_failure: Optional[str] = None
 
 
-def _load_through_the_slot(model_name: str, ctx_size: int, log_context: str) -> None:
+def _load_through_the_slot(
+    model_name: str, ctx_size: Optional[int], log_context: str
+) -> None:
     """Load a model the way a chat turn does: broker lease, then the load lock.
 
     ``LemonadeClient.load_model`` takes the lease, checks free memory and adds
     the chosen llama.cpp backend; ``model_load_lock`` keeps it from racing a
-    chat's own pre-flight load in this process.
+    chat's own pre-flight load in this process. A ``ctx_size`` of None loads
+    at ``resolve_ctx_size(model_name)``.
     """
     from gaia.config import GaiaConfigError
     from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
-    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        resolve_ctx_size,
+    )
     from gaia.ui._chat_helpers import model_load_lock, note_model_loaded
 
     try:
+        if ctx_size is None:
+            ctx_size = resolve_ctx_size(model_name)
+        logger.info("%s at ctx_size=%d", log_context, ctx_size)
         # The order every load in this process uses: lease, then the lock.
         with model_lease(model_name, priority="interactive"), model_load_lock:
             LemonadeClient(verbose=False).load_model(
@@ -1388,7 +1459,6 @@ async def load_model_endpoint(body: LoadModelRequest):
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
 
-    ctx_size = body.ctx_size if body.ctx_size is not None else _MIN_CONTEXT_SIZE
     answering = _chats_answering()
     if answering and not body.force:
         raise HTTPException(
@@ -1400,6 +1470,19 @@ async def load_model_endpoint(body: LoadModelRequest):
                 "finish, or load anyway (force=true)."
             ),
         )
+    ctx_size = body.ctx_size
+    if ctx_size is None:
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+
+        # The window a chat on this model asks for, so its first turn doesn't reload.
+        try:
+            ctx_size = await asyncio.to_thread(resolve_ctx_size, model_name)
+        except (LemonadeClientError, GaiaConfigError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not size the context window for {model_name}: {exc}",
+            ) from exc
     task = asyncio.create_task(
         asyncio.to_thread(
             _load_through_the_slot, model_name, ctx_size, f"Load {model_name}"
@@ -1449,7 +1532,7 @@ async def work_in_progress(request: Request, db: ChatDatabase = Depends(get_db))
         # A model download started from Retry or Settings runs outside a setup run.
         setup=setup_status.get("state") in ("running", "verifying")
         or any(
-            m.get("state") in ("queued", "downloading")
+            m.get("state") in ("queued", "downloading", "verifying")
             for m in setup_status.get("models") or []
         ),
     )
@@ -1498,6 +1581,7 @@ async def unload_model_endpoint(body: UnloadModelRequest, request: Request):
 class DownloadModelRequest(BaseModel):
     model_name: str
     force: bool = False
+    load_after: bool = False
 
 
 @router.post("/api/system/download-model", status_code=202)
@@ -1517,11 +1601,13 @@ async def download_model_endpoint(body: DownloadModelRequest):
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name must not be empty")
     try:
-        pull_request_body(model_name)
+        await _pull_body(model_name)
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    task = asyncio.create_task(_stream_lemonade_pull(model_name, body.force))
+    task = asyncio.create_task(
+        _stream_lemonade_pull(model_name, body.force, body.load_after)
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return {"status": "downloading", "model": model_name}

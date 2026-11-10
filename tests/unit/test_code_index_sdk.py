@@ -405,11 +405,11 @@ class TestEmbeddingBatchSync:
         assert vecs.shape[0] == 3
         assert len(synced_chunks) == vecs.shape[0]
 
-    def test_encode_partial_failure_stays_in_sync(self, tmp_path):
-        """A batch stuck returning fewer vectors than requested (not a
-        transient load race — every retry gets the same short result) must
-        still fall back to one-by-one and keep chunks/vectors aligned,
-        rather than silently zipping mismatched lists together.
+    def test_a_short_batch_raises_and_no_chunk_is_sent_alone(self, tmp_path):
+        """A batch stuck returning fewer vectors than requested is an error.
+
+        It is not re-sent one chunk at a time: that fallback cost a 60 s call
+        per chunk against a dead backend and dropped the chunks that failed.
         """
         skip_if_unavailable()
         sdk = make_sdk(tmp_path)
@@ -427,27 +427,49 @@ class TestEmbeddingBatchSync:
         ]
         texts = [c.content for c in chunks]
 
-        def side_effect(input_texts, model=None, timeout=None):
-            # A 2-text batch always comes back with only 1 vector (stuck
-            # partial failure); a single-text call (the one-by-one fallback)
-            # succeeds — this is what forces recovery through the fallback.
-            n = 1 if len(input_texts) > 1 else len(input_texts)
-            return {
-                "data": [
-                    {"embedding": np.zeros(768, dtype="float32").tolist()}
-                    for _ in range(n)
-                ]
-            }
-
         mock_enc = MagicMock()
-        mock_enc.embeddings.side_effect = side_effect
+        mock_enc.embeddings.return_value = {
+            "data": [{"embedding": np.zeros(768, dtype="float32").tolist()}]
+        }
         sdk._embedder = mock_enc
 
-        with patch("gaia.code_index.sdk.time.sleep"):
-            vecs, synced_chunks = sdk._encode_texts_with_sync(texts, chunks)
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch("gaia.code_index.sdk.time.sleep") as sleep,
+        ):
+            with pytest.raises(RuntimeError, match="returned 1/2 vectors"):
+                sdk._encode_texts_with_sync(texts, chunks)
 
-        # One-by-one fallback recovers both chunks despite the stuck batch.
-        assert vecs.shape[0] == len(synced_chunks) == 2
+        assert mock_enc.embeddings.call_count == 1
+        assert all(
+            len(call.args[0]) == 2 for call in mock_enc.embeddings.call_args_list
+        )
+        sleep.assert_not_called()
+
+    def test_an_empty_vector_in_a_full_batch_raises(self, tmp_path):
+        """A chunk whose vector comes back empty fails the batch, not just itself."""
+        skip_if_unavailable()
+        import numpy as np
+
+        from gaia.code_index.sdk import CodeChunk
+
+        sdk = make_sdk(tmp_path)
+        chunks = [
+            CodeChunk("def a(): pass", "a.py", "python", 1, 1),
+            CodeChunk("def b(): pass", "b.py", "python", 1, 1),
+        ]
+        mock_enc = MagicMock()
+        mock_enc.embeddings.return_value = {
+            "data": [
+                {"embedding": np.zeros(768, dtype="float32").tolist()},
+                {"embedding": []},
+            ]
+        }
+        sdk._embedder = mock_enc
+
+        with patch.object(sdk, "_load_embedder"):
+            with pytest.raises(RuntimeError, match="returned 1/2 vectors"):
+                sdk._encode_texts_with_sync([c.content for c in chunks], chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -600,11 +622,8 @@ class TestFailLoudly:
 
 
 # ---------------------------------------------------------------------------
-# Test: batch-embedding race — backend returns 0/short vectors with NO
-# exception (e.g. the embedding model is still warming up). Previously this
-# silently degraded to a ~25x-slower one-by-one fallback (or, for the
-# query-encode path used by search(), silently returned an empty result
-# indistinguishable from "no matches found").
+# Test: batch-embedding race — backend returns no vectors with NO exception
+# (the embedding model is still warming up), and a backend that is down.
 # ---------------------------------------------------------------------------
 
 
@@ -624,8 +643,8 @@ class TestBatchEmbeddingRace:
         return mock_enc
 
     def test_encode_texts_retries_batch_before_failing(self, tmp_path):
-        """A short-without-exception response must be retried as a whole
-        batch (the 'not ready yet' race) — not immediately treated as final.
+        """A batch that comes back with no vectors and no error (the model is
+        still loading) gets the warm-up waits before it fails.
         """
         skip_if_unavailable()
         import numpy as np
@@ -638,8 +657,7 @@ class TestBatchEmbeddingRace:
             with pytest.raises(RuntimeError, match="Embedding backend returned"):
                 sdk._encode_texts(["hello world"])
 
-        # 1 initial + 2 retries = 3 calls to the same batch, never falls
-        # back to a silent partial/empty result.
+        # The warm-up tries, all on the same batch, then a loud failure.
         assert mock_enc.embeddings.call_count == 3
 
     def test_encode_texts_recovers_if_batch_becomes_ready_on_retry(self, tmp_path):
@@ -691,17 +709,14 @@ class TestBatchEmbeddingRace:
             with pytest.raises(RuntimeError, match="Query encoding failed"):
                 sdk.search("anything")
 
-    def test_encode_with_sync_falls_back_only_after_batch_retries_exhausted(
-        self, tmp_path
-    ):
-        """The bulk-index path may still fall back to one-by-one for a
-        batch that's genuinely stuck short — but only after retrying the
-        batch itself, not on the first short response.
+    def test_a_batch_still_loading_after_its_waits_raises(self, tmp_path):
+        """A batch that comes back with no vectors gets the warm-up waits, then
+        fails: no chunk is re-sent on its own or dropped.
         """
         skip_if_unavailable()
         import numpy as np
 
-        from gaia.code_index.sdk import CodeChunk
+        from gaia.code_index.sdk import _EMBED_WARMUP_ATTEMPTS, CodeChunk
 
         sdk = make_sdk(tmp_path)
         chunks = [CodeChunk("def a(): pass", "a.py", "python", 1, 1)]
@@ -710,12 +725,49 @@ class TestBatchEmbeddingRace:
         mock_enc = self._mock_embedder_with_data(np, n_per_call=0)
         sdk._embedder = mock_enc
 
-        with patch("gaia.code_index.sdk.time.sleep"):
-            vecs, synced_chunks = sdk._encode_texts_with_sync(texts, chunks)
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch("gaia.code_index.sdk.time.sleep") as sleep,
+        ):
+            with pytest.raises(RuntimeError, match="returned 0/1 vectors"):
+                sdk._encode_texts_with_sync(texts, chunks)
 
-        # Batch retried 3x (all short), then one-by-one also short -> the
-        # chunk is dropped, not silently paired with a garbage/zero vector.
-        assert vecs.shape[0] == len(synced_chunks) == 0
+        assert mock_enc.embeddings.call_count == _EMBED_WARMUP_ATTEMPTS
+        assert sleep.call_count == _EMBED_WARMUP_ATTEMPTS - 1
+
+    def test_a_dead_backend_fails_indexing_on_its_first_call(self, tmp_path):
+        """With Lemonade down, indexing says so at once.
+
+        It used to retry each batch with sleeps, then try every chunk on its
+        own, before reporting anything: many minutes on a large repo.
+        """
+        skip_if_unavailable()
+        try:
+            import faiss  # noqa: F401
+        except ImportError:
+            pytest.skip("faiss not installed")
+
+        sdk = make_sdk(tmp_path)
+        for n in range(60):
+            _write_py(tmp_path, f"m{n}.py", f"def f{n}():\n    return {n}\n")
+
+        mock_enc = MagicMock()
+        mock_enc.embeddings.side_effect = ConnectionError(
+            "The local model server isn't answering: connection refused."
+        )
+        sdk._embedder = mock_enc
+
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch("gaia.code_index.sdk.time.sleep") as sleep,
+        ):
+            with pytest.raises(RuntimeError, match="connection refused") as exc:
+                sdk.index_repository()
+
+        assert sdk.config.embedding_model in str(exc.value)
+        assert ".." not in str(exc.value)
+        assert mock_enc.embeddings.call_count == 1
+        sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -901,9 +953,7 @@ class TestAbandonedBuild:
 
         with (
             patch.object(sdk, "_load_embedder"),
-            patch.object(
-                sdk, "_embed_batch_resilient", side_effect=first_batch_then_abandoned
-            ),
+            patch.object(sdk, "_embed_batch", side_effect=first_batch_then_abandoned),
         ):
             set_tool_cancel_event(cancelled)
             try:

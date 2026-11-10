@@ -393,7 +393,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_status.busy = False
         mock_status.context_size = 4096
         mock_status.loaded_models = [
-            {"id": "test-model", "labels": []}
+            {"id": "test-model", "labels": [], "recipe_options": {"ctx_size": 4096}}
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
         mock_client.base_url = "http://localhost:13305/api/v1"
@@ -435,7 +435,7 @@ class TestLemonadeManagerContextMessage(unittest.TestCase):
         mock_status.busy = False
         mock_status.context_size = 4096
         mock_status.loaded_models = [
-            {"id": "test-model", "labels": []}
+            {"id": "test-model", "labels": [], "recipe_options": {"ctx_size": 4096}}
         ]  # LLM model loaded
         mock_client.get_status.return_value = mock_status
         mock_client.base_url = "http://localhost:13305/api/v1"
