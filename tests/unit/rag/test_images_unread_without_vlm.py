@@ -68,8 +68,7 @@ def _vlm(up: bool) -> MagicMock:
     return vlm
 
 
-def _index(tmp_path: Path, pdf: Path, vlm: MagicMock) -> tuple[dict, RAGSDK]:
-    """Index *pdf* in a fresh SDK sharing one cache, as a new session would."""
+def _sdk(tmp_path: Path) -> RAGSDK:
     with patch("gaia.rag.sdk.AgentSDK"):
         sdk = RAGSDK(
             RAGConfig(
@@ -83,6 +82,14 @@ def _index(tmp_path: Path, pdf: Path, vlm: MagicMock) -> tuple[dict, RAGSDK]:
         np.stack([_vector(t) for t in texts]) if texts else np.zeros((0, DIM))
     )
     sdk._get_hmac_key = lambda: b"test-index-key" * 3
+    return sdk
+
+
+def _index(
+    tmp_path: Path, pdf: Path, vlm: MagicMock, sdk: RAGSDK | None = None
+) -> tuple[dict, RAGSDK]:
+    """Index *pdf*, in a fresh SDK sharing one cache (a new session) unless given one."""
+    sdk = sdk or _sdk(tmp_path)
     with (
         patch("gaia.llm.VLMClient", return_value=vlm),
         patch("gaia.rag.sdk.resident_vision_model", return_value="vision-model"),
@@ -120,6 +127,32 @@ def test_once_the_vision_model_is_up_the_cached_file_is_read_again(tmp_path):
     assert result["from_cache"]
     again.check_availability.assert_not_called()
     assert any("chart on page 2" in chunk for chunk in sdk.chunks)
+
+
+def test_in_the_same_session_indexing_again_reads_the_images(tmp_path):
+    pdf = _pdf(tmp_path / "q3.pdf", REPORT, "Figure 1")
+    _, sdk = _index(tmp_path, pdf, _vlm(up=False))
+
+    result, sdk = _index(tmp_path, pdf, _vlm(up=True), sdk)
+
+    assert not result.get("already_indexed")
+    assert result["reindexed"]
+    assert "unread_image_pages" not in result
+    assert any("chart on page 2" in chunk for chunk in sdk.chunks)
+    # The old text was replaced, not left beside the new.
+    assert len(sdk.indexed_files) == 1
+    assert len(sdk.chunks) == len(sdk.file_to_chunk_indices[str(pdf.absolute())])
+
+
+def test_in_the_same_session_with_the_model_still_down_it_stays_indexed(tmp_path):
+    pdf = _pdf(tmp_path / "q3.pdf", REPORT, "Figure 1")
+    _, sdk = _index(tmp_path, pdf, _vlm(up=False))
+
+    vlm = _vlm(up=False)
+    result, _ = _index(tmp_path, pdf, vlm, sdk)
+
+    assert result["already_indexed"]
+    vlm.extract_from_page_images.assert_not_called()
 
 
 def test_while_the_vision_model_is_still_down_the_cache_is_used_and_still_flagged(

@@ -978,6 +978,25 @@ class RAGSDK:
             )
             return False
 
+    def _left_images_unread(self, file_path: str) -> bool:
+        """Whether *file_path*'s indexed text skipped images the vision model should read.
+
+        Call with ``_state_lock`` held.
+        """
+        metadata = self.file_metadata.get(file_path, {})
+        return metadata.get("vlm_available") is False and bool(
+            metadata.get("unread_image_pages")
+        )
+
+    def unread_images_readable(self, file_path: str) -> bool:
+        """Whether indexing *file_path* again would read images it left unread."""
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if not self._left_images_unread(file_path):
+                return False
+            metadata = dict(self.file_metadata[file_path])
+        return self._images_readable_now(metadata)
+
     def _note_images_skipped(self) -> None:
         """Say once per file that its images aren't read while chat is on the NPU."""
         reason = self._vision_off()
@@ -4117,6 +4136,12 @@ These positions indicate where to split the text."""
             if replacing:
                 # Built without the lock; the old text serves until the swap.
                 self.log.info(f"{file_path} changed since it was indexed; re-indexing")
+            elif self.unread_images_readable(file_path):
+                replacing = True
+                self.log.info(
+                    f"{file_path} left images unread and the vision model is up; "
+                    "re-indexing to read them"
+                )
 
         with self._state_lock:
             # Check if already indexed
@@ -4206,7 +4231,9 @@ These positions indicate where to split the text."""
                 )
 
                 with self._state_lock:
-                    if self._indexed_from(file_path, content_key):
+                    if self._indexed_from(
+                        file_path, content_key
+                    ) and not self._left_images_unread(file_path):
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
@@ -4406,7 +4433,9 @@ These positions indicate where to split the text."""
             )
 
             with self._state_lock:
-                if self._indexed_from(file_path, content_key):
+                if self._indexed_from(
+                    file_path, content_key
+                ) and not self._left_images_unread(file_path):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")

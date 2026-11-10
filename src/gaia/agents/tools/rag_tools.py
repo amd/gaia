@@ -2085,11 +2085,16 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
-                # A file edited since it was indexed falls through and re-indexes.
+                # A file edited since it was indexed falls through and re-indexes,
+                # as does one whose images went unread and can be read now.
                 if (
-                    file_path in self.indexed_files
-                    or real_file_path in self.indexed_files
-                ) and self.rag.is_current(real_file_path):
+                    (
+                        file_path in self.indexed_files
+                        or real_file_path in self.indexed_files
+                    )
+                    and self.rag.is_current(real_file_path)
+                    and self.rag.unread_images_readable(real_file_path) is not True
+                ):
                     logger.debug(
                         "Skipping re-index for already-indexed file: %s", file_path
                     )

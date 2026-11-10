@@ -342,3 +342,41 @@ class TestIndexDocumentUnreadImages:
 
         assert "unread_image_pages" not in result
         assert "images" not in result["message"]
+
+
+class TestIndexDocumentRereadsUnreadImages:
+    """A tracked file whose images went unread is indexed again once they can be read."""
+
+    def _index(self, tmp_path, readable):
+        doc = tmp_path / "q3.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        rag = _fake_rag({str(doc)})
+        rag.is_current.return_value = True
+        rag.unread_images_readable.return_value = readable
+        host = _make_host(rag)
+        host.indexed_files = {str(doc)}
+        host.current_session = None
+        host.rebuild_system_prompt = MagicMock()
+        calls = []
+
+        def index_file(_rag, path, **_kwargs):
+            calls.append(path)
+            return {"success": True, "file_name": doc.name, "reindexed": True}, None
+
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            result = _tool("index_document")(file_path=str(doc))
+        return result, calls
+
+    def test_readable_images_send_it_back_to_the_index(self, tmp_path):
+        result, calls = self._index(tmp_path, readable=True)
+
+        assert (
+            calls
+        ), "the tool answered 'Already indexed' instead of reading the images"
+        assert not result.get("already_indexed")
+
+    def test_otherwise_it_stays_already_indexed(self, tmp_path):
+        result, calls = self._index(tmp_path, readable=False)
+
+        assert calls == []
+        assert result["already_indexed"]
