@@ -128,12 +128,12 @@ function parseViewportChoice(choice) {
  *   session: Electron.Session,
  *   shell: Electron.Shell,
  *   userDataDir: string,
- *   downloadsDir: () => string,
+ *   savePathFor: (filename: string) => string,
  *   blockedPorts: () => number[],
  *   devServers: import("./dev-servers.cjs").DevServerSupervisor,
  * }} deps
  */
-function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downloadsDir, blockedPorts, devServers }) {
+function createBrowserPaneService({ ipcMain, session, shell, userDataDir, savePathFor, blockedPorts, devServers }) {
   /** @type {PaneHost | null} */
   let host = null;
   /** The dev servers are app-wide, not the window's, so they join the state here. */
@@ -144,7 +144,7 @@ function createBrowserPaneService({ ipcMain, session, shell, userDataDir, downlo
 
   installSessionPolicy(session, {
     blockedPorts,
-    downloadsDir,
+    savePathFor,
     onPermissionDenied: (webContents, permission, origin) => {
       console.log(`[browser-pane] Denied ${permission} for ${origin || "a pane page"}`);
       if (host) host.notePermissionDenied(webContents, permission, origin);

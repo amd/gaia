@@ -41,6 +41,14 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`. In GAIA desktop, a chat with the browser pane gets nine
+  more tools that drive the visible pane, and `dev_server` to start a project's
+  dev server on 127.0.0.1; they never register outside the desktop app.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,

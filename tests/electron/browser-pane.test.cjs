@@ -343,7 +343,7 @@ describe("navigation policy", () => {
   ])("a page asking for %s gets %s", (permission, granted) => {
     const ses = fakeSession();
     const denied = jest.fn();
-    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: denied, downloadsDir: () => "/dl" });
+    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: denied, savePathFor: (name) => path.join("/dl", name) });
     const callback = jest.fn();
     const wc = { getURL: () => "https://site.test/page" };
     ses.requestHandler(wc, permission, callback, { requestingUrl: "https://site.test/page" });
@@ -355,7 +355,7 @@ describe("navigation policy", () => {
 
   test("device pickers are refused and downloads always ask where to save", () => {
     const ses = fakeSession();
-    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: jest.fn(), downloadsDir: () => "/dl" });
+    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: jest.fn(), savePathFor: (name) => path.join("/dl", name) });
     expect(ses.deviceHandler({ deviceType: "usb" })).toBe(false);
     const item = { setSaveDialogOptions: jest.fn(), setSavePath: jest.fn(), getFilename: () => "report.pdf" };
     ses.emit("will-download", {}, item);
@@ -374,7 +374,7 @@ describe("navigation policy", () => {
     ["blob:https://site.test/1234", false],
   ])("any request to %s is cancelled: %s", (url, cancel) => {
     const ses = fakeSession();
-    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: jest.fn(), downloadsDir: () => "/dl" });
+    installSessionPolicy(ses, { blockedPorts: () => [BACKEND_PORT], onPermissionDenied: jest.fn(), savePathFor: (name) => path.join("/dl", name) });
     const callback = jest.fn();
     ses.beforeRequest({ url }, callback);
     expect(callback).toHaveBeenCalledWith({ cancel });
@@ -455,7 +455,7 @@ describe("IPC", () => {
       session: fakeSession(),
       shell: { openExternal: jest.fn(() => Promise.resolve()) },
       userDataDir,
-      downloadsDir: () => "/dl",
+      savePathFor: (name) => path.join("/dl", name),
       blockedPorts: () => [BACKEND_PORT],
       devServers,
     });
@@ -557,14 +557,17 @@ describe("dev QA mode", () => {
     const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
     expect(main).toContain("const devQa = resolveDevQaMode({ isPackaged: app.isPackaged, env: process.env });");
     expect(main).toContain("if (!devQa) registerProtocolHandler();");
-    expect(main).toContain("const bootstrapOk = devQa ? true : await prepareInstalledBackend();");
+    expect(main).toContain("if (devQa) showingInstallScreen = false;");
     expect(main).toContain("const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();");
     expect(main).toContain("if (!devQa) await cleanupOrphanedBackend();");
-    expect(main).toMatch(/if \(!devQa\) \{\n\s+try \{\n[^]*?backend\.pid/);
-    const prep = main.slice(main.indexOf("async function prepareInstalledBackend("), main.indexOf("app.whenReady().then("));
-    expect(prep).toContain("bootstrapBackend()");
-    expect(prep).toContain("cleanupOrphanedBackend()");
-    expect(prep).toContain("seedBundledAgents()");
+    expect(main).toMatch(/if \(!devQa\) \{\r?\n\s+try \{\r?\n[^]*?backend\.pid/);
+    // Seeding and the startup orphan cleanup share one dev-QA guard, before the install runs.
+    const ready = main.slice(main.indexOf("app.whenReady().then("));
+    const guard = ready.indexOf("if (!devQa) {");
+    expect(guard).toBeGreaterThan(-1);
+    const guarded = ready.slice(guard, ready.indexOf("engineInstall.run()"));
+    expect(guarded).toContain("seedBundledAgents()");
+    expect(guarded).toContain("await cleanupOrphanedBackend();");
   });
 });
 

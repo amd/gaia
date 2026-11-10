@@ -956,7 +956,7 @@ function initializeServices() {
     session: session.fromPartition(PANE_PARTITION),
     shell,
     userDataDir: app.getPath("userData"),
-    downloadsDir: () => app.getPath("downloads"),
+    savePathFor: saveFolderFor,
     // GAIA's backend, the bridge and GAIA's other local services: no pane page may reach any.
     blockedPorts: appPorts,
     devServers,
@@ -1288,40 +1288,6 @@ app.on("second-instance", (_event, argv, _cwd) => {
   if (deepLink) handleDeepLink(deepLink);
 });
 
-/**
- * Seed agents and stop an orphaned backend before the install runs.
- * Both write to the user's ~/.gaia, so dev QA mode skips them.
- */
-async function prepareInstalledBackend() {
-  // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
-  // agent registry sees them on its first discovery pass. Failures here are
-  // non-fatal — the app must still launch even if seeding is blocked (e.g.
-  // permission error on ~/.gaia/agents).
-  try {
-    const seedResult = await agentSeeder.seedBundledAgents();
-    if (seedResult.seeded.length > 0) {
-      console.log("[main] Seeded agents:", seedResult.seeded);
-    }
-    if (seedResult.cleaned.length > 0) {
-      console.log("[main] Cleaned legacy agents:", seedResult.cleaned);
-    }
-    if (seedResult.errors.length > 0) {
-      console.warn(
-        "[main] Agent seeding errors:",
-        seedResult.errors.map((e) => e.id)
-      );
-    }
-  } catch (err) {
-    console.warn("[main] Agent seeding failed (non-fatal):", err);
-  }
-
-  // Phase A0: kill any orphaned backend from a previous launch BEFORE the
-  // installer runs. On Windows a live `gaia chat --ui` holds an open handle on
-  // gaia.exe, so an upgrade's `uv pip install --refresh` fails with os error 32
-  // unless that process is gone first (issue #1388).
-  await cleanupOrphanedBackend();
-}
-
 app.whenReady().then(async () => {
   if (_inSafeMode) {
     await runSafeModePrompt({
@@ -1367,11 +1333,41 @@ app.whenReady().then(async () => {
   });
 
   // Decided before the window has a page, so a current backend never sees this screen.
-  // Dev QA mode runs GAIA_BIN's backend, so it never installs one.
-  showingInstallScreen = !devQa && !backendInstaller.isBackendCurrent();
+  showingInstallScreen = !backendInstaller.isBackendCurrent();
+  // Dev QA mode runs GAIA_BIN's backend and never installs one.
+  if (devQa) showingInstallScreen = false;
   if (showingInstallScreen) await loadApp();
 
-  if (!devQa) await prepareInstalledBackend();
+  // Both write to the user's ~/.gaia, so dev QA mode skips them.
+  if (!devQa) {
+    // Phase 0: seed bundled agents BEFORE the Python backend starts, so the
+    // agent registry sees them on its first discovery pass. Failures here are
+    // non-fatal — the app must still launch even if seeding is blocked (e.g.
+    // permission error on ~/.gaia/agents).
+    try {
+      const seedResult = await agentSeeder.seedBundledAgents();
+      if (seedResult.seeded.length > 0) {
+        console.log("[main] Seeded agents:", seedResult.seeded);
+      }
+      if (seedResult.cleaned.length > 0) {
+        console.log("[main] Cleaned legacy agents:", seedResult.cleaned);
+      }
+      if (seedResult.errors.length > 0) {
+        console.warn(
+          "[main] Agent seeding errors:",
+          seedResult.errors.map((e) => e.id)
+        );
+      }
+    } catch (err) {
+      console.warn("[main] Agent seeding failed (non-fatal):", err);
+    }
+
+    // Phase A0: kill any orphaned backend from a previous launch BEFORE the
+    // installer runs. On Windows a live `gaia chat --ui` holds an open handle on
+    // gaia.exe, so an upgrade's `uv pip install --refresh` fails with os error 32
+    // unless that process is gone first (issue #1388).
+    await cleanupOrphanedBackend();
+  }
 
   // Phase A: install or upgrade the Python backend behind EngineInstallScreen.
   if (showingInstallScreen) {

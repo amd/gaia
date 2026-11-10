@@ -92,7 +92,7 @@ It answers **200** when ready and **503** when not, with a `hint` naming the fix
 
 ## Tool surface
 
-On a larger model the default construction registers **105 tools** — the 69 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). Grouped by what they're for:
+On a larger model the default construction registers **105 tools** — the 69 of the Chat agent's `full` profile, `search_tools`, plus 8 skill-library tools, 8 live-browser tools, 8 read-only email tools, 4 code-search tools, 3 image-generation tools, 3 audio-generation tools, and `remember_skill_lesson`. Some register conditionally: `search_documentation` needs `npx` on your PATH, and the browser tools need the `browser` extra (`pip install "amd-gaia[browser]"`). A chat open in GAIA desktop gets nine more for its browser pane, 114 in all. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|

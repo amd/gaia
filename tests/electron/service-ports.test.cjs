@@ -101,7 +101,7 @@ describe("a name that resolves to this computer", () => {
     ses.setPermissionCheckHandler = jest.fn();
     ses.setDevicePermissionHandler = jest.fn();
     ses.webRequest = { onBeforeRequest: jest.fn((h) => (ses.beforeRequest = h)) };
-    installSessionPolicy(ses, { blockedPorts: () => [13305], onPermissionDenied: jest.fn(), downloadsDir: () => "/dl" });
+    installSessionPolicy(ses, { blockedPorts: () => [13305], onPermissionDenied: jest.fn(), savePathFor: (name) => path.join("/dl", name) });
     const answer = await new Promise((resolve) => ses.beforeRequest({ url: "http://rebind.example:13305/api" }, resolve));
     expect(answer).toEqual({ cancel: true });
     lookup.mockRestore();

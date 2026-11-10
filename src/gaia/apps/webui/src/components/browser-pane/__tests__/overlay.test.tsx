@@ -75,6 +75,8 @@ const NOT_OVER_THE_PANE: Record<string, string> = {
     'components/PermissionPrompt.tsx': 'drawn inline above the composer, which the pane never covers',
     'components/InfoBubble.tsx': 'only opens inside the model menu, a Popover',
     'components/browser-pane/PageDialogBar.tsx': "a bar in the pane's own toolbar area, above the page, never over it",
+    'components/settings/LocalModelsSections.tsx': 'portals its downloads list into a slot inside the settings dialog, which joins the registry',
+    'components/setup/SetupFooter.tsx': "portals its buttons into the setup screen's own footer row, inline",
 };
 
 const OVERLAY_MARKERS = [

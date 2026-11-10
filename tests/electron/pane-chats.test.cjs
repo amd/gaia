@@ -450,7 +450,7 @@ describe("deleting a chat", () => {
       session,
       shell: { openExternal: jest.fn() },
       userDataDir,
-      downloadsDir: () => "/dl",
+      savePathFor: (name) => path.join("/dl", name),
       blockedPorts: () => [],
       devServers,
     });

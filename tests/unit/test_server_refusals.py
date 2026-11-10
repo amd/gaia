@@ -194,8 +194,7 @@ SERVE_FOREVER = (
 @pytest.fixture(scope="module")
 def python_tools(tmp_path_factory):
     """One ChatAgent's run_python and execute_python_file (building one is slow)."""
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
@@ -207,8 +206,8 @@ def python_tools(tmp_path_factory):
         # Not this machine's ~/.gaia: its embedded Lemonade record is not the test's.
         mp.setenv("GAIA_HOME", str(tmp_path_factory.mktemp("gaia-home")))
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(root)])
@@ -225,7 +224,7 @@ def python_tools(tmp_path_factory):
 def test_run_python_refuses_a_server_before_any_process(python_tools, monkeypatch):
     root, tools, _agent = python_tools
     monkeypatch.chdir(root)
-    with patch("gaia_agent_chat.agent.run_python_job") as job:
+    with patch("gaia_agent.chat_agent.run_python_job") as job:
         result = tools["run_python"](code=SERVE_FOREVER)
     job.assert_not_called()
     assert result["status"] == "error"
@@ -251,7 +250,7 @@ def test_execute_python_file_reads_the_script_and_refuses_a_server(
     site.mkdir(exist_ok=True)
     script = site / "temp_server.py"
     script.write_text(SERVE_FOREVER)
-    with patch("gaia_agent_chat.agent.run_python_job") as job:
+    with patch("gaia_agent.chat_agent.run_python_job") as job:
         result = tools["execute_python_file"](file_path=str(script))
     job.assert_not_called()
     assert result["status"] == "error"
@@ -260,7 +259,7 @@ def test_execute_python_file_reads_the_script_and_refuses_a_server(
 
 def test_run_python_outside_gaia_desktop_says_to_ask_the_user(python_tools):
     _root, tools, _agent = python_tools
-    with patch("gaia_agent_chat.agent.run_python_job") as job:
+    with patch("gaia_agent.chat_agent.run_python_job") as job:
         result = tools["run_python"](code="import uvicorn\nuvicorn.run(app)")
     job.assert_not_called()
     assert "Ask the user to run the server" in result["error"]

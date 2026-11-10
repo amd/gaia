@@ -11,7 +11,6 @@
 
 const dns = require("dns");
 const net = require("net");
-const path = require("path");
 
 const PANE_SCHEMES = new Set(["http:", "https:"]);
 
@@ -152,10 +151,10 @@ function isPermissionAllowed(permission) {
  * @param {{
  *   blockedPorts: () => number[],
  *   onPermissionDenied: (webContents: Electron.WebContents, permission: string, origin: string) => void,
- *   downloadsDir: () => string,
+ *   savePathFor: (filename: string) => string,
  * }} deps
  */
-function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, downloadsDir }) {
+function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, savePathFor }) {
   ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const allowed = isPermissionAllowed(permission);
     if (!allowed) {
@@ -191,7 +190,7 @@ function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, downloads
   ses.on("will-download", (_event, item) => {
     item.setSaveDialogOptions({
       title: "Save download from the browser pane",
-      defaultPath: path.join(downloadsDir(), item.getFilename()),
+      defaultPath: savePathFor(item.getFilename()),
     });
   });
 }
