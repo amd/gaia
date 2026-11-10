@@ -913,7 +913,8 @@ class ProgressIndicator:
                 self.rich_spinner.text = timer_text
                 self.live.update(self.rich_spinner)
                 time.sleep(1.0)  # Update every 1 second
-            except Exception:
+            except Exception as e:
+                logger.debug("Progress timer stopped: %s", e)
                 break
 
     def stop(self):
@@ -927,8 +928,8 @@ class ProgressIndicator:
         if RICH_AVAILABLE and hasattr(self, "_update_timer_thread"):
             try:
                 self._update_timer_thread.join(timeout=0.5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Progress timer thread join failed: %s", e)
 
         if RICH_AVAILABLE and self.live:
             self.live.stop()
@@ -1179,7 +1180,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     return obj.item()
                 if isinstance(obj, np.ndarray):
                     return obj.tolist()
-            except Exception:
+            except ImportError:
                 pass
 
             for caster in (float, int, str):
@@ -1665,7 +1666,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 lines.append("".join(line_parts) + "\x1b[0m")
 
             return "\n".join(lines)
-        except Exception:
+        except Exception as e:
+            logger.debug("Half-block render of %s failed: %s", image_path, e)
             return ""
 
     def print_image(
@@ -1740,7 +1742,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                             self.console.print(
                                 Panel(info, border_style="cyan"), justify="center"
                             )
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Image metadata read of %s failed: %s", path, e)
                         self.console.print(
                             f"[cyan]🖼️  Image: {path}[/cyan]", justify="center"
                         )
@@ -2034,8 +2037,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                 self.file_preview_live = None
                 # Small delay to ensure clean transition
                 time.sleep(0.05)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Pausing file preview failed: %s", e)
 
         self.progress.start(message, show_timer=show_timer)
 
@@ -2604,8 +2607,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         if self.file_preview_live is not None:
             try:
                 self.file_preview_live.stop()
-            except Exception:
-                pass  # Ignore errors if already stopped
+            except Exception as e:
+                logger.debug("Stopping previous file preview failed: %s", e)
             finally:
                 self.file_preview_live = None
                 # Small delay to ensure display cleanup
@@ -2666,10 +2669,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     # Just update, don't force refresh
                     self.file_preview_live.update(preview)
                     self._last_preview_update_time = current_time
-                except Exception:
-                    # If update fails, continue accumulating content
-                    # (silently ignore preview update failures)
-                    pass
+                except Exception as e:
+                    logger.debug("File preview update failed: %s", e)
         else:
             # For non-rich mode, print new content directly
             print(content_chunk, end="", flush=True)
@@ -2681,8 +2682,8 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             if self.file_preview_live:
                 try:
                     self.file_preview_live.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Stopping file preview failed: %s", e)
                 finally:
                     self.file_preview_live = None
 

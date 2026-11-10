@@ -4,16 +4,17 @@ VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PKG      = github.com/amd/gaia/tui/internal/cli
+EXE     := $(shell go env GOEXE)
 LDFLAGS  = -ldflags="-s -w -X $(PKG).version=$(VERSION) -X $(PKG).commit=$(COMMIT) -X $(PKG).date=$(DATE)"
 
 # Built as gaia-tui, never as gaia: the Python CLI owns `gaia`, the two have
 # completely different subcommands, and a dev build called `gaia` shadows it on
 # PATH — which reads as the Python CLI having silently lost every command it has.
 build:
-	go build -o bin/gaia-tui ./cmd/gaia
+	go build -o bin/gaia-tui$(EXE) ./cmd/gaia
 
 build-release:
-	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-tui ./cmd/gaia
+	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/gaia-tui$(EXE) ./cmd/gaia
 
 test:
 	go test ./... -v
@@ -73,7 +74,7 @@ endef
 export COV_ROLLUP
 
 mock-agent:
-	go build -o bin/mock-agent ./test/mockagent
+	go build -o bin/mock-agent$(EXE) ./test/mockagent
 
 dev: build mock-agent
 	@echo "Built gaia-tui + mock-agent. Run: ./bin/gaia-tui"

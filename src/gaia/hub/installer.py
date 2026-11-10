@@ -2500,8 +2500,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))
