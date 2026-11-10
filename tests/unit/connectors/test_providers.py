@@ -272,16 +272,16 @@ class TestGoogleProvider:
 
 
 class TestNoImportSideEffects:
-    def test_importing_google_module_does_not_register(self, monkeypatch):
+    def test_importing_google_module_does_not_register(
+        self, monkeypatch, reload_module
+    ):
         # Per A-Crit-3 in Iteration 1: providers/google.py must have NO
         # side effects on import. Reimport the module with the env unset and
         # ensure the registry stays empty.
-        import importlib
-
         from gaia.connectors.providers import google as google_mod
 
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
-        importlib.reload(google_mod)
+        reload_module(google_mod)
         assert "google" not in providers._registry  # type: ignore[attr-defined]
 
 

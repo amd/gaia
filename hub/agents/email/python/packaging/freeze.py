@@ -73,6 +73,9 @@ ADD_DATA = [
     # Staged INSIDE the package: at runtime the frozen agent has no package-root
     # directory above itself, so the source-checkout location does not exist.
     (PKG_ROOT / "gaia-agent.yaml", "gaia_agent_email"),
+    # Third-party licence notices for the libraries the binary bundles.
+    (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
+    (REPO_ROOT / "licenses", "licenses"),
 ]
 
 # Heavy ML stack reached only via the lazily-imported triage import graph. Real
@@ -85,6 +88,18 @@ ADD_DATA = [
 # excluded). ``faiss``/``faiss_cpu`` are therefore NOT excluded and are collected
 # in full below. numpy is a memory.py module-level import the analyzer already
 # follows.
+# GPL code GAIA must not ship: on Linux, readline links GNU Readline (reached via
+# doctest -> pdb) and _gdbm/_dbm link GNU dbm; PyInstaller's own package is
+# GPL-2.0 outside its bootloader. Every stdlib importer of these treats them as
+# optional. The flagship's packaging/check_bundle_licenses.py enforces it.
+GPL_EXCLUDES = [
+    "PyInstaller",
+    "readline",
+    "_gdbm",
+    "_dbm",
+    "dbm.gnu",
+    "dbm.ndbm",
+]
 EXCLUDES = [
     "torch",
     "transformers",
@@ -97,6 +112,7 @@ EXCLUDES = [
     "safetensors",
     "torchvision",
     "torchaudio",
+    *GPL_EXCLUDES,
 ]
 
 

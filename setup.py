@@ -12,8 +12,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
-tkml_version = "5.0.4"
-
 # Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
 # util/list_agent_packages.py for build_agent_package.yml and
 # util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
@@ -21,7 +19,6 @@ tkml_version = "5.0.4"
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
-    "gaia-agent-chat",
     "gaia-agent-gaia",
 ]
 
@@ -32,6 +29,7 @@ setup(
     author="AMD",
     url="https://github.com/amd/gaia",
     license="MIT",
+    license_files=["LICENSE.md", "THIRD_PARTY_NOTICES.md", "licenses/*"],
     package_dir={"": "src"},
     packages=[
         "gaia",
@@ -70,9 +68,8 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._calendar",
         "gaia.agents.tools._email",
-        "gaia.agents.code_index",
-        "gaia.agents.code_index.tools",
         "gaia.governance",
         "gaia.factory",
         "gaia.factory.harvest",
@@ -95,14 +92,6 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
-        "gaia.eval": [
-            "webapp/*.json",
-            "webapp/*.js",
-            "webapp/*.md",
-            "webapp/public/*.html",
-            "webapp/public/*.css",
-            "webapp/public/*.js",
-        ],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -116,7 +105,9 @@ setup(
             "dist/*.webmanifest",
             "dist/*.json",
             "dist/*.txt",
+            "dist/*.js",
             "dist/assets/*",
+            "dist/icons/*",
         ],
     },
     install_requires=[
@@ -141,12 +132,16 @@ setup(
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
+        "idna>=3.0",
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
         "truststore>=0.10.0",
         "beautifulsoup4",
-        "watchdog>=2.1.0",
+        # watchdog 7.0.0 starves Windows change delivery while a neighbouring
+        # file is written continuously; stay on the known-good 6.x line until
+        # upstream fixes its DirectoryChangeReader.
+        "watchdog>=2.1.0,<7",
         "pillow>=9.0.0",
         # Cron-based scheduler (issue #892): apscheduler drives the daemon;
         # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
@@ -160,6 +155,10 @@ setup(
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
+        # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
+        # route through this SDK, so a base install can pick one. 0.49 is the
+        # first to export Omit, which keeps Anthropic credentials off that wire.
+        "anthropic>=0.49.0,<3.0.0",
         # Ed25519 signature verification for `gaia skill install` (#2467). Core,
         # not an extra: a skill's security tier rests on its signature, and a
         # build that cannot verify one would have to either refuse every signed
@@ -212,13 +211,13 @@ setup(
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
             # SecretService). Pinned upper bound per supply-chain advisory.
             "keyring>=24.0.0,<26.0.0",
-            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pymupdf/numpy and
+            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pypdfium2/numpy and
             # embeds via Lemonade (NOT sentence-transformers). See #845.
             # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            "pymupdf>=1.24.0,<2",
-            "pypdf",
+            "pypdfium2>=5.0.0,<6",
+            "pypdf>=6.20.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -234,6 +233,11 @@ setup(
         "diarize": [
             "sherpa-onnx>=1.13,<3",
         ],
+        # Fetches videos from links. Installed on first use in a source install;
+        # a frozen build has to bundle it, as with diarize above.
+        "media-url": [
+            "yt-dlp>=2025.1.1",
+        ],
         "mcp": [
             # Supports mcp 2.x: its public MCPServer API replaced
             # mcp.server.fastmcp (FastMCP). Keep the upper bound below the next
@@ -243,7 +247,6 @@ setup(
             "uvicorn",
         ],
         "telegram": [
-            "python-telegram-bot>=20.3",
             "psutil>=5.9.0",
         ],
         "slack": [
@@ -287,10 +290,9 @@ setup(
             "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
-            "anthropic",
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf",
+            "pypdf>=6.20.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -314,10 +316,10 @@ setup(
             # RAG embeds via Lemonade, not sentence-transformers — do NOT add it.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
-            # 2.x ships no macOS x86_64 wheel and its sdist doesn't build. No
-            # platform marker: `gaia init` refuses to evaluate one (install_hints).
-            "pymupdf>=1.24.0,<2",
-            "pypdf",
+            # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
+            # PyMuPDF is AGPL-3.0 and must not come back.
+            "pypdfium2>=5.0.0,<6",
+            "pypdf>=6.20.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without

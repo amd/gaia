@@ -6,7 +6,8 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    padding: 12px 12px 10px 16px;
+    padding-block: 12px 10px;
+    padding-inline: 16px 12px;
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
@@ -146,7 +147,8 @@
     align-items: center;
     gap: 6px;
     max-width: 260px;
-    padding: 3px 4px 3px 8px;
+    padding-block: 3px;
+    padding-inline: 8px 4px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -157,6 +159,10 @@
     flex-wrap: wrap;
     align-content: flex-start;
     background: var(--danger-dim);
+}
+
+.composer-attachment svg {
+    flex-shrink: 0;
 }
 
 .composer-attachment-thumb {
@@ -187,12 +193,33 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     white-space: normal;
-    padding: 0 4px 2px 0;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
     color: var(--danger);
 }
 
 .composer-attachment.has-error .composer-attachment-name {
     flex: 1;
+}
+
+/* A recording's status gets its own line too, so a long name is never squeezed out.
+   justify-self keeps an Arabic name in an English UI from sitting at the far edge. */
+.composer-attachment.is-media {
+    display: inline-grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    max-width: min(340px, 100%);
+}
+
+.composer-attachment.is-media .composer-attachment-name {
+    justify-self: start;
+    max-width: 100%;
+}
+
+.composer-attachment.is-media .composer-attachment-state {
+    grid-row: 2;
+    grid-column: 2 / -1;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
 }
 
 .composer-attachment .composer-icon-btn {
@@ -223,6 +250,11 @@
 .composer-chip-label {
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
+@media (max-width: 480px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
 }
 
 .composer-chip.is-warning {

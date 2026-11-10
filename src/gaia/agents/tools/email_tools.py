@@ -3,7 +3,7 @@
 # pylint: disable=protected-access
 
 """
-Email Tools — read-only mailbox access for the flagship agent.
+Email Tools — mailbox access for the flagship agent.
 
 Gives an agent the ability to list, search, and read mail and whole
 conversations from a connected mailbox, and to find the threads waiting on the
@@ -12,8 +12,11 @@ deliberately return facts, not verdicts: categorisation is the model's job,
 driven by the skill, which is the whole point of moving email onto the flagship
 rather than shipping a second agent with its own classifier.
 
-Read-only by design. Nothing here archives, sends, or deletes; write verbs
-arrive with the reversible-action ledger in a later phase. See
+The tools here only read. Drafting, replying, forwarding and sending ship as the
+bundled ``send-email`` skill (``hub/skills/send-email``), which writes through this
+mixin's mailbox and per-call writer, and asks a person before any mail leaves.
+Nothing archives or deletes received mail; those verbs arrive with the
+reversible-action ledger in a later phase. See
 ``docs/plans/email-triage-skill.mdx``.
 
 Provider support: Gmail and Outlook / Microsoft Graph, behind one set of tool
@@ -21,7 +24,8 @@ names. Both backends return the same provider-neutral shape, so neither the
 skill nor the model has to care which mailbox is connected.
 
 Selection is connector-derived and has no override: a mailbox is eligible only
-if it is connected, carries a read scope, and this agent holds a grant for it.
+if it is connected, carries a read scope, and this agent holds a grant for it. A
+write then resolves its own scope against that same mailbox.
 With both eligible, Gmail wins on registry order, and the way to change that is
 to revoke the grant — not to set an environment variable, which would bypass
 the gate that makes any of this checkable. The one exception is the scenario
@@ -31,8 +35,10 @@ which replaces the mailbox outright rather than choosing between real ones.
 
 import json
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
+from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools._email.outgoing import OutgoingMessage
 from gaia.agents.tools._email.phishing import (
     SUSPICIOUS_GUIDANCE,
     annotate,
@@ -42,7 +48,10 @@ from gaia.agents.tools._email.scopes import (
     DECLARED_SCOPES,
     GOOGLE_CONNECTOR_ID,
     MICROSOFT_CONNECTOR_ID,
+    OPERATION_SEND,
     READ_CAPABLE_SCOPES,
+    WRITE_SCOPES,
+    missing_write_scopes,
     resolve_request_scope,
 )
 from gaia.agents.tools._email.waiting import (
@@ -66,6 +75,8 @@ GMAIL_SCOPES: tuple = DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]
 MAILBOX_PROVIDERS: tuple = (GOOGLE_CONNECTOR_ID, MICROSOFT_CONNECTOR_ID)
 
 _EMAIL_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
+
+_PROVIDER_NAMES = {GOOGLE_CONNECTOR_ID: "Google", MICROSOFT_CONNECTOR_ID: "Microsoft"}
 
 _MAX_LIMIT = 100
 
@@ -243,7 +254,7 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     if not capable:
         # `--scopes` REPLACES a connection's scopes, so the remedy must name
         # granted ∪ needed. Naming only the gap would strip what it already had.
-        union = sorted(set(conn_scopes) | {DECLARED_SCOPES[provider][0]})
+        union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         return None, (
             "connected, but the connection carries no mail read scope. "
             f"Reconnect with `gaia connectors connect {provider} --scopes "
@@ -255,10 +266,12 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
         provider, connection_scopes=conn_scopes, granted_scopes=granted
     )
     if scope is None:
+        # A grant replaces, so naming only mail would strip a calendar grant.
+        union = sorted(set(granted) | {capable[0]})
         return None, (
             "connected and readable, but this agent holds no matching grant. "
             f"Run `gaia connectors grants grant {provider} {EMAIL_AGENT_ID} "
-            f"--scopes {capable[0]}` (a ledger write — no browser needed)"
+            f"--scopes {' '.join(union)}` (a ledger write — no browser needed)"
         )
     return scope, "ready"
 
@@ -272,8 +285,45 @@ def _no_mailbox_error(states: Dict[str, Tuple[Optional[str], str]]) -> str:
     )
 
 
+def _write_scopes(provider: str, operation: str) -> Tuple[str, ...]:
+    """The scopes this write requests, or raise naming how to get them.
+
+    The grant ledger matches exact strings, so a read-only connection and a
+    ledger row narrower than the connection are different problems with
+    different remedies. Google lets a person untick a scope on its consent
+    screen, which reads here exactly like a connection made for reading only.
+    """
+    from gaia.agents.tools._email import MailboxError
+    from gaia.connectors.api import get_connection
+    from gaia.connectors.grants import list_agent_grants
+
+    name = _PROVIDER_NAMES[provider]
+    conn_scopes = list((get_connection(provider) or {}).get("scopes") or [])
+    missing = missing_write_scopes(provider, operation, held_scopes=conn_scopes)
+    if missing:
+        union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
+        raise MailboxError(
+            f"This {name} connection lacks {' '.join(missing)}, which GAIA needs "
+            f"to {'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
+            f"was changed. Reconnect {name} in Settings -> Connectors and approve "
+            "reading, composing and sending mail, leaving that option ticked on "
+            f"{name}'s consent screen. In a terminal: `gaia connectors connect "
+            f"{provider} --scopes {' '.join(union)}`. See {_EMAIL_DOCS_URL}"
+        )
+    needed = WRITE_SCOPES[provider][operation]
+    granted = list_agent_grants(provider).get(EMAIL_AGENT_ID, [])
+    if missing_write_scopes(provider, operation, held_scopes=granted):
+        raise MailboxError(
+            f"The {name} connection can write mail, but this agent holds no grant "
+            f"to. Run `gaia connectors grants grant {provider} {EMAIL_AGENT_ID} "
+            f"--scopes {' '.join(needed)}` (a ledger write, no browser needed)."
+        )
+    return needed
+
+
 class EmailToolsMixin:
-    """Read-only mailbox tools (Gmail / Outlook).
+    """Mailbox tools (Gmail / Outlook): reading, and the writer the send-email
+    skill drafts and sends through.
 
     Tool registration follows the GAIA pattern: ``register_email_tools()``.
 
@@ -292,6 +342,23 @@ class EmailToolsMixin:
     _email_turn_token = None
     _email_turn_body_chars = 0
     _email_turn_reads = 0
+
+    # Messages built for a prompt, waiting for the body to send them.
+    _email_prepared_by_call: Optional[Dict[str, OutgoingMessage]] = None
+    _email_uncertain_by_call: Optional[set] = None
+
+    @property
+    def _email_prepared(self) -> Dict[str, OutgoingMessage]:
+        if self._email_prepared_by_call is None:
+            self._email_prepared_by_call = {}
+        return self._email_prepared_by_call
+
+    @property
+    def _email_uncertain_sends(self) -> set:
+        """Calls whose send may have gone out, so their next prompt can say so."""
+        if self._email_uncertain_by_call is None:
+            self._email_uncertain_by_call = set()
+        return self._email_uncertain_by_call
 
     def _email_turn_budget_chars(self) -> int:
         """Chars all mail bodies read in ONE turn may occupy, combined.
@@ -408,6 +475,57 @@ class EmailToolsMixin:
             self._email_backend_is_owned = False
             return fn(self._email())
 
+    def _new_write_backend(self, provider: str, token: Callable[[], str]):
+        if provider == GOOGLE_CONNECTOR_ID:
+            from gaia.agents.tools._email.gmail import GmailWriteBackend
+
+            return GmailWriteBackend(token)
+        from gaia.agents.tools._email.graph import OutlookWriteBackend
+
+        return OutlookWriteBackend(token)
+
+    def _email_writer(self, operation: str):
+        """A backend for one write, on the mailbox the reads use.
+
+        Built per call, under the scopes *operation* needs, so a reconnect
+        mid-session takes effect at once. Never memoized with the read backend,
+        which keeps running on the narrowest scope.
+        """
+        from gaia.agents.tools._email import fixture
+
+        if fixture.fixture_path():
+            return self._email()
+
+        import gaia.connectors.api as connectors_api
+
+        provider = self._resolve_mailbox()[0]
+        scopes = list(_write_scopes(provider, operation))
+
+        def _token() -> str:
+            return connectors_api.get_access_token_sync(
+                provider=provider, scopes=scopes, agent_id=EMAIL_AGENT_ID
+            )
+
+        return self._new_write_backend(provider, _token)
+
+    def _email_account_label(self) -> str:
+        """The account a write goes through, as its prompt names it."""
+        from gaia.agents.tools._email import fixture
+
+        if fixture.fixture_path():
+            provider, address = GOOGLE_CONNECTOR_ID, fixture.FIXTURE_ADDRESS
+        else:
+            provider = self._resolve_mailbox()[0]
+            address = next(
+                s["account_email"]
+                for s in self._mailbox_states()
+                if s["provider"] == provider
+            )
+        name = _PROVIDER_NAMES[provider]
+        if not address:
+            return f"your {name} account (its address was not recorded)"
+        return f"{address} ({name})"
+
     def _mailbox_states(self) -> List[Dict]:
         """Every mailbox provider's live state, without a network call.
 
@@ -472,6 +590,9 @@ class EmailToolsMixin:
             else:
                 logger.warning("email tool failed during %s: %s", action, exc)
             payload = {"error": str(exc), "action": action, "success": False}
+            if refusal:
+                # A per-turn budget, not a mailbox fault: memory must not learn it.
+                payload.update(NOT_EXECUTED)
             payload.update(extra)
             return json.dumps(payload, indent=2)
 

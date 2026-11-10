@@ -6,6 +6,21 @@ title: "Dynamic Tool Loader"
   **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`hub/agents/chat/python/gaia_agent_chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/tool_bundles.py)
 </Info>
 
+<Warning>
+**Superseded for the flagship.** Per-turn selection changes `tools=`, and on Gemma 4 and
+Qwen3.6 any change there makes the server re-read the whole conversation: appending six
+tools with 6K of history behind them re-read 18,544 tokens (34.9 s), while the same
+schemas in a message read 1,058 (10.0 s). An undeclared tool also cannot be called, because
+llama.cpp's grammar rewrites the call: a request for `search_web` came out as
+`search_past_conversations`.
+
+The flagship now starts on a usage-based core list in thin form, keeps the full list
+primed on a slot of its own, and moves to it at most once; `search_tools` replaces
+`load_tools`. There is no cap and no eviction. See
+[Dynamic Tool Loading](/guides/chat#dynamic-tool-loading). This page records the earlier
+design.
+</Warning>
+
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`

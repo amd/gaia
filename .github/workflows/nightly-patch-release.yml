@@ -22,7 +22,8 @@
 #   - no release PR is already open (never twice for the same target version),
 #   - the previous release tag is a normal vX.Y.Z (not an ambiguous hotfix vX.Y.Z.W),
 #   - src/gaia/version.py on main is in the expected steady state (not already bumped
-#     ahead by a half-finished prior release that was merged but never tagged),
+#     ahead by a half-finished prior release that was merged but never tagged; a next
+#     minor/major with RC tags is valid but never patch-drafted — util/release_version_state.py),
 #   - main's tip is FULLY green on CI, and
 #   - the pending commits are patch-shaped (not 3+ feats or a breaking-change commit).
 # Any other case files or updates ONE rolling tracking issue instead of drafting — a human
@@ -184,7 +185,9 @@ jobs:
           fi
           PREV_BARE="${PREV#v}"
           TARGET_BARE="${TARGET#v}"
-          if [ "$MAIN_VERSION" = "$TARGET_BARE" ]; then
+          VERSION_STATE=$(python3 util/release_version_state.py "$PREV" "$MAIN_VERSION")
+          echo "main's __version__ $MAIN_VERSION vs $PREV: $VERSION_STATE"
+          if [ "$VERSION_STATE" = "staged-not-tagged" ]; then
             echo "main's __version__ ($MAIN_VERSION) already equals the naive next patch — a release for $TARGET may already be merged but not tagged."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
             record_condition staged-not-tagged \
@@ -195,18 +198,24 @@ jobs:
 
           - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
-          elif [ "$MAIN_VERSION" != "$PREV_BARE" ]; then
-            echo "main's __version__ ($MAIN_VERSION) matches neither $PREV_BARE nor the naive next patch $TARGET_BARE — unexpected state."
+          elif [ "$VERSION_STATE" != "steady" ] && [ "$VERSION_STATE" != "next-line" ]; then
+            echo "main's __version__ ($MAIN_VERSION) matches neither $PREV_BARE, the naive next patch $TARGET_BARE, nor a next minor/major with RC tags — unexpected state."
             echo "should_draft=false" >> "$GITHUB_OUTPUT"
             record_condition version-mismatch \
               "Release check: version.py on main doesn't match any expected version" \
-              "\`src/gaia/version.py\` on \`main\` declares \`$MAIN_VERSION\`, which matches neither the last tagged release (\`$PREV_BARE\`) nor the naive next patch (\`$TARGET_BARE\`). Nightly automation won't guess a target version from this — check what changed \`__version__\` and resolve manually before the next run.
+              "\`src/gaia/version.py\` on \`main\` declares \`$MAIN_VERSION\`, which matches neither the last tagged release (\`$PREV_BARE\`), the naive next patch (\`$TARGET_BARE\`), nor a next minor/major with an RC tag. Nightly automation won't guess a target version from this — check what changed \`__version__\` and resolve manually before the next run.
 
           - Checked by run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             exit 0
           fi
           guard_passed staged-not-tagged "Release check: $TARGET already staged on main, not tagged"
           guard_passed version-mismatch "Release check: version.py on main doesn't match any expected version"
+          if [ "$VERSION_STATE" = "next-line" ]; then
+            # A minor/major cut from main (RCs tagged) is valid, just not a patch.
+            echo "main is on the v$MAIN_VERSION release line — no patch to draft from main."
+            echo "should_draft=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Guard 5: HEAD must be fully green before drafting a release from it — a release
           # drafted off red CI would ship whatever broke it.
@@ -333,8 +342,6 @@ jobs:
     if: "!cancelled() && needs.check.result == 'success' && needs.check.outputs.should_draft == 'true'"
     runs-on: ubuntu-latest
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
@@ -380,12 +387,20 @@ jobs:
             git push origin --delete "$BRANCH" || echo "::warning::Could not delete stale branch $BRANCH — the draft step may fail to push."
           fi
 
+      - name: Pick the Claude account
+        id: claude_account
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          what: "The patch-release draft"
+
       - name: Draft release notes and open the release PR
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
-          anthropic_api_key: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Scheduled runs execute as a bot actor, which the action's actor gate rejects
           # unless allow-listed. This workflow only triggers via schedule / workflow_dispatch

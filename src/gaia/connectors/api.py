@@ -77,9 +77,9 @@ logger = logging.getLogger(__name__)
 # explicit ``required_scopes``: at least ONE of these mail read scopes,
 # narrowest first. Authoritative validation is the caller's job (the UI router
 # resolves the union from the granted agents' ``REQUIRED_CONNECTORS``); this
-# is a defense-in-depth default. It is any-of, not all-of, because the
-# read-only flagship holds ``gmail.readonly`` while the email agent holds
-# ``gmail.modify`` — demanding modify + send rejected every forwarded flagship
+# is a defense-in-depth default. It is any-of, not all-of, because a flagship
+# connection made before it could write holds only ``gmail.readonly`` and must
+# keep reading — demanding modify + send rejected every such forwarded
 # connection. Unknown providers default to no requirement; the use-time gate
 # in ``get_access_token`` still enforces per-agent coverage.
 #
@@ -98,7 +98,11 @@ _DEFAULT_READ_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 
 
 def resolve_declared_scopes(
-    registry: Any, connector_id: str, agent_ids: List[str]
+    registry: Any,
+    connector_id: str,
+    agent_ids: List[str],
+    *,
+    enforced_only: bool = False,
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` -> ``{agent_id: declared_scopes}`` (#2603).
 
@@ -128,6 +132,9 @@ def resolve_declared_scopes(
         not in the connector catalog — an unrelated failure surfaces later
         at the connector lookup that every caller already performs.
 
+    ``enforced_only`` returns each requirement's ``required_scopes`` instead: what
+    the agent cannot work without, rather than everything consent asks for.
+
     Returns ``{}`` when ``agent_ids`` is empty — no resolution needed.
     """
     if not agent_ids:
@@ -153,7 +160,7 @@ def resolve_declared_scopes(
         scopes: set = set()
         for cr in reg.required_connections:
             if cr.connector_id == connector_id:
-                scopes.update(cr.scopes)
+                scopes.update(cr.required_scopes if enforced_only else cr.scopes)
         if not scopes:
             raise NoDeclaredScopesError(nsid, connector_id)
         if available is not None:
@@ -588,11 +595,14 @@ def import_forwarded_connection(
     from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.providers import reload as reload_provider
     from gaia.connectors.store import (
+        clear_forward_recovery,
+        recover_forward_recovery,
         restore_connection_slots,
         save_connection,
         save_provider_credentials,
         snapshot_connection_slots,
         verify_keyring_backend,
+        write_forward_recovery,
     )
     from gaia.connectors.tokens import _cache as _token_cache
 
@@ -660,7 +670,11 @@ def import_forwarded_connection(
     # that fails partway is undone before the lock is released, for the same
     # reason.
     with held_sync(provider):
+        # A prior process may have died after changing only one of the two
+        # keyring slots. Recover that pair before taking a new snapshot.
+        recover_forward_recovery(provider)
         previous = snapshot_connection_slots(provider)
+        write_forward_recovery(provider, previous)
         try:
             # 4. Persist the forwarded OAuth client → ``provider:<provider>`` slot.
             save_provider_credentials(
@@ -693,10 +707,12 @@ def import_forwarded_connection(
                 # host app's own OAuth grant — see save_connection's docstring.
                 forwarded=True,
             )
+            clear_forward_recovery(provider)
         except BaseException as e:
             _provider_registry.pop(provider, None)
             try:
                 restore_connection_slots(previous)
+                clear_forward_recovery(provider)
             except Exception as restore_err:
                 if not isinstance(e, Exception):
                     # Ctrl+C or shutdown: say what was left behind, don't mask it.

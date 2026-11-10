@@ -4,8 +4,10 @@
 /**
  * backend-installer.cjs — Shared GAIA Python backend bootstrap logic.
  *
- * Single source of truth for installing / upgrading the GAIA Python backend
- * (`~/.gaia/venv` with `amd-gaia[ui]==<pinned-version>`). Called from both:
+ * Single source of truth for the GAIA backend the app runs. A packaged app
+ * runs the frozen `gaia` it ships (<resources>/core) and installs nothing; run
+ * from source, it installs `~/.gaia/venv` with `amd-gaia[ui]==<pinned-version>`.
+ * Called from both:
  *
  *   - `bin/gaia-ui.cjs`  (the npm CLI entry point)
  *   - `main.cjs`         (the Electron app, on first-run bootstrap)
@@ -16,10 +18,13 @@
  *   - ensureUv()                     → Promise<void>
  *   - installBackend(opts)           → Promise<void>
  *   - ensureBackend(opts)            → Promise<string>  (returns gaia bin path)
+ *   - isBackendCurrent()             → boolean  (nothing to install or refresh)
+ *   - stopRunningDaemon(opts)        → Promise<void>  (before its files are replaced)
  *   - getInstalledVersion(gaiaBin)   → string | null
  *   - findGaiaBin()                  → string | null
  *   - getState() / setState()        → state machine helpers
  *   - getLogPath() / getStatePath()  → path helpers
+ *   - readLogTail(maxLines)          → string[]
  *   - runPreChecks(opts)             → Promise<PreCheckResult>
  *   - STATES                         → state name constants
  *
@@ -30,8 +35,7 @@
 
 "use strict";
 
-const { spawn, spawnSync, execSync } = require("child_process");
-const crypto = require("crypto");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -52,12 +56,28 @@ const GAIA_PYTHON_BIN = IS_WINDOWS
   ? path.join(GAIA_VENV, "Scripts", "python.exe")
   : path.join(GAIA_VENV, "bin", "python");
 
+// The frozen `gaia` a packaged app ships (installer/core/freeze.py). A packaged
+// app runs only this one; the venv below is for running the app from source.
+const BUNDLED_GAIA_BIN = process.resourcesPath
+  ? path.join(process.resourcesPath, "core", IS_WINDOWS ? "gaia.exe" : "gaia")
+  : null;
+// Not ~/.gaia/core: install.sh unpacks its own gaia there.
+const APPIMAGE_CORE_ROOT = path.join(GAIA_HOME, "app-core");
+// Written last, so a copy a quit cut short is redone.
+const APPIMAGE_CORE_DONE = ".copied";
+
 const STATE_FILE = path.join(GAIA_HOME, "electron-install-state.json");
 const LOG_FILE = path.join(GAIA_HOME, "electron-install.log");
+// hub/installer.py writes this once the flagship is installed; first-run setup installs it.
+const FLAGSHIP_SENTINEL = path.join(GAIA_HOME, "agents", "gaia", ".installed");
+/** `gaia init --agent-only` kept the installed agent: the hub couldn't be reached. */
+const AGENT_KEPT_EXIT = 5;
 
-// Floor for uv, Python and the GAIA package only. The models, often 30 GB,
-// are checked by `gaia init` against Lemonade's model store, which it sizes.
-const MIN_DISK_SPACE_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
+// Room for what this installer writes: Python 3.12, uv's wheel cache and the
+// `amd-gaia[ui]` venv (0.3 GB on macOS arm64 for 0.25.1rc5, under 1 GB in
+// all). Models are not installed here; first-run setup checks the disk for
+// the download the user picks.
+const MIN_DISK_SPACE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const NETWORK_CHECK_HOSTS = Object.freeze([
   "https://pypi.org/simple/",
   "https://astral.sh",
@@ -68,55 +88,6 @@ const NETWORK_CHECK_TIMEOUT_MS = 5000;
 // PyPI, so retry a transient network failure a few times before giving up.
 const INSTALL_MAX_ATTEMPTS = 3;
 const INSTALL_RETRY_BACKOFF_MS = 3000;
-
-// ── Bundled `uv` binary ──────────────────────────────────────────────────────
-//
-// Issue #782 / T3: the AppImage now ships a pinned `uv` under
-// `extraResources` (see electron-builder.yml). At runtime we copy it into
-// `~/.gaia/bin/uv` with atomic-rename + SHA256 verification. The previous
-// `curl | sh` path is retained only as an unpackaged-dev fallback so
-// contributors running from source keep working.
-//
-// When bumping uv, update:
-//   - .github/workflows/build-installers.yml (tarball .tar.gz SHA256 — archive)
-//   - BUNDLED_UV_SHA256 below (extracted binary SHA256, linux-x64/win-x64 only)
-//
-// IMPORTANT: per-platform verification strategy differs:
-//   - linux-x64 / win-x64: BUNDLED_UV_SHA256 pins the raw extracted-binary
-//     digest (no post-build modification) — deterministic across CI runs.
-//   - mac-arm64: NOT pinned here. electron-builder code-signs the bundled uv
-//     during packaging (ad-hoc `identity=-` when no Developer ID cert is
-//     configured, which is every CI build today), and ad-hoc codesign output
-//     depends on the codesign/Xcode toolchain baked into the GitHub-hosted
-//     `macos-latest` runner image — which floats and is NOT reproducible
-//     across CI runs (observed: macos-15-arm64 vs macos-26-arm64 images
-//     produced two different digests for byte-identical source). A fixed
-//     SHA256 pin is therefore not deterministic on macOS and would fail
-//     ~half of CI runs and brick first-launch on user machines whenever the
-//     runner image rolls. Instead, ensureUv() and the dmg-structural-smoke
-//     test both run `codesign --verify --strict` against the bundled binary
-//     — this validates the on-disk signature is intact/untampered without
-//     depending on the exact signing bytes, and still fails loud on
-//     corruption or an actually-invalid signature.
-const BUNDLED_UV_VERSION = "0.5.14";
-const BUNDLED_UV_SHA256 = {
-  "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
-  // The Windows extracted uv.exe SHA is populated by CI during the
-  // build step. The placeholder MUST be replaced in CI before packaging
-  // so runtime verification remains strict.
-  "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
-  // mac-arm64: intentionally absent. See the comment block above — the
-  // post-codesign digest is not deterministic across CI runner images, so
-  // mac-arm64 is verified via codesignVerify() (identity/signature validity)
-  // instead of a fixed SHA256 pin. bundledUvPlatformKey() still returns
-  // "mac-arm64"; callers must not treat a missing entry here as "unpinned
-  // platform" for darwin — see ensureUv()/installBundledUv().
-};
-
-const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
-const MANAGED_UV_BIN = IS_WINDOWS
-  ? path.join(MANAGED_UV_DIR, "uv.exe")
-  : path.join(MANAGED_UV_DIR, "uv");
 
 const STATES = Object.freeze({
   IDLE: "idle",
@@ -131,24 +102,38 @@ const STAGES = Object.freeze({
   ENSURE_UV: "ensure-uv",
   CREATE_VENV: "create-venv",
   INSTALL_PACKAGE: "install-package",
-  GAIA_INIT: "gaia-init",
   VERIFY: "verify",
+  // After the package, and outside the weighted bar: it has no percent to report.
+  AGENT_REFRESH: "agent-refresh",
 });
 
-const GAIA_INIT_MESSAGE =
-  "Setting up Lemonade Server and downloading models (this can take several minutes)";
-const WAITING_FOR_LEMONADE_CHOICE_MESSAGE =
-  "Waiting for your answer: GAIA found a Lemonade Server already running " +
-  "and is asking whether to use it. Setup continues once you choose.";
+// Why an install failed, for what the app tells the user to do about it.
+const FAILURE_REASONS = Object.freeze({
+  DISK: "disk",
+  NETWORK: "network",
+  TLS: "tls",
+  LOCKED: "locked",
+  DAEMON: "daemon",
+});
+
+// `gaia daemon stop` can take about 90 s: up to 45 s for a graceful exit, then
+// terminating the daemon and its agents, then up to 20 s for GAIA's Lemonade Server.
+const DAEMON_STOP_TIMEOUT_MS = 120 * 1000;
+/** `gaia daemon stop` exit code: the daemon stopped, GAIA's Lemonade Server did not. */
+const DAEMON_STOP_LEMONADE_EXIT = 3;
+const DAEMON_INSTANCE_FILE = path.join(GAIA_HOME, "host", "instance.json");
+
+// Stage an older installer recorded while it ran `gaia init`; the package was
+// already in place by then.
+const LEGACY_SETUP_STAGE = "gaia-init";
 
 // Weight each stage contributes to the overall 0-100 progress.
 // Sum must equal 100.
 const STAGE_WEIGHTS = {
   [STAGES.PRE_CHECKS]: 2,
   [STAGES.ENSURE_UV]: 8,
-  [STAGES.CREATE_VENV]: 10,
-  [STAGES.INSTALL_PACKAGE]: 50,
-  [STAGES.GAIA_INIT]: 28,
+  [STAGES.CREATE_VENV]: 15,
+  [STAGES.INSTALL_PACKAGE]: 73,
   [STAGES.VERIFY]: 2,
 };
 
@@ -157,7 +142,6 @@ const STAGE_ORDER = [
   STAGES.ENSURE_UV,
   STAGES.CREATE_VENV,
   STAGES.INSTALL_PACKAGE,
-  STAGES.GAIA_INIT,
   STAGES.VERIFY,
 ];
 
@@ -174,10 +158,6 @@ let logStream = null;
  * calls turn into plain appends.
  */
 let logRotatedThisSession = false;
-
-function isTruthyEnv(value) {
-  return /^(1|true|yes|on)$/i.test(String(value || ""));
-}
 
 function ensureGaiaHome() {
   try {
@@ -321,6 +301,16 @@ function getStatePath() {
   return STATE_FILE;
 }
 
+/** The end of the install log, or nothing when no install has written one. */
+function readLogTail(maxLines = 40) {
+  try {
+    return fs.readFileSync(LOG_FILE, "utf8").split(/\r?\n/).filter(Boolean).slice(-maxLines);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
 // ── State machine ────────────────────────────────────────────────────────────
 
 /**
@@ -396,7 +386,8 @@ function computeOverallPercent(stage, withinStagePercent) {
 function makeProgressReporter(onProgress) {
   const safe = typeof onProgress === "function" ? onProgress : () => {};
   return function report(stage, withinStagePercent, message) {
-    const percent = computeOverallPercent(stage, withinStagePercent);
+    const percent =
+      withinStagePercent === null ? null : computeOverallPercent(stage, withinStagePercent);
     try {
       safe(stage, percent, message || "");
     } catch (err) {
@@ -405,167 +396,82 @@ function makeProgressReporter(onProgress) {
   };
 }
 
-// ── gaia init progress (`gaia init --progress-json`) ─────────────────────────
-
-// Where the plan and the end of the downloads land in the GAIA_INIT slice; the
-// rest of the slice is Lemonade setup before and verification after.
-const INIT_PLAN_PERCENT = 5;
-const INIT_DOWNLOADED_PERCENT = 95;
-
-/**
- * Read one line of `gaia init --progress-json` output. Returns `{ event }` for
- * a progress event, `{ error }` for a line that looks like one but is not, and
- * null for human output.
- */
-function parseInitEventLine(line) {
-  const text = String(line || "").trim();
-  if (!text.startsWith("{")) return null;
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (err) {
-    return { error: err.message };
-  }
-  if (!value || typeof value !== "object" || typeof value.event !== "string") {
-    return { error: 'no "event" field' };
-  }
-  return { event: value };
-}
-
-function formatGB(bytes) {
-  return `${(Math.max(0, bytes || 0) / 1e9).toFixed(1)} GB`;
-}
-
-function formatSpeed(bytesPerSecond) {
-  return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`;
-}
-
-function formatTimeLeft(seconds) {
-  if (seconds < 60) return "less than a minute left";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `about ${minutes} min left`;
-  return `about ${Math.floor(minutes / 60)} h ${minutes % 60} min left`;
-}
-
-/**
- * Map `gaia init --progress-json` events onto the GAIA_INIT slice of the bar.
- * `report(withinStagePercent, message)` receives a percent that never goes
- * back. `onLine` returns true for the lines too frequent to log.
- */
-function createInitProgress(report, logFn = log) {
-  const models = new Map();
-  let percent = 0;
-
-  const advance = (within, message) => {
-    percent = Math.max(percent, Math.round(within));
-    report(percent, message);
-  };
-  const totals = () => {
-    let done = 0;
-    let total = 0;
-    for (const m of models.values()) {
-      total += m.total;
-      done += Math.min(m.done, m.total);
-    }
-    return { done, total };
-  };
-  const downloadPercent = () => {
-    const { done, total } = totals();
-    const share = total > 0 ? done / total : 0;
-    return INIT_PLAN_PERCENT + (INIT_DOWNLOADED_PERCENT - INIT_PLAN_PERCENT) * share;
-  };
-  const model = (id) => {
-    if (!models.has(id)) models.set(id, { done: 0, total: 0 });
-    return models.get(id);
-  };
-
-  function handle(event) {
-    switch (event.event) {
-      case "step":
-        advance(percent, `Step ${event.step} of ${event.total}: ${event.message}`);
-        return true;
-      case "plan":
-        for (const m of event.models || []) {
-          if (!m.downloaded) model(m.id).total = m.bytes_total || 0;
-        }
-        advance(
-          INIT_PLAN_PERCENT,
-          event.bytes_total > 0
-            ? `Downloading ${formatGB(event.bytes_total)} of models`
-            : "Models already downloaded"
-        );
-        return true;
-      case "progress": {
-        const m = model(event.model);
-        m.done = event.bytes_done || 0;
-        m.total = Math.max(event.bytes_total || 0, m.done);
-        const parts = [
-          `Downloading ${event.model} (${event.index} of ${event.count}): ` +
-            `${formatGB(m.done)} of ${formatGB(m.total)}`,
-        ];
-        if (event.speed_bps > 0) {
-          const { done, total } = totals();
-          parts.push(
-            `at ${formatSpeed(event.speed_bps)}, ` +
-              formatTimeLeft((total - done) / event.speed_bps)
-          );
-        }
-        advance(downloadPercent(), parts.join(" "));
-        return true;
-      }
-      case "model_done": {
-        const m = model(event.model);
-        m.done = m.total;
-        advance(downloadPercent(), `${event.model} ready`);
-        return true;
-      }
-      case "done":
-        advance(
-          event.ok ? INIT_DOWNLOADED_PERCENT : percent,
-          event.ok ? "Models downloaded, finishing setup" : "Model download did not finish"
-        );
-        return true;
-      case "error":
-        advance(percent, String(event.message || "gaia init reported an error").trim());
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  function onLine(line) {
-    const parsed = parseInitEventLine(line);
-    if (!parsed) return false;
-    if (parsed.error) {
-      logFn(`Malformed gaia init progress line (${parsed.error}): ${line}`);
-      return false;
-    }
-    handle(parsed.event);
-    return parsed.event.event === "progress";
-  }
-
-  return { onLine, handle };
-}
-
 // ── Command helpers ──────────────────────────────────────────────────────────
 
 /**
- * Check if a command exists on PATH.
+ * Check if a command exists on PATH. Throws when the lookup itself can't run.
  */
 function commandExists(cmd) {
-  try {
-    const check = IS_WINDOWS ? `where ${cmd}` : `command -v ${cmd}`;
-    execSync(check, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
+  // `command -v` is a shell built-in, so it works where `which` isn't installed; the name is $1, never script text.
+  const [file, args] = IS_WINDOWS
+    ? ["where", [cmd]]
+    : ["sh", ["-c", 'command -v "$1"', "sh", cmd]];
+  const result = spawnSync(file, args, { stdio: "ignore", shell: false, windowsHide: true });
+  if (result.error || result.status === null) {
+    const reason = result.error ? result.error.message : `killed by ${result.signal}`;
+    throw new InstallError(`Could not check whether "${cmd}" is on PATH: running ${file} failed (${reason}).`, {
+      code: result.error ? result.error.code : null,
+      suggestion: IS_WINDOWS
+        ? "Make sure C:\\Windows\\System32 is on PATH, then restart GAIA."
+        : "Make sure /bin/sh exists and /bin is on PATH, then restart GAIA.",
+    });
   }
+  return result.status === 0;
+}
+
+/** The `gaia` this packaged app ships, or null when it ships none. */
+function shippedGaiaBin() {
+  return BUNDLED_GAIA_BIN && fs.existsSync(BUNDLED_GAIA_BIN) ? BUNDLED_GAIA_BIN : null;
+}
+
+/** Where an AppImage keeps its copy of the shipped core for this version. */
+function appImageCoreDir() {
+  return path.join(APPIMAGE_CORE_ROOT, toPep440(appVersion()));
 }
 
 /**
- * Find the gaia binary — prefer the managed venv, fall back to PATH.
+ * The shipped `gaia` as the app runs it, or null until it can run. An
+ * AppImage's files vanish when the app quits, and the daemon outlives the app,
+ * so an AppImage runs a copy under ~/.gaia once ensureBundledCore has made it.
+ */
+function bundledGaiaBin() {
+  const shipped = shippedGaiaBin();
+  if (!shipped || !process.env.APPIMAGE) return shipped;
+  const dir = appImageCoreDir();
+  return fs.existsSync(path.join(dir, APPIMAGE_CORE_DONE)) ? path.join(dir, path.basename(shipped)) : null;
+}
+
+/** bundledGaiaBin, after copying an AppImage's core out of its mount. */
+async function ensureBundledCore() {
+  const shipped = shippedGaiaBin();
+  if (!shipped || !process.env.APPIMAGE) return shipped;
+  const ready = bundledGaiaBin();
+  if (ready) return ready;
+  const dir = appImageCoreDir();
+  log(`Copying the backend out of the AppImage to ${dir}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  await fs.promises.cp(path.dirname(shipped), dir, { recursive: true, verbatimSymlinks: true });
+  fs.writeFileSync(path.join(dir, APPIMAGE_CORE_DONE), appVersion());
+  const copy = bundledGaiaBin();
+  const older = listDir(APPIMAGE_CORE_ROOT).filter((name) => name !== path.basename(dir));
+  if (older.length) {
+    // A daemon from an older copy reads its files as it runs, so it stops first.
+    await stopRunningDaemon({ gaiaBin: copy });
+    for (const name of older) {
+      fs.rmSync(path.join(APPIMAGE_CORE_ROOT, name), { recursive: true, force: true });
+    }
+  }
+  return copy;
+}
+
+/**
+ * Find the gaia binary. A packaged app runs only the one it ships; from
+ * source, the managed venv, else PATH.
  */
 function findGaiaBin() {
+  if (shippedGaiaBin()) {
+    return bundledGaiaBin();
+  }
   if (fs.existsSync(GAIA_BIN)) {
     return GAIA_BIN;
   }
@@ -581,9 +487,13 @@ function findGaiaBin() {
  *
  * `onLine(line)` sees each whole stdout line as it arrives; a line it returns
  * true for is left out of the log.
+ *
+ * When `signal` aborts, the child and everything it started are stopped and
+ * the Promise rejects with InstallCancelled once they are gone.
  */
-function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
-  return new Promise((resolve) => {
+function runCommand(cmd, args, { env, stageLabel, onLine, signal, timeoutMs } = {}) {
+  if (signal && signal.aborted) return Promise.reject(new InstallCancelled());
+  return new Promise((resolve, reject) => {
     log(`$ ${cmd} ${args.join(" ")}`);
     let proc;
     try {
@@ -599,6 +509,21 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       resolve({ code: -1, stdout: "", stderr: String(err.message || err), error: err });
       return;
     }
+
+    let stopping = false;
+    const onAbort = () => {
+      stopping = true;
+      stopTimer();
+      log(`Stopping ${cmd}: GAIA is quitting`);
+      require("./process-tree.cjs")
+        .killProcessTree(proc, { label: stageLabel || cmd, log, logError })
+        .then(() => reject(new InstallCancelled()), reject);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const finish = (result) => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (!stopping) resolve(result);
+    };
 
     let stdout = "";
     let stderr = "";
@@ -647,16 +572,121 @@ function runCommand(cmd, args, { env, stageLabel, onLine } = {}) {
       });
     });
 
+    // From `timers`, not the globals: the installer tests run this file in a bare vm context.
+    let timer = null;
+    if (timeoutMs) {
+      timer = require("timers").setTimeout(() => {
+        logError(`${cmd} ${args.join(" ")} did not finish within ${Math.round(timeoutMs / 1000)}s — ending it`);
+        killTree(proc);
+        finish({ code: null, stdout, stderr, timedOut: true });
+      }, timeoutMs);
+    }
+    const stopTimer = () => {
+      if (timer) require("timers").clearTimeout(timer);
+    };
+
     proc.on("error", (err) => {
+      stopTimer();
       logError(`${cmd} error: ${err.message}`);
-      resolve({ code: -1, stdout, stderr, error: err });
+      finish({ code: -1, stdout, stderr, error: err });
     });
 
     proc.on("exit", (code) => {
+      stopTimer();
       log(`  exit code: ${code}`);
-      resolve({ code, stdout, stderr });
+      finish({ code, stdout, stderr });
     });
   });
+}
+
+/** End `proc` and what it started: a Windows venv launcher runs Python as a child. */
+function killTree(proc) {
+  if (IS_WINDOWS) {
+    const r = spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 30 * 1000,
+    });
+    if (r.error || r.status !== 0) {
+      logError(`taskkill /PID ${proc.pid} /T /F failed: ${r.error ? r.error.message : `exit ${r.status}`}`);
+    }
+    return;
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch (err) {
+    logError(`Could not end pid ${proc.pid}: ${err.message}`);
+  }
+}
+
+/** The pid of the GAIA daemon ~/.gaia/host/instance.json records, when that process is alive. */
+function liveDaemonPid() {
+  let pid;
+  try {
+    pid = Number(JSON.parse(fs.readFileSync(DAEMON_INSTANCE_FILE, "utf8")).pid);
+  } catch (err) {
+    if (err.code !== "ENOENT") log(`Could not read ${DAEMON_INSTANCE_FILE}: ${err.message}`);
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (err) {
+    // EPERM: the process exists but belongs to someone else.
+    return err.code === "EPERM" ? pid : null;
+  }
+}
+
+/**
+ * Stop the GAIA daemon (and the agents it runs) that the existing venv may be
+ * running, so the install doesn't trip over its open files. Throws an
+ * InstallError naming the daemon only when one is still alive afterwards: a
+ * stop that fails with no daemon running (a broken venv, say) must not block
+ * the reinstall that repairs it.
+ */
+async function stopRunningDaemon({ gaiaBin = GAIA_BIN, timeoutMs = DAEMON_STOP_TIMEOUT_MS, signal } = {}) {
+  if (!fs.existsSync(gaiaBin) || (gaiaBin === GAIA_BIN && !fs.existsSync(GAIA_PYTHON_BIN))) return;
+  const result = await runCommand(gaiaBin, ["daemon", "stop"], {
+    stageLabel: "daemon",
+    timeoutMs,
+    signal,
+    // gaia prints emoji, which a Windows pipe's code page can't encode.
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+  });
+  if (result.code === 0) return;
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.code === 2 && /invalid choice: '?daemon'?/.test(output)) {
+    log("The installed GAIA predates the daemon — nothing to stop");
+    return;
+  }
+  const pid = liveDaemonPid();
+  if (pid === null) {
+    if (result.code === DAEMON_STOP_LEMONADE_EXIT) {
+      log(
+        "The GAIA daemon stopped, but GAIA's Lemonade Server did not (see the lines above). " +
+          "It lives outside the backend's files, so the install goes on."
+      );
+    } else {
+      log(
+        `gaia daemon stop ${result.timedOut ? "timed out" : `exited ${result.code}`}, ` +
+          "but no GAIA daemon is running — continuing"
+      );
+    }
+    return;
+  }
+  const why = result.timedOut
+    ? `did not stop within ${Math.round(timeoutMs / 1000)} seconds`
+    : `could not be stopped (gaia daemon stop exit ${result.code})`;
+  log(`To stop it by hand: ${gaiaBin} daemon stop`);
+  throw new InstallError(
+    `GAIA's background service (the GAIA daemon, pid ${pid}) ${why}, so its files can't be updated.`,
+    {
+      stage: STAGES.CREATE_VENV,
+      code: result.code,
+      reason: FAILURE_REASONS.DAEMON,
+      suggestion: `It has no window to close. Restart your PC, then try again. The log at ${LOG_FILE} has the details.`,
+    }
+  );
 }
 
 /**
@@ -669,10 +699,95 @@ function isFileLockedError(output) {
   return /os error 32/i.test(output) || /being used by another process/i.test(output);
 }
 
+/** The files uv could not replace, as absolute paths, in the order it named them. */
+function lockedFiles(output) {
+  const files = [];
+  for (const m of String(output || "").matchAll(/failed to \w+ (?:file|directory) `([^`]+)`/gi)) {
+    const file = path.resolve(m[1]);
+    if (!files.includes(file)) files.push(file);
+  }
+  return files;
+}
+
+const MOVED_ASIDE_SUFFIX = /\.old-\d+$/i;
+
+function sameFile(a, b) {
+  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+}
+
+/**
+ * Rename each locked launcher in the venv's Scripts folder to <name>.old-<ts>
+ * so uv can write a fresh one (#6570). A launcher something is running can't
+ * be renamed; it is left alone. Returns [{ file, aside }] for those moved.
+ */
+function moveLockedAside(files) {
+  const scripts = path.join(GAIA_VENV, "Scripts");
+  const stamp = Date.now();
+  const moved = [];
+  for (const file of files) {
+    if (!/\.exe$/i.test(file) || !sameFile(path.dirname(file), scripts)) continue;
+    const aside = `${file}.old-${stamp}`;
+    try {
+      fs.renameSync(file, aside);
+      moved.push({ file, aside });
+      log(`Moved locked ${file} aside to ${path.basename(aside)}`);
+    } catch (err) {
+      log(`Could not move locked ${file} aside (${err.code || err.message}); it stays where it is`);
+    }
+  }
+  return moved;
+}
+
+/** Put back every moved launcher uv did not replace, so a failed upgrade leaves the venv whole. */
+function putBackUnreplaced(moved) {
+  for (const { file, aside } of moved) {
+    if (fs.existsSync(file)) {
+      log(`${path.basename(file)} was reinstalled; ${path.basename(aside)} is deleted on a later install`);
+      continue;
+    }
+    try {
+      fs.renameSync(aside, file);
+    } catch (err) {
+      throw new Error(`Could not put ${aside} back at ${file}: ${err.message}`);
+    }
+    log(`Put ${path.basename(file)} back from ${path.basename(aside)}`);
+  }
+}
+
+/**
+ * Tidy what an earlier upgrade moved aside. A .old file whose original was
+ * reinstalled is deleted unless still in use; one whose original is missing
+ * is put back, newest first.
+ */
+function removeMovedLaunchers() {
+  const dir = path.join(GAIA_VENV, "Scripts");
+  const stampOf = (name) => Number(/\.old-(\d+)$/i.exec(name)[1]);
+  const leftovers = listDir(dir)
+    .filter((name) => MOVED_ASIDE_SUFFIX.test(name))
+    .sort((a, b) => stampOf(b) - stampOf(a));
+  for (const name of leftovers) {
+    const aside = path.join(dir, name);
+    const file = aside.replace(MOVED_ASIDE_SUFFIX, "");
+    if (!fs.existsSync(file)) {
+      fs.renameSync(aside, file);
+      log(`Put ${path.basename(file)} back from ${name}: no newer copy was installed`);
+      continue;
+    }
+    try {
+      fs.unlinkSync(aside);
+      log(`Removed ${aside}, moved aside by an earlier upgrade`);
+    } catch (err) {
+      // Windows refuses to delete a program that is running (EPERM) or open (EBUSY).
+      if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+      log(`Left ${aside} in place: it is still in use (${err.code})`);
+    }
+  }
+}
+
 /**
  * Detect a transient network failure in `uv pip install` output so the
  * install stage can retry instead of failing the whole bootstrap. The
- * install stage downloads transitive deps (numpy, faiss, pymupdf, …) from
+ * install stage downloads transitive deps (numpy, faiss, pypdfium2, …) from
  * PyPI; a single mid-stream hiccup ("stream closed because of a broken pipe")
  * otherwise fails the entire backend install — and, in the release pipeline,
  * the whole AppImage smoke test that gates publishing.
@@ -746,14 +861,20 @@ function checkDiskSpace() {
     logError(`statfsSync failed: ${err.message}`);
   }
 
-  // Fallback: platform-specific shell commands. Non-fatal if unavailable.
+  // Fallback: platform-specific tools. Non-fatal if unavailable.
   try {
     if (IS_WINDOWS) {
-      // Use PowerShell to read free space on the drive containing parent.
-      const drive = path.parse(parent).root.replace(/\\$/, "");
-      const out = execSync(
-        `powershell -NoProfile -Command "(Get-PSDrive -Name '${drive.replace(":", "")}').Free"`,
-        { encoding: "utf8", timeout: 5000 }
+      // The drive letter reaches PowerShell through the environment, not the script text.
+      const drive = path.parse(parent).root.replace(/[:\\]+$/, "");
+      const out = execFileSync(
+        "powershell",
+        ["-NoProfile", "-Command", "(Get-PSDrive -Name $env:GAIA_DISK_DRIVE).Free"],
+        {
+          encoding: "utf8",
+          timeout: 5000,
+          windowsHide: true,
+          env: { ...process.env, GAIA_DISK_DRIVE: drive },
+        }
       ).trim();
       const freeBytes = parseInt(out, 10);
       if (!Number.isNaN(freeBytes)) {
@@ -765,7 +886,7 @@ function checkDiskSpace() {
       }
     } else {
       // `df -k <parent>` — second line, 4th column is available 1K blocks.
-      const out = execSync(`df -k "${parent}"`, { encoding: "utf8", timeout: 5000 });
+      const out = execFileSync("df", ["-k", parent], { encoding: "utf8", timeout: 5000 });
       const lines = out.trim().split("\n");
       if (lines.length >= 2) {
         const cols = lines[lines.length - 1].trim().split(/\s+/);
@@ -1078,446 +1199,141 @@ async function runPreChecks(opts = {}) {
 // ── uv install ───────────────────────────────────────────────────────────────
 
 class InstallError extends Error {
-  constructor(message, { stage, code, suggestion } = {}) {
+  constructor(message, { stage, code, suggestion, reason, lockedFiles, keepState } = {}) {
     super(message);
     this.name = "InstallError";
     this.stage = stage || null;
     this.code = code || null;
     this.suggestion = suggestion || null;
+    this.reason = reason || null;
+    // The files another program held open, for main to find who holds them.
+    this.lockedFiles = lockedFiles || null;
+    // Nothing was touched, so the recorded state still holds.
+    this.keepState = Boolean(keepState);
   }
 }
 
+/** The caller's signal stopped the install: the app is quitting, nothing failed. */
+class InstallCancelled extends Error {
+  constructor() {
+    super("The install stopped because GAIA is quitting; it continues on the next launch.");
+    this.name = "InstallCancelled";
+  }
+}
+
+/** ENOSPC on POSIX (os error 28) and ERROR_DISK_FULL on Windows (os error 112). */
+function isDiskFullError(output) {
+  return /No space left on device|not enough space on the disk|os error (28|112)\b/i.test(output || "");
+}
+
 /**
- * Which `extraResources` subdirectory holds the bundled uv for this host.
- * Returns null for platforms we don't yet ship a binary for (falls through
- * to the dev fallback).
+ * The pre-check found too little space to install. `keep`: a working install
+ * is in place and the refusal leaves it, and its recorded state, untouched.
  */
-function bundledUvPlatformKey() {
-  if (process.platform === "linux" && process.arch === "x64") return "linux-x64";
-  if (process.platform === "win32" && process.arch === "x64") return "win-x64";
-  if (process.platform === "darwin" && process.arch === "arm64") return "mac-arm64";
+function lowDiskError(disk, { keep, installedVersion }) {
+  const mb = (bytes) => Math.round(bytes / (1024 * 1024));
+  const requiredMb = mb(disk.requiredBytes);
+  const freeMb = disk.freeBytes != null ? mb(disk.freeBytes) : null;
+  const need = freeMb != null ? `${requiredMb - freeMb} MB more` : `${requiredMb} MB`;
+  const kept = keep ? ` Your installed GAIA${installedVersion ? ` ${installedVersion}` : ""} was not changed.` : "";
+  return new InstallError(
+    `Not enough free disk space${keep ? " to update GAIA" : ""}. Required: ${requiredMb} MB${
+      freeMb != null ? `, available: ${freeMb} MB` : ""
+    }.${kept}`,
+    {
+      stage: STAGES.PRE_CHECKS,
+      reason: FAILURE_REASONS.DISK,
+      suggestion: `Free at least ${need} at ${path.dirname(GAIA_HOME)}, then try again.`,
+      keepState: keep,
+    }
+  );
+}
+
+/** Which FAILURE_REASONS a uv failure's output shows, or null. */
+function failureReason(output) {
+  if (isDiskFullError(output)) return FAILURE_REASONS.DISK;
+  if (isFileLockedError(output)) return FAILURE_REASONS.LOCKED;
+  if (isTlsCertError(output)) return FAILURE_REASONS.TLS;
+  if (isTransientNetworkError(output)) return FAILURE_REASONS.NETWORK;
   return null;
 }
 
 /**
- * Stream-SHA256 a file. Returns lowercase hex.
- */
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("error", reject);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolve(hash.digest("hex")));
-  });
-}
-
-/**
- * Verify a macOS binary's code signature is structurally intact via
- * `codesign --verify --strict`. Used in place of a fixed SHA256 pin for
- * mac-arm64 (see the BUNDLED_UV_SHA256 comment) — ad-hoc-signed binaries
- * (identity=-, which is every CI build today) pass this check, but a
- * corrupted, tampered, or actually-unsigned binary fails it. This does NOT
- * depend on the specific bytes any given codesign/Xcode toolchain produces,
- * so it is stable across GitHub-hosted runner image rollovers where a fixed
- * digest pin is not.
- *
- * @param {string} binPath
- * @returns {{ ok: boolean, output: string }}
- */
-function codesignVerify(binPath) {
-  const result = spawnSync("codesign", ["--verify", "--strict", binPath], {
-    encoding: "utf8",
-  });
-  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
-  return { ok: result.status === 0, output };
-}
-
-/**
- * Resolve the bundled uv binary path inside the Electron resources dir.
- * Returns null if this isn't an Electron-packaged runtime (no
- * `process.resourcesPath`) or if the host platform isn't bundled.
- */
-function findBundledUvResource() {
-  const key = bundledUvPlatformKey();
-  if (!key) return null;
-  const resourcesPath = process.resourcesPath;
-  if (!resourcesPath) return null;
-  const candidate = path.join(
-    resourcesPath,
-    "vendor",
-    "uv",
-    key,
-    IS_WINDOWS ? "uv.exe" : "uv"
-  );
-  return fs.existsSync(candidate) ? candidate : null;
-}
-
-/**
- * Atomically install the bundled uv into ~/.gaia/bin/uv after verifying it.
- * Returns the installed path.
- *
- * Verification strategy differs by platform (see the BUNDLED_UV_SHA256
- * comment): mac-arm64 uses `codesign --verify --strict` (darwin only —
- * post-codesign SHA256 is not deterministic across CI runner images);
- * linux-x64 / win-x64 use the SHA256 pin in BUNDLED_UV_SHA256, which IS
- * deterministic for those platforms (no post-build re-signing).
- *
- * Writes to `uv.tmp-<pid>-<rand>` with mode 0o700, verifies, `chmod +x`,
- * then `fs.rename()` (atomic on same filesystem).
- */
-async function installBundledUv(sourcePath, platformKey) {
-  const isDarwin = platformKey === "mac-arm64";
-  const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!isDarwin && (!expected || expected.startsWith("<"))) {
-    // Enforce strict verification: builds MUST populate the expected SHA
-    // for packaged binaries. Failing fast prevents shipping an unverified
-    // uv binary which would be a supply-chain regression.
-    throw new InstallError(
-      `No bundled uv checksum registered for platform ${platformKey}. Build must populate BUNDLED_UV_SHA256.${platformKey}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  ensureGaiaHome();
-  try {
-    fs.mkdirSync(MANAGED_UV_DIR, { recursive: true });
-  } catch (err) {
-    throw new InstallError(
-      `Could not create ${MANAGED_UV_DIR}: ${err.message}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  const rand = crypto.randomBytes(6).toString("hex");
-  const tmpPath = path.join(
-    MANAGED_UV_DIR,
-    `uv.tmp-${process.pid}-${rand}${IS_WINDOWS ? ".exe" : ""}`
-  );
-
-  // Copy source → tmp with restrictive mode.
-  await new Promise((resolve, reject) => {
-    const rs = fs.createReadStream(sourcePath);
-    const ws = fs.createWriteStream(tmpPath, { mode: 0o700 });
-    rs.on("error", reject);
-    ws.on("error", reject);
-    ws.on("finish", resolve);
-    rs.pipe(ws);
-  });
-
-  if (isDarwin) {
-    // chmod BEFORE codesign --verify: codesign needs the execute bit to
-    // resolve the binary's designated requirement on some toolchains.
-    try {
-      fs.chmodSync(tmpPath, 0o700);
-    } catch (err) {
-      log(`Warning: chmod on tmp uv failed: ${err.message}`);
-    }
-    const { ok, output } = codesignVerify(tmpPath);
-    if (!ok) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Bundled uv failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-        }
-      );
-    }
-    log("Bundled uv passed codesign --verify --strict");
-  } else {
-    let actual;
-    try {
-      actual = await sha256File(tmpPath);
-    } catch (err) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Could not hash copied uv binary: ${err.message}`,
-        { stage: STAGES.ENSURE_UV }
-      );
-    }
-
-    if (actual !== expected) {
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-      throw new InstallError(
-        `Bundled uv SHA256 mismatch (expected ${expected}, got ${actual}).`,
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
-        }
-      );
-    }
-
-    try {
-      if (!IS_WINDOWS) fs.chmodSync(tmpPath, 0o700);
-    } catch (err) {
-      log(`Warning: chmod on tmp uv failed: ${err.message}`);
-    }
-  }
-
-  try {
-    // rename() is atomic on the same filesystem on POSIX; on Windows
-    // it requires the target not to exist, so unlink first.
-    if (IS_WINDOWS && fs.existsSync(MANAGED_UV_BIN)) {
-      try { fs.unlinkSync(MANAGED_UV_BIN); } catch { /* ignore */ }
-    }
-    fs.renameSync(tmpPath, MANAGED_UV_BIN);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw new InstallError(
-      `Could not install uv to ${MANAGED_UV_BIN}: ${err.message}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
-
-  log(`Installed bundled uv v${BUNDLED_UV_VERSION} → ${MANAGED_UV_BIN}`);
-  return MANAGED_UV_BIN;
-}
-
-/**
- * Prepend ~/.gaia/bin to this process's PATH so child spawns see our
- * managed uv before any system-wide install.
- */
-function addManagedBinToPath() {
-  if (
-    process.env.PATH &&
-    !process.env.PATH.split(path.delimiter).includes(MANAGED_UV_DIR)
-  ) {
-    process.env.PATH = `${MANAGED_UV_DIR}${path.delimiter}${process.env.PATH}`;
-    log(`Prepended ${MANAGED_UV_DIR} to PATH for this process`);
-  }
-}
-
-/**
- * Ensure `uv` is available. Preference order (per issue #782 / T3):
- *   1. Managed copy at ~/.gaia/bin/uv already verified (warm-install fast path):
- *      SHA256 pin on linux-x64/win-x64, `codesign --verify --strict` on mac-arm64.
- *   2. Bundled binary in process.resourcesPath/vendor/uv/<platform>/uv:
- *      copy atomically to ~/.gaia/bin/uv with the same platform-appropriate
- *      verification.
- *   3. DEV-ONLY fallback (app.isPackaged === false OR no resourcesPath):
- *      the original `curl | sh` from astral.sh. Not a shipped-user path.
- *   4. System `uv` on PATH (last resort — unverified version).
+ * Ensure `uv` is available. Only running the app from source gets here: a
+ * packaged app ships its backend. Uses the uv on PATH, else installs it from
+ * astral.sh.
  *
  * Throws InstallError on failure.
  */
-async function ensureUv({ onProgress, isPackaged } = {}) {
+async function ensureUv({ onProgress, signal } = {}) {
   const report = makeProgressReporter(onProgress);
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
-  const platformKey = bundledUvPlatformKey();
-  const isDarwin = platformKey === "mac-arm64";
-  const expectedSha = platformKey ? BUNDLED_UV_SHA256[platformKey] : null;
-
-  // Fast path: warm install already on disk and still passes verification.
-  if (isDarwin && fs.existsSync(MANAGED_UV_BIN)) {
-    const { ok, output } = codesignVerify(MANAGED_UV_BIN);
-    if (ok) {
-      log(`Managed uv at ${MANAGED_UV_BIN} passed codesign --verify --strict — reusing`);
-      addManagedBinToPath();
-      report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
-      return;
-    }
-    log(`Managed uv failed codesign verification (${output || "no output"}) — replacing`);
-  } else if (expectedSha && fs.existsSync(MANAGED_UV_BIN)) {
-    try {
-      const actual = await sha256File(MANAGED_UV_BIN);
-      if (actual === expectedSha) {
-        log(`Managed uv at ${MANAGED_UV_BIN} passed SHA256 check — reusing`);
-        addManagedBinToPath();
-        report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
-        return;
-      }
-      log(
-        `Managed uv hash mismatch (expected ${expectedSha}, got ${actual}) — replacing`
-      );
-    } catch (err) {
-      log(`Could not verify managed uv: ${err.message} — replacing`);
-    }
-  }
-
-  // Bundled path (the shipped-user path — AppImage, NSIS, DMG).
-  const bundled = findBundledUvResource();
-  if (bundled && platformKey) {
-    report(STAGES.ENSURE_UV, 30, "Installing bundled uv");
-    log(`Using bundled uv from ${bundled}`);
-
-    // Verify the source resource before copying — catches installer
-    // corruption before we touch the user's home. mac-arm64 uses
-    // codesign --verify --strict (see BUNDLED_UV_SHA256 comment for why a
-    // fixed digest isn't viable there); other platforms use the SHA256 pin,
-    // which CI must have populated — a missing/placeholder value is a
-    // build-time error, rejected at runtime here.
-    if (isDarwin) {
-      const { ok, output } = codesignVerify(bundled);
-      if (!ok) {
-        throw new InstallError(
-          `Bundled uv resource failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
-          {
-            stage: STAGES.ENSURE_UV,
-            suggestion:
-              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-          }
-        );
-      }
-    } else {
-      const srcHash = await sha256File(bundled);
-      if (srcHash !== expectedSha) {
-        throw new InstallError(
-          `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
-          {
-            stage: STAGES.ENSURE_UV,
-            suggestion:
-              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-          }
-        );
-      }
-    }
-    await installBundledUv(bundled, platformKey);
-    addManagedBinToPath();
-    report(STAGES.ENSURE_UV, 100, "uv installed (bundled)");
-    return;
-  }
-
-  // DEV-ONLY fallback for contributors running from source (no
-  // extraResources, no packaged app). Never fires for end users.
-  const isDev = isPackaged === false || !process.resourcesPath;
-  if (isDev) {
-    if (commandExists("uv")) {
-      log("uv already on PATH (dev) — using system install");
-      report(STAGES.ENSURE_UV, 100, "uv is already installed (system)");
-      return;
-    }
-
-    log("[dev] No bundled uv and no system uv — falling back to curl|sh installer");
-    let result;
-    if (IS_WINDOWS) {
-      result = await runCommand(
-        "powershell",
-        [
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "irm https://astral.sh/uv/install.ps1 | iex",
-        ],
-        { stageLabel: "uv-install-dev" }
-      );
-    } else {
-      result = await runCommand(
-        "bash",
-        ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
-        { stageLabel: "uv-install-dev" }
-      );
-    }
-
-    if (result.code !== 0) {
-      throw new InstallError(
-        `Could not install uv automatically (exit code ${result.code}).`,
-        {
-          stage: STAGES.ENSURE_UV,
-          code: result.code,
-          suggestion: IS_WINDOWS
-            ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
-            : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
-        }
-      );
-    }
-
-    if (!commandExists("uv")) {
-      const candidates = [
-        path.join(os.homedir(), ".local", "bin"),
-        path.join(os.homedir(), ".cargo", "bin"),
-      ];
-      for (const uvDir of candidates) {
-        if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-          process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-          log(`Added ${uvDir} to PATH for this process`);
-        }
-      }
-    }
-
-    if (!commandExists("uv")) {
-      throw new InstallError(
-        "uv installed but not found on PATH. A shell restart may be required.",
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
-        }
-      );
-    }
-
-    report(STAGES.ENSURE_UV, 100, "uv installed (dev fallback)");
-    return;
-  }
-
-  // Packaged Windows rescue: try the Astral PowerShell installer even when
-  // running a packaged build. This provides an automated recovery path for
-  // end users on clean machines that don't have uv and where the installer
-  // build unexpectedly omitted a bundled binary. It is a last-resort and
-  // non-fatal attempt; on failure we fall through to the generic error.
-  if (IS_WINDOWS && !isDev) {
-    log("Packaged Windows: attempting automated uv installer (rescue)");
-    try {
-      const rescue = await runCommand(
-        "powershell",
-        [
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "irm https://astral.sh/uv/install.ps1 | iex",
-        ],
-        { stageLabel: "uv-install-packaged-rescue" }
-      );
-      if (rescue.code === 0) {
-        // Ensure common install locations are present on PATH for this
-        // process in case the installer placed uv in a user-local bin.
-        const candidates = [
-          path.join(os.homedir(), ".local", "bin"),
-          path.join(os.homedir(), ".cargo", "bin"),
-        ];
-        for (const uvDir of candidates) {
-          if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
-            process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
-            log(`Added ${uvDir} to PATH for this process`);
-          }
-        }
-        if (commandExists("uv")) {
-          log("Packaged Windows: uv installed and found on PATH (rescue succeeded)");
-          addManagedBinToPath();
-          report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
-          return;
-        }
-        log("Packaged Windows: uv installer ran but uv not found on PATH");
-      } else {
-        log(`Packaged Windows: automated uv installer exited ${rescue.code}`);
-      }
-    } catch (rescueErr) {
-      log(`Packaged Windows: rescue installer threw: ${rescueErr.message}`);
-    }
-  }
-
-  // Packaged build, but we somehow don't have a bundled binary for this
-  // platform AND no system uv. Last-ditch: accept an unverified system uv
-  // if present; otherwise fail with a clear message.
   if (commandExists("uv")) {
-    log(
-      `No bundled uv for ${process.platform}-${process.arch}, using system uv on PATH (unverified)`
-    );
-    report(STAGES.ENSURE_UV, 100, "uv ready (system, unverified)");
+    log("uv already on PATH (dev) — using system install");
+    report(STAGES.ENSURE_UV, 100, "uv is already installed (system)");
     return;
   }
 
-  throw new InstallError(
-    `GAIA could not find or install its Python helper (uv) required to provision the backend.`,
-    {
-      stage: STAGES.ENSURE_UV,
-      suggestion:
-        "GAIA attempted automatic recovery but could not install uv. Please either: (a) click 'Install uv' in the dialog to let GAIA try again, or (b) install uv from https://astral.sh/uv and re-launch GAIA.",
+  log("No uv on PATH — installing it from astral.sh");
+  let result;
+  if (IS_WINDOWS) {
+    result = await runCommand(
+      "powershell",
+      [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "irm https://astral.sh/uv/install.ps1 | iex",
+      ],
+      { stageLabel: "uv-install", signal }
+    );
+  } else {
+    result = await runCommand(
+      "bash",
+      ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+      { stageLabel: "uv-install", signal }
+    );
+  }
+
+  if (result.code !== 0) {
+    throw new InstallError(
+      `Could not install uv automatically (exit code ${result.code}).`,
+      {
+        stage: STAGES.ENSURE_UV,
+        code: result.code,
+        suggestion: IS_WINDOWS
+          ? 'Install uv manually: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
+          : "Install uv manually: curl -LsSf https://astral.sh/uv/install.sh | sh",
+      }
+    );
+  }
+
+  if (!commandExists("uv")) {
+    const candidates = [
+      path.join(os.homedir(), ".local", "bin"),
+      path.join(os.homedir(), ".cargo", "bin"),
+    ];
+    for (const uvDir of candidates) {
+      if (process.env.PATH && !process.env.PATH.includes(uvDir)) {
+        process.env.PATH = `${uvDir}${path.delimiter}${process.env.PATH}`;
+        log(`Added ${uvDir} to PATH for this process`);
+      }
     }
-  );
+  }
+
+  if (!commandExists("uv")) {
+    throw new InstallError(
+      "uv installed but not found on PATH. A shell restart may be required.",
+      {
+        stage: STAGES.ENSURE_UV,
+        suggestion:
+          "Restart your terminal or reboot, then re-launch GAIA. If the problem persists, install uv manually from https://astral.sh/uv",
+      }
+    );
+  }
+
+  report(STAGES.ENSURE_UV, 100, "uv installed");
 }
 
 // ── Backend install ──────────────────────────────────────────────────────────
@@ -1545,6 +1361,11 @@ function resolveBackendVersion(opts = {}) {
   }
 }
 
+/** The version the app ships with, whatever backend this run was asked to install. */
+function appVersion() {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+}
+
 /**
  * The PEP 440 spelling of the app's npm version: `0.25.0-rc.1` -> `0.25.0rc1`.
  * pip pins and `gaia --version` use this form; a final version is unchanged.
@@ -1554,142 +1375,16 @@ function toPep440(version) {
   return version.replace(/^(\d+\.\d+\.\d+)-rc\.(\d+)$/, "$1rc$2");
 }
 
-function shouldSkipGaiaInit(opts) {
-  return Boolean(opts.skipGaiaInit) || isTruthyEnv(process.env.GAIA_SKIP_GAIA_INIT);
-}
-
-/**
- * Run `gaia init` for the profile the app's own setup check asks about
- * (setup_runner.PROFILE), so the first launch finds setup done instead of
- * running it a second time.
- *
- * `chooseLemonade` is asked about a Lemonade Server already running here; see
- * lemonadeInitArgs.
- *
- * Returns `{ init }`, "done", "failed" or "skipped", plus `initError` when it
- * failed. The state file records both: a backend whose setup never finished is
- * not installed, so the next launch runs it, and the app shows the error.
- */
-async function runGaiaInit(gaiaBin, report, version, skipGaiaInit, chooseLemonade) {
-  if (skipGaiaInit) {
-    log("Skipping gaia init (skipGaiaInit=true or GAIA_SKIP_GAIA_INIT set)");
-    return { init: "skipped" };
-  }
-  setState(STATES.INSTALLING, { stage: STAGES.GAIA_INIT, version });
-  report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  const lemonadeArgs = await lemonadeInitArgs(gaiaBin, chooseLemonade, runCommand, report);
-  const progress = createInitProgress((within, message) =>
-    report(STAGES.GAIA_INIT, within, message)
-  );
-  const initResult = await runCommand(
-    gaiaBin,
-    ["init", "--profile", "gaia", "--yes", "--skip-webui-build", "--progress-json", ...lemonadeArgs],
-    // Unwrapped, so an error line reaches initFailureReason whole.
-    { stageLabel: "gaia-init", env: { ...process.env, COLUMNS: "1000" }, onLine: progress.onLine }
-  );
-  if (initResult.code !== 0) {
-    // Non-fatal: the app opens and its start screen shows initError, and the
-    // next launch runs setup again, because the state file records the failure.
-    log(
-      `Warning: gaia init exited with code ${initResult.code}. Continuing; setup runs again next launch.`
-    );
-    report(STAGES.GAIA_INIT, 100, "Lemonade Server setup did not finish");
-    return { init: "failed", initError: initFailureReason(initResult) };
-  }
-  report(STAGES.GAIA_INIT, 100, "Lemonade Server setup complete");
-  return { init: "done" };
-}
-
-/** Why `gaia init` failed, in its own words: its last ❌ line, else its last line. */
-function initFailureReason({ code, stdout, stderr }) {
-  const lines = `${stdout || ""}\n${stderr || ""}`
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    // --progress-json event lines are for the progress bar, not the user.
-    .filter((line) => line && !line.startsWith('{"event"'));
-  const marked = lines.filter((line) => line.startsWith("❌"));
-  const reason = marked.length
-    ? marked[marked.length - 1].replace(/^❌\s*/, "")
-    : lines[lines.length - 1];
-  return reason || `gaia init exited with code ${code} and printed nothing.`;
-}
-
-/**
- * Run a `gaia ... --json` command and parse what it printed.
- * Returns undefined after logging a warning that names the failure.
- */
-async function readGaiaJson(run, gaiaBin, args) {
-  const shown = `gaia ${args.join(" ")}`;
-  const result = await run(gaiaBin, args, { stageLabel: "lemonade" });
-  if (result.code !== 0) {
-    log(`Warning: ${shown} exited with code ${result.code}: ${(result.stderr || result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-  const lines = (result.stdout || "").trim().split(/\r?\n/);
-  try {
-    return JSON.parse(lines[lines.length - 1]);
-  } catch (err) {
-    log(`Warning: ${shown} printed no JSON (${err.message}): ${(result.stdout || "").trim().slice(-400)}`);
-    return undefined;
-  }
-}
-
-/**
- * Extra `gaia init` args for a Lemonade Server the user already runs.
- *
- * Asks `chooseLemonade(found)` only on a first setup (nothing saved, no
- * LEMONADE_BASE_URL) when a usable server answers. "external" adds
- * `--lemonade-url <url>`, "gaia" adds `--gaia-lemonade`, null adds nothing:
- * init then sets up GAIA's own and prints how to switch, as it always has.
- * A server that needs a key or is too old is left to the app's setup screen.
- *
- * `report` is the progress reporter: while the question is open the progress
- * window says setup is waiting on the user, then goes back to GAIA_INIT_MESSAGE.
- */
-async function lemonadeInitArgs(gaiaBin, chooseLemonade, run = runCommand, report = () => {}) {
-  if (typeof chooseLemonade !== "function") return [];
-  const unchanged = "gaia init will set up GAIA's own Lemonade Server; to use yours later run `gaia lemonade connect <url>`.";
-  const status = await readGaiaJson(run, gaiaBin, ["lemonade", "status", "--json"]);
-  if (status === undefined || status === null) {
-    log(`Warning: could not read which Lemonade Server GAIA uses; ${unchanged}`);
-    return [];
-  }
-  if (status.saved_mode != null || status.source === "env") return [];
-  const found = await readGaiaJson(run, gaiaBin, ["lemonade", "detect", "--json"]);
-  if (found === undefined) {
-    log(`Warning: could not look for a Lemonade Server already running; ${unchanged}`);
-    return [];
-  }
-  if (!found) return [];
-  if (found.status !== "ok") {
-    log(`Found a Lemonade Server at ${found.url} (${found.status}); the app's setup screen offers it.`);
-    return [];
-  }
-  let answer;
-  report(STAGES.GAIA_INIT, 0, WAITING_FOR_LEMONADE_CHOICE_MESSAGE);
-  try {
-    answer = await chooseLemonade(found);
-  } catch (err) {
-    log(`Warning: could not ask whether to use the Lemonade Server at ${found.url}: ${err.message}; ${unchanged}`);
-    return [];
-  } finally {
-    report(STAGES.GAIA_INIT, 0, GAIA_INIT_MESSAGE);
-  }
-  log(`Lemonade Server at ${found.url}: user chose ${answer || "not to answer"}`);
-  if (answer === "external") return ["--lemonade-url", found.url];
-  if (answer === "gaia") return ["--gaia-lemonade"];
-  return [];
-}
-
 /**
  * Install the GAIA Python backend from scratch.
+ *
+ * Installs no model and runs no `gaia init`: the Lemonade Server and the models
+ * are set up by the app's first-run setup, where the user chooses cloud or
+ * local and sees what downloads.
  *
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: string — override the pinned version
- *   - skipGaiaInit: boolean — skip `gaia init` (for testing)
- *   - chooseLemonade(found): Promise<"external"|"gaia"|null> — asked when a
- *     Lemonade Server already runs here; see lemonadeInitArgs
  *
  * Throws InstallError on failure. The state file is updated to reflect
  * the current stage so a subsequent launch can recover.
@@ -1707,7 +1402,6 @@ async function installBackend(opts = {}) {
   const pipPackage = localWheel
     ? `${localWheel}[ui]`
     : `amd-gaia[ui]==${toPep440(version)}`;
-  const skipGaiaInit = shouldSkipGaiaInit(opts);
 
   log("================================================");
   log("  Installing GAIA backend");
@@ -1718,13 +1412,14 @@ async function installBackend(opts = {}) {
   setState(STATES.INSTALLING, { stage: STAGES.ENSURE_UV, version });
 
   // Stage 1: ensure uv
-  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged });
+  await ensureUv({ onProgress: opts.onProgress, isPackaged: opts.isPackaged, signal: opts.signal });
 
   // Stage 2: create venv
   setState(STATES.INSTALLING, { stage: STAGES.CREATE_VENV, version });
   report(STAGES.CREATE_VENV, 0, "Creating Python 3.12 environment");
 
   ensureGaiaHome();
+  await stopRunningDaemon({ signal: opts.signal });
 
   // If the venv exists but the python binary is missing, treat as partial.
   const venvLooksValid =
@@ -1741,7 +1436,7 @@ async function installBackend(opts = {}) {
     }
 
     const venvArgs = ["venv", GAIA_VENV, "--python", "3.12"];
-    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv" });
+    let venvResult = await runCommand("uv", venvArgs, { stageLabel: "venv", signal: opts.signal });
     // uv downloads Python 3.12 when none is installed; behind a corporate
     // proxy that fails on uv's bundled roots exactly like the pip step below.
     let venvNativeTls = false;
@@ -1764,6 +1459,7 @@ async function installBackend(opts = {}) {
       }
       venvResult = await runCommand("uv", [...venvArgs, "--native-tls"], {
         stageLabel: "venv",
+        signal: opts.signal,
       });
     }
     if (venvResult.code !== 0) {
@@ -1775,6 +1471,7 @@ async function installBackend(opts = {}) {
         {
           stage: STAGES.CREATE_VENV,
           code: venvResult.code,
+          reason: failureReason(`${venvResult.stdout || ""}\n${venvResult.stderr || ""}`),
           suggestion: `Try creating it manually:\n  ${manual}\nThen restart GAIA.`,
         }
       );
@@ -1787,6 +1484,7 @@ async function installBackend(opts = {}) {
   // Stage 3: pip install
   setState(STATES.INSTALLING, { stage: STAGES.INSTALL_PACKAGE, version });
   report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage}`);
+  if (IS_WINDOWS) removeMovedLaunchers();
 
   const pipArgs = [
     "pip",
@@ -1799,11 +1497,26 @@ async function installBackend(opts = {}) {
     GAIA_PYTHON_BIN,
   ];
   // Retry the install on transient PyPI/network failures. The transitive
-  // deps (numpy, faiss, pymupdf, …) are fetched live from PyPI even
+  // deps (numpy, faiss, pypdfium2, …) are fetched live from PyPI even
   // when the gaia wheel itself is local, so a single broken-pipe mid-download
   // would otherwise fail the whole bootstrap (and block a release). File-lock
-  // failures (Windows os-error-32) are NOT retried — they need user action.
+  // failures (Windows os-error-32) get their own single retry after this loop.
   let installResult;
+  if (!localWheel && isBackendPrefetched(version)) {
+    report(STAGES.INSTALL_PACKAGE, 0, `Installing ${pipPackage} from the downloaded update`);
+    const offline = await runCommand(
+      "uv",
+      ["pip", "install", pipPackage, "--offline", "--compile-bytecode", "--python", GAIA_PYTHON_BIN],
+      { stageLabel: "pip", signal: opts.signal }
+    );
+    fs.rmSync(_prefetchMarker(toPep440(version)), { force: true });
+    if (offline.code === 0) {
+      installResult = offline;
+    } else {
+      log(`The prefetched backend is no longer all in uv's cache (${_lastLines(offline)}) — installing from PyPI`);
+    }
+  }
+  const installedOffline = Boolean(installResult);
   let useNativeTls = false;
   let nativeTlsAttempted = false;
   // The TLS branch flips useNativeTls and `continue`s, consuming an iteration.
@@ -1811,12 +1524,12 @@ async function installBackend(opts = {}) {
   // so the promised --native-tls retry actually runs (issue #1693 review).
   for (
     let attempt = 1;
-    attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted);
+    !installedOffline && (attempt <= INSTALL_MAX_ATTEMPTS || (useNativeTls && !nativeTlsAttempted));
     attempt++
   ) {
     const attemptArgs = useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs;
     if (useNativeTls) nativeTlsAttempted = true;
-    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip" });
+    installResult = await runCommand("uv", attemptArgs, { stageLabel: "pip", signal: opts.signal });
     if (installResult.code === 0) break;
     const attemptOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     // A corporate proxy's custom root CA isn't in uv's bundled webpki roots, so
@@ -1853,16 +1566,41 @@ async function installBackend(opts = {}) {
     );
     await sleep(backoffMs);
   }
+  // A launcher that is only open, not running, can be renamed out of uv's way (#6570).
+  const firstOutput = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
+  if (IS_WINDOWS && installResult.code !== 0 && isFileLockedError(firstOutput)) {
+    const moved = moveLockedAside(lockedFiles(firstOutput));
+    if (moved.length > 0) {
+      report(STAGES.INSTALL_PACKAGE, 0, "Another program has GAIA's files open — retrying the install");
+      try {
+        installResult = await runCommand("uv", useNativeTls ? [...pipArgs, "--native-tls"] : pipArgs, {
+          stageLabel: "pip",
+          signal: opts.signal,
+        });
+      } finally {
+        putBackUnreplaced(moved);
+      }
+    }
+  }
   if (installResult.code !== 0) {
-    // Windows: an upgrade can't replace gaia.exe while a previous GAIA
-    // process still holds it open (issue #1388). The orphan cleanup in
-    // main.cjs should have killed it first; if the lock persists, point the
-    // user at the live process rather than the generic manual-install hint.
     const output = `${installResult.stdout || ""}\n${installResult.stderr || ""}`;
     let suggestion;
     if (isFileLockedError(output)) {
-      suggestion =
-        "A running GAIA process is locking the install. Close GAIA completely (including any leftover gaia.exe in Task Manager), then relaunch.";
+      // pip's own line is already in the log, which the setup screen's details show.
+      const files = lockedFiles(output);
+      const names = files.map((file) => path.basename(file)).join(", ");
+      throw new InstallError(
+        `GAIA couldn't replace its own files because another program has them open${names ? ` (${names})` : ""}.`,
+        {
+          stage: STAGES.INSTALL_PACKAGE,
+          code: installResult.code,
+          reason: FAILURE_REASONS.LOCKED,
+          lockedFiles: files,
+          suggestion:
+            "Close other GAIA apps and any terminal running gaia, or restart your PC, then try again. " +
+            `The log at ${LOG_FILE} names the file.`,
+        }
+      );
     } else if (isTlsCertError(output)) {
       suggestion =
         "PyPI's certificate isn't trusted on this network — usually a corporate proxy presenting its own root CA. " +
@@ -1871,6 +1609,14 @@ async function installBackend(opts = {}) {
           : "") +
         "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
         "See https://amd-gaia.ai/docs/quickstart#cli-install";
+    } else if (isTransientNetworkError(output)) {
+      // The log file keeps pip's output; the box says what to do about it.
+      throw new InstallError("GAIA couldn't reach the internet to finish installing.", {
+        stage: STAGES.INSTALL_PACKAGE,
+        code: installResult.code,
+        suggestion:
+          "Check your connection, then choose Retry. If it keeps failing, the log file below says why. Your chats and settings are safe.",
+      });
     } else {
       suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
@@ -1891,6 +1637,7 @@ async function installBackend(opts = {}) {
       {
         stage: STAGES.INSTALL_PACKAGE,
         code: installResult.code,
+        reason: failureReason(output),
         suggestion,
       }
     );
@@ -1907,16 +1654,7 @@ async function installBackend(opts = {}) {
   }
   report(STAGES.INSTALL_PACKAGE, 100, "GAIA package installed");
 
-  // Stage 4: gaia init
-  const setup = await runGaiaInit(
-    GAIA_BIN,
-    report,
-    version,
-    skipGaiaInit,
-    opts.chooseLemonade
-  );
-
-  // Stage 5: verify
+  // Stage 4: verify
   setState(STATES.INSTALLING, { stage: STAGES.VERIFY, version });
   report(STAGES.VERIFY, 0, "Verifying installation");
 
@@ -1974,11 +1712,156 @@ async function installBackend(opts = {}) {
     log(`Shim creation check failed: ${err.message}`);
   }
 
-  setState(STATES.READY, { stage: null, version, installedVersion, ...setup });
+  setState(STATES.READY, { stage: null, version, installedVersion });
   log("Backend install complete");
 }
 
+// ── Agent refresh ────────────────────────────────────────────────────────────
+
+/**
+ * Update the flagship to this release, without Lemonade or models. A PC with
+ * no flagship is skipped: first-run setup installs it.
+ *
+ * The stage stays recorded until this succeeds, so an update that failed or was
+ * quit part way through refreshes again on the next launch.
+ */
+async function refreshAgent(gaiaBin, opts = {}) {
+  const version = resolveBackendVersion(opts);
+  if (!fs.existsSync(FLAGSHIP_SENTINEL)) {
+    log("No GAIA agent installed yet — first-run setup installs it");
+    // Nothing to refresh: a refresh recorded earlier is done, not pending forever.
+    setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
+    return;
+  }
+  setState(STATES.INSTALLING, { stage: STAGES.AGENT_REFRESH, version });
+  makeProgressReporter(opts.onProgress)(STAGES.AGENT_REFRESH, null, "Updating the GAIA agent");
+
+  const result = await runCommand(gaiaBin, ["init", "--agent-only"], {
+    stageLabel: "agent",
+    env: { ...process.env, COLUMNS: "1000" },
+    signal: opts.signal,
+  });
+  const lastLine = `${result.stderr || ""}`.trim().split(/\r?\n/).pop();
+  if (result.code === AGENT_KEPT_EXIT) {
+    // Offline: the working agent stays, and the next launch tries the update again.
+    log(`Kept the installed GAIA agent; the update runs again next launch: ${lastLine}`);
+    setState(STATES.PARTIAL, { stage: STAGES.AGENT_REFRESH, version, message: lastLine });
+    return;
+  }
+  if (result.code !== 0) {
+    throw new InstallError(
+      lastLine ? lastLine.replace(/^Error:\s*/, "") : `The GAIA agent update exited ${result.code}.`,
+      { stage: STAGES.AGENT_REFRESH, code: result.code }
+    );
+  }
+  setState(STATES.READY, { version, installedVersion: getInstalledVersion(gaiaBin) });
+}
+
+// ── Backend prefetch for an app update ──────────────────────────────────────
+
+const PREFETCH_DIR = path.join(GAIA_HOME, "cache", "backend-prefetch");
+
+function _prefetchMarker(pep440) {
+  return path.join(PREFETCH_DIR, `${pep440}.ready`);
+}
+
+/**
+ * True when `version`'s backend needs no download: an app that ships its
+ * backend gets it with the update, otherwise a prefetch left it in uv's cache.
+ */
+function isBackendPrefetched(version) {
+  if (shippedGaiaBin()) return true;
+  return Boolean(version) && fs.existsSync(_prefetchMarker(toPep440(version)));
+}
+
+/**
+ * Before an app update restarts, put the backend it will need into uv's cache
+ * by installing it into a throwaway environment. The first launch then
+ * installs offline, so it neither waits on nor depends on PyPI.
+ * Throws with uv's own words when the download fails.
+ */
+async function prefetchBackend(appVersion, { isPackaged } = {}) {
+  if (isPackaged) {
+    log("This app ships its own backend, so the update carries it and there is nothing to prefetch");
+    return;
+  }
+  if (process.env.GAIA_LOCAL_WHEEL) {
+    log("GAIA_LOCAL_WHEEL is set: the next launch installs that wheel, so there is nothing to prefetch");
+    return;
+  }
+  const version = toPep440(appVersion);
+  const pipPackage = `amd-gaia[ui]==${version}`;
+  const workDir = path.join(PREFETCH_DIR, version);
+  const venv = path.join(workDir, "venv");
+  const python = IS_WINDOWS ? path.join(venv, "Scripts", "python.exe") : path.join(venv, "bin", "python");
+  log(`Prefetching ${pipPackage} for the update`);
+  await ensureUv({ isPackaged });
+  _removeScratchVenvs();
+  fs.mkdirSync(workDir, { recursive: true });
+  try {
+    const venvResult = await runCommand("uv", ["venv", venv, "--python", "3.12"], { stageLabel: "prefetch" });
+    if (venvResult.code !== 0) {
+      throw new Error(`uv venv exited ${venvResult.code}: ${_lastLines(venvResult)}`);
+    }
+    const args = ["pip", "install", pipPackage, "--refresh", "--python", python];
+    let result = await runCommand("uv", args, { stageLabel: "prefetch" });
+    if (result.code !== 0 && isTlsCertError(`${result.stdout || ""}\n${result.stderr || ""}`)) {
+      result = await runCommand("uv", [...args, "--native-tls"], { stageLabel: "prefetch" });
+    }
+    if (result.code !== 0) {
+      throw new Error(`Couldn't download ${pipPackage} (uv exit ${result.code}): ${_lastLines(result)}`);
+    }
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+  fs.writeFileSync(_prefetchMarker(version), new Date().toISOString());
+  log(`Prefetched ${pipPackage}: the next launch installs it offline`);
+}
+
+/** Scratch venvs a quit cut short; the .ready markers beside them stay. */
+function _removeScratchVenvs() {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(PREFETCH_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) fs.rmSync(path.join(PREFETCH_DIR, entry.name), { recursive: true, force: true });
+  }
+}
+
+function _lastLines({ stdout, stderr }) {
+  return `${stdout || ""}\n${stderr || ""}`
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-5)
+    .join(" | ");
+}
+
 // ── Version-aware ensure ─────────────────────────────────────────────────────
+
+/**
+ * Whether the backend is finished at the app's version. A recorded failure or
+ * unfinished stage says no, so it reaches ensureBackend and the user.
+ */
+function isBackendCurrent() {
+  // A local wheel is reinstalled on every launch, as ensureBackend says.
+  if (process.env.GAIA_LOCAL_WHEEL && !shippedGaiaBin()) return false;
+  if (shippedGaiaBin()) {
+    // The core is always current; an app version is done once it refreshed the agent.
+    if (!bundledGaiaBin()) return false;
+    const prev = getState();
+    if (!prev) return !fs.existsSync(FLAGSHIP_SENTINEL);
+    return prev.state === STATES.READY && toPep440(prev.version || "") === toPep440(appVersion());
+  }
+  const bin = findGaiaBin();
+  if (!bin) return false;
+  const prev = getState();
+  if (prev && prev.state !== STATES.READY) return false;
+  return getInstalledVersion(bin) === toPep440(appVersion());
+}
 
 /**
  * The installed backend version, or null when it is not installed.
@@ -1986,6 +1869,10 @@ async function installBackend(opts = {}) {
  * `gaia --version`, which starts Python and can take 20 s+ on a busy PC.
  */
 function getInstalledVersion(gaiaBin) {
+  // Built with the app, from the same commit.
+  if (shippedGaiaBin() && gaiaBin === bundledGaiaBin()) {
+    return toPep440(appVersion());
+  }
   if (gaiaBin === GAIA_BIN) {
     // existsSync follows the venv's python symlink, so a removed base interpreter reads as missing.
     if (!fs.existsSync(GAIA_PYTHON_BIN)) {
@@ -2049,17 +1936,31 @@ function venvPackageVersion() {
  * opts:
  *   - onProgress(stage, percent, message)
  *   - version: override the pinned version
- *   - skipGaiaInit: bool
- *   - chooseLemonade: see installBackend
  *   - allowPartialRestart: bool (default true) — restart from scratch if
  *     the state file indicates a `partial` install.
+ *   - signal: AbortSignal — stops the running step (the app is quitting)
  *
- * Throws InstallError on failure and updates the state file.
+ * Throws InstallError on failure and updates the state file. Throws
+ * InstallCancelled when `signal` stopped it; the state file then still says
+ * installing, so the next launch runs the install again.
  */
 async function ensureBackend(opts = {}) {
   openLog({ truncate: true });
 
   try {
+    const bundled = await ensureBundledCore();
+    if (bundled) {
+      log(`Using the GAIA backend this app ships: ${bundled}`);
+      await refreshAgent(bundled, opts);
+      return bundled;
+    }
+    if (opts.isPackaged) {
+      throw new InstallError("This GAIA install is missing its backend.", {
+        stage: STAGES.VERIFY,
+        suggestion: `Reinstall GAIA from https://amd-gaia.ai/#install. Expected it at ${BUNDLED_GAIA_BIN}.`,
+      });
+    }
+
     const preChecks = await runPreChecks({ onProgress: opts.onProgress });
 
     // Handle a pre-existing partial install first (before disk/network fails
@@ -2080,30 +1981,6 @@ async function ensureBackend(opts = {}) {
       } else if (prev.state === STATES.READY) {
         log("Previous state: ready");
       }
-    }
-
-    // Disk check failure: fatal, surface as InstallError.
-    if (!preChecks.disk.ok) {
-      const freeMb =
-        preChecks.disk.freeBytes != null
-          ? Math.round(preChecks.disk.freeBytes / (1024 * 1024))
-          : null;
-      const requiredMb = Math.round(
-        preChecks.disk.requiredBytes / (1024 * 1024)
-      );
-      const err = new InstallError(
-        `Not enough free disk space. Required: ${requiredMb} MB${
-          freeMb != null ? `, available: ${freeMb} MB` : ""
-        }.`,
-        {
-          stage: STAGES.PRE_CHECKS,
-          suggestion: `Free at least ${requiredMb} MB at ${path.dirname(
-            GAIA_HOME
-          )} and try again.`,
-        }
-      );
-      setState(STATES.FAILED, { stage: STAGES.PRE_CHECKS, message: err.message });
-      throw err;
     }
 
     // Network check is ADVISORY, never fatal. A failed HEAD probe is most often
@@ -2132,47 +2009,29 @@ async function ensureBackend(opts = {}) {
     // reinstall from the local wheel so CI gets a fresh install each run.
     const expectedVersion = resolveBackendVersion(opts);
     const existingBin = findGaiaBin();
-    // Installed means setup finished too, not just that the package is there.
-    // No state file at all is an install from before it existed.
+    // Installed means the package finished installing. No state file at all
+    // is an install from before it existed.
     const prev = preChecks.previousState;
-    const setupFinished =
-      !prev || (prev.state === STATES.READY && prev.init !== "failed");
     const packageFinished =
-      setupFinished ||
-      (prev &&
-        (prev.state === STATES.READY ||
-          prev.stage === STAGES.GAIA_INIT ||
-          prev.stage === STAGES.VERIFY));
+      !prev ||
+      prev.state === STATES.READY ||
+      prev.stage === LEGACY_SETUP_STAGE ||
+      prev.stage === STAGES.VERIFY ||
+      prev.stage === STAGES.AGENT_REFRESH;
+    let installedVersion = null;
     if (existingBin) {
-      const installedVersion = getInstalledVersion(existingBin);
+      installedVersion = getInstalledVersion(existingBin);
       const versionMatches =
         expectedVersion !== null && installedVersion === toPep440(expectedVersion);
-      if (versionMatches && !setupFinished && packageFinished) {
-        log(
-          `GAIA ${installedVersion} is installed but its setup did not finish ` +
-            `(state=${prev.state}, stage=${prev.stage || "-"}) — running gaia init`
-        );
-        const report = makeProgressReporter(opts.onProgress);
-        const setup = await runGaiaInit(
-          existingBin,
-          report,
-          expectedVersion,
-          shouldSkipGaiaInit(opts),
-          opts.chooseLemonade
-        );
-        setState(STATES.READY, { version: expectedVersion, installedVersion, ...setup });
-        report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
+      if (versionMatches && packageFinished && prev && prev.stage === STAGES.AGENT_REFRESH) {
+        await refreshAgent(existingBin, opts);
         return existingBin;
       }
-      if (versionMatches && setupFinished) {
+      if (versionMatches && packageFinished) {
         log(
           `GAIA backend already installed at version ${installedVersion} — nothing to do`
         );
-        setState(STATES.READY, {
-          version: expectedVersion,
-          installedVersion,
-          init: prev ? prev.init : undefined,
-        });
+        setState(STATES.READY, { version: expectedVersion, installedVersion });
         // Tell the UI we are instantly ready.
         const report = makeProgressReporter(opts.onProgress);
         report(STAGES.VERIFY, 100, `GAIA ${installedVersion} ready`);
@@ -2185,6 +2044,12 @@ async function ensureBackend(opts = {}) {
       );
     } else {
       log("GAIA backend not found — installing from scratch");
+    }
+
+    // Checked only once there is something to install, so a full disk never stops a current install.
+    if (!preChecks.disk.ok) {
+      const keep = Boolean(existingBin) && packageFinished && prev?.state !== STATES.FAILED;
+      throw lowDiskError(preChecks.disk, { keep, installedVersion });
     }
 
     await installBackend(opts);
@@ -2205,9 +2070,18 @@ async function ensureBackend(opts = {}) {
       throw err;
     }
 
+    await refreshAgent(verified, opts);
     return verified;
   } catch (err) {
+    if (err instanceof InstallCancelled) {
+      log(err.message);
+      throw err;
+    }
     if (err instanceof InstallError) {
+      if (err.keepState) {
+        log(`Install refused; the recorded state is unchanged: ${err.message}`);
+        throw err;
+      }
       setState(STATES.FAILED, {
         stage: err.stage || null,
         message: err.message,
@@ -2232,11 +2106,13 @@ module.exports = {
   ensureUv,
   installBackend,
   ensureBackend,
+  isBackendCurrent,
+  prefetchBackend,
+  isBackendPrefetched,
   getInstalledVersion,
   findGaiaBin,
   toPep440,
-  lemonadeInitArgs,
-  initFailureReason,
+  stopRunningDaemon,
 
   // Pre-checks
   runPreChecks,
@@ -2255,9 +2131,6 @@ module.exports = {
   setState,
   clearState,
 
-  // gaia init progress
-  parseInitEventLine,
-  createInitProgress,
   computeOverallPercent,
 
   // Logging
@@ -2267,12 +2140,14 @@ module.exports = {
   logError,
   getLogPath,
   getStatePath,
+  readLogTail,
 
   // Constants
   STATES,
   STAGES,
-  GAIA_INIT_MESSAGE,
-  WAITING_FOR_LEMONADE_CHOICE_MESSAGE,
+  FAILURE_REASONS,
+  DAEMON_STOP_TIMEOUT_MS,
+  DAEMON_STOP_LEMONADE_EXIT,
   GAIA_HOME,
   GAIA_VENV,
   GAIA_BIN,
@@ -2280,4 +2155,5 @@ module.exports = {
 
   // Error
   InstallError,
+  InstallCancelled,
 };

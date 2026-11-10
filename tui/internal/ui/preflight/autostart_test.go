@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -71,45 +74,6 @@ func TestStartLemonadeRefusesWhatItMayNotStart(t *testing.T) {
 	if !errors.Is(err, errNoAutoStart) {
 		t.Fatalf("want errNoAutoStart for an empty launcher, got %v", err)
 	}
-}
-
-// --- the context window reaches the child -----------------------------------
-
-func TestStartEnvCarriesTheContextWindow(t *testing.T) {
-	env := startEnv(launcher{CtxSize: 65536})
-	if !hasEnv(env, ctxSizeEnv+"=65536") {
-		t.Fatalf("%s missing from the child env; a server that comes up at the "+
-			"wrong window answers /health and 502s every query", ctxSizeEnv)
-	}
-}
-
-func TestServiceManagedLauncherGetsNoContextWindow(t *testing.T) {
-	// The unit file or plist owns it. Setting it on the systemctl CLIENT
-	// process changes nothing while looking like it did.
-	env := startEnv(launcher{CtxSize: 65536, ServiceManaged: true})
-	if hasEnv(env, ctxSizeEnv+"=65536") {
-		t.Fatalf("%s must not be set for a service-managed launcher", ctxSizeEnv)
-	}
-}
-
-func TestStartEnvLeavesVulkanCoopmatOn(t *testing.T) {
-	// Disabling it halves prompt speed for every model; GAIA loads only the
-	// embedder on the CPU backend instead (#1831).
-	const coopmatOff = "GGML_VK_DISABLE_COOPMAT=1"
-	for _, l := range []launcher{{CtxSize: 65536}, {}} {
-		if hasEnv(startEnv(l), coopmatOff) && !hasEnv(os.Environ(), coopmatOff) {
-			t.Fatalf("%s added to the child env for %+v", coopmatOff, l)
-		}
-	}
-}
-
-func hasEnv(env []string, want string) bool {
-	for _, e := range env {
-		if e == want {
-			return true
-		}
-	}
-	return false
 }
 
 // --- waiting --------------------------------------------------------------
@@ -312,6 +276,13 @@ func TestMain(m *testing.M) {
 	replayKeptKey = func(context.Context, string) (bool, error) { return false, nil }
 	// Nor reach the network to check the AMD gateway.
 	probeChatGateway = func(context.Context, string, string) error { return nil }
+	// Full motion by default: go test's stdout is not a terminal, which would
+	// otherwise switch every spinner off.
+	setupMotion = func() modelsetup.Motion { return modelsetup.Motion{} }
+	// Nor start the developer's real daemon to read the model plan.
+	newSetupAPI = func() setupapi.API {
+		return &setupapitest.Fake{PlanErr: errors.New("no daemon in tests")}
+	}
 	// Nor read the developer's own Lemonade choice, or find their server.
 	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
 	if err != nil {

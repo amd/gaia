@@ -670,6 +670,15 @@ def test_a_step_without_stats_makes_token_totals_unknown():
     assert perf["tokens_cached"] is None
 
 
+def test_a_priced_cloud_turn_with_no_token_counts_is_unreported():
+    perf = turn_insights._cost("fireworks.glm-5p3-flash", None, None, None)
+    assert perf == {"kind": "unreported", "usd": None}
+    time = {"wall_seconds": 1.0, "model_seconds": None, "gaia_seconds": None}
+    totals = turn_insights.chat_totals([{"time": time, "cost": perf}])
+    # Still counted apart from the total, never as $0.
+    assert totals["unpriced_turns"] == 1
+
+
 def test_a_model_gaia_cannot_place_is_never_priced_at_zero():
     # Dotted, not a known local model, not in the cloud catalog.
     assert turn_insights.where_model_runs("acme.some-model") is None

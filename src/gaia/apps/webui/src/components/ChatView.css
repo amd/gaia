@@ -2,12 +2,17 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
-.history-notice {
+.history-notice,
+.library-notices {
     margin: 8px auto;
     max-width: 640px;
     text-align: center;
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+.library-notices {
+    color: var(--text-primary);
 }
 
 .task-view {
@@ -34,7 +39,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 12px 8px 16px;
+    padding-block: 8px;
+    padding-inline: 16px 12px;
     min-height: 52px;
     flex-shrink: 0;
     background: var(--bg-primary);
@@ -48,6 +54,11 @@
     color: var(--accent-fill-text);
 }
 .task-header-right .task-header-private[data-private="true"]:hover { background: var(--accent-fill-hover); }
+.task-header-right .task-header-resources[aria-pressed="true"] {
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+}
+.task-header-right .task-header-resources[aria-pressed="true"]:hover { background: var(--accent-fill-hover); }
 
 .task-title {
     display: inline-flex;
@@ -68,9 +79,17 @@
 .task-title span {
     overflow: hidden;
     white-space: nowrap;
-    padding-right: 24px;
+    padding-inline-end: 24px;
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.task-title span {
+    unicode-bidi: plaintext;
+}
+.task-title span:dir(rtl) {
+    text-align: right;
+    -webkit-mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
 }
 
 .task-title-edit {
@@ -120,7 +139,7 @@
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
     width: 100%;
-    text-align: left;
+    text-align: start;
 }
 .doc-context-expanded {
     flex-wrap: wrap;
@@ -194,7 +213,7 @@
     width: 14px;
     height: 14px;
     padding: 0;
-    margin-left: 1px;
+    margin-inline-start: 1px;
     border: none;
     border-radius: var(--radius-sm);
     background: transparent;
@@ -276,7 +295,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding-left: 32px;
+    padding-inline-start: 32px;
 }
 
 .skeleton-line {
@@ -369,7 +388,7 @@
 }
 
 @media (max-width: 768px) {
-    .task-header { padding-left: var(--sidebar-toggle-clearance); }
+    .task-header { padding-inline-start: var(--sidebar-toggle-clearance); }
     .messages-column,
     .input-column { padding: 0 12px; }
 }
@@ -453,7 +472,51 @@
         padding: 12px 16px;
     }
     .skeleton-lines {
-        padding-left: 0;
+        padding-inline-start: 0;
     }
 
+}
+
+/* Under a turn the model server ended by taking no connection. */
+.server-down-notice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-block: 4px 12px;
+    padding: 12px;
+    max-width: 640px;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-yellow);
+    border-radius: var(--radius-md);
+}
+
+.server-down-notice p {
+    margin: 0;
+}
+
+.server-down-notice--ok {
+    border-color: var(--border-light);
+}
+
+.server-down-notice__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.server-down-notice__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.server-down-notice__raw {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
 }

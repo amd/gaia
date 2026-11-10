@@ -64,13 +64,6 @@ _FOLLOWUP_GRACE_SECONDS = 10.0
 GOALS_SESSION_TITLE = "Background goals"
 GOALS_SESSION_SETTING = "agent_loop_session_id"
 
-SIDECAR_TICKS_UNSUPPORTED = (
-    "Background goals can't run with this install's GAIA agent yet: it runs as "
-    "a separate program, and goal runs only work with the agent installed into "
-    "GAIA's Python, as in a source checkout. Track "
-    "https://github.com/amd/gaia/issues/5840."
-)
-
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
 # the honest default is "goal_driven" — which is exactly what the loop does.
@@ -501,7 +494,19 @@ class AgentLoop:
                 registry = _helpers._agent_registry
                 flagship = registry.get("gaia") if registry is not None else None
                 if flagship is not None and flagship.is_sidecar:
-                    raise RuntimeError(SIDECAR_TICKS_UNSUPPORTED)
+                    # The agent runs as its own binary, as the apps ship it: the
+                    # tick goes to it through the daemon, as scheduled prompts do.
+                    # Its set_loop_state call reaches sse_handler through the relay.
+                    answer = _helpers.relay_one_prompt(
+                        sse_handler,
+                        tick_prompt,
+                        agent_type="gaia",
+                        model_id=db.get_setting("custom_model") or session.get("model"),
+                        memory=_helpers._memory_mode(session, db),
+                        max_steps=None,
+                    )
+                    result_holder["result"] = {"result": answer or ""}
+                    return
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
@@ -540,12 +545,6 @@ class AgentLoop:
                         db, session.get("document_ids", [])
                     )
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
-                    # Beta dynamic tool loader (#1798). Inert here: autonomous
-                    # ticks use the default "full" prompt profile and the loader
-                    # only activates on the "doc" profile — wired for future-
-                    # proofing so this path stays in lock-step with server.py's
-                    # scheduled-prompt build if that ever changes.
-                    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
                     config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -555,7 +554,6 @@ class AgentLoop:
                         min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
-                        dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
                         surface="agent_ui",
                     )

@@ -9,7 +9,7 @@ title: "Test Utilities"
 <Note>
 **Component:** Test Utilities (MockLLMProvider, MockVLMClient, fixtures)
 **Module:** `gaia.testing`
-**Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_database`
+**Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_db`
 </Note>
 ---
 
@@ -269,45 +269,27 @@ def create_test_agent(
     return agent
 
 @contextmanager
-def temp_database(schema_file: Optional[str] = None):
+def temp_db(schema: Optional[str] = None):
     """
-    Create temporary SQLite database for testing.
+    Create a temporary SQLite database for testing.
 
-    Auto-deletes after test completes.
+    Auto-deletes after the context exits.
 
     Args:
-        schema_file: Optional SQL file to execute
+        schema: Optional SQL to execute on the database (CREATE TABLE, etc.)
 
     Yields:
-        Database URL string
+        str: Path to the temporary database file
 
     Usage:
-        with temp_database() as db_url:
-            agent = MyAgent(db_url=db_url)
-            # Test with real database
-            agent.execute_insert("users", {"name": "Test"})
+        with temp_db("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)") as db_path:
+            agent = MyAgent(skip_lemonade=True)
+            agent.init_db(db_path)
+            agent.insert("users", {"name": "Test"})
 
         # Database automatically deleted
     """
-    with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
-        db_path = f.name
-
-    db_url = f"sqlite:///{db_path}"
-
-    try:
-        # Initialize database if schema provided
-        if schema_file:
-            import sqlite3
-            conn = sqlite3.connect(db_path)
-            with open(schema_file) as schema:
-                conn.executescript(schema.read())
-            conn.close()
-
-        yield db_url
-
-    finally:
-        # Cleanup
-        Path(db_path).unlink(missing_ok=True)
+    ...  # See src/gaia/database/testing.py
 
 @contextmanager
 def temp_directory():
@@ -418,7 +400,7 @@ from gaia.testing import (
     MockLLMProvider,
     MockVLMClient,
     create_test_agent,
-    temp_database,
+    temp_db,
     temp_directory,
 )
 from gaia import Agent
@@ -461,37 +443,20 @@ def test_mock_vlm_returns_text():
     assert result == "Extracted data"
     assert mock.was_called
 
-def test_temp_database_creates_and_cleans_up():
-    """Test temp_database fixture."""
-    import sqlite3
+def test_temp_db_creates_and_cleans_up():
+    """Test temp_db fixture."""
+    with temp_db() as db_path:
+        assert Path(db_path).parent.exists()
 
-    with temp_database() as db_url:
-        # Database should exist
-        assert "sqlite:///" in db_url
-
-        # Should be usable
-        db_path = db_url.replace("sqlite:///", "")
-        conn = sqlite3.connect(db_path)
-        conn.execute("CREATE TABLE test (id INTEGER)")
-        conn.close()
-
-        # File exists
-        assert Path(db_path).exists()
-
-    # After context, file should be deleted
+    # After context, the temp directory is deleted
     assert not Path(db_path).exists()
 
-def test_temp_database_with_schema(tmp_path):
-    """Test temp_database with schema file."""
-    schema_file = tmp_path / "schema.sql"
-    schema_file.write_text("CREATE TABLE users (id INTEGER PRIMARY KEY);")
+def test_temp_db_with_schema():
+    """Test temp_db with a schema."""
+    import sqlite3
 
-    with temp_database(schema_file=str(schema_file)) as db_url:
-        import sqlite3
-        db_path = db_url.replace("sqlite:///", "")
+    with temp_db("CREATE TABLE users (id INTEGER PRIMARY KEY);") as db_path:
         conn = sqlite3.connect(db_path)
-
-        # Table should exist from schema
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = [row[0] for row in cursor.fetchall()]
 
@@ -522,7 +487,7 @@ def test_create_test_agent():
     class TestAgent(Agent):
         def _get_system_prompt(self): return "Test"
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
         def _register_tools(self): pass
 
@@ -567,7 +532,7 @@ def test_agent_processes_query():
 
 ```python
 import pytest
-from gaia.testing import temp_database
+from gaia.testing import temp_db
 from gaia import Agent, DatabaseMixin
 
 def test_customer_agent_creates_record(tmp_path):
@@ -582,8 +547,9 @@ def test_customer_agent_creates_record(tmp_path):
     """)
 
     # Test with temporary database
-    with temp_database(schema_file=str(schema)) as db_url:
-        agent = CustomerAgent(db_url=db_url)
+    with temp_db(schema.read_text()) as db_path:
+        agent = CustomerAgent(skip_lemonade=True)
+        agent.init_db(db_path)
 
         # Tools are regular Python functions — call them directly
         from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -594,7 +560,7 @@ def test_customer_agent_creates_record(tmp_path):
         assert result["status"] == "created"
 
         # Verify in database
-        customers = agent.execute_query("SELECT * FROM customers")
+        customers = agent.query("SELECT * FROM customers")
         assert len(customers) == 1
         assert customers[0]["name"] == "Test Customer"
 
@@ -667,7 +633,7 @@ def test_agent_processes_new_files():
 
 ```python
 import pytest
-from gaia.testing import temp_database, temp_directory, MockLLMProvider
+from gaia.testing import temp_db, temp_directory, MockLLMProvider
 
 @pytest.fixture
 def mock_llm():
@@ -675,10 +641,10 @@ def mock_llm():
     return MockLLMProvider()
 
 @pytest.fixture
-def temp_db():
+def db_path():
     """Provide temporary database fixture."""
-    with temp_database() as db_url:
-        yield db_url
+    with temp_db() as path:
+        yield path
 
 @pytest.fixture
 def tmp_dir():
@@ -702,7 +668,7 @@ Add new section:
 
 ### Testing Your Agents
 
-**Import:** `from gaia.testing import MockLLMProvider, temp_database, create_test_agent`
+**Import:** `from gaia.testing import MockLLMProvider, temp_db, create_test_agent`
 
 **Purpose:** Test agents without real LLMs, databases, or network calls.
 
@@ -754,7 +720,7 @@ dev = [
 
 ### Step 3: Implement Fixtures
 - [ ] `create_test_agent()` function
-- [ ] `temp_database()` context manager
+- [ ] `temp_db()` context manager
 - [ ] `temp_directory()` context manager
 - [ ] Schema loading for temp DB
 
@@ -767,7 +733,7 @@ dev = [
 - [ ] Create `tests/sdk/test_testing_utilities.py`
 - [ ] Test MockLLMProvider
 - [ ] Test MockVLMClient
-- [ ] Test temp_database
+- [ ] Test temp_db
 - [ ] Test temp_directory
 - [ ] Test create_test_agent
 

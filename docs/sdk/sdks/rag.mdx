@@ -65,8 +65,9 @@ indexes empty text. Photos are turned upright using their EXIF orientation, and
 transparent backgrounds are read as white. A multi-page TIFF is read page by
 page, up to 50 pages; a larger one fails, naming its page count. An animated GIF
 is read from its first frame only.
-`gaia init` doesn't download the default vision model; run
-`lemonade pull Qwen3-VL-4B-Instruct-GGUF` to get it. The Agent UI's folder
+`RAGConfig.vlm_model` is `None` while the chat model runs on the NPU: images in documents are then skipped with a note, and indexing an image file raises `ImageExtractionError` saying why. Otherwise the default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
+unless you set your own `default_model`; then run
+`lemonade pull Gemma-4-E4B-it-GGUF` to get it. The Agent UI's folder
 indexing skips images, so add them one at a time.
 </Note>
 
@@ -185,12 +186,20 @@ response = rag.query("How do I contact support?")
 print(response.text)
 ```
 
-**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing.
+**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing. Each question is answered only from the passages retrieved for that question.
 
 Check the `success` field returned by `index_document()`. A failed cache write
 leaves the searchable index unchanged, so retrying does not duplicate chunks.
-Use `reindex_document(path)` after changing a document; if replacement fails,
-the previously indexed version remains available for queries.
+Calling `index_document()` again on a document that changed since it was
+indexed re-indexes it (the result has `reindexed: True`); an unchanged one
+returns `already_indexed: True` without re-embedding. `is_current(path)` tells
+you which without indexing, and `freshness(path)` does so cheaply enough to
+call before every query (it hashes only when the file's size or timestamps
+moved). If replacement fails, the call reports the error and the previously
+indexed version remains available for queries. The agent's document search
+tools run this check themselves, so they never answer from an edited file's
+old text. `reindex_document(path)`, which the file watcher calls, takes the same
+path: searches keep answering from the old version while the new one embeds.
 
 Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
 takes minutes. Pass `progress_callback=lambda done, total: ...` to
@@ -319,8 +328,40 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
 </Note>
+
+### Indexing JSON records
+
+By default a `.json` file is flattened into one document. For an export that holds
+many records (Jira issues, Confluence pages), set `json_loader` so each object in the
+array is indexed on its own, and every chunk starts with that record's citation
+fields:
+
+```python
+from gaia.rag.sdk import JsonLoaderConfig, RAGConfig, RAGSDK
+
+rag = RAGSDK(RAGConfig(
+    json_loader=JsonLoaderConfig(
+        content_fields=["bodyText", "descriptionText", "summary"],
+        metadata_fields=["key", "title", "webUrl", "author"],
+        document_array_path="confluencePages",  # dotted path; "" if the file is the array
+    ),
+))
+rag.index_document("export.json")
+# A retrieved chunk reads:
+#   key: OAI-12
+#   title: OAI HWSD Bug Report
+#   webUrl: https://...
+#   The GPT-OSS 120B serving...
+```
+
+Content from two records never shares a chunk, and fields not listed in either
+list stay out of the index. Records with no text in `content_fields` are skipped
+with a warning. A path that doesn't resolve to an array of objects, or field names
+that match no record, fail the index with an error saying what to fix. The loader
+applies to every `.json` file this `RAGSDK` indexes, and it is part of the cache
+key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
@@ -1019,7 +1060,7 @@ except PermissionError as e:
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+**Security Consideration:** Without `allowed_paths`, RAG reads only the working directory, and `index_document` refuses any other file with `file_unreadable`. A caller that names a file grants it first with `path_validator.add_allowed_path(path)`, as `quick_rag()` and the chat agent's `/index` do. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
 
 `allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write), and the agent's `index_document` / `index_directory` tools apply them too. Calling `RAGSDK.index_document` directly checks the scope only.
 </Warning>

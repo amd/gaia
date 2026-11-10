@@ -1,15 +1,13 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Read-only Microsoft Graph mailbox client for the flagship agent's email tools.
+"""Microsoft Graph mailbox clients for the flagship agent's email tools.
 
-Scope is deliberately narrow: list, search, read (one message or a whole
-conversation), and folder enumeration. There
-is no mutating verb here, so there is no action ledger to keep consistent and
-nothing to undo. Writes arrive in a later phase together with the ledger that
-makes them reversible.
+The read client lists, searches and reads, under the narrowest scope the
+connection carries. The write client adds drafts and sending, and is built only
+when a write is asked for. Neither organizes or deletes received mail.
 
-This is a lean reimplementation of the read half of
-``gaia_agent_email.outlook_backend``, not an import of it: the flagship must not
+This is a lean reimplementation of ``gaia_agent_email.outlook_backend``, not an
+import of it: the flagship must not
 depend on the standalone email package it is meant to replace. The wire
 contract (Graph ``message`` resource) is the shared truth, not the Python.
 """
@@ -23,7 +21,17 @@ from urllib.parse import quote
 
 import httpx
 
-from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
+from gaia.agents.tools._email.errors import (
+    MailboxAuthError,
+    MailboxError,
+    MailboxOutcomeUnknown,
+)
+from gaia.agents.tools._email.outgoing import (
+    OutgoingMessage,
+    Recipient,
+    Recipients,
+    SourceMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +45,19 @@ _LIST_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview"
 )
-_FULL_SELECT = _LIST_SELECT + ",body"
+# Graph only needs the header collection when reading a full conversation;
+# keeping it off list/search calls avoids asking those endpoints for data the
+# caller does not use.
+_FULL_SELECT = _LIST_SELECT + ",internetMessageHeaders,body"
+
+_DRAFT_SELECT = (
+    "id,conversationId,subject,toRecipients,ccRecipients,bccRecipients,body,"
+    "isDraft,internetMessageId,bodyPreview"
+)
+_SOURCE_SELECT = (
+    "id,conversationId,subject,from,replyTo,toRecipients,ccRecipients,body,"
+    "internetMessageId,receivedDateTime"
+)
 
 # Graph caps $top at 999; asking for more is a 400, not a truncation.
 _MAX_TOP = 999
@@ -102,6 +122,11 @@ def message_summary(
     shape, so the tools and the skill never learn which mailbox they are on.
     """
     flag = (msg.get("flag") or {}).get("flagStatus")
+    headers = {
+        str(header.get("name") or "").lower(): str(header.get("value") or "")
+        for header in msg.get("internetMessageHeaders") or []
+        if header.get("name")
+    }
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("conversationId") or msg.get("id"),
@@ -114,12 +139,65 @@ def message_summary(
         "flagged": flag in ("flagged", "complete"),
         "categories": list(msg.get("categories") or []),
         "preview": (msg.get("bodyPreview") or "").strip(),
+        # Provider-neutral metadata consumed by the waiting-on-you detector.
+        "auto_submitted": headers.get("auto-submitted", ""),
+        "x_autoreply": headers.get("x-autoreply", ""),
     }
     if include_body:
         body = msg.get("body") or {}
         summary["body"] = body.get("content") or ""
         summary["body_content_type"] = (body.get("contentType") or "text").lower()
     return summary
+
+
+def _recipient(entity: Dict[str, Any]) -> Recipient:
+    email = entity.get("emailAddress") or {}
+    return Recipient(
+        (email.get("name") or "").strip(), (email.get("address") or "").strip()
+    )
+
+
+def _recipients(entities: Optional[Iterable[Dict[str, Any]]]) -> Recipients:
+    found = (_recipient(e) for e in entities or [])
+    return tuple(r for r in found if r.address)
+
+
+def _graph_recipients(recipients: Recipients) -> List[Dict[str, Any]]:
+    return [
+        (
+            {"emailAddress": {"name": r.name, "address": r.address}}
+            if r.name
+            else {"emailAddress": {"address": r.address}}
+        )
+        for r in recipients
+    ]
+
+
+def graph_message(message: OutgoingMessage) -> Dict[str, Any]:
+    """*message* as a Graph ``message`` resource.
+
+    Threading headers are absent on purpose: Graph answers 400 to a standard
+    header in ``internetMessageHeaders``. A reply threads through ``createReply``.
+    """
+    return {
+        "subject": message.subject,
+        "body": {
+            "contentType": "HTML" if message.body_type == "html" else "Text",
+            "content": message.body,
+        },
+        "toRecipients": _graph_recipients(message.to),
+        "ccRecipients": _graph_recipients(message.cc),
+        "bccRecipients": _graph_recipients(message.bcc),
+    }
+
+
+def _graph_id(value: str, kind: str, source: str) -> str:
+    # Ids arrive from the model. Quoted whole: a base64 `/` is data, not a path.
+    if not value or not _MESSAGE_ID_RE.fullmatch(value):
+        raise ValueError(
+            f"{kind} {value!r} is not a Microsoft Graph id. Use one from {source}."
+        )
+    return quote(value, safe="")
 
 
 class OutlookReadBackend:
@@ -361,11 +439,193 @@ class OutlookReadBackend:
             for f in data.get("value", [])
         ]
 
+    def get_draft(self, draft_id: str) -> OutgoingMessage:
+        """One draft, exactly as Graph would send it now.
+
+        A Graph draft id is a message id, so this refuses a message that is not
+        a draft: discarding or rewriting received mail must never start here.
+        """
+        path = _graph_id(draft_id, "draft_id", "create_draft or list_drafts")
+        data = self._get(
+            f"/me/messages/{path}",
+            params={
+                "$select": _DRAFT_SELECT,
+                "$expand": "attachments($select=name)",
+            },
+        )
+        if not data.get("isDraft"):
+            raise ValueError(
+                f"Message {draft_id!r} is not a draft. Use an id from create_draft "
+                "or list_drafts."
+            )
+        body = data.get("body") or {}
+        return OutgoingMessage(
+            to=_recipients(data.get("toRecipients")),
+            cc=_recipients(data.get("ccRecipients")),
+            bcc=_recipients(data.get("bccRecipients")),
+            subject=data.get("subject") or "",
+            body=body.get("content") or "",
+            body_type=(body.get("contentType") or "text").lower(),
+            thread_id=data.get("conversationId"),
+            attachments=tuple(
+                a.get("name") or "" for a in data.get("attachments") or []
+            ),
+        )
+
+    def list_drafts(self, *, limit: int = 25) -> List[Dict[str, Any]]:
+        """Saved drafts with their recipients and subject, not their bodies."""
+        data = self._get(
+            "/me/mailFolders/drafts/messages",
+            params={
+                "$top": self._clamp(limit),
+                "$select": "id,conversationId,subject,toRecipients,bodyPreview",
+            },
+        )
+        return [
+            {
+                "draft_id": m.get("id"),
+                "thread_id": m.get("conversationId"),
+                "to": _address_list(m.get("toRecipients")),
+                "subject": m.get("subject") or "(no subject)",
+                "preview": (m.get("bodyPreview") or "").strip(),
+            }
+            for m in data.get("value", [])
+        ]
+
+
+class OutlookWriteBackend(OutlookReadBackend):
+    """Drafting and sending. Each call is made once; a failure is reported, not retried."""
+
+    # A PATCH touches only the fields it names, so a draft's files stay.
+    edit_keeps_attachments = True
+
+    def _write(
+        self, method: str, path: str, *, payload: Optional[dict] = None
+    ) -> Dict[str, Any]:
+        where = f"{method} {path}"
+        headers = self._headers()
+        try:
+            resp = self._client.request(
+                method,
+                f"{GRAPH_API_BASE}{path}",
+                headers=headers,
+                json=payload,
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            raise MailboxError(
+                f"Could not reach Microsoft Graph for {where} "
+                f"({type(exc).__name__}), so the request never went out. Check "
+                "network connectivity, then retry."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise MailboxOutcomeUnknown(
+                f"The connection to Microsoft Graph failed during {where} "
+                f"({type(exc).__name__}), so GAIA can't tell whether it took "
+                "effect. Check Sent Items and Drafts before trying again."
+            ) from exc
+        if resp.status_code == 403:
+            raise MailboxAuthError(
+                "Microsoft Graph refused this because the connection can't write "
+                "mail (403). Reconnect Microsoft in Settings -> Connectors and "
+                "approve reading and sending mail. (request: "
+                f"{where}; code: {_error_detail(resp) or 'forbidden'})"
+            )
+        if resp.status_code >= 500:
+            raise MailboxOutcomeUnknown(
+                f"Microsoft Graph answered {resp.status_code} during {where}, so "
+                "GAIA can't tell whether it took effect. Check Sent Items and Drafts "
+                "before trying again."
+            )
+        if resp.status_code not in (200, 201, 202, 204):
+            self._raise(resp, where)
+        try:
+            return resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise MailboxOutcomeUnknown(
+                f"Microsoft Graph accepted {where} but its answer was unreadable, so "
+                "GAIA can't confirm the result. Check Sent Items and Drafts before "
+                "trying again."
+            ) from exc
+
+    def get_source_message(self, message_id: str) -> SourceMessage:
+        """What a reply or forward is built from."""
+        path = _graph_id(message_id, "message_id", "list_inbox or search_email")
+        data = self._get(
+            f"/me/messages/{path}",
+            params={
+                "$select": _SOURCE_SELECT,
+                "$expand": "attachments($select=name)",
+            },
+        )
+        sender = _recipient(data["from"]) if data.get("from") else None
+        body = data.get("body") or {}
+        return SourceMessage(
+            id=message_id,
+            sender=sender if sender and sender.address else None,
+            reply_to=_recipients(data.get("replyTo")),
+            to=_recipients(data.get("toRecipients")),
+            cc=_recipients(data.get("ccRecipients")),
+            subject=data.get("subject") or "",
+            body=body.get("content") or "",
+            body_type=(body.get("contentType") or "text").lower(),
+            thread_id=data.get("conversationId"),
+            internet_message_id=data.get("internetMessageId"),
+            references=None,
+            received=data.get("receivedDateTime") or "",
+            attachments=tuple(
+                a.get("name") or "" for a in data.get("attachments") or []
+            ),
+        )
+
+    def _new_reply_draft(self, message: OutgoingMessage) -> str:
+        """A threaded draft whose every field is *message*'s, not Graph's defaults."""
+        source = quote(message.reply_to_id, safe="")
+        draft_id = self._write("POST", f"/me/messages/{source}/createReply")["id"]
+        try:
+            self.update_draft(draft_id, message)
+        except MailboxError as exc:
+            raise MailboxError(
+                f"Graph started a reply draft ({draft_id}) but could not fill it "
+                f"in, so nothing was sent. Discard that draft in Outlook. {exc}"
+            ) from exc
+        return draft_id
+
+    def create_draft(self, message: OutgoingMessage) -> str:
+        if message.reply_to_id:
+            return self._new_reply_draft(message)
+        return self._write("POST", "/me/messages", payload=graph_message(message))["id"]
+
+    def update_draft(self, draft_id: str, message: OutgoingMessage) -> None:
+        path = _graph_id(draft_id, "draft_id", "create_draft or list_drafts")
+        self._write("PATCH", f"/me/messages/{path}", payload=graph_message(message))
+
+    def discard_draft(self, draft_id: str) -> None:
+        path = _graph_id(draft_id, "draft_id", "create_draft or list_drafts")
+        self._write("DELETE", f"/me/messages/{path}")
+
+    def send_draft(self, draft_id: str) -> Dict[str, Any]:
+        path = _graph_id(draft_id, "draft_id", "create_draft or list_drafts")
+        self._write("POST", f"/me/messages/{path}/send")
+        # Graph answers 202 with no body, so no sent id exists to report.
+        return {"message_id": None, "thread_id": None}
+
+    def send(self, message: OutgoingMessage) -> Dict[str, Any]:
+        if message.reply_to_id:
+            return self.send_draft(self._new_reply_draft(message))
+        self._write(
+            "POST",
+            "/me/sendMail",
+            payload={"message": graph_message(message), "saveToSentItems": True},
+        )
+        return {"message_id": None, "thread_id": None}
+
 
 __all__ = [
     "GRAPH_API_BASE",
     "MailboxAuthError",
     "MailboxError",
     "OutlookReadBackend",
+    "OutlookWriteBackend",
+    "graph_message",
     "message_summary",
 ]

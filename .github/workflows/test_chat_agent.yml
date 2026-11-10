@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 # This workflow tests ChatAgent, which ships in the flagship gaia-agent-gaia
-# wheel (#6099), plus the deprecated gaia-agent-chat re-export shim's own
-# tests and the framework-side session, RAG, and path-validation suites.
+# wheel (#6099), plus the framework-side session, RAG, and path-validation
+# suites.
 
 name: Chat Agent Tests
 
@@ -11,7 +11,6 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/chat/python/**'
       - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -58,6 +57,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -93,9 +93,8 @@ on:
       - 'tests/unit/test_profilespec_characterization.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
-      - 'hub/agents/chat/python/**'
       - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -142,6 +141,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -209,8 +209,8 @@ jobs:
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
           # ChatAgent ships in the flagship wheel (#6099), which the retrieval
-          # harness also binds; the chat package is its deprecated re-export shim.
-          uv pip install --system -e hub/agents/gaia/python -e hub/agents/chat/python
+          # harness also binds.
+          uv pip install --system -e hub/agents/gaia/python
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_chat_agent.yml --job test-chat-agent
@@ -232,17 +232,6 @@ jobs:
             tests/unit/test_chat_tool_bundles.py tests/unit/test_chat_tool_failure_honesty.py \
             tests/unit/api/test_sse_confirmation_gate.py -v --tb=short
 
-      - name: Run Chat Agent Package Tests
-        env:
-          GAIA_MEMORY_DISABLED: "1"
-        run: |
-          echo "================================================================"
-          echo "                  CHAT AGENT PACKAGE TESTS"
-          echo "================================================================"
-          echo "Testing the deprecated re-export shim..."
-          echo ""
-          python -m pytest hub/agents/chat/python/tests/ -v --tb=short
-
       - name: Run Chat-Wheel Suites
         env:
           GAIA_MEMORY_DISABLED: "1"
@@ -252,6 +241,7 @@ jobs:
           python -m pytest \
             tests/unit/test_chat_agent_integration.py \
             tests/unit/test_chat_dynamic_tools.py \
+            tests/unit/test_chat_fetch_webpage_retry_after.py \
             tests/unit/test_chat_fix_contracts.py \
             tests/unit/test_chat_inline_web_ssrf.py \
             tests/unit/test_chat_system_prompt_budget.py \
@@ -277,6 +267,7 @@ jobs:
             tests/unit/agents/test_console_tool_confirmation.py \
             tests/unit/agents/tools/test_email_tools.py \
             tests/unit/test_inference_location.py \
+            tests/unit/test_skill_loads_with.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
             tests/unit/chat/test_session_prompt_context.py \
@@ -379,7 +370,7 @@ jobs:
           echo "================================================================"
           echo "         CHAT AGENT HOST-ATTRIBUTE CONTRACT TESTS"
           echo "================================================================"
-          echo "Testing ChatAgent/ChatAgentLite are unaffected by the"
+          echo "Testing ChatAgent is unaffected by the"
           echo "RAGToolsMixin/FileIOToolsMixin host-attribute contract fix..."
           echo ""
 

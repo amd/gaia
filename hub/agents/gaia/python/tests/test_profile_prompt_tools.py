@@ -12,7 +12,6 @@ from gaia_agent.profiles import PROFILE_SPECS
 # Prompt names with no registered tool; remove an entry once its prompt is fixed.
 _KNOWN_GAPS = {
     "chat": {"query_specific_file"},  # appears only inside a banned-output example
-    "doc": {"find_files"},
 }
 
 
@@ -39,6 +38,68 @@ def test_prompt_names_only_registered_tools(profile, prompts_and_tools):
     prompt, registered = prompts_and_tools[profile]
     named = {name for name in known if re.search(rf"\b{re.escape(name)}\b", prompt)}
     assert named - registered == _KNOWN_GAPS.get(profile, set())
+
+
+# The discovery block as "file" and "full" render it; the flagship runs "full",
+# so these bytes must not move when the doc profile's wording changes.
+_FS_DISCOVERY_RULES = """
+**SMART DISCOVERY WORKFLOW:**
+1. Domain question + nothing relevant indexed: `find_files` with 1-2 document-type keywords (handbook / report / manual / policy / guide), NOT the question's content terms. If nothing after 2 tries, `browse_directory`.
+2. Files found → `index_document` immediately (no confirmation), then query and answer in the same turn.
+3. Already indexed → query directly.
+
+**NEVER ASK PERMISSION TO INDEX.** "Would you like me to index this?" is BANNED. If a document is referenced and you can locate it, index + query + answer in one flow.
+
+**SEARCH LOOP PREVENTION:** Same `find_files` / `browse_directory` query twice with same result → STOP and acknowledge.
+
+**VAGUE FOLLOW-UP ("what about X?"):** find_files("X") → index_document → query_specific_file with whatever question is implicit, or "key topics overview" if none.
+"""
+
+
+@pytest.mark.parametrize("profile", ["file", "full", "no-such-profile"])
+def test_filesystem_profiles_discovery_rules_are_unchanged(profile):
+    """Profiles that register find_files keep the original discovery bytes."""
+    prompt = _prompt_for_profile(profile)
+    assert _FS_DISCOVERY_RULES in prompt
+
+
+def test_doc_profile_discovery_rules_use_search_file(prompts_and_tools):
+    prompt, registered = prompts_and_tools["doc"]
+    assert {"search_file", "browse_directory"} <= registered
+    assert "find_files" not in prompt
+    assert _FS_DISCOVERY_RULES.replace("find_files", "search_file") in prompt
+
+
+@pytest.mark.parametrize(
+    "groups, tool",
+    [
+        (("doc_rag",), "search_file"),
+        (("doc_rag", "file_fs"), "find_files"),
+        (("file_fs", "doc_rag"), "find_files"),
+        # Near-miss group names must not switch the doc wording to find_files.
+        (("doc_rag", "file_fs_extra"), "search_file"),
+        (("doc_rag", "file"), "search_file"),
+    ],
+)
+def test_discovery_tool_follows_file_fs_group(groups, tool):
+    import dataclasses
+
+    import gaia_agent.chat_agent as agent_mod
+
+    spec = dataclasses.replace(PROFILE_SPECS["doc"], tool_groups=groups)
+    other = "find_files" if tool == "search_file" else "search_file"
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="doc"))
+        with patch.object(agent_mod, "get_profile_spec", return_value=spec):
+            prompt = agent._get_system_prompt()
+    assert _FS_DISCOVERY_RULES.replace("find_files", tool) in prompt
+    assert f"`{other}` / `browse_directory`" not in prompt
 
 
 def test_data_profile_does_not_advertise_web_or_media(prompts_and_tools):
@@ -71,12 +132,76 @@ def test_full_profile_unsupported_line_is_unchanged(prompts_and_tools):
     )
 
 
+def test_scheduling_is_unsupported_only_without_the_calendar_skill():
+    from gaia.agents.base.model_features import COMPACT, FULL
+
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="full"))
+        assert "scheduling" in _unsupported_line(agent._get_system_prompt())
+
+        agent.BUNDLES_CALENDAR_SKILL = True
+        agent.model_features = FULL
+        assert "scheduling" not in _unsupported_line(agent._get_system_prompt())
+
+        agent.model_features = COMPACT
+        assert "scheduling" in _unsupported_line(agent._get_system_prompt())
+
+
+def test_sending_email_is_unsupported_only_without_the_send_email_skill():
+    from gaia.agents.base.model_features import COMPACT, FULL
+
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile="full"))
+        assert "**UNSUPPORTED:** Email, " in agent._get_system_prompt()
+
+        added = "read_email" not in agent._tools_registry
+        agent._tools_registry["read_email"] = {}
+        try:
+            line = _unsupported_line(agent._get_system_prompt())
+            assert "**UNSUPPORTED:** Sending email, " in line
+
+            agent.BUNDLES_SEND_EMAIL_SKILL = True
+            agent.model_features = FULL
+            assert "email" not in _unsupported_line(agent._get_system_prompt())
+
+            agent.model_features = COMPACT
+            line = _unsupported_line(agent._get_system_prompt())
+            assert "**UNSUPPORTED:** Sending email, " in line
+        finally:
+            if added:
+                agent._tools_registry.pop("read_email", None)
+
+
 def test_data_profile_unsupported_line_keeps_image_analysis(prompts_and_tools):
     line = _unsupported_line(prompts_and_tools["data"][0])
     assert line.endswith(
         "feature_request.md . Image analysis IS supported via `analyze_image`."
     )
     assert "search_web" not in line and "transcribe_media" not in line
+
+
+def _prompt_for_profile(profile):
+    with (
+        patch.dict("os.environ", {"GAIA_MEMORY_DISABLED": "1"}),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
+        patch("gaia.llm.lemonade_manager.LemonadeManager.ensure_ready"),
+        patch("gaia.llm.lemonade_client.LemonadeClient"),
+    ):
+        agent = ChatAgent(ChatAgentConfig(silent_mode=True, prompt_profile=profile))
+        return agent._get_system_prompt()
 
 
 def _prompt_for_spec(spec):

@@ -4,15 +4,17 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
-import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
+import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
     | 'general'
+    | 'setup'
     | 'model'
     | 'permissions'
     | 'skills'
@@ -20,6 +22,7 @@ export type SettingsSection =
     | 'memory'
     | 'privacy'
     | 'notifications'
+    | 'voice'
     | 'advanced';
 
 /**
@@ -70,6 +73,27 @@ export function readCustomColors(): CustomColors {
     return DEFAULT_CUSTOM;
 }
 
+const LOCALE_KEY = 'gaia-chat-locale';
+
+/**
+ * The saved interface language; anything unregistered reads as English. With
+ * nothing saved (a first run), the PC's own language when GAIA has it.
+ */
+export function readLocale(): string {
+    const v = readPref(LOCALE_KEY, '');
+    if (v) {
+        if (isLocaleCode(v)) return v;
+        log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+        return DEFAULT_LOCALE;
+    }
+    const system = typeof navigator === 'undefined' ? [] : (navigator.languages?.length ? navigator.languages : [navigator.language]);
+    for (const tag of system) {
+        const code = (tag ?? '').split('-')[0].toLowerCase();
+        if (isLocaleCode(code)) return code;
+    }
+    return DEFAULT_LOCALE;
+}
+
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
 function writePref(key: string, value: string): void {
     try {
@@ -106,6 +130,23 @@ export interface LiveQuestion {
     expiresAt: number | null;
 }
 
+/** One stage of a recording: 0 running, 1 done, 2 skipped. */
+export interface RecordingStage {
+    state: number;
+    percent?: number;
+    etaSeconds?: number;
+}
+
+/** One section of a recording, read while the rest are still being read. */
+export interface RecordingSection {
+    section: number;
+    sections: number;
+    start: string;
+    end: string;
+    summary: string;
+    items: FoundItem[];
+}
+
 interface ChatState {
     /** Registered agents; Settings → Connectors grants scopes to them. */
     agents: AgentInfo[];
@@ -133,10 +174,12 @@ interface ChatState {
     queuedSessionIds: string[];
     /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
     awaitingBySession: Record<string, AwaitingUser>;
-    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first, or while GAIA is unreachable. */
     activeRunsAt: number;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** GAIA is unreachable: show no chat running, and treat none as idle until a poll lands. */
+    loseActiveRuns: () => void;
     /** Messages typed while a chat answered, by chat. Each goes out when that
      *  chat's turn ends, open or not, and survives a reload. */
     messageQueues: Record<string, QueuedMessage[]>;
@@ -172,12 +215,22 @@ interface ChatState {
     appendThinkingContent: (content: string) => void;
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
+    /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
+    addSkillStep: (step: AgentStep | null) => void;
+    /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
+    skillUses: number;
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
     livePhase: string | null;
     setLiveStatus: (status: string | null, phase?: string | null) => void;
+    /** Where the recording being worked on stands, by stage; null when there is none. */
+    recordingStages: Record<number, RecordingStage> | null;
+    setRecordingStage: (stage: number, report: RecordingStage) => void;
+    /** Sections of the recording already read, by section number; null when none yet. */
+    recordingSections: Record<number, RecordingSection> | null;
+    addRecordingSection: (section: RecordingSection) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
@@ -214,6 +267,9 @@ interface ChatState {
     showFileBrowser: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Setup was asked to run again from Settings. */
+    setupAgain: boolean;
+    runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
     showMemoryDashboard: boolean;
@@ -238,6 +294,9 @@ interface ChatState {
     /** A message queued for one chat; only that chat's view sends it. */
     pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Interface language, a code registered in src/i18n/registry.ts. */
+    locale: string;
+    setLocale: (code: string) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
     customColors: CustomColors;
@@ -309,6 +368,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             return next;
         }),
+    loseActiveRuns: () =>
+        set((state) => (state.runningSessionIds.length > 0
+            ? { activeRunsAt: 0, runningSessionIds: [] }
+            : { activeRunsAt: 0 })),
     messageQueues: readQueues(),
     updateQueue: (sessionId, fn) =>
         set((state) => {
@@ -398,7 +461,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -448,10 +511,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    addSkillStep: (step) =>
+        set((state) => {
+            if (!step) return { skillUses: state.skillUses + 1 };
+            const steps = [...state.agentSteps];
+            let at = steps.length;
+            for (let i = steps.length - 1; i >= 0; i--) {
+                if (steps[i].type !== 'tool') continue;
+                if (steps[i].active) at = i;
+                break;
+            }
+            steps.splice(at, 0, step);
+            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+        }),
+    skillUses: 0,
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
     livePhase: null,
     setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
+    recordingStages: null,
+    setRecordingStage: (stage, report) => set((state) => {
+        const next: Record<number, RecordingStage> = { ...state.recordingStages };
+        // Reaching a stage means the earlier ones are behind it, reused or finished.
+        for (let earlier = 1; earlier < stage; earlier++) {
+            if (next[earlier]?.state !== 2) next[earlier] = { state: 1 };
+        }
+        next[stage] = report;
+        return { recordingStages: next };
+    }),
+    recordingSections: null,
+    addRecordingSection: (section) => set((state) => ({
+        recordingSections: { ...state.recordingSections, [section.section]: section },
+    })),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
@@ -469,7 +560,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
             const { [requestId]: _closed, ...rest } = state.liveQuestions;
-            return { liveQuestions: rest };
+            // The agent stops waiting once its question is answered or expires.
+            return { liveQuestions: rest, awaitingUser: false };
         }),
     closeSessionQuestions: (sessionId) =>
         set((state) => {
@@ -501,6 +593,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showDocLibrary: false,
     showFileBrowser: false,
     settingsSection: null,
+    setupAgain: false,
+    runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
     showMemoryDashboard: false,
     showSchedules: false,
@@ -524,6 +618,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         applyTheme(theme);
         applyPalette(get().palette, get().customColors, theme);
         set({ theme });
+    },
+    locale: readLocale(),
+    setLocale: (code) => {
+        applyLocale(code);
+        syncTitleBar();
+        writePref(LOCALE_KEY, code);
+        set({ locale: code });
     },
     palette: readPalette(),
     customColors: readCustomColors(),

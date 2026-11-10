@@ -49,7 +49,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
-          uv pip install -e ".[eval]" --system
+          uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python --system
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
@@ -126,7 +126,7 @@ This writes `eval/results/baseline.json`. Commit this file to your repository.
 On subsequent runs, compare the current results against the saved baseline:
 
 ```bash
-gaia eval agent --compare eval/results/latest/scorecard.json
+gaia eval agent --compare eval/results/eval-20261021-141300/scorecard.json
 ```
 
 When only one path is provided, it's compared against `eval/results/baseline.json` automatically.
@@ -175,7 +175,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
-          uv pip install -e ".[eval]" --system
+          uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python --system
           npm install -g @anthropic-ai/claude-code
 
       - name: Start Agent UI backend
@@ -196,7 +196,7 @@ jobs:
 
           # Compare against committed baseline
           gaia eval agent \
-            --compare eval/results/latest/scorecard.json
+            --compare "$(ls -dt eval/results/eval-*/ | head -1)scorecard.json"
 
       - name: Upload results
         if: always()
@@ -294,7 +294,7 @@ jobs:
       - name: Install
         run: |
           pip install uv
-          uv pip install -e ".[eval]" --system
+          uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python --system
           npm install -g @anthropic-ai/claude-code
       - name: Start backend
         run: |
@@ -335,7 +335,7 @@ jobs:
       - name: Install
         run: |
           pip install uv
-          uv pip install -e ".[eval]" --system
+          uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python --system
           npm install -g @anthropic-ai/claude-code
       - name: Start backend
         run: |
@@ -361,48 +361,62 @@ jobs:
 
 ## Interpreting Scorecard Diffs
 
-When you run `--compare`, the output shows per-scenario deltas:
+When you run `--compare`, the output starts with a summary table, then groups scenarios by what changed. Each row shows the baseline score, the current score and the delta.
+
+### Summary
+
+```
+======================================================================
+SCORECARD COMPARISON
+  Baseline : tests/fixtures/eval_baselines/gaia-flagship/scorecard_rag_quality.json
+  Current  : eval/results/<run-id>/scorecard.json
+======================================================================
+
+METRIC                           BASELINE    CURRENT      DELTA
+--------------------------------------------------------------
+Pass rate (all)                       80%        70%       -10%
+Pass rate (judged)                    80%        70%       -10%
+Avg score                             7.9        6.8       -1.1
+Scenarios                              10         10
+```
 
 ### Regressions (PASS to FAIL)
 
 ```
-❌ REGRESSION: simple_factual_rag
-   Before: PASS (8.2/10)
-   After:  FAIL (3.1/10)
-   Delta:  -5.1 points
+[!] REGRESSED (1 scenario(s)) — PASS → FAIL:
+    simple_factual_rag                       8.2 → 3.1 (-5.1)
 ```
 
-Regressions are highlighted and should block the PR. The trace file (`traces/simple_factual_rag.json`) contains the full conversation, dimension scores, and reasoning to help diagnose the issue.
+Regressions should block the PR. The trace file (`traces/simple_factual_rag.json` in the run directory) contains the full conversation, dimension scores, and reasoning to help diagnose the issue.
 
 ### Improvements (FAIL to PASS)
 
 ```
-✅ IMPROVEMENT: cross_turn_file_recall
-   Before: FAIL (4.8/10)
-   After:  PASS (7.5/10)
-   Delta:  +2.7 points
+[+] IMPROVED (1 scenario(s)) — FAIL → PASS:
+    cross_turn_file_recall                   4.8 → 7.5 (+2.7)
 ```
 
 ### Score Drops Within Same Status
 
 ```
-⚠️ SCORE DROP: hallucination_resistance
-   Before: PASS (9.1/10)
-   After:  PASS (6.2/10)
-   Delta:  -2.9 points
+[~] SCORE REGRESSION (1 scenario(s)) — PASS but score drop ≥2.0:
+    hallucination_resistance                 9.1 → 6.2 (-2.9)
 ```
 
-Even if the status stays PASS, a score drop of more than 2.0 points triggers a warning -- the scenario is getting closer to failing.
+Even if the status stays PASS, a score drop of 2.0 points or more is reported as a score regression -- the scenario is getting closer to failing.
 
-### Category-Level Changes
+### Verdict
+
+The comparison ends with a verdict:
 
 ```
-## Category Summary
-| Category         | Before | After  | Change |
-|------------------|--------|--------|--------|
-| rag_quality      | 85%    | 71%    | -14%   |
-| context_retention| 75%    | 100%   | +25%   |
+======================================================================
+[WARN] 1 regression(s) detected!
+[WARN] 1 score regression(s) detected (still passing but score dropped ≥2.0)!
+======================================================================
 ```
+
+When nothing regressed, it prints `[OK]   No status changes between runs.` instead, or `[OK]   Net improvement: N scenario(s) fixed, 0 regressions.` when scenarios went from FAIL to PASS. The command exits with code 2 when it finds any regression, so CI can fail the job on it.
 
 ---
 
@@ -469,6 +483,15 @@ gaia eval agent \
   --scenario-dir ~/project-b/scenarios
 ```
 
+Scenarios in `~/.gaia/eval/scenarios` are picked up automatically. A scenario from
+either place whose `id` matches a built-in one replaces it. The run warns when that
+happens, and the scorecard records it: `config.scenario_provenance` lists every
+scenario's source path and a SHA-256 of its parsed content, and
+`overridden_builtins` names the replaced ids. A `--resume` re-checks the scenarios
+it re-runs and updates that record. `--compare` prints a `Different questions`
+warning when either scorecard replaced a built-in, or when a scenario's content
+differs between the two runs.
+
 Similarly, use `--corpus-dir` for additional corpus directories:
 
 ```bash
@@ -502,7 +525,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
 </CardGroup>
 
 <Warning>
-  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
+  The agent under test can run shell commands, so its backend must never inherit `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or the backup `CLAUDE_CODE_OAUTH_TOKEN_BACKUP`; only the `gaia eval agent` step needs them. On a public repository anyone can download workflow artifacts, and GitHub masks secrets only in job logs. Keep uploads to scorecards and reproduce a regression locally for its traces.
 </Warning>
 
 <Warning>

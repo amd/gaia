@@ -100,6 +100,15 @@ describe('NewChat while GAIA is starting', () => {
         expect(onSend).not.toHaveBeenCalled();
     });
 
+    it('keeps the message box open once every boot task has finished', () => {
+        useChatStore.setState({ systemStatus: {
+            init_state: 'initializing',
+            init_tasks: [{ name: 'Loading AI model', status: 'done' }],
+        } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        expect(screen.getByLabelText('Message')).not.toBeDisabled();
+    });
+
     it('sends once GAIA is ready', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
         const onSend = vi.fn().mockResolvedValue(undefined);
@@ -109,6 +118,20 @@ describe('NewChat while GAIA is starting', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         expect(onSend).toHaveBeenCalledWith('hello');
+    });
+});
+
+describe('NewChat try chips', () => {
+    it('fills the box with an example that ends in a card, without sending it', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
+        expect(screen.getByLabelText('Message')).toHaveFocus();
+        expect(onSend).not.toHaveBeenCalled();
     });
 });
 

@@ -227,8 +227,11 @@ def process_query(
             "input_tokens": int,     # Total input tokens across all steps
             "output_tokens": int,    # Total output tokens across all steps
             "total_tokens": int,     # Combined token count
-            "error_count": int,      # Number of errors encountered
-            "error_history": list,   # Full error history; an unusable reply
+            "error_count": int,      # Errors recorded during this query only
+            "error_history": list,   # This query's errors (a snapshot — a later
+                                     # query never changes it; the agent's
+                                     # cumulative list is get_error_history()).
+                                     # An unusable reply
                                      # (malformed tool call, a stream that closed
                                      # before the model finished) that a later
                                      # reply recovered from is kept with
@@ -327,7 +330,9 @@ self.plan_iterations: int
 # Conversation history
 self.conversation_history: List[Dict]
 
-# Error history for learning
+# Every error recorded across all queries (cumulative; read it with
+# get_error_history(), which returns a copy). A result's error_count /
+# error_history cover only that query.
 self.error_history: List[Dict]
 
 # Last execution result

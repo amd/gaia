@@ -69,3 +69,65 @@ def test_the_prompt_puts_blocks_under_the_question():
         }
     )
     assert mixed["summary"] == "Run 'send_now' with to=\"a@b.c\"?\nbody:\n    a\n    b"
+
+
+class TestCalendarSummary:
+    """The TUI shows only this text, so the approval must be decidable from it."""
+
+    PEOPLE = [f"person{i}@example.com" for i in range(60)]
+
+    def _summary(self, tool, **args):
+        events = CanonicalTranslator(run_id="r", agent_id="gaia").translate(
+            {"type": "permission_request", "tool": tool, "args": args}
+        )
+        return events[0]["summary"]
+
+    def test_create_keeps_the_title_and_every_attendee_however_long_the_list(self):
+        summary = self._summary(
+            "calendar/create_calendar_event",
+            title="Budget review",
+            start="2026-11-03T09:00:00-05:00",
+            end="2026-11-03T10:00:00-05:00",
+            notify_attendees=self.PEOPLE,
+            calendar_account="me@example.com",
+            description="d" * 500,
+        )
+        assert "Title: Budget review" in summary
+        assert "When: 2026-11-03T09:00:00-05:00 to 2026-11-03T10:00:00-05:00" in summary
+        assert "Account: me@example.com" in summary
+        assert "d" * 500 in summary
+        assert all(person in summary for person in self.PEOPLE)
+        assert "not shown" not in summary
+
+    def test_update_says_what_changes(self):
+        summary = self._summary(
+            "calendar/update_calendar_event",
+            event_id="abc",
+            expected_title="<<<UNTRUSTED_TEXT>>>Budget<<<END_UNTRUSTED_TEXT>>>",
+            expected_start="2026-11-03T14:00:00Z",
+            notify_attendees=["dana@x.com"],
+            new_title="Budget sync",
+            new_start="2026-11-04T14:00:00Z",
+            new_end="2026-11-04T15:00:00Z",
+            new_location="Room 9",
+            new_description="New agenda",
+        )
+        assert summary.splitlines() == [
+            "Event: Budget",
+            "When: 2026-11-03T14:00:00Z",
+            "New title: Budget sync",
+            "New time: 2026-11-04T14:00:00Z to 2026-11-04T15:00:00Z",
+            "New location: Room 9",
+            "New description: New agenda",
+            "Notifies: dana@x.com",
+        ]
+
+    def test_cancel_says_when_nobody_is_told(self):
+        summary = self._summary(
+            "calendar/cancel_calendar_event",
+            event_id="abc",
+            expected_title="Budget",
+            expected_start="2026-11-03T14:00:00Z",
+            notify_attendees=[],
+        )
+        assert summary.splitlines()[-1] == "Notifies: nobody"

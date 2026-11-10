@@ -122,13 +122,15 @@ LONG_INPUTS = {
 @pytest.mark.parametrize("name", LONG_INPUTS)
 def test_masking_stays_fast_on_long_input(name):
     text = LONG_INPUTS[name]
-    started = time.perf_counter()
+    # This thread's CPU time, so time spent waiting for a busy runner's CPU or
+    # on another thread in the worker doesn't count.
+    started = time.thread_time()
 
     MemoryMixin._mask_credentials(text)
     MemoryMixin._looks_like_credential(text)
 
-    # ~0.2s locally; the bound catches runaway backtracking, not a busy CI runner.
-    assert time.perf_counter() - started < 5.0
+    # Under 0.5s of CPU even on a loaded box; runaway backtracking takes 20s+.
+    assert time.thread_time() - started < 5.0
 
 
 def test_remember_refuses_a_pin(store):

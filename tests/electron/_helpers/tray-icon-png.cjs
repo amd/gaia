@@ -3,7 +3,8 @@
 
 /**
  * Checks that a Linux tray-icon PNG is a real logo rather than a flat
- * placeholder (#5268). Shared by
+ * placeholder (#5268), and that a macOS template PNG is a real glyph (#5281).
+ * Shared by
  * tray-manager.test.cjs (source tree) and appimage-smoke.test.mjs (packaged).
  */
 
@@ -113,4 +114,50 @@ function assertTrayLogoPng(buf, size, label) {
   }
 }
 
-module.exports = { decodeRgbaPng, assertTrayLogoPng };
+/**
+ * Throw unless `buf` is a `size`×`size` RGBA PNG usable as a macOS template
+ * image (#5281): macOS draws only the alpha channel, so the glyph must be
+ * black on a transparent background, and its mask must be a shape, not a
+ * filled square (the old placeholder) and not empty.
+ */
+function assertTrayTemplatePng(buf, size, label) {
+  const { width, height, pixels } = decodeRgbaPng(buf, label);
+  if (width !== size || height !== size) {
+    throw new Error(`${label}: expected ${size}x${size}, got ${width}x${height}`);
+  }
+  const alphaAt = (x, y) => pixels[(y * width + x) * 4 + 3];
+  const corners = [
+    [0, 0],
+    [width - 1, 0],
+    [0, height - 1],
+    [width - 1, height - 1],
+  ];
+  for (const [x, y] of corners) {
+    if (alphaAt(x, y) !== 0) {
+      throw new Error(
+        `${label}: corner (${x},${y}) is opaque — a template image needs a ` +
+          "transparent background, not a filled square"
+      );
+    }
+  }
+  let visible = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i + 3] === 0) continue;
+    visible++;
+    if (pixels[i] !== 0 || pixels[i + 1] !== 0 || pixels[i + 2] !== 0) {
+      throw new Error(
+        `${label}: visible pixel ${i / 4} is not black — macOS template ` +
+          "images are a black glyph the OS tints for light and dark menu bars"
+      );
+    }
+  }
+  const coverage = visible / (width * height);
+  if (coverage < 0.2 || coverage > 0.9) {
+    throw new Error(
+      `${label}: glyph covers ${Math.round(coverage * 100)}% of the icon ` +
+        "(need 20-90%) — looks like a placeholder, not the GAIA logo"
+    );
+  }
+}
+
+module.exports = { decodeRgbaPng, assertTrayLogoPng, assertTrayTemplatePng };

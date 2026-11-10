@@ -33,10 +33,12 @@ from gaia.agents.tools.document_text import (
     with_small_limit_warning,
 )
 from gaia.agents.tools.file_edit import (
+    after_excerpt,
     apply_unique_replacement,
     file_read_record,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
 from gaia.agents.tools.path_access import (
     missing_file_error,
@@ -65,6 +67,38 @@ from gaia.security import BackupError
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
+
+
+def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool:
+    """Return whether a canonical implementation already owns *tool_name*.
+
+    File-search is composed with the file-I/O and filesystem mixins in several
+    profiles. Those mixins provide the authoritative implementations for the
+    overlapping generic tools; checking the registry before defining another
+    closure makes the result independent of registrar order.
+    """
+    from gaia.agents.base.tools import _BUILD_NAMES, _TOOL_REGISTRY
+
+    # The process-wide registry outlives an Agent.  Only reuse a canonical
+    # implementation that was registered earlier in this same build; an entry
+    # left by a different Agent belongs to that Agent's workspace and policy.
+    build = _BUILD_NAMES.get()
+    if build is None or tool_name not in build:
+        return False
+
+    entry = _TOOL_REGISTRY.get(tool_name)
+    function = entry.get("function") if entry else None
+    return getattr(function, "__module__", None) == module_name
+
+
+def _tool_or_reuse(tool_name: str, canonical_module: str, **kwargs):
+    """Register a tool unless its canonical sibling is already registered."""
+    from gaia.agents.base.tools import tool
+
+    if _canonical_tool_already_registered(tool_name, canonical_module):
+        return lambda function: function
+    return tool(**kwargs)
+
 
 #: Root-level operating-system trees a deep search walks last, so they cannot
 #: spend the budget before user folders. Applied only at a filesystem root,
@@ -295,6 +329,7 @@ _ORDINAL_QUARTER_RE = re.compile(
     re.I,
 )
 _RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
+_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b", re.I)
 
 
 def _parse_date_value(value: str):
@@ -327,6 +362,31 @@ def _parse_date_value(value: str):
             continue
         return ym, ym
     return None
+
+
+def _cell_month_span(value):
+    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None.
+
+    A quarter, year or month cell ('2025-Q1', '2025') spans its whole period;
+    any other date dateutil can read spans its one month. A quarter without a
+    year ('Q1') is None: dateutil would read it as the 1st of this month.
+    """
+    if isinstance(value, datetime):
+        ym = value.strftime("%Y-%m")
+        return ym, ym
+    text = str(value).strip()
+    span = _parse_date_value(text)
+    if span is not None:
+        return span
+    if _QUARTER_TOKEN_RE.search(text):
+        return None
+    from dateutil import parser as date_parser
+
+    try:
+        ym = date_parser.parse(text, fuzzy=True).strftime("%Y-%m")
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return ym, ym
 
 
 def parse_date_range(date_range: str):
@@ -873,7 +933,7 @@ class FileSearchToolsMixin:
                 # exactly this result.
                 if not deep_search or directory:
                     # Name the places that were searched. A bare zero reads as
-                    # "there are none", and the model relays it that way (#3576).
+                    # "there are none", and the model relays it that way.
                     where = ", ".join(str(r) for r in roots) or "nowhere"
                     return with_truncation(
                         {
@@ -1096,8 +1156,12 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
+        # FileIOToolsMixin is canonical whenever this profile also has file I/O.
+        # Keep FileSearchToolsMixin's version for doc-only profiles, but reuse
+        # the already-registered implementation when composition order puts the
+        # canonical mixin first.
+        @_tool_or_reuse(
+            "read_file", "gaia.agents.tools.file_io_tools", atomic=True, override=True
         )
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
@@ -1132,7 +1196,7 @@ class FileSearchToolsMixin:
 
                 # os.path.exists() is true for a directory too, so without this
                 # check open() below raises IsADirectoryError into the generic
-                # except Exception handler as a raw errno string (amd/gaia#3890).
+                # except Exception handler as a raw errno string.
                 if os.path.isdir(file_path):
                     return {
                         "status": "error",
@@ -1292,7 +1356,7 @@ class FileSearchToolsMixin:
             id_rsa, *.pem...) are never searched.
             """
             try:
-                # Relative to the workspace, not this process's cwd (#3576).
+                # Relative to the workspace, not this process's cwd.
                 directory, unresolved = self._resolve_search_directory(
                     directory or ".", allow_file=True
                 )
@@ -1530,7 +1594,9 @@ class FileSearchToolsMixin:
         def _workspace_target(args: Dict[str, Any]) -> Path:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
-        @tool(
+        @_tool_or_reuse(
+            "write_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
@@ -1727,17 +1793,23 @@ class FileSearchToolsMixin:
             else:
                 return dt.strftime("%Y-%m-%d")
 
-        def _read_tabular_file(file_path: str) -> tuple:
+        def _read_tabular_file(file_path: str, sheet: Optional[str] = None) -> tuple:
             """
             Read a tabular data file (CSV, TSV, or Excel) into a list of dicts.
 
+            Args:
+                file_path: The file to read.
+                sheet: For a workbook, the sheet to read (default: the active one).
+
             Returns:
-                Tuple of (rows: List[Dict], columns: List[str], error: str or None)
+                Tuple of (rows: List[Dict], columns: List[str], error: str or None,
+                sheets: workbook sheet names and the one read, or None for CSV/TSV)
             """
             ext = Path(file_path).suffix.lower()
             rows: List[Dict[str, Any]] = []
             columns: List[str] = []
             error = None
+            sheets = None
 
             if ext in (".xlsx", ".xls"):
                 try:
@@ -1746,11 +1818,28 @@ class FileSearchToolsMixin:
                     wb = openpyxl.load_workbook(
                         file_path, read_only=True, data_only=True
                     )
-                    ws = wb.active
+                    names = list(wb.sheetnames)
+                    if sheet is None:
+                        ws = wb.active
+                    else:
+                        wanted = sheet.strip().lower()
+                        match = next(
+                            (n for n in names if n.strip().lower() == wanted), None
+                        )
+                        if match is None:
+                            wb.close()
+                            return (
+                                [],
+                                [],
+                                f"No sheet named {sheet!r}. Sheets: {', '.join(names)}",
+                                {"sheets": names},
+                            )
+                        ws = wb[match]
+                    sheets = {"sheet": ws.title, "sheets": names}
                     ws_rows = list(ws.iter_rows(values_only=True))
                     wb.close()
                     if not ws_rows:
-                        return [], [], None
+                        return [], [], None, sheets
                     header = _header_row_index(ws_rows)
                     columns = [
                         str(c) if c is not None else f"Column_{i}"
@@ -1786,7 +1875,7 @@ class FileSearchToolsMixin:
                         continue
                 if content is None:
                     error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
-                    return [], [], error
+                    return [], [], error, None
 
                 try:
                     # Use csv.Sniffer to detect delimiter if possible
@@ -1804,7 +1893,7 @@ class FileSearchToolsMixin:
                 except Exception as e:
                     error = f"Error parsing CSV/TSV file: {e}"
 
-            return rows, columns, error
+            return rows, columns, error, sheets
 
         def _infer_column_type(values: list) -> str:
             """Infer the data type of a column from its values."""
@@ -1873,7 +1962,9 @@ class FileSearchToolsMixin:
 
         # --- New tool definitions ---
 
-        @tool(
+        @_tool_or_reuse(
+            "edit_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
@@ -1889,7 +1980,9 @@ class FileSearchToolsMixin:
 
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
-            need a separate read.
+            need a separate read. new_content replaces old_content only; to
+            rewrite the whole file, use write_file. Repeating an edit already
+            applied this turn is refused.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1913,7 +2006,7 @@ class FileSearchToolsMixin:
                     # Validate write access (skip overwrite prompt since we're editing).
                     # Pass the *actual* size of the replacement string so
                     # MAX_WRITE_SIZE_BYTES is enforced — passing 0 here would
-                    # silently bypass the size guardrail (#495 review feedback).
+                    # silently bypass the size guardrail.
                     is_allowed, reason = path_validator.validate_write(
                         str(resolved_path),
                         content_size=len(new_content.encode("utf-8")),
@@ -1951,7 +2044,9 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path)
+                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
+                    resolved_path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
 
@@ -2017,6 +2112,7 @@ class FileSearchToolsMixin:
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
+                reads.note_edit(resolved_path, old_content, new_content, turn_of(self))
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -2039,6 +2135,7 @@ class FileSearchToolsMixin:
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
+                    **after_excerpt(current_content, updated_content),
                     "diff": diff,
                 }
                 if backup_path:
@@ -2070,9 +2167,10 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory. Keep the
+        # historical FileSearch schema here; changing the owner changes the
+        # model-facing arguments and needs a separate eval-backed change.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:
@@ -2408,12 +2506,15 @@ class FileSearchToolsMixin:
             columns: str = None,
             group_by: str = None,
             date_range: str = None,
+            sheet: str = None,
         ) -> Dict[str, Any]:
             """
             Parse and analyze tabular data files with multiple analysis modes.
 
             Supports CSV, TSV, XLSX, and XLS files. Provides summary statistics,
             spending categorization, and trend analysis for financial data.
+            A workbook is read one sheet at a time; the result's ``sheets``
+            lists them all, so check it before saying data is not in the file.
 
             Args:
                 file_path: Path to the data file
@@ -2421,9 +2522,12 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows dated in this period (optional).
-                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
-                    day, or range ('2025-01 to 2025-06'). Else an error.
+                date_range: Rows dated in this period (optional): quarter
+                    ('2025-Q1', "Q1'25"), year, month, day, or range
+                    ('2025-01 to 2025-06'). Cells may use these forms. Else an
+                    error.
+                sheet: Workbook sheet to analyze (optional; default the sheet
+                    the workbook opens on). Ignored for CSV/TSV.
 
             Returns:
                 Dictionary with analysis results based on the requested type
@@ -2511,7 +2615,20 @@ class FileSearchToolsMixin:
                     }
 
                 # Read the file (use resolved fp path in case of fallback)
-                rows, all_columns, read_error = _read_tabular_file(str(fp))
+                rows, all_columns, read_error, sheet_info = _read_tabular_file(
+                    str(fp), sheet
+                )
+                sheet_fields = {}
+                if sheet_info and "sheet" in sheet_info:
+                    read, names = sheet_info["sheet"], sheet_info["sheets"]
+                    sheet_fields = {"sheet": read, "sheets": names}
+                    others = [n for n in names if n != read]
+                    if others:
+                        sheet_fields["other_sheets_note"] = (
+                            f"This covers sheet {read!r} only. The workbook also "
+                            f"has {', '.join(repr(n) for n in others)}; pass "
+                            "sheet=<name> to analyze one."
+                        )
 
                 if read_error:
                     return {
@@ -2527,13 +2644,12 @@ class FileSearchToolsMixin:
                         "file": fp.name,
                         "row_count": 0,
                         "columns": all_columns,
+                        **sheet_fields,
                         "message": "File is empty or contains only headers.",
                     }
 
                 # --- Date range filtering ---
                 if date_range:
-                    from dateutil import parser as date_parser
-
                     parsed_range = parse_date_range(date_range)
                     if parsed_range is None:
                         return {
@@ -2579,20 +2695,35 @@ class FileSearchToolsMixin:
                     date_col_filter = date_col_candidates[0]
 
                     filtered = []
+                    unreadable = []
+                    dated = 0
                     for row in rows:
                         dv = row.get(date_col_filter)
                         if dv is None or str(dv).strip() == "":
                             continue
-                        try:
-                            if isinstance(dv, datetime):
-                                dt = dv
-                            else:
-                                dt = date_parser.parse(str(dv), fuzzy=True)
-                            row_ym = dt.strftime("%Y-%m")
-                            if start_ym <= row_ym <= end_ym:
-                                filtered.append(row)
-                        except (ValueError, TypeError, OverflowError):
+                        span = _cell_month_span(dv)
+                        if span is None:
+                            unreadable.append(str(dv))
                             continue
+                        dated += 1
+                        if start_ym <= span[0] and span[1] <= end_ym:
+                            filtered.append(row)
+                    if unreadable and not dated:
+                        examples = ", ".join(repr(v) for v in unreadable[:3])
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"date_range {date_range!r} could not be applied: "
+                                f"no value in column '{date_col_filter}' reads as "
+                                f"a date (e.g. {examples}). Cells must hold a "
+                                "quarter ('2025-Q1', 'Q1 2025'), year, month "
+                                "('2025-03') or date. Call again without "
+                                "date_range, using group_by="
+                                f"'{date_col_filter}' to split the rows by it."
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
                     rows = filtered
                     if not rows:
                         return {
@@ -2602,6 +2733,11 @@ class FileSearchToolsMixin:
                             "date_filter_applied": date_range,
                             "date_filter_parsed": {"start": start_ym, "end": end_ym},
                             "date_column": date_col_filter,
+                            **(
+                                {"date_rows_unreadable": len(unreadable)}
+                                if unreadable
+                                else {}
+                            ),
                             "message": (
                                 f"No rows in column '{date_col_filter}' fall "
                                 f"between {start_ym} and {end_ym} (inclusive), "
@@ -2633,6 +2769,7 @@ class FileSearchToolsMixin:
                     "status": "success",
                     "file": fp.name,
                     "file_path": str(fp.resolve()),
+                    **sheet_fields,
                     "row_count": len(rows),
                     "columns": all_columns,
                     "column_count": len(all_columns),
@@ -2641,6 +2778,8 @@ class FileSearchToolsMixin:
                     result["date_filter_applied"] = date_range
                     result["date_filter_parsed"] = {"start": start_ym, "end": end_ym}
                     result["date_column"] = date_col_filter
+                    if unreadable:
+                        result["date_rows_unreadable"] = len(unreadable)
 
                 # Infer column types
                 column_types = {}

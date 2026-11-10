@@ -17,9 +17,9 @@ interface DockedResizeOptions {
 }
 
 /**
- * The left-edge separator of a pane docked on the right: drag with the
- * pointer, arrow keys step 16px, Home and End jump to the limits, and a
- * double-click restores the default width.
+ * The inner-edge separator of a pane docked at the inline end (the right,
+ * or the left right to left): drag with the pointer, arrow keys step 16px,
+ * Home and End jump to the limits, and a double-click restores the default width.
  */
 export function useDockedResize({ width, setWidth, clamp, min, max, defaultWidth }: DockedResizeOptions) {
     const [dragWidth, setDragWidth] = useState<number | null>(null);
@@ -31,9 +31,11 @@ export function useDockedResize({ width, setWidth, clamp, min, max, defaultWidth
         const startWidth = width;
         const target = e.currentTarget;
         target.setPointerCapture?.(e.pointerId);
+        // Right to left the pane sits on the left, so dragging right widens it.
+        const sign = getComputedStyle(target).direction === 'rtl' ? -1 : 1;
         let latest = startWidth;
         const move = (ev: globalThis.PointerEvent) => {
-            latest = clamp(startWidth + (startX - ev.clientX));
+            latest = clamp(startWidth + sign * (startX - ev.clientX));
             setDragWidth(latest);
         };
         const up = () => {
@@ -49,9 +51,10 @@ export function useDockedResize({ width, setWidth, clamp, min, max, defaultWidth
     }, [clamp, setWidth, width]);
 
     const onKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
+        const step = getComputedStyle(e.currentTarget).direction === 'rtl' ? -KEY_STEP : KEY_STEP;
         const next = {
-            ArrowLeft: width + KEY_STEP,
-            ArrowRight: width - KEY_STEP,
+            ArrowLeft: width + step,
+            ArrowRight: width - step,
             Home: min,
             End: max,
         }[e.key];

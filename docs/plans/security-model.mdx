@@ -134,10 +134,19 @@ assigned a risk tier:
 
 | Tier | Behavior | Examples |
 |------|----------|---------|
-| **READ** | Auto-approve, no confirmation | `search_web`, `read_file`, `run_shell_command` (read-only whitelist), `git status` |
-| **WRITE** | Confirm-first popup in UI, y/n in CLI | `write_file`, `run_cli_command` (unrestricted), `browser_click` |
+| **READ** | Auto-approve, no confirmation | `search_web`, `read_file` |
+| **WRITE** | Confirm-first popup in UI, y/n in CLI | `write_file`, `browser_click` |
+| **SHELL** | Confirmation-gated by default; "always" is scoped to the invocation | `run_shell_command`, `run_cli_command`, `wait_for_condition` |
 | **DESTRUCTIVE** | Confirm-first with warning banner | `delete_file`, `git reset`, shell `rm` |
 | **DENIED** | Always blocked, cannot be overridden | `os.system`, `eval`, `exec`, `subprocess.Popen` (direct) |
+
+**Shell tools are confirmation-gated by default, by design; the only ways past the prompt are a loaded skill's read-only grant and full-access mode (§4.5).** `run_shell_command` is in
+`TOOLS_REQUIRING_CONFIRMATION` (`src/gaia/agents/base/agent.py`), enforced in `_execute_tool`
+for every agent. The read-only allowlist is not the security boundary: a command off it is
+shown and runs once approved, and it only decides what `GAIA_AUTO_APPROVE_TOOLS` or
+`auto_approve_gated_tools` may run unattended. An "always allow" answer is keyed on the invocation (the binary plus up to two
+subcommand words, e.g. `gh issue list`; `src/gaia/agents/base/tool_grants.py`), never the
+whole tool. Do not move these tools to READ.
 
 ### 4.2 MCP Tool Classification
 
@@ -237,7 +246,7 @@ the allowlist, and nothing could write its output anywhere.
 |------|---------|--------------|
 | Shell operator block (`>`, `>>`, `<`, `&`, `` ` ``, `$()`, newline) | refused before parsing | parsed and executed |
 | Confirmation prompts | asked every call | pre-approved (unchanged behaviour) |
-| Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` sub-guards | replaced by `DEVELOPER_COMMANDS` |
+| Per-binary read-only policy | `ALLOWED_COMMANDS` + the git / PowerShell / `find` / `sort` / `uniq` / `date` / `sysctl` / `hostname` / `ipconfig` / `file` / `less` / `more` / `arch` sub-guards | replaced by `DEVELOPER_COMMANDS` |
 | Shell rate limit (10/min, 3/10s) | paced — a command over the cap waits its turn | lifted |
 
 Pipes and chaining (`\|`, `&&`, `\|\|`, `;`) were never blocked, or have since

@@ -20,6 +20,7 @@ import pytest
 
 from gaia.llm.lemonade_client import LemonadeClientError, LemonadeStatus
 from gaia.llm.lemonade_manager import DEFAULT_CONTEXT_SIZE, LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 # A co-loaded non-LLM model. Its tiny ctx_size must never be mistaken for the
 # server's, and its presence must never be mistaken for "a chat model is up".
@@ -47,6 +48,7 @@ def _reset_manager():
 
 def _status(running=True, context_size=0, loaded_models=None):
     return LemonadeStatus(
+        version=LEMONADE_VERSION,
         running=running,
         context_size=context_size,
         loaded_models=[] if loaded_models is None else loaded_models,
@@ -264,6 +266,7 @@ def test_preload_failure_raises_actionable_and_does_not_poison_singleton(mock_cl
     msg = str(exc_info.value)
     assert "Lemonade" in msg
     assert "ctx_size=32768" in msg or "32768" in msg
+    assert "server returned 500" in msg, "the load's own error must reach the CLI"
     assert "systemctl --user start lemond" in msg
     assert "lemonade-server" not in msg
 
@@ -1008,7 +1011,7 @@ def test_recheck_with_only_non_llm_model_warns_loudly(mock_cls, caplog, capsys):
         assert "no LLM loaded" in surface
         assert "Whisper-Large-v3-Turbo" in surface
         assert "gaia init" in surface
-        assert "server.log" in surface
+        assert "log has the full error" in surface
 
     # The silent part that must NOT happen: caching min_context_size as if a
     # chat model were up.

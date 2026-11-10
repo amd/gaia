@@ -80,7 +80,7 @@ describe("wiring", () => {
   });
 
   test("main.cjs registers the handler with the other services", () => {
-    const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
+    const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8").replace(/\r\n/g, "\n");
     expect(main).toMatch(/require\("\.\/services\/folder-dialog\.cjs"\)/);
     const start = main.indexOf("function initializeServices(");
     const init = main.slice(start, main.indexOf("\n}\n", start));

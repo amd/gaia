@@ -53,8 +53,8 @@
             "name": "Chat Agent Debug - Model Selection",
             "type": "debugpy",
             "request": "launch",
-            "module": "gaia_agent_chat.app",
-            "args": ["--query", "hi"],
+            "module": "gaia.cli",
+            "args": ["chat", "--query", "hi"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
@@ -63,7 +63,7 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": true,
-            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint in chat/agent.py line 222 (model_id variable)"]
+            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint on model_id in hub/agents/gaia/python/gaia_agent/chat_agent.py"]
         },
         {
             "name": "Chat Agent Debug - With Query",
@@ -187,46 +187,6 @@
             "stopOnEntry": false,
         },
         {
-            "name": "Code Agent Debug (CLI)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "gaia.cli",
-            "args": [
-                "code",
-                "${input:codeAgentPrompt}",
-                "--debug"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false
-        },
-        {
-            "name": "Code Agent Debug (API)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "gaia.cli",
-            "args": [
-                "code",
-                "${input:codeAgentPrompt}",
-                "--debug",
-                "--use-api"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}",
-                "GAIA_API_URL": "${input:apiUrl}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false
-        },
-        {
             "name": "GAIA Pytest Debug",
             "type": "debugpy",
             "request": "launch",
@@ -268,18 +228,6 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": false,
-        },
-        {
-            "name": "JIRA Dashboard - Electron",
-            "type": "node",
-            "request": "launch",
-            "cwd": "${workspaceFolder}",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "app:jira:run:electron"],
-            "console": "integratedTerminal",
-            "env": {
-                "GAIA_APP_MODE": "development"
-            }
         },
         {
             "name": "C++ Process Agent Debug",
@@ -361,12 +309,6 @@
             "type": "promptString",
             "description": "GAIA MCP Server URL",
             "default": "http://localhost:8765"
-        },
-        {
-            "id": "codeAgentPrompt",
-            "type": "promptString",
-            "description": "Code Agent task/prompt",
-            "default": "Create a simple calculator function"
         },
         {
             "id": "cliArgs",

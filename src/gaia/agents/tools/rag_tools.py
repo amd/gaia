@@ -7,13 +7,14 @@ Provides document retrieval, querying, and evaluation tools.
 """
 
 import contextvars
+import functools
 import os
 import re
 import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.errors import require_host_attr
 from gaia.agents.base.file_snapshots import before_change
@@ -27,8 +28,14 @@ from gaia.agents.tools.path_access import (
 from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
-from gaia.rag.sdk import EmbeddingUnavailableError
+from gaia.rag.keyword_search import keyword_index
+from gaia.rag.sdk import (
+    EmbeddingUnavailableError,
+    folder_index_skip_reason,
+    text_scripts,
+)
 from gaia.tool_cancellation import raise_if_cancelled
+from gaia.upload_names import display_file_name
 
 logger = get_logger(__name__)
 
@@ -43,6 +50,22 @@ _SESSION_SAVE_WARNING = (
 #: meeting summary off mid-sentence; a model that always reasons (Gemma 4)
 #: spends part of this before it writes anything.
 SUMMARY_MAX_TOKENS = 8192
+
+# Cap on skipped files listed in an index_directory result, to bound the reply.
+_MAX_SKIPPED_REPORTED = 50
+
+
+def _split_oversized_page(page: str, max_words: int) -> List[str]:
+    """Cut text with no page markers, such as a transcript, into section-sized parts.
+
+    Parts stay well under ``max_words`` because each section re-reads the
+    previous part as overlap.
+    """
+    words = page.split()
+    if len(words) <= max_words:
+        return [page]
+    size = max(max_words // 4, 1)
+    return [" ".join(words[i : i + size]) for i in range(0, len(words), size)]
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -66,8 +89,13 @@ def _summary_text(chat: Any, prompt: str) -> str:
 INDEX_FOREGROUND_BUDGET_S = 120.0
 
 _INDEX_JOBS_LOCK = threading.Lock()
-#: RAGSDK -> {path: _IndexJob}; jobs go away with the SDK that runs them.
+#: RAGSDK -> {realpath: _IndexJob}; jobs go away with the SDK that runs them.
 _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
+#: RAGSDK -> {realpath: (path, reason)} for background indexes that failed
+#: after every caller had already been told "in progress".
+_INDEX_FAILURES: "weakref.WeakKeyDictionary[Any, Dict[str, Tuple[str, str]]]" = (
     weakref.WeakKeyDictionary()
 )
 
@@ -85,7 +113,12 @@ class _IndexJob:
         self.embedder_wait = 0
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[BaseException] = None
+        #: ``index_document`` returned; the document is no longer "indexing".
+        self.finished = threading.Event()
+        #: Finished and recorded on the agent: the result is final.
         self.done = threading.Event()
+        #: Set once a caller returned "in progress": nobody is waiting on it.
+        self.backgrounded = False
 
     def progress(self, embedded: int, total: int) -> None:
         if self.embed_started is None:
@@ -101,23 +134,65 @@ class _IndexJob:
         rate = self.embedded / max(time.monotonic() - self.embed_started, 1e-6)
         return int((self.total - self.embedded) / rate)
 
+    def failure(self) -> Optional[str]:
+        """Why the finished job did not index the document, or None."""
+        if self.error is not None:
+            return f"{type(self.error).__name__}: {self.error}"
+        if not (self.result or {}).get("success"):
+            return str((self.result or {}).get("error") or "indexing failed")
+        return None
+
+
+def _finish_unattended(
+    rag: Any,
+    key: str,
+    job: _IndexJob,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]],
+) -> None:
+    """Record a job that finished after its callers stopped waiting on it."""
+    failure = job.failure()
+    if failure is None and on_indexed is not None:
+        try:
+            on_indexed(job.result)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.exception(f"Recording background index of {job.path} failed")
+            failure = (
+                f"it was indexed but could not be attached to this chat "
+                f"({type(e).__name__}: {e})"
+            )
+    if failure is None:
+        logger.info(f"Background index of {job.path} finished")
+        return
+    logger.error(f"Background index of {job.path} failed: {failure}")
+    with _INDEX_JOBS_LOCK:
+        _INDEX_FAILURES.setdefault(rag, {})[key] = (job.path, failure)
+
 
 def _index_within_budget(
-    rag: Any, path: str, budget: Optional[float] = None
+    rag: Any,
+    path: str,
+    budget: Optional[float] = None,
+    on_indexed: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
     """Index *path*, waiting at most *budget* seconds for it.
 
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
-    call for the same path waits on the running job instead of starting another.
+    call for the same file waits on the running job instead of starting another.
+
+    *on_indexed* is the bookkeeping a caller runs on success. When the job
+    finishes after every caller got ``None`` back, it runs on the indexing
+    thread instead; a failure then shows in ``documents_failed_indexing``.
     """
     budget = INDEX_FOREGROUND_BUDGET_S if budget is None else budget
+    key = os.path.realpath(path)
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
-        job = jobs.get(path)
+        job = jobs.get(key)
         if job is None:
             job = _IndexJob(path)
-            jobs[path] = job
+            jobs[key] = job
+            _INDEX_FAILURES.get(rag, {}).pop(key, None)
 
             def _run():
                 from gaia.daemon.broker_client import detached_from_turn
@@ -133,7 +208,19 @@ def _index_within_budget(
                 except BaseException as e:  # noqa: BLE001 — re-raised by the waiter
                     job.error = e
                 finally:
-                    job.done.set()
+                    with _INDEX_JOBS_LOCK:
+                        job.finished.set()
+                        unattended = job.backgrounded
+                    try:
+                        if unattended:
+                            _finish_unattended(rag, key, job, on_indexed)
+                    finally:
+                        # Only once recorded, or a caller in between re-indexes it.
+                        with _INDEX_JOBS_LOCK:
+                            job.done.set()
+                            # Finished jobs leave the map: a later call indexes afresh.
+                            if jobs.get(key) is job:
+                                del jobs[key]
 
             ctx = contextvars.copy_context()
             threading.Thread(
@@ -141,11 +228,12 @@ def _index_within_budget(
                 name=f"rag-index:{Path(path).name}",
                 daemon=True,
             ).start()
-    if not job.done.wait(budget):
-        return None, job
-    with _INDEX_JOBS_LOCK:
-        if jobs.get(path) is job:
-            del jobs[path]
+    if not job.finished.wait(budget):
+        with _INDEX_JOBS_LOCK:
+            if not job.finished.is_set():
+                job.backgrounded = True
+                return None, job
+    job.done.wait()
     if job.error is not None:
         raise job.error
     return job.result, job
@@ -157,7 +245,26 @@ def documents_still_indexing(rag: Any) -> List[str]:
         return []
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.get(rag) or {}
-        return sorted(path for path, job in jobs.items() if not job.done.is_set())
+        return sorted(job.path for job in jobs.values() if not job.finished.is_set())
+
+
+def documents_failed_indexing(rag: Any) -> List[Tuple[str, str]]:
+    """``(path, reason)`` for background indexes that failed unattended.
+
+    A document stays listed until it is indexed again.
+    """
+    if rag is None:
+        return []
+    with _INDEX_JOBS_LOCK:
+        return sorted((_INDEX_FAILURES.get(rag) or {}).values())
+
+
+def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
+    """Drop documents the library evicted, so asking for one again re-indexes it."""
+    gone = {os.path.realpath(path) for path in evicted}
+    for path in list(indexed_files):
+        if os.path.realpath(path) in gone:
+            indexed_files.discard(path)
 
 
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
@@ -200,8 +307,218 @@ def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     }
 
 
+#: How long a search waits for edited documents to re-index before answering without them.
+QUERY_REINDEX_BUDGET_S = 30.0
+
+_UNSERVABLE = {
+    "missing": "{name} was indexed from {path}, which no longer exists",
+    "locked": (
+        "{name} may have changed since it was indexed, but another program has it "
+        "open, so it cannot be checked. Ask the user to close it and search again"
+    ),
+    "unreadable": (
+        "{name} may have changed since it was indexed, but it cannot be read "
+        "to check"
+    ),
+}
+
+
+def _left_out(
+    path: str, reason: str, message: str, job: Optional[_IndexJob] = None
+) -> Dict[str, Any]:
+    entry = {
+        "file": Path(path).name,
+        "path": path,
+        "reason": reason,
+        "message": f"{message.rstrip('. ')}. Its old indexed text is not served.",
+    }
+    if job is not None:
+        entry["job"] = job
+    return entry
+
+
+def _bring_current(host: Any, rag: Any, paths) -> Dict[str, Dict[str, Any]]:
+    """Re-index the *paths* edited since indexing; return those that can't be served.
+
+    An unchanged file costs a stat. Edited files re-index in the background,
+    waited on together for at most ``QUERY_REINDEX_BUDGET_S``; the index lock
+    is only taken to swap each one in. Keys of the result are the paths whose
+    indexed text must not be served, with why.
+    """
+    left_out: Dict[str, Dict[str, Any]] = {}
+    edited = []
+    for path in paths:
+        state = rag.freshness(path)
+        if state == "changed":
+            edited.append(path)
+        elif state in _UNSERVABLE:
+            name = Path(path).name
+            left_out[path] = _left_out(
+                path, state, _UNSERVABLE[state].format(name=name, path=path)
+            )
+    if not edited:
+        return left_out
+
+    deadline = time.monotonic() + QUERY_REINDEX_BUDGET_S
+    started = {path: _index_within_budget(rag, path, budget=0) for path in edited}
+    for path in edited:
+        name = Path(path).name
+        try:
+            result, job = started[path]
+            if result is None:
+                result, job = _index_within_budget(
+                    rag, path, max(0.0, deadline - time.monotonic())
+                )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(f"Re-indexing edited {path} failed: {e}")
+            left_out[path] = _left_out(
+                path,
+                "reindex_failed",
+                f"{name} changed since it was indexed, and re-indexing it failed "
+                f"({type(e).__name__}: {e})",
+            )
+            continue
+        if result is None:
+            left_out[path] = _left_out(
+                path,
+                "reindexing",
+                f"{name} changed since it was indexed and is still re-indexing "
+                "in the background; search again in a minute",
+                job,
+            )
+        elif not result.get("success"):
+            left_out[path] = _reindex_failure(path, result)
+        elif isinstance(getattr(host, "indexed_files", None), set):
+            _forget_evicted(host.indexed_files, result.get("evicted", []))
+    return left_out
+
+
+def _reindex_failure(path: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Left-out entry for a failed re-index, keeping the index tool's advice."""
+    error_type = result.get("error_type")
+    if error_type == "embedding_unavailable":
+        advice = _index_embedding_error(result)
+    elif error_type in _CACHE_LOCK_HINTS:
+        advice = _index_cache_error(result, path)
+    else:
+        advice = None
+    entry = _left_out(
+        path,
+        "reindex_failed",
+        f"{Path(path).name} changed since it was indexed, and re-indexing it "
+        f"failed: {result.get('error', 'unknown error')}",
+    )
+    if error_type:
+        entry["error_type"] = error_type
+    if advice is not None:
+        entry["advice"] = advice
+        entry["message"] += " " + (advice.get("next_step") or advice["hint"])
+    return entry
+
+
+def _left_out_result(left_out: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Tool result when nothing a search would cover can be served now."""
+    entries = list(left_out.values())
+    if len(entries) == 1 and "advice" in entries[0]:
+        result = dict(entries[0]["advice"])
+        result["file_name"] = entries[0]["file"]
+        result["files_left_out"] = _public(entries)
+        return result
+    if len(entries) == 1 and entries[0]["reason"] == "reindexing":
+        result = _indexing_in_progress(entries[0]["job"])
+        result["message"] = (
+            f"{entries[0]['file']} changed since it was indexed. {result['message']}"
+        )
+        result["files_left_out"] = _public(entries)
+        return result
+    messages = " ".join(entry["message"] for entry in entries)
+    if all(entry["reason"] == "reindexing" for entry in entries):
+        return {
+            "status": "in_progress",
+            "message": messages,
+            "files_left_out": _public(entries),
+            "hint": "Tell the user the edited documents are re-indexing; search again shortly.",
+        }
+    return {
+        "status": "error",
+        "error": messages,
+        "files_left_out": _public(entries),
+        "instruction": (
+            "Tell the user why. Do not answer from what these documents said "
+            "before, and do not say they hold no relevant information."
+        ),
+    }
+
+
+def _public(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {k: v for k, v in entry.items() if k not in ("job", "advice")}
+        for entry in entries
+    ]
+
+
+def _search_without(rag: Any, query: str, left_out) -> Tuple[List[str], List[float]]:
+    """``rag._retrieve_chunks`` minus the chunks the *left_out* files own."""
+    # pylint: disable=protected-access
+    snapshot = rag._search_chunks(query)
+    owner = snapshot["chunk_to_file"]
+    kept = [
+        (chunk, score)
+        for idx, chunk, score in zip(
+            snapshot["retrieved_indices"],
+            snapshot["retrieved_chunks"],
+            snapshot["scores"],
+        )
+        if owner.get(idx) not in left_out
+    ]
+    return [chunk for chunk, _ in kept], [score for _, score in kept]
+
+
+def _served_chunks(rag: Any, left_out) -> List[str]:
+    """Every chunk not owned by a *left_out* file."""
+    if not left_out:
+        return rag.chunks
+    with rag._state_lock:  # pylint: disable=protected-access
+        return [
+            chunk
+            for i, chunk in enumerate(rag.chunks)
+            if rag.chunk_to_file.get(i) not in left_out
+        ]
+
+
+def _served_positions(rag: Any, left_out) -> Dict[str, int]:
+    """First index of each chunk text owned by a file that is not left out."""
+    with rag._state_lock:  # pylint: disable=protected-access
+        positions: Dict[str, int] = {}
+        for i, chunk in enumerate(rag.chunks):
+            if rag.chunk_to_file.get(i) not in left_out:
+                positions.setdefault(chunk, i)
+        return positions
+
+
+def _left_out_note(left_out: Dict[str, Dict[str, Any]]) -> str:
+    """Instruction prefix naming documents a partial search left out."""
+    messages = " ".join(entry["message"] for entry in left_out.values())
+    return (
+        f"Left out of this search: {messages} Tell the user, and do not say the "
+        "documents lack anything those files might hold. "
+    )
+
+
 def _rag_not_available() -> str:
     return f"RAG not available. {missing_extra_hint('rag')}"
+
+
+def _rag_unavailable_message(host: Any) -> str:
+    """Why a document tool cannot run.
+
+    "Install the RAG extra" is only true when the extra failed to import.
+    A config or embedder error keeps its own cause.
+    """
+    error = getattr(host, "_rag_init_error", None)
+    if error is None or isinstance(error, ImportError):
+        return _rag_not_available()
+    return f"RAG failed to start: {type(error).__name__}: {error}"
 
 
 def _embedding_next_step(unreachable: bool, retry: str, busy: bool = False) -> str:
@@ -339,6 +656,79 @@ def _chunks_have_pages(chunks: List[Dict[str, Any]]) -> bool:
     return any("page" in chunk for chunk in chunks)
 
 
+def _question_language_note(question: str, chunks: List[Dict[str, Any]]) -> str:
+    """Name the question when the chunks could pull the answer into their language."""
+    asked = text_scripts(question)
+    if not asked or not chunks:
+        return ""
+    found = text_scripts(" ".join(chunk.get("content", "") for chunk in chunks))
+    if not found or found == asked[:1]:
+        return ""
+    return (
+        f"\n\nThe question you are answering is: {question[:300]}\n"
+        "Write your whole answer in the language of that question and translate "
+        "what you use from these chunks. Neither their language nor an earlier "
+        "turn's changes that."
+    )
+
+
+def _answers_in_question_language(mixin: Any):
+    """Restate the question where the model picks its answer's language: after reading."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") == "success":
+                result["instruction"] = result.get(
+                    "instruction", ""
+                ) + _question_language_note(
+                    getattr(mixin, "_memory_turn_query", ""),
+                    result.get("chunks") or [],
+                )
+            return result
+
+        return wrapper
+
+    return wrap
+
+
+_SEARCH_AGAIN_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
+    "more with different words (other terms for the same thing, and the question's "
+    "words in the document's language). If that search misses too, say it is not "
+    "in the documents."
+)
+
+
+_NO_TURN = object()
+
+
+def _asks_once_for_another_search(mixin: Any):
+    """Ask for one more search before "not in the document", once per turn.
+
+    Only the turn's first search that returns chunks carries the note, so it
+    buys one extra search and never a chain of them.
+    """
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if result.get("status") != "success" or not result.get("chunks"):
+                return result
+            turn = getattr(mixin, "_turn_seq", None)
+            if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
+                return result
+            mixin._search_again_turn = turn
+            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -390,11 +780,18 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
     )
 
 
+_PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
+
+
 def extract_page_from_chunk(
     chunk_text, chunk_index=-1, all_chunks=None, chunk_to_file=None
 ):
     """
-    Extract page number from chunk text or by looking at nearby chunks.
+    The page a chunk's first line is on.
+
+    Text before a mid-chunk ``[Page N]`` belongs to the page an earlier chunk
+    was on. With no earlier chunk to ask, a page-start marker means page N-1;
+    an in-page marker (image text, speaker notes) means page N.
 
     Args:
         chunk_text: The chunk text to extract page from
@@ -406,30 +803,92 @@ def extract_page_from_chunk(
     Returns:
         Page number as int, or None if not found
     """
-    # Strategy 1: Try [Page X] format in this chunk
-    match = re.search(r"\[Page (\d+)\]", chunk_text)
+    match = _PAGE_MARKER.search(chunk_text)
     if match:
-        return int(match.group(1))
+        page = int(match.group(1))
+        if not chunk_text[: match.start()].strip():
+            return page
+        earlier = _page_before(chunk_index, all_chunks, chunk_to_file)
+        if earlier is not None:
+            return earlier
+        if _IN_PAGE_SECTION.match(chunk_text, match.end()):
+            return page
+        return max(1, page - 1)
 
-    # Strategy 2: Try (Page X) format
     match = re.search(r"\(Page (\d+)\)", chunk_text)
     if match:
         return int(match.group(1))
 
-    # Strategy 3: Look backwards in previous chunks to find most recent page marker
-    if chunk_index >= 0 and all_chunks:
-        for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
-            if chunk_to_file is not None and chunk_to_file.get(
-                prev_idx
-            ) != chunk_to_file.get(chunk_index):
-                # Indexed after another document: its pages are not this file's.
-                break
-            if prev_idx < len(all_chunks):
-                prev_chunk = all_chunks[prev_idx]
-                match = re.search(r"\[Page (\d+)\]", prev_chunk)
-                if match:
-                    return int(match.group(1))
+    # No marker: the chunk continues the last page an earlier chunk started.
+    return _page_before(chunk_index, all_chunks, chunk_to_file)
 
+
+# Markers the extractor writes inside a page, not at its start.
+_IN_PAGE_SECTION = re.compile(r"\s*(?:\*\*Content Extracted|### |\*\*Speaker Notes)")
+
+
+# Text one default-size chunk (~500 tokens) costs the prompt.
+_CHUNK_CHARS = 2000
+
+
+def top_or_whole_index(
+    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+) -> List[tuple]:
+    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
+    all of them fit in the text ``limit`` full-size chunks would take.
+
+    A rollup over eight one-paragraph reports must see all eight.
+    """
+    if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
+        return ranked[:limit]
+    seen = {chunk for chunk, _ in ranked}
+    rest = []
+    for chunk in candidates:
+        if chunk not in seen:
+            seen.add(chunk)
+            rest.append((chunk, 0.0))
+    return ranked + rest
+
+
+def split_entries_at_pages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """*entries* with each page-spanning chunk split, so every 'page' field is true.
+
+    A model cites the field, so a chunk starting on page 22 that runs into page
+    23 would have page 23's facts cited as page 22.
+    """
+    split = []
+    for entry in entries:
+        content, page, start = entry["content"], entry.get("page"), 0
+        for marker in _PAGE_MARKER.finditer(content):
+            if page is None or _IN_PAGE_SECTION.match(content, marker.end()):
+                continue
+            text = content[start : marker.start()].strip()
+            if text:
+                split.append({**entry, "content": text, "page": page})
+            start, page = marker.start(), int(marker.group(1))
+        tail = {**entry, "content": content[start:]}
+        if page is not None:
+            tail["page"] = page
+        split.append(tail)
+    for number, entry in enumerate(split, 1):
+        entry["chunk_id"] = number
+    return split
+
+
+def _page_before(chunk_index, all_chunks, chunk_to_file):
+    """The last page marker in the few chunks before this one, same file only."""
+    if chunk_index < 0 or not all_chunks:
+        return None
+    for prev_idx in range(chunk_index - 1, max(-1, chunk_index - 5), -1):
+        if chunk_to_file is not None and chunk_to_file.get(
+            prev_idx
+        ) != chunk_to_file.get(chunk_index):
+            # Indexed after another document: its pages are not this file's.
+            break
+        if prev_idx < len(all_chunks):
+            markers = _PAGE_MARKER.findall(all_chunks[prev_idx])
+            if markers:
+                return int(markers[-1])
     return None
 
 
@@ -460,6 +919,26 @@ class RAGToolsMixin:
         """
         return "No documents are currently indexed."
 
+    def _attach_indexed_document(self, file_path: str, result: Dict[str, Any]) -> str:
+        """Record a successful index on the agent and its chat session.
+
+        Runs on the indexing thread when the document finished in the
+        background. Returns a warning when the session could not be saved.
+        """
+        _forget_evicted(self.indexed_files, result.get("evicted", []))
+        self.indexed_files.add(file_path)
+        save_warning = ""
+        session = getattr(self, "current_session", None)
+        if session and file_path not in session.indexed_documents:
+            session.indexed_documents.append(file_path)
+            manager = getattr(self, "session_manager", None)
+            if manager is not None and not manager.save_session(session):
+                save_warning = _SESSION_SAVE_WARNING
+                logger.warning(save_warning)
+        if hasattr(self, "rebuild_system_prompt"):
+            self.rebuild_system_prompt()
+        return save_warning
+
     def register_rag_tools(self) -> None:
         """Register RAG-related tools."""
         from gaia.agents.base.tools import tool
@@ -467,6 +946,8 @@ class RAGToolsMixin:
         @tool(
             atomic=True,
         )
+        @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -479,7 +960,12 @@ class RAGToolsMixin:
             """
             rag = _require_rag(self)
             try:
-                # Check if RAG is initialized and has documents
+                # None with no startup error means RAG is off. A recorded failure is an error.
+                if not rag and getattr(self, "_rag_init_error", None) is not None:
+                    return {
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
+                    }
                 if not rag or not rag.index or len(rag.chunks) == 0:
                     message = self._no_documents_message()
                     return {
@@ -487,12 +973,19 @@ class RAGToolsMixin:
                         "message": message,
                         "instruction": (
                             f"{message} "
+                            "If the user named a folder or file to index, call index_directory "
+                            "or index_document on it now, without asking, then query again. "
                             "For domain-specific questions (HR policies, PTO, remote work, company procedures, "
                             "financial data, project plans, technical specs): use the SMART DISCOVERY WORKFLOW — "
                             "use search_file to find relevant files, index_document to index them, then query_specific_file to answer. "
                             "For general knowledge questions (math, science, geography), answer directly from knowledge."
                         ),
                     }
+
+                indexed = list(rag.indexed_files)
+                left_out = _bring_current(self, rag, indexed)
+                if left_out and len(left_out) == len(indexed):
+                    return _left_out_result(left_out)
 
                 # Generate multiple search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
@@ -522,7 +1015,10 @@ class RAGToolsMixin:
                     try:
                         # Use RAG to retrieve chunks
                         # pylint: disable=protected-access
-                        chunks, scores = rag._retrieve_chunks(search_key)
+                        if left_out:
+                            chunks, scores = _search_without(rag, search_key, left_out)
+                        else:
+                            chunks, scores = rag._retrieve_chunks(search_key)
                         if chunks:
                             all_chunks.extend(chunks)
                             all_scores.extend(scores)
@@ -596,79 +1092,32 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
-                query_lower = query.lower()
-
-                # Identify important terms (not common words)
-
-                query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                stop_words = {
-                    "the",
-                    "is",
-                    "what",
-                    "of",
-                    "and",
-                    "a",
-                    "an",
-                    "in",
-                    "to",
-                    "for",
-                }
-                important_terms = [
-                    w for w in query_words if w not in stop_words and len(w) > 2
-                ]
-
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
+                keywords = keyword_index(rag)
+                owners = dict(rag.chunk_to_file) if left_out else {}
+                for chunk_idx, boost_score, matching_terms in keywords.rank(query):
+                    if owners.get(chunk_idx) in left_out:
+                        continue
+                    # Deduplication below keeps a chunk's higher score.
+                    all_chunks.append(keywords.texts[chunk_idx])
+                    all_scores.append(boost_score)
 
-                if important_terms:
-                    # Check each indexed chunk for keyword matches
-                    for chunk_idx, chunk_text in enumerate(rag.chunks):
-                        chunk_lower = chunk_text.lower()
+                    # Get source file for this chunk
+                    source_file = rag.chunk_to_file.get(chunk_idx, "Unknown")
 
-                        # Count matching terms in this chunk (whole word matching)
-                        matching_terms = []
-                        for term in important_terms:
-                            # Use word boundary regex for whole-word matching
-                            if re.search(r"\b" + re.escape(term) + r"\b", chunk_lower):
-                                matching_terms.append(term)
-
-                        if matching_terms:
-                            # Calculate boost score based on match ratio
-                            match_ratio = (
-                                len(matching_terms) / len(important_terms)
-                                if important_terms
-                                else 0
-                            )
-                            boost_score = 0.6 + (0.2 * match_ratio)  # Range: 0.6-0.8
-
-                            # Add this chunk with boosted score if not already in all_chunks
-                            if chunk_text not in all_chunks:
-                                all_chunks.append(chunk_text)
-                                all_scores.append(boost_score)
-
-                                # Get source file for this chunk
-                                source_file = rag.chunk_to_file.get(
-                                    chunk_idx, "Unknown"
-                                )
-
-                                keyword_boost_info.append(
-                                    {
-                                        "chunk_index": chunk_idx,
-                                        "source_file": (
-                                            Path(source_file).name
-                                            if source_file != "Unknown"
-                                            else "Unknown"
-                                        ),
-                                        "matching_terms": matching_terms,
-                                        "boost_score": boost_score,
-                                        "match_ratio": match_ratio,
-                                    }
-                                )
-
-                                # Limit boosted chunks
-                                if len(keyword_boost_info) >= 5:
-                                    break
+                    keyword_boost_info.append(
+                        {
+                            "chunk_index": chunk_idx,
+                            "source_file": (
+                                Path(source_file).name
+                                if source_file != "Unknown"
+                                else "Unknown"
+                            ),
+                            "matching_terms": matching_terms,
+                            "boost_score": boost_score,
+                        }
+                    )
 
                 # Capture debug info for keyword boosting
                 if debug_info and keyword_boost_info:
@@ -709,6 +1158,11 @@ class RAGToolsMixin:
                         "relevance_scores": [],
                         "instruction": "Inform the user that no relevant information was found in the documents for their query.",
                     }
+                    if left_out:
+                        result["files_left_out"] = _public(list(left_out.values()))
+                        result["instruction"] = (
+                            _left_out_note(left_out) + result["instruction"]
+                        )
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -766,12 +1220,23 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    _served_chunks(rag, left_out),
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Find the actual chunk indices from the RAG system
                 chunk_indices = []
+                served_at = _served_positions(rag, left_out) if left_out else None
                 for chunk in top_chunks:
+                    if served_at is not None:
+                        # A twin chunk in a left-out file must not be cited.
+                        chunk_indices.append(served_at.get(chunk, -1))
+                        continue
                     # Find this chunk's index in the global chunks list
                     try:
                         idx = rag.chunks.index(chunk)
@@ -814,10 +1279,11 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 # Update debug info with final chunks
                 if debug_info:
-                    debug_info["final_chunks_returned"] = len(top_chunks)
+                    debug_info["final_chunks_returned"] = len(formatted_chunks)
                     debug_info["score_distribution"] = {
                         "max": float(max(top_scores)) if top_scores else 0,
                         "min": float(min(top_scores)) if top_scores else 0,
@@ -853,9 +1319,9 @@ class RAGToolsMixin:
                 # Return chunks for agent to use in answer generation
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant document chunks",
+                    "message": f"Found {len(formatted_chunks)} relevant document chunks",
                     "chunks": formatted_chunks,
-                    "num_chunks": len(top_chunks),
+                    "num_chunks": len(formatted_chunks),
                     "search_keys_used": search_keys,
                     "source_files": matched_source_files,
                     "instruction": _documents_instruction(
@@ -863,6 +1329,11 @@ class RAGToolsMixin:
                         all("page" in chunk for chunk in formatted_chunks),
                     ),
                 }
+                if left_out:
+                    result["files_left_out"] = _public(list(left_out.values()))
+                    result["instruction"] = (
+                        _left_out_note(left_out) + result["instruction"]
+                    )
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -892,6 +1363,8 @@ class RAGToolsMixin:
             # cap; at the default a big PDF is abandoned mid-index and re-indexed.
             timeout=600,
         )
+        @_answers_in_question_language(self)
+        @_asks_once_for_another_search(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -903,7 +1376,7 @@ class RAGToolsMixin:
                 if not rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -951,30 +1424,19 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
-                            idx_result, job = _index_within_budget(rag, resolved)
+                            idx_result, job = _index_within_budget(
+                                rag,
+                                resolved,
+                                on_indexed=functools.partial(
+                                    self._attach_indexed_document, file_path
+                                ),
+                            )
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
-                                self.indexed_files.add(file_path)
-                                if (
-                                    hasattr(self, "current_session")
-                                    and self.current_session
-                                ):
-                                    if (
-                                        file_path
-                                        not in self.current_session.indexed_documents
-                                    ):
-                                        self.current_session.indexed_documents.append(
-                                            file_path
-                                        )
-                                        if hasattr(self, "session_manager"):
-                                            if not self.session_manager.save_session(
-                                                self.current_session
-                                            ):
-                                                save_warning = _SESSION_SAVE_WARNING
-                                                logger.warning(save_warning)
-                                if hasattr(self, "rebuild_system_prompt"):
-                                    self.rebuild_system_prompt()
+                                save_warning = self._attach_indexed_document(
+                                    file_path, idx_result
+                                )
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
                                 # stores the absolute path, not the relative one passed in.
@@ -1025,6 +1487,10 @@ class RAGToolsMixin:
                 if len(matching_files) > 1:
                     return _ambiguous_file_error(file_path, matching_files)
                 target_file = matching_files[0]
+                if not auto_indexed:
+                    left_out = _bring_current(self, rag, [str(target_file)])
+                    if left_out:
+                        return _left_out_result(left_out)
 
                 # Generate search keys for better retrieval
                 search_keys = self._generate_search_keys(query)
@@ -1123,99 +1589,43 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # HYBRID SEARCH: Boost scores of chunks containing keywords
-                # Instead of creating new text snippets, we boost the scores of existing chunks
+                # HYBRID SEARCH: add the chunks that best match the query's words
                 if (
                     str(target_file) in rag.file_metadata
                     and "full_text" in rag.file_metadata[str(target_file)]
                 ):
-                    query_lower = query.lower()
-
-                    # Identify important terms (not common words)
-
-                    query_words = re.findall(r"\b[a-z]+\b", query_lower)
-                    # Filter out common words
-                    stop_words = {
-                        "the",
-                        "is",
-                        "what",
-                        "of",
-                        "and",
-                        "a",
-                        "an",
-                        "in",
-                        "to",
-                        "for",
-                    }
-                    important_terms = [
-                        w for w in query_words if w not in stop_words and len(w) > 2
-                    ]
-
-                    if important_terms:
-                        file_keyword_info = []
-
-                        # Check each chunk from this file for keyword matches
-                        file_chunk_indices = rag.file_to_chunk_indices.get(
-                            str(target_file), []
+                    file_chunk_indices = rag.file_to_chunk_indices.get(
+                        str(target_file), []
+                    )
+                    file_keyword_info = []
+                    keywords = keyword_index(rag)
+                    for chunk_idx, boost_score, matching_terms in keywords.rank(
+                        query,
+                        [i for i in file_chunk_indices if i < len(keywords)],
+                    ):
+                        # Deduplication below keeps a chunk's higher score.
+                        all_chunks.append(keywords.texts[chunk_idx])
+                        all_scores.append(boost_score)
+                        file_keyword_info.append(
+                            {
+                                "chunk_index": chunk_idx,
+                                "matching_terms": matching_terms,
+                                "boost_score": boost_score,
+                            }
                         )
 
-                        for chunk_idx in file_chunk_indices:
-                            if chunk_idx < len(rag.chunks):
-                                chunk_text = rag.chunks[chunk_idx].lower()
-
-                                # Count matching terms in this chunk (whole word matching)
-                                matching_terms = []
-                                for term in important_terms:
-                                    # Use word boundary regex for whole-word matching
-                                    if re.search(
-                                        r"\b" + re.escape(term) + r"\b", chunk_text
-                                    ):
-                                        matching_terms.append(term)
-
-                                if matching_terms:
-                                    # Calculate boost score based on match ratio
-                                    match_ratio = (
-                                        len(matching_terms) / len(important_terms)
-                                        if important_terms
-                                        else 0
-                                    )
-                                    boost_score = 0.6 + (
-                                        0.2 * match_ratio
-                                    )  # Range: 0.6-0.8
-
-                                    # Add this chunk with boosted score if not already in all_chunks
-                                    chunk_content = rag.chunks[chunk_idx]
-                                    if chunk_content not in all_chunks:
-                                        all_chunks.append(chunk_content)
-                                        all_scores.append(boost_score)
-
-                                        file_keyword_info.append(
-                                            {
-                                                "chunk_index": chunk_idx,
-                                                "matching_terms": matching_terms,
-                                                "boost_score": boost_score,
-                                                "match_ratio": match_ratio,
-                                            }
-                                        )
-
-                                        # Limit boosted chunks
-                                        if len(file_keyword_info) >= 5:
-                                            break
-
-                        # Capture debug info for keyword search
-                        if debug_info and file_keyword_info:
-                            debug_info["keyword_retrieval"].append(
-                                {
-                                    "file": Path(target_file).name,
-                                    "chunks_boosted": len(file_keyword_info),
-                                    "boosted_chunks": file_keyword_info[
-                                        :5
-                                    ],  # Show first 5 boosted chunks
-                                }
-                            )
-                            logger.info(
-                                f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
-                            )
+                    # Capture debug info for keyword search
+                    if debug_info and file_keyword_info:
+                        debug_info["keyword_retrieval"].append(
+                            {
+                                "file": Path(target_file).name,
+                                "chunks_boosted": len(file_keyword_info),
+                                "boosted_chunks": file_keyword_info,
+                            }
+                        )
+                        logger.info(
+                            f"[DEBUG] Keyword search in {Path(target_file).name}: boosted {len(file_keyword_info)} chunks"
+                        )
 
                 # Update debug info before deduplication - track which chunks before dedup
                 if debug_info:
@@ -1238,7 +1648,10 @@ class RAGToolsMixin:
                 if not all_chunks:
                     result = {
                         "status": "success",
-                        "message": f"No relevant information found in {Path(target_file).name}",
+                        "message": (
+                            "No relevant information found in "
+                            f"{display_file_name(target_file)}"
+                        ),
                         "chunks": [],
                         "file": str(target_file),
                     }
@@ -1295,8 +1708,18 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                top_chunks = [chunk for chunk, score in sorted_items[:adaptive_max]]
-                top_scores = [score for chunk, score in sorted_items[:adaptive_max]]
+                kept = top_or_whole_index(
+                    sorted_items,
+                    [
+                        rag.chunks[i]
+                        for i in rag.file_to_chunk_indices.get(str(target_file), [])
+                        if i < len(rag.chunks)
+                    ],
+                    adaptive_max,
+                    _CHUNK_CHARS,
+                )
+                top_chunks = [chunk for chunk, score in kept]
+                top_scores = [score for chunk, score in kept]
 
                 # Update debug info with final chunks
                 if debug_info:
@@ -1350,17 +1773,21 @@ class RAGToolsMixin:
                     if _page is not None:
                         _entry["page"] = _page
                     formatted_chunks.append(_entry)
+                formatted_chunks = split_entries_at_pages(formatted_chunks)
 
                 result = {
                     "status": "success",
-                    "message": f"Found {len(top_chunks)} relevant chunks in {Path(target_file).name}",
+                    "message": (
+                        f"Found {len(formatted_chunks)} relevant chunks in "
+                        f"{display_file_name(target_file)}"
+                    ),
                     "chunks": formatted_chunks,
                     "file": str(target_file),
                     "source_files": [source_path],
                     "auto_indexed": auto_indexed,
                     "instruction": _file_instruction(
-                        Path(target_file).name,
-                        len(top_chunks),
+                        display_file_name(target_file),
+                        len(formatted_chunks),
                         _chunks_have_pages(formatted_chunks),
                     ),
                 }
@@ -1403,7 +1830,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Debug information collection
@@ -1422,19 +1849,38 @@ class RAGToolsMixin:
                 if not self.rag.chunks:
                     return {"status": "error", "error": self._no_documents_message()}
 
-                # Search through chunks for pattern
+                indexed = list(self.rag.indexed_files)
+                left_out = _bring_current(self, self.rag, indexed)
+                if left_out and len(left_out) == len(indexed):
+                    return _left_out_result(left_out)
+                with self.rag._state_lock:  # pylint: disable=protected-access
+                    # Keep one coherent snapshot for matching and provenance. A
+                    # re-index can replace both arrays while this tool is
+                    # formatting its answer.
+                    chunks_snapshot = list(self.rag.chunks)
+                    chunk_to_file_snapshot = dict(self.rag.chunk_to_file)
+                    searched = [
+                        (index, chunk, chunk_to_file_snapshot.get(index))
+                        for index, chunk in enumerate(chunks_snapshot)
+                        if chunk_to_file_snapshot.get(index) not in left_out
+                    ]
+
+                # Search through chunks for pattern. Keep the global chunk index
+                # so exact matches retain their source file and PDF page.
                 matching_chunks = []
+                matching_details = []
                 pattern_lower = pattern.lower()
 
                 if debug_info:
-                    debug_info["total_chunks_searched"] = len(self.rag.chunks)
+                    debug_info["total_chunks_searched"] = len(searched)
                     logger.info(
-                        f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(self.rag.chunks)} chunks"
+                        f"[DEBUG] search_indexed_chunks: Searching for '{pattern}' in {len(searched)} chunks"
                     )
 
-                for i, chunk in enumerate(self.rag.chunks):
+                for index, chunk, source_file in searched:
                     if pattern_lower in chunk.lower():
                         matching_chunks.append(chunk)
+                        matching_details.append((index, chunk, source_file))
 
                         # Capture debug info for first few matches
                         if debug_info and len(debug_info["chunks_with_matches"]) < 5:
@@ -1445,7 +1891,7 @@ class RAGToolsMixin:
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
-                                    "chunk_index": i,
+                                    "chunk_index": index,
                                     "chunk_preview": (
                                         chunk[:100] + "..."
                                         if len(chunk) > 100
@@ -1470,21 +1916,68 @@ class RAGToolsMixin:
                         "matches": [],
                         "count": 0,
                     }
+                    if left_out:
+                        result["files_left_out"] = _public(list(left_out.values()))
+                        result["instruction"] = _left_out_note(left_out)
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
 
                 # Limit results
-                limited_matches = matching_chunks[:10]
+                limited_details = matching_details[:10]
+                limited_matches = [chunk for _, chunk, _ in limited_details]
+                formatted_matches = []
+                for index, chunk, source_file in limited_details:
+                    matched_content = chunk
+                    page = None
+                    initial_page = extract_page_from_chunk(
+                        chunk, index, chunks_snapshot, chunk_to_file_snapshot
+                    )
+                    if initial_page is not None:
+                        page_entries = split_entries_at_pages(
+                            [
+                                {
+                                    "chunk_id": index,
+                                    "content": chunk,
+                                    "page": initial_page,
+                                }
+                            ]
+                        )
+                        matching_entries = [
+                            entry
+                            for entry in page_entries
+                            if pattern_lower in entry["content"].lower()
+                        ]
+                        if matching_entries:
+                            matched_content = matching_entries[0]["content"]
+                            page = matching_entries[0].get("page")
+                    entry = {"content": matched_content}
+                    if source_file:
+                        entry["source_file"] = str(Path(source_file).resolve())
+                        if page is None and initial_page is not None:
+                            page = initial_page
+                        if page is not None:
+                            entry["page"] = page
+                    formatted_matches.append(entry)
 
                 result = {
                     "status": "success",
                     "message": f"Found {len(matching_chunks)} matches for '{pattern}'",
                     "matches": limited_matches,
+                    "match_details": formatted_matches,
                     "count": len(matching_chunks),
                     "showing": len(limited_matches),
-                    "instruction": "Use these exact matches to answer the user's question.",
+                    "instruction": (
+                        "Use these exact matches to answer the user's question. "
+                        "Cite each match using its source_file and page when present; "
+                        "do not invent a page number when the field is absent."
+                    ),
                 }
+                if left_out:
+                    result["files_left_out"] = _public(list(left_out.values()))
+                    result["instruction"] = (
+                        _left_out_note(left_out) + result["instruction"]
+                    )
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1573,7 +2066,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 # Before the existence probe, as in read_file.
@@ -1592,10 +2085,11 @@ class RAGToolsMixin:
                 # docs) and after each successful index_document call.  This prevents
                 # the LLM from calling the tool redundantly within a single request.
                 # The hash-based RAG cache prevents re-processing across requests.
+                # A file edited since it was indexed falls through and re-indexes.
                 if (
                     file_path in self.indexed_files
                     or real_file_path in self.indexed_files
-                ):
+                ) and self.rag.is_current(real_file_path):
                     logger.debug(
                         "Skipping re-index for already-indexed file: %s", file_path
                     )
@@ -1603,6 +2097,7 @@ class RAGToolsMixin:
                         "status": "success",
                         "message": f"Already indexed: {Path(file_path).name}",
                         "file_name": Path(file_path).name,
+                        "file_path": real_file_path,
                         "already_indexed": True,
                         "from_cache": True,
                         "total_indexed_files": len(self.indexed_files),
@@ -1610,26 +2105,19 @@ class RAGToolsMixin:
 
                 # A document too big to index within the budget keeps indexing
                 # in the background; say so instead of running into the timeout.
-                result, job = _index_within_budget(self.rag, real_file_path)
+                result, job = _index_within_budget(
+                    self.rag,
+                    real_file_path,
+                    on_indexed=functools.partial(
+                        self._attach_indexed_document, file_path
+                    ),
+                )
                 if result is None:
                     return _indexing_in_progress(job)
 
                 if result.get("success"):
-                    self.indexed_files.add(file_path)
-                    save_warning = ""
-
-                    # Add to current session
-                    if self.current_session:
-                        if file_path not in self.current_session.indexed_documents:
-                            self.current_session.indexed_documents.append(file_path)
-                            if not self.session_manager.save_session(
-                                self.current_session
-                            ):
-                                save_warning = _SESSION_SAVE_WARNING
-                                logger.warning(save_warning)
-
-                    # Update system prompt to include the new document
-                    self.rebuild_system_prompt()
+                    evicted = result.get("evicted", [])
+                    save_warning = self._attach_indexed_document(file_path, result)
 
                     # Return detailed stats from RAG SDK
                     file_name = result.get("file_name", file_path)
@@ -1641,11 +2129,19 @@ class RAGToolsMixin:
                         msg = f"Re-indexed (updated): {file_name}"
                     else:
                         msg = f"Successfully indexed: {file_name}"
+                    if evicted:
+                        names = ", ".join(Path(path).name for path in evicted)
+                        msg += (
+                            f". The document library was full, so it removed {names}; "
+                            "questions about it will find nothing until it is indexed again"
+                        )
                     return {
                         "status": "success",
                         "message": f"{msg}. {save_warning}" if save_warning else msg,
                         **({"warning": save_warning} if save_warning else {}),
                         "file_name": result.get("file_name"),
+                        # The Agent UI records this path in the user's Document library.
+                        "file_path": real_file_path,
                         "file_type": result.get("file_type"),
                         "file_size_mb": result.get("file_size_mb"),
                         "num_pages": result.get("num_pages"),
@@ -1655,6 +2151,7 @@ class RAGToolsMixin:
                         "from_cache": result.get("from_cache", False),
                         "already_indexed": result.get("already_indexed", False),
                         "reindexed": result.get("reindexed", False),
+                        **({"evicted": evicted} if evicted else {}),
                     }
                 else:
                     if result.get("error_type") == "embedding_unavailable":
@@ -1695,12 +2192,8 @@ class RAGToolsMixin:
             try:
                 if not self.rag:
                     return {
-                        "status": "success",
-                        "documents": [],
-                        "count": 0,
-                        "total_chunks": 0,
-                        "total_size_mb": 0,
-                        "message": self._no_documents_message(),
+                        "status": "error",
+                        "error": _rag_unavailable_message(self),
                     }
                 docs = list(self.rag.indexed_files)
 
@@ -1777,7 +2270,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
                 status = self.rag.get_status()
 
@@ -1831,7 +2324,7 @@ class RAGToolsMixin:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_path)
@@ -1864,7 +2357,8 @@ class RAGToolsMixin:
                         "'Overall' or 'In summary'."
                     ),
                     "detailed": (
-                        "Write a comprehensive summary of at least 250 words covering "
+                        "Write a comprehensive summary of at least 250 words and at "
+                        "most 1,000 words covering "
                         "every major topic, key point, and important detail in full "
                         "paragraphs. Keep every number, percentage, dollar amount, "
                         "date, and metric. Do not use bullets."
@@ -1944,6 +2438,12 @@ class RAGToolsMixin:
                 # Add last page
                 if current_page.strip():
                     pages.append(current_page.strip())
+
+                pages = [
+                    piece
+                    for page in pages
+                    for piece in _split_oversized_page(page, max_words_per_section)
+                ]
 
                 # Group pages into sections that fit within max_words_per_section
                 # Include overlap: last page of previous section is included in next section
@@ -2143,7 +2643,7 @@ references from the section summaries.
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 matching_files = _match_indexed_files(self.rag.indexed_files, file_name)
@@ -2249,13 +2749,17 @@ references from the section summaries.
             """
             Index all supported files in a directory.
 
-            Returns statistics about indexed files.
+            Indexes PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx),
+            CSV, JSON, EPUB, text, Markdown and source-code files. Images and
+            other types are skipped; skipped_files lists each with a reason.
+
+            Returns statistics about indexed, failed and skipped files.
             """
             try:
                 if not self.rag:
                     return {
                         "status": "error",
-                        "error": _rag_not_available(),
+                        "error": _rag_unavailable_message(self),
                     }
 
                 dir_path = _resolve_target(
@@ -2284,25 +2788,10 @@ references from the section summaries.
 
                 logger.info(f"Indexing directory: {dir_path} (recursive={recursive})")
 
-                # Supported file extensions
-                supported_extensions = {
-                    ".pdf",
-                    ".txt",
-                    ".csv",
-                    ".json",
-                    ".py",
-                    ".js",
-                    ".java",
-                    ".cpp",
-                    ".c",
-                    ".h",
-                    ".md",
-                }
-
                 indexed_files = []
                 failed_files = []
                 failure_reasons: Dict[str, str] = {}
-                skipped_files = []
+                skipped_files: List[Dict[str, str]] = []
                 embedding_failure: Optional[Dict[str, Any]] = None
 
                 # Get files to index
@@ -2312,11 +2801,19 @@ references from the section summaries.
                     files_to_index = [f for f in dir_path.iterdir() if f.is_file()]
 
                 for file_path in files_to_index:
+                    rel_name = file_path.relative_to(dir_path).as_posix()
                     # A link out of the folder, or a secret in it, is not indexed.
                     if not readable_entry(self, file_path):
-                        skipped_files.append(str(file_path))
+                        skipped_files.append(
+                            {
+                                "file": rel_name,
+                                "reason": "outside the allowed folders or a "
+                                "protected file",
+                            }
+                        )
                         continue
-                    if file_path.suffix.lower() in supported_extensions:
+                    skip_reason = folder_index_skip_reason(file_path)
+                    if skip_reason is None:
                         try:
                             # Use the RAG SDK to index the file
                             result = self.rag.index_document(str(file_path))
@@ -2337,7 +2834,7 @@ references from the section summaries.
                             failed_files.append(str(file_path))
                             failure_reasons[file_path.name] = f"{type(e).__name__}: {e}"
                     else:
-                        skipped_files.append(str(file_path))
+                        skipped_files.append({"file": rel_name, "reason": skip_reason})
 
                 # Update system prompt after indexing directory
                 if indexed_files:
@@ -2353,8 +2850,11 @@ references from the section summaries.
                         [Path(f).name for f in failed_files] if failed_files else []
                     ),
                     "failure_reasons": failure_reasons,
+                    "skipped_files": skipped_files[:_MAX_SKIPPED_REPORTED],
                     "message": f"Indexed {len(indexed_files)} files from {dir_path.name}",
                 }
+                if len(skipped_files) > _MAX_SKIPPED_REPORTED:
+                    result["skipped_files_truncated"] = True
                 if embedding_failure is not None:
                     return {**result, **embedding_failure}
                 if failed_files and not indexed_files:

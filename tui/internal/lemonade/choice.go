@@ -12,8 +12,11 @@ package lemonade
 //   - lemonade_base_url: the user's server, canonical form ending in /api/v1
 //   - lemonade_api_key_stored: its key is in the Python OS credential store,
 //     which Go cannot read, so the daemon hands it over (GET /lemonade/target)
+//   - lemonade_env_url_ignored: a LEMONADE_BASE_URL value the person chose
+//     GAIA's own over in the Agent UI
 //
-// LEMONADE_BASE_URL still wins. In external mode GAIA starts no Lemonade at all.
+// LEMONADE_BASE_URL still wins, except while it holds lemonade_env_url_ignored.
+// In external mode GAIA starts no Lemonade at all.
 
 import (
 	"context"
@@ -32,6 +35,7 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 const (
@@ -40,9 +44,16 @@ const (
 )
 
 // MinExternalVersion is the oldest Lemonade GAIA adopts as the user's server.
-// Must equal INIT_PROFILES["gaia"]["min_lemonade_version"] in
-// src/gaia/installer/init_command.py (a drift test pins the two).
-const MinExternalVersion = "10.9.0"
+// Must equal LEMONADE_MIN_VERSION in src/gaia/version.py (a drift test pins
+// the two).
+const MinExternalVersion = "2026.44.1"
+
+// UpgradeHint is the remedy for a Lemonade older than MinExternalVersion when
+// the caller cannot tell whose it is. Matches the Python side's
+// describe_upgrade_hint for both owners.
+const UpgradeHint = "GAIA updates its own Lemonade Server the next time its " +
+	"daemon starts it (`gaia daemon restart` does that now); update any other " +
+	"from https://lemonade-server.ai, then retry."
 
 // SwitchBackHint is how a user goes back to GAIA's own server.
 const SwitchBackHint = "run `gaia config set lemonade_mode gaia` to use GAIA's own instead"
@@ -52,7 +63,9 @@ type Choice struct {
 	Mode      string
 	BaseURL   string
 	KeyStored bool
-	Path      string
+	// EnvURLIgnored is the LEMONADE_BASE_URL value GAIA's own was chosen over.
+	EnvURLIgnored string
+	Path          string
 }
 
 // ConfigPathFrom mirrors gaia.config: GAIA_CONFIG_FILE, then GAIA_CONFIG_DIR,
@@ -81,7 +94,7 @@ func ReadChoice() (Choice, error) {
 		return Choice{}, nil
 	}
 	c := Choice{Path: path}
-	raw, err := os.ReadFile(path)
+	raw, err := filelock.ReadFile(path)
 	if os.IsNotExist(err) {
 		return c, nil
 	}
@@ -92,6 +105,7 @@ func ReadChoice() (Choice, error) {
 		Mode      json.RawMessage `json:"lemonade_mode"`
 		BaseURL   json.RawMessage `json:"lemonade_base_url"`
 		KeyStored json.RawMessage `json:"lemonade_api_key_stored"`
+		Ignored   json.RawMessage `json:"lemonade_env_url_ignored"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return c, fmt.Errorf("GAIA's config at %s is not valid JSON (%v). Fix it, or delete it", path, err)
@@ -108,7 +122,12 @@ func ReadChoice() (Choice, error) {
 		return c, fmt.Errorf("GAIA's config at %s: lemonade_api_key_stored must be true or false (unquoted). "+
 			"Fix it by hand, or delete the key", path)
 	}
+	if err := decodeOptional(doc.Ignored, &c.EnvURLIgnored); err != nil {
+		return c, fmt.Errorf("GAIA's config at %s: lemonade_env_url_ignored must be a URL string. "+
+			"Fix it by hand, or delete the key", path)
+	}
 	c.BaseURL = strings.TrimSpace(c.BaseURL)
+	c.EnvURLIgnored = strings.TrimSpace(c.EnvURLIgnored)
 	return c, nil
 }
 
@@ -159,7 +178,36 @@ func envURL() string {
 	if ownCredentials() {
 		return ""
 	}
-	return strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL"))
+	return EnvBaseURL()
+}
+
+// EnvBaseURL is LEMONADE_BASE_URL, or "" while it still holds the value the
+// person chose GAIA's own over in the Agent UI. Any other value applies again.
+// Mirrors Python's lemonade_choice._env_url.
+func EnvBaseURL() string {
+	env := strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL"))
+	if env == "" {
+		return ""
+	}
+	// An unreadable config is reported by ChoiceError.
+	c, _ := ReadChoice()
+	return envValue(c)
+}
+
+// EnvURLIgnored reports whether LEMONADE_BASE_URL is set but ignored, so its
+// LEMONADE_API_KEY belongs to a server GAIA no longer uses.
+func EnvURLIgnored() bool {
+	return strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" && EnvBaseURL() == ""
+}
+
+func envValue(c Choice) string {
+	env := strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL"))
+	// A bare origin and its /api/v1 form are the same server, as in Python.
+	if env != "" && c.EnvURLIgnored != "" &&
+		normalizeBaseURL(env) == normalizeBaseURL(c.EnvURLIgnored) {
+		return ""
+	}
+	return env
 }
 
 func ownCredentials() bool {
@@ -170,12 +218,13 @@ func ownCredentials() bool {
 // picks the user's own server, and which. active with a non-nil err means the
 // choice is unusable or unreadable: start nothing, and say so.
 func SavedExternal() (base string, active bool, err error) {
-	if envURL() != "" {
-		return "", false, nil
-	}
 	c, err := ReadChoice()
 	if err != nil {
+		// Unreadable, it can't say whether LEMONADE_BASE_URL is ignored.
 		return "", true, err
+	}
+	if !ownCredentials() && envValue(c) != "" {
+		return "", false, nil
 	}
 	if c.Mode != ModeExternal {
 		return "", false, nil

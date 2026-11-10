@@ -18,6 +18,7 @@ from gaia.agents.base.agent import Agent, _response_reasoning
 from gaia.agents.base.verification import strip_verification_scope
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.providers.lemonade import LemonadeProvider
+from gaia.llm.reasoning import split_reasoning
 
 # ---------------------------------------------------------------------------
 # Provider
@@ -274,11 +275,9 @@ def test_unclosed_think_block_is_not_the_answer(agent):
 
     answer = strip_verification_scope(result["result"]).strip()
     assert "Still working" not in answer
-    # Name the outcome rather than only asserting an absence: today the loop
-    # ends on the empty-response branch without re-prompting. Continuing a
-    # cut-off reply is #4054's job, so that PR must update this assertion.
-    assert len(sent) == 1
-    assert "empty response" in answer.lower()
+    # A reply that is all reasoning is empty, so the model is asked again.
+    assert len(sent) == 2
+    assert answer == "It says hello."
 
 
 def test_a_reply_merely_mentioning_think_is_not_truncated(agent):
@@ -290,6 +289,38 @@ def test_a_reply_merely_mentioning_think_is_not_truncated(agent):
     result = agent.process_query("How do I hide reasoning?", max_steps=3)
 
     assert strip_verification_scope(result["result"]).strip() == mention
+
+
+def test_reasoning_before_a_lone_close_tag_is_not_the_answer(agent):
+    # The template opened the block in the prompt, so only `</think>` arrives.
+    sent = _stub_chat(agent, ("Short file, just greet.</think>It says hello.", None))
+
+    result = agent.process_query("What does the file say?", max_steps=3)
+
+    assert len(sent) == 1
+    assert _assistant_reasoning(result["conversation"]) == ["Short file, just greet."]
+    assert strip_verification_scope(result["result"]).strip() == "It says hello."
+
+
+# The four reply shapes every reasoning split must agree on.
+REPLY_SHAPES = [
+    pytest.param("<think>Plan it.</think>Hello.", "Hello.", "Plan it.", id="paired"),
+    pytest.param("<think>Plan it, then", "", "Plan it, then", id="unclosed"),
+    pytest.param("Plan it.</think>Hello.", "Hello.", "Plan it.", id="lone-close"),
+    pytest.param("Hello.", "Hello.", None, id="no-tags"),
+]
+
+
+@pytest.mark.parametrize("reply, answer, reasoning", REPLY_SHAPES)
+def test_split_reasoning_on_every_reply_shape(reply, answer, reasoning):
+    assert split_reasoning(reply) == (answer, reasoning)
+
+
+def test_only_the_first_close_tag_can_be_lone():
+    # After a paired block, a later `</think>` is the answer quoting the tag.
+    reply = "<think>Plan.</think>Close it with </think> when done."
+
+    assert split_reasoning(reply) == ("Close it with </think> when done.", "Plan.")
 
 
 def _stub_stream(agent, *replies):

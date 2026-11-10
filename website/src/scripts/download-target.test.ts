@@ -38,7 +38,7 @@ const RAW_BINARIES = [
   'gaia-windows-amd64.exe',
   'gaia-windows-arm64.exe',
 ];
-// What release_components.yml attaches alongside them.
+// What publish.yml's github-release-installers attaches alongside them.
 const INSTALLER_FILES = [
   'gaia-0.23.0-win-x64-setup.exe',
   'gaia-0.23.0-darwin-arm64.pkg',
