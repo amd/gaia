@@ -21,6 +21,7 @@ import requests
 
 from gaia.agents.base.tools import tool
 from gaia.skills.context import check_read, list_readable, open_read
+from gaia.skills.errors import SkillPermissionError
 
 API_BASE = "https://cloudish.ai"
 DEFAULT_TIMEOUT_S = 120
@@ -123,6 +124,10 @@ def _context_archive(context_dir: str) -> bytes:
     selected: List[Any] = []
     for path in list_readable(base):
         relative = path.relative_to(base)
+        # ``list_readable`` already leaves out hidden files and secrets; repeat
+        # the check here so the upload stays clean if that contract changes.
+        if any(part.startswith(".") for part in relative.parts):
+            continue
         if any(part in EXCLUDED_DIRS for part in relative.parts[:-1]):
             continue
         selected.append((relative, path))
@@ -271,6 +276,8 @@ def cloudish_deploy(
             "Pass exactly one of image (a prebuilt container image) and "
             "context_dir (a folder with a Dockerfile)."
         )
+    if not 1 <= port <= 65535:
+        return _error(f"port must be between 1 and 65535; got {port}.")
 
     try:
         fields = _runtime_fields(
@@ -297,7 +304,7 @@ def cloudish_deploy(
 
     try:
         archive = _context_archive(context_dir)
-    except ValueError as exc:
+    except (ValueError, OSError, SkillPermissionError) as exc:
         return _error(str(exc))
 
     form: Dict[str, Any] = {"name": name, "port": str(port)}

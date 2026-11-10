@@ -54,6 +54,10 @@ DEFERRED: dict[str, str] = {
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
+    "deploy-cloudish": (
+        "Requires a live Cloudish account and paid credit; an eval run would "
+        "leave a billed app behind. The tool-level tests cover the request shape."
+    ),
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
     "guides": (
         "The answer is a card the client draws; a skill scenario needs a judge "
