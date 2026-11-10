@@ -291,7 +291,8 @@ def test_missing_agent_binary_names_the_fix():
         ch.start()
     message = str(excinfo.value)
     assert "not on PATH" in message
-    assert "gaia init" in message, "an error must name what to do about it"
+    assert "setup" in message, "an error must name what to do about it"
+    assert "gaia init" not in message, "the fix is in the app, not a command"
 
 
 # ----------------------------------------------------------------------

@@ -91,7 +91,7 @@ def discord_start(body: DiscordStartRequest) -> Dict[str, Any]:
 @router.post("/discord/stop", dependencies=[Depends(require_ui_header)])
 def discord_stop() -> Dict[str, Any]:
     cli = _cli()
-    if not cli.stop():
+    if not cli.stop(stay_stopped=True):
         raise HTTPException(
             status_code=500,
             detail="The Discord bridge did not stop. " + cli.stop_failed_hint(),

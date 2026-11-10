@@ -347,9 +347,9 @@ class AgentChannel:
         except FileNotFoundError as e:
             raise AgentChannelError(
                 f"The agent binary '{self._argv[0]}' is not on PATH, so no "
-                f"message can be answered. Install it with "
-                f"`gaia init --profile gaia`, or pass --agent-command with the "
-                f"path to it. Docs: https://amd-gaia.ai/docs/guides/install"
+                f"message can be answered. Open the GAIA app and let setup "
+                f"finish; it installs the agent. "
+                f"Docs: https://amd-gaia.ai/docs/guides/install"
             ) from e
         except OSError as e:
             raise AgentChannelError(

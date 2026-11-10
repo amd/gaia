@@ -78,8 +78,9 @@ DISCORD_REPLY_NOTE = (
     "file you write, a screenshot you take or an image you make is posted "
     "here on its own. To send any other file on this PC, put [[send: its full "
     "path]] on a line of its own in your reply. The "
-    "user is likely on their phone: never tell them to run a command; name the "
-    "GAIA app screen that does it, like Settings → Connectors. Reminders, "
+    "user is likely on their phone: never tell them to run a command or paste "
+    "one for them to run; name the GAIA app screen that does it, like Settings "
+    "→ Connectors, or say what you could not do and leave it there. Reminders, "
     "alerts and watches have no screen: they change them by asking you here.)"
 )
 
@@ -102,8 +103,8 @@ OPEN_PLACEHOLDER = "placeholder"
 OPEN_PROMPT = "prompt"
 
 RESTART_HINT = (
-    "Restart Discord from Settings → Messaging in the GAIA app, or type "
-    "/discord restart in the terminal app."
+    "In the GAIA app, open Settings → Messaging and press Stop, then Start; or "
+    "type /discord restart in the terminal app."
 )
 
 #: Discord rejects a message over 2000 characters; chunks leave room for the
@@ -1459,7 +1460,7 @@ class DiscordAdapter:
                     "-# Queued — GAIA is waiting for your answer above (tap a button, "
                     "or reply yes or no)…"
                     if asking
-                    else f"-# Queued — finishing {ahead} earlier message"
+                    else f"-# Queued — finishing {ahead} earlier task"
                     f"{'s' if ahead != 1 else ''} first…"
                 ),
             )
