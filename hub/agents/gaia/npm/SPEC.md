@@ -522,6 +522,22 @@ reached; the turn fails at once instead of retrying, and its `answer` names the
 server, not the provider. Offer to start the server. Older binaries never send
 `failure`, so read it only when present.
 
+#### The "not confirmed" note on `final.answer`
+
+When the turn's own tool log shows work that is not confirmed, the agent loop
+ends the answer with one plain-English line, for example
+`I haven't confirmed this works — the tests didn't pass.` It appears when a
+check failed, a check was blocked before it could run, a file was changed and
+nothing checked it afterwards, or the answer claims something the tool record
+does not support. It is capped at 200 characters and added at most once per
+turn. A turn where every check passed, or nothing needed checking, carries
+nothing. It is part of `final.answer` and of the streamed text, so it is also
+what you store and replay in the next turn's `context`. A client that wants the
+answer without it can drop the line that starts `I haven't confirmed this works`
+(the older label `Verification:` is dropped the same way). The agent applies
+`strip_verification_scope` from `gaia.agents.base.verification` to its own
+history.
+
 ### 5.2 `session_id` and agent retention
 
 `POST /v1/gaia/query` accepts an optional `session_id` in the request body.
