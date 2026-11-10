@@ -63,6 +63,27 @@ AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
 
+
+def eval_checkout_error() -> Optional[str]:
+    """Say why eval can't run when the repo's ``eval/`` assets are absent.
+
+    Scenarios, corpus and MCP config ship only in a source checkout, never in
+    the wheel, so an installed package resolves them into site-packages.
+    """
+    if SCENARIOS_DIR.is_dir():
+        return None
+    return (
+        "gaia eval agent needs a GAIA source checkout, but no scenarios "
+        f"directory exists at {SCENARIOS_DIR}. The scenarios, corpus and MCP "
+        "config live in the repository's eval/ directory and are not part of "
+        "the installed package.\n"
+        "  Clone the repo and install it in editable mode, then run from it:\n"
+        "    git clone https://github.com/amd/gaia && cd gaia\n"
+        '    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python\n'
+        "  See https://amd-gaia.ai/docs/guides/eval#prerequisites"
+    )
+
+
 # ── MCP interpreter resolution ────────────────────────────────────────────
 #
 # ``mcp-config.json`` is a template: hosts with ``python3`` but no bare
@@ -3410,6 +3431,11 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        checkout_error = eval_checkout_error()
+        if checkout_error:
+            print(f"[ERROR] {checkout_error}", file=sys.stderr)
+            sys.exit(1)
 
         if fix_mode and resume_dir is None:
             require_clean_tree_for_fix()

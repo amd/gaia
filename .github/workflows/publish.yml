@@ -377,9 +377,15 @@ jobs:
   # We pass publish_to_release=false so build-installers does NOT create its
   # own draft release — publish.yml's github-release job is the single
   # source of truth for what gets published, gated on the approval step.
+  # An RC waits for rc-flagship: its frozen core's real-engine check installs
+  # that build, since the pre-release it would read is what this run publishes.
   build-desktop-installers:
     name: Build Desktop Installers
-    needs: validate
+    needs: [validate, rc-flagship]
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: write   # build-installers uploads workflow artifacts
       id-token: write   # for SignPath OIDC (Phase H — opt-in via secret)
@@ -389,6 +395,7 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
       skip_source_tests: ${{ needs.validate.outputs.is_rc == 'true' }}
+      flagship: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || '' }}
 
   # ── Release candidate: the flagship agent from this commit ──────────
   # The hub's flagship is whatever release_agent_gaia.yml last published, which

@@ -29,7 +29,7 @@
     },
     {
       "title": "Code Index",
-      "purpose": "Semantic code search over repository files using FAISS + Lemonade embeddings. SDK at src/gaia/code_index/, agent integration via CodeIndexToolsMixin at src/gaia/agents/code_index/tools/mixin.py (composed into CodeAgent), CLI via gaia-code index (build/search/status/clear/chat).",
+      "purpose": "Semantic code search over repository files using FAISS + Lemonade embeddings. SDK at src/gaia/code_index/, agent integration via CodeIndexToolsMixin at src/gaia/agents/tools/code_index_tools.py (composed into CodeAgent), CLI via gaia-code index (build/search/status/clear/chat).",
       "parent": "Core Capabilities"
     },
     {

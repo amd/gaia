@@ -84,9 +84,6 @@ func TestEveryDaemonRouteReportsSkewTheSameWay(t *testing.T) {
 			_, err := f.client().Agents(context.Background(), false)
 			return err
 		}},
-		{"uninstall", daemon.APIPrefix + "/agents/email", func(f *fakeDaemon) error {
-			return f.client().Uninstall(context.Background(), "email")
-		}},
 	}
 
 	for _, tc := range cases {
@@ -110,16 +107,15 @@ func TestEveryDaemonRouteReportsSkewTheSameWay(t *testing.T) {
 }
 
 // A 404 the route ITSELF sends is a refusal about the thing asked for, not
-// version skew, and must keep its own explanation. Installing an unknown agent
-// is the live example: the daemon names the agent and what is missing.
+// version skew, and must keep its own explanation.
 func TestARouteThatAnswersKeepsItsOwnExplanation(t *testing.T) {
-	const detail = "'nope' is not installed (no .installed at ~/.gaia/agents/nope)"
+	const detail = "no agent sidecars are registered (none installed under ~/.gaia/agents)"
 	fake := newFakeDaemon(t)
-	fake.refuseRoute(daemon.APIPrefix+"/agents/nope", http.StatusNotFound, detail)
+	fake.refuseRoute(daemon.APIPrefix+"/agents", http.StatusNotFound, detail)
 
-	err := fake.client().Uninstall(context.Background(), "nope")
+	_, err := fake.client().Agents(context.Background(), false)
 	if err == nil {
-		t.Fatal("a refused uninstall reported success")
+		t.Fatal("a refused agents list reported success")
 	}
 
 	var missing *daemon.RouteMissingError

@@ -964,8 +964,8 @@ class EmailTriageAgent(
         # GGUF/Vulkan default makes Lemonade evict and reload the chat model
         # on every turn (NPU <-> Vulkan). When the resolved model is the NPU
         # candidate, thread the device-appropriate embedder into init_memory
-        # the same way ChatAgent does (hub/agents/chat/python/gaia_agent_chat/
-        # agent.py, get_embedding_model_for_device) so chat + embeddings stay
+        # the same way ChatAgent does (hub/agents/gaia/python/gaia_agent/
+        # chat_agent.py, get_embedding_model_for_device) so chat + embeddings stay
         # co-resident on the NPU backend. Any other resolved model keeps the
         # unchanged default (embedding_model=None -> the GGUF embedder
         # `gaia init` downloads).
