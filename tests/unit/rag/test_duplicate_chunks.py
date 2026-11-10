@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.agents.tools.rag_tools import RAGToolsMixin, _left_out
 from gaia.rag.sdk import RAGSDK, RAGConfig
 
 DIM = 8
@@ -180,3 +180,33 @@ def test_a_file_search_resolves_the_chunk_in_that_file(rag, docs):
     assert result["status"] == "success", result
     (policy,) = [c for c in result["chunks"] if c["content"] == POLICY]
     assert rag.chunk_to_file[policy["_debug_chunk_index"]] == copy
+
+
+@pytest.mark.usefixtures("_clean_registry")
+def test_a_copy_in_a_left_out_file_does_not_hide_the_served_one(rag, docs, tmp_path):
+    # Too much text to hand the agent whole, so the search alone decides.
+    handbook = tmp_path / "handbook.txt"
+    handbook.write_text(
+        " ".join(f"Rule {n} covers desk booking in building {n}." for n in range(400)),
+        encoding="utf-8",
+    )
+    assert rag.index_document(str(handbook))["success"]
+    # A query with no words in common, so only the vector search can find the
+    # policy. Leave out whichever copy it kept: its twin is the one served.
+    query = "qqq"
+    snapshot = rag._search_chunks(query)
+    kept_by_search = rag.chunk_to_file[snapshot["retrieved_indices"][0]]
+    served = next(
+        path
+        for name, path in docs.items()
+        if name.startswith("policy") and path != kept_by_search
+    )
+    left_out = {kept_by_search: _left_out(kept_by_search, "stale", "It changed")}
+
+    with patch("gaia.agents.tools.rag_tools._bring_current", return_value=left_out):
+        result = _tool(rag, "query_documents")(query=query)
+
+    assert result["status"] == "success", result
+    (policy,) = [c for c in result["chunks"] if c["content"] == POLICY]
+    assert policy["source_file"] == str(Path(served).resolve())
+    assert "also_in" not in policy

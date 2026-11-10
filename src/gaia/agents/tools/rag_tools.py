@@ -449,18 +449,23 @@ def _public(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _search_without(rag: Any, query: str, left_out) -> Tuple[List[str], List[float]]:
-    """``rag._retrieve_chunks`` minus the chunks the *left_out* files own."""
+    """``rag._retrieve_chunks`` minus the chunks only *left_out* files own."""
     # pylint: disable=protected-access
     snapshot = rag._search_chunks(query)
     owner = snapshot["chunk_to_file"]
+    copies = snapshot.get("duplicate_indices") or [
+        [] for _ in snapshot["retrieved_indices"]
+    ]
+    # A chunk stays when any copy of its text sits in a file still served.
     kept = [
         (chunk, score)
-        for idx, chunk, score in zip(
+        for idx, chunk, score, twins in zip(
             snapshot["retrieved_indices"],
             snapshot["retrieved_chunks"],
             snapshot["scores"],
+            copies,
         )
-        if owner.get(idx) not in left_out
+        if any(owner.get(i) not in left_out for i in [idx, *twins])
     ]
     return [chunk for chunk, _ in kept], [score for _, score in kept]
 
