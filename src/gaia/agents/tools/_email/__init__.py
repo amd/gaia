@@ -5,8 +5,10 @@
 Gmail and Microsoft Graph, each emitting the same provider-neutral summary
 shape so the tools above never learn which mailbox answered.
 
-Read-only for now. Write verbs (organize, draft, send) land with the action
-ledger in a later phase — see ``docs/plans/email-triage-skill.mdx``.
+Reads run through the read backends. Drafting and sending run through their
+write subclasses, under a scope resolved separately. Organize and delete verbs
+land with the action ledger in a later phase — see
+``docs/plans/email-triage-skill.mdx``.
 """
 
 from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError

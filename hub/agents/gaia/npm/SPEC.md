@@ -358,7 +358,7 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
 web search and page fetches, the browser, connector (MCP) and Agent Hub
-tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
+tools, mailbox reads, drafts and sends, calendar access, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -487,6 +487,12 @@ Claude Code skill folders), or `null` for any other root. An agent that predates
 carries a value the host does not know, as ungrouped and show it flat, never
 drop the skill. A skill root that cannot be read is a `500` naming it.
 
+A `tool_result` from a card tool carries `render` (`guide` or `calculator`)
+on `/query` and over stdio, with the card in `data`. Those tools come from the
+bundled `guides` and `calculators` skills and register as `<skill>/<tool>` when
+the skill loads. A failed call carries no `render`, so a client never draws an
+invalid card ahead of the model's retry.
+
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
 empty `final` and sends no `token` after the cancel, so a host keeps the text
@@ -521,6 +527,22 @@ connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
 server, not the provider. Offer to start the server. Older binaries never send
 `failure`, so read it only when present.
+
+#### The "not confirmed" note on `final.answer`
+
+When the turn's own tool log shows work that is not confirmed, the agent loop
+ends the answer with one plain-English line, for example
+`I haven't confirmed this works — the tests didn't pass.` It appears when a
+check failed, a check was blocked before it could run, a file was changed and
+nothing checked it afterwards, or the answer claims something the tool record
+does not support. It is capped at 200 characters and added at most once per
+turn. A turn where every check passed, or nothing needed checking, carries
+nothing. It is part of `final.answer` and of the streamed text, so it is also
+what you store and replay in the next turn's `context`. A client that wants the
+answer without it can drop the line that starts `I haven't confirmed this works`
+(the older label `Verification:` is dropped the same way). The agent applies
+`strip_verification_scope` from `gaia.agents.base.verification` to its own
+history.
 
 ### 5.2 `session_id` and agent retention
 

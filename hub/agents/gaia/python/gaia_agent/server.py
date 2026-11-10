@@ -1811,7 +1811,9 @@ async def query(request: QueryRequest):
 
     async def _stream():
         translator = CanonicalTranslator(
-            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+            request.run_id,
+            agent_id=AGENT_ID,
+            reasoning=request.reasoning,
         )
         terminated = False
         last_write = time.monotonic()

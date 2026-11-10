@@ -30,6 +30,7 @@ from gaia.agents.base.call_risk import (
     shell_command_risk,
 )
 from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
@@ -4633,6 +4634,7 @@ class ShellToolsMixin:
         command: str,
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
+        _unwrapped: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -4660,6 +4662,21 @@ class ShellToolsMixin:
         """
         if bypass_gates:
             return ShellToolsMixin._validate_bypass_command(cmd_base)
+
+        # A launcher (sudo, timeout, xargs, ...) keeps the refusal of the
+        # command it runs; a harmless inner command gets the launcher's prompt.
+        if not _unwrapped:
+            for start in command_starts(cmd_parts):
+                inner_parts = cmd_parts[start:]
+                inner = ShellToolsMixin._validate_command(
+                    inner_parts[0].lower(),
+                    inner_parts,
+                    command,
+                    granted_binaries=granted_binaries,
+                    _unwrapped=True,
+                )
+                if inner is not None and _tier_rank(inner) == _TIER_RANK[TIER_REFUSE]:
+                    return inner
 
         program = _program_behind(cmd_base)
         if program is not None:

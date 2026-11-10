@@ -120,8 +120,8 @@ class TestBareInitTargetsTheFlagship:
             lambda name: asked.append(name),
         )
         monkeypatch.setattr("gaia.hub.installer.read_sentinel", lambda _id: None)
-        InitCommand._is_hub_agent_available("chat")
-        assert asked == ["gaia_agent_chat"]
+        InitCommand._is_hub_agent_available("email")
+        assert asked == ["gaia_agent_email"]
 
     def test_a_binary_only_flagship_install_counts_as_present(self, monkeypatch):
         """The flagship publishes a native binary — `~/.gaia/agents/gaia/`

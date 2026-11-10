@@ -329,7 +329,11 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 
 
 def _resolve_grant_scopes(
-    request: Request, connector_id: str, agent_ids: List[str]
+    request: Request,
+    connector_id: str,
+    agent_ids: List[str],
+    *,
+    enforced_only: bool = False,
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
 
@@ -350,7 +354,9 @@ def _resolve_grant_scopes(
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
     try:
-        return resolve_declared_scopes(registry, connector_id, agent_ids)
+        return resolve_declared_scopes(
+            registry, connector_id, agent_ids, enforced_only=enforced_only
+        )
     except UnknownAgentError as e:
         raise HTTPException(
             status_code=404,
@@ -1195,7 +1201,10 @@ async def forward_connection(
     requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
     rather than silently granting it zero required scopes.
     """
-    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
+    # A host that forwards mail only must keep working without calendar scope.
+    grant_map = _resolve_grant_scopes(
+        request, provider, body.grant_agents, enforced_only=True
+    )
     required: set[str] = set()
     for scopes in grant_map.values():
         required.update(scopes)
