@@ -133,7 +133,9 @@ gaiacpp --prompt-file prompt.txt
  "usage": {"prompt_tokens": 17831, "completion_tokens": 735, "total_tokens": 18566}}
 ```
 
-`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer.
+`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
+
+With `-p` and no prompt argument, the prompt is read from stdin until it closes.
 
 ## MCP server mode
 
@@ -214,4 +216,4 @@ The release build links OpenSSL statically on every platform and, on Linux, the 
 - **"Always allow" is scoped:** in the interactive session, always allowing a shell command covers that program (`pytest`), or program and subcommand (`git status`), or the exact text of a chained or piped command, never every shell command.
 - **Reasoning text:** `<think>…</think>` blocks never reach the answer. A reply that is empty, for example reasoning cut off by `maxTokens`, is asked for once more.
 - **Cancel:** `requestCancel()` (Ctrl+C, or a server client disconnecting) stops the run at the next step, and mid-stream when the agent streams (`GAIA_STREAMING=1`). A second Ctrl+C exits at once, for a model call or tool that won't return.
-- **Web access:** `web_fetch` follows redirects itself and refuses any hop that resolves to a loopback, private, link-local or metadata address, so a page can't steer the agent at Lemonade or other local services. `GAIA_WEB_FETCH_ALLOW_PRIVATE=1` allows the local network.
+- **Web access:** `web_fetch` follows redirects itself and refuses any hop that resolves to a loopback, private, link-local or metadata address, so a page can't steer the agent at Lemonade or other local services. `GAIA_WEB_FETCH_ALLOW_PRIVATE=1` allows the local network, and `--no-web` leaves the tool out.
