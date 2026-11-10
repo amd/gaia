@@ -21,6 +21,8 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
@@ -150,6 +152,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -380,7 +389,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -500,6 +509,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const summaryFiles = message.turnSummary?.files;
+    const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -594,6 +606,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -664,7 +679,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -691,6 +706,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
@@ -712,6 +730,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>
@@ -808,13 +828,31 @@ const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
 const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
 
+/** Paths of the files this answer's turn wrote (`turn_summary.files`). */
+const WrittenFilesContext = createContext<readonly string[]>([]);
+
+/**
+ * The written file an inline-code span names: its exact path, or a bare name
+ * only one written file has. Two writes sharing a name stay plain code.
+ */
+function writtenFileFor(files: readonly string[], children: React.ReactNode): string | null {
+    if (typeof children !== 'string' || files.length === 0) return null;
+    const text = children.trim();
+    if (!text) return null;
+    if (files.includes(text)) return text;
+    if (/[\\/]/.test(text)) return null;
+    const name = text.toLowerCase();
+    const matches = files.filter((f) => (f.split(/[\\/]/).pop() ?? '').toLowerCase() === name);
+    return matches.length === 1 ? matches[0] : null;
+}
+
 function inlineCodePath(children: React.ReactNode): string | null {
     if (typeof children !== 'string') return null;
     const text = children.trim();
     return WIN_PATH_ONLY_RE.test(text) ? text : null;
 }
 
-function FilePathLink({ path }: { path: string }) {
+function FilePathLink({ path, label }: { path: string; label?: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         api.openFileOrFolder(path).catch((err) => {
@@ -832,7 +870,7 @@ function FilePathLink({ path }: { path: string }) {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {path}
+            {label ?? path}
         </span>
     );
 }
@@ -992,12 +1030,15 @@ function Linkified({ children }: { children?: React.ReactNode }) {
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
 function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
     const index = useContext(CitationContext);
+    const writtenFiles = useContext(WrittenFilesContext);
     const t = useT();
     // A filename here outside a block Linkified handles (e.g. inside **bold**).
     const doc = inlineCodeDoc(index, children);
     if (doc) return <CitationLink doc={doc} t={t} />;
     const path = inlineCodePath(children);
     if (path) return <FilePathLink path={path} />;
+    const written = writtenFileFor(writtenFiles, children);
+    if (written) return <FilePathLink path={written} label={String(children).trim()} />;
     return (
         <code className="inline-code" dir="ltr" {...props}>
             {children}
@@ -1105,7 +1146,9 @@ const MARKDOWN_COMPONENTS: Components = {
     },
 };
 
-export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
+const NO_WRITTEN_FILES: readonly string[] = [];
+
+export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     if (!content && !showCursor) return null;
@@ -1114,6 +1157,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
     return (
         <StreamingContext.Provider value={isStreaming}>
         <CitationContext.Provider value={citations}>
+        <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
@@ -1125,6 +1169,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </WrittenFilesContext.Provider>
         </CitationContext.Provider>
         </StreamingContext.Provider>
     );

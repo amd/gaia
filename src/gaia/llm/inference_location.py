@@ -153,7 +153,6 @@ def resolve_inference_location(
     model: Optional[str],
     *,
     use_claude: bool = False,
-    use_openai: bool = False,
     cloud_provider_lookup: Optional[Callable[[str], Optional[str]]] = None,
 ) -> InferenceLocation:
     """Classify the backend a session's chat turns are answered by.
@@ -172,8 +171,6 @@ def resolve_inference_location(
     model_id = (model or "").strip() or "unknown"
     if use_claude:
         return InferenceLocation("claude", model_id, remote=True)
-    if use_openai:
-        return InferenceLocation("openai", model_id, remote=True)
     provider = _ask(cloud_provider_lookup, model_id)
     if provider:
         return InferenceLocation(provider, model_id, remote=True)

@@ -114,6 +114,9 @@ class AgentSidecarSpec:
     category: str = ""
     tags: Tuple[str, ...] = field(default_factory=tuple)
     icon: str = ""
+    #: The agent class's ``CONSUMES_MCP_SERVERS``. The UI offers a per-agent
+    #: switch on each MCP connector only for agents that set it.
+    consumes_mcp_servers: bool = False
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -197,13 +200,36 @@ _EMAIL_REQUIRED_CONNECTIONS = (
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+            "https://www.googleapis.com/auth/calendar.events",
+        ),
+        required_scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ),
+        reason=(
+            "Read and search your Gmail, draft and send mail when you approve it, "
+            "and see and, with your approval, change your Google calendar."
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
-        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+            "https://graph.microsoft.com/Calendars.ReadWrite",
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ),
+        reason=(
+            "Read and search your Outlook mail, draft and send mail when you "
+            "approve it, and see and, with your approval, change your Outlook "
+            "calendar."
+        ),
     ),
 )
 
@@ -582,5 +608,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             category="general",
             tags=("general", "chat", "rag", "memory", "skills"),
             icon="sparkles",
+            consumes_mcp_servers=True,
         ),
     }

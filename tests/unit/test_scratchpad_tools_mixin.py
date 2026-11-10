@@ -162,6 +162,38 @@ class TestCreateTable:
         assert "database is locked" in result
 
 
+class TestInvalidTableNameWithRealService:
+    """An invalid name reaches the model as an error naming the rule."""
+
+    @pytest.fixture
+    def tools(self, tmp_path):
+        from gaia.scratchpad.service import ScratchpadService
+
+        agent, tools = _create_mixin_and_tools()
+        agent._scratchpad = ScratchpadService(db_path=str(tmp_path / "s.db"))
+        yield tools
+        agent._scratchpad.close_db()
+
+    def test_docstring_states_naming_rule(self, tools):
+        assert "Letters, digits and underscores" in tools["create_table"].__doc__
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda t: t["create_table"]("sales-2025", "amount REAL"),
+            lambda t: t["insert_data"]("sales-2025", '[{"amount": 1}]'),
+            lambda t: t["drop_table"]("sales-2025"),
+        ],
+        ids=["create_table", "insert_data", "drop_table"],
+    )
+    def test_invalid_name_returns_actionable_error(self, tools, call):
+        result = call(tools)
+        assert "Error" in result
+        assert "Invalid table name 'sales-2025'" in result
+        assert "[A-Za-z_][A-Za-z0-9_]*" in result
+        assert "'sales_2025'" in result
+
+
 # ===== insert_data Tests =====
 
 

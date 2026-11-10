@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
+from gaia.audio.media import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 from gaia.config import (
     GAIA_HOME_IS_FS_ROOT,
     UnsafeGaiaHomeError,
@@ -277,6 +278,7 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        library_notices=msg.get("library_notices"),
         stopped=bool(msg.get("stopped")),
     )
 
@@ -344,12 +346,14 @@ def sanitize_document_path(user_path: str) -> Path:
                 "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
-                {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
-                "Video files are not supported for indexing.",
+                VIDEO_EXTENSIONS,
+                "Video files can't go in the document library. "
+                "Tip: Attach the video to a chat to transcribe it.",
             ),
             "audio": (
-                {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"},
-                "Audio files are not supported for indexing.",
+                AUDIO_EXTENSIONS,
+                "Audio files can't go in the document library. "
+                "Tip: Attach the recording to a chat to transcribe it.",
             ),
             "archive": (
                 {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},

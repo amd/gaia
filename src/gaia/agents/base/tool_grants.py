@@ -241,7 +241,14 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: become "always allow any path" — each new path is asked about on its own.
 PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
+#: The prompt asking whether to read a project folder's CLAUDE.md, AGENTS.md and
+#: skills (:mod:`gaia.project_trust`). Not a registered tool, and ungrantable: the
+#: answer is kept per folder in the trust store, never as an "always" grant.
+PROJECT_TRUST_PROMPT_TOOL = "trust_project_folder"
+
+_UNGRANTABLE_TOOLS = frozenset(
+    {"capture_skill", PATH_ACCESS_PROMPT_TOOL, PROJECT_TRUST_PROMPT_TOOL}
+)
 
 #: Prompt argument set by the agent (never the model) when a script it runs sits
 #: in its own scratch folder. Such a call is never offered "always".
@@ -733,6 +740,7 @@ __all__ = [
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
+    "PROJECT_TRUST_PROMPT_TOOL",
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
     "command_reaches_folder",

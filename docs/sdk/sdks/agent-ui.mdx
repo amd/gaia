@@ -184,6 +184,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
@@ -542,6 +545,39 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | `preferred_backend` | The saved choice, which may be an untested one saved before GAIA stopped offering it; `null` means none was saved and Lemonade picks |
   </Accordion>
 
+  <Accordion title="GET /api/system/resources">
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead. On Linux an AMD NPU is read through its `amdxdna` driver, which reports usage on Linux 7.1 and later with the AMD PMF driver loaded; an NPU that can't be read is reported in `npus_error`.
+
+    On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
+
+    **Response:**
+    ```json
+    {
+      "interval_ms": 1000,
+      "ready": true,
+      "cpu": { "percent": 20.4, "ghz": 4.7, "history": [18.2, 20.4] },
+      "memory": { "used_bytes": 48318382080, "total_bytes": 68289282048, "percent": 70.8, "history": [70.5, 70.8] },
+      "devices": [
+        { "id": "0x00000000_0x0000d938", "name": "AMD Radeon(TM) 8060S Graphics", "kind": "gpu", "percent": 14.0, "memory_used_bytes": 32212254720, "history": [12.0, 14.0] },
+        { "id": "0x00000000_0x0000f994", "name": "NPU Compute Accelerator Device", "kind": "npu", "percent": 0.0, "memory_used_bytes": 12261240832, "history": [0.0, 0.0] }
+      ],
+      "networks": [
+        { "id": "net_0006008007000000", "name": "Ethernet 3", "description": "Realtek Gaming 2.5GbE Family Controller", "kind": "ethernet", "send_bps": 52008, "recv_bps": 47055, "send_history": [68447, 52008], "recv_history": [60059, 47055] }
+      ]
+    }
+    ```
+
+    | Field | Description |
+    |-------|-------------|
+    | `cpu.ghz` | Current clock speed, or `null` when the OS doesn't report it |
+    | `memory.used_bytes` | Total less available, as Task Manager's "In use" |
+    | `devices[].kind` | `gpu` or `npu` |
+    | `devices[].memory_used_bytes` | Dedicated plus shared memory the device holds, or `null` when not reported |
+    | `networks[].kind` | `ethernet`, `wifi`, or `network` when the OS doesn't say which |
+    | `networks[].send_bps`, `recv_bps` | Bits per second over the last interval; the histories are the same per sample |
+    | `devices_error`, `networks_error` | Why GPUs and NPUs, or network adapters, can't be read while CPU and memory still can (for example, no GPU counters in a VM); `null` otherwise. That list is then empty |
+  </Accordion>
+
   <Accordion title="PUT /api/system/model-server/backend">
     Save the llama.cpp backend for chat models as `llamacpp_backend` in `~/.gaia/config.json`. It applies the next time a chat model loads; the embedding model keeps its own backend.
 
@@ -567,7 +603,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
-    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to the window a chat on that model asks for: its `MODELS` entry sized to this PC's memory, or `GAIA_CTX_SIZE` when set. The response reports the size used. |
     | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
@@ -600,7 +636,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
-    | `load_after` | boolean | No | Load the model after the download completes. Skipped while a chat is answering. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes, at the same window `load-model` defaults to. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
@@ -972,6 +1008,40 @@ Deleting a chat deletes its copies.
     Set `retention_days` (1–365) and `max_mb` (10–100000), then remove history
     past the new limits. Turns older than the time limit go first, then the
     oldest until the total fits. The size limit never removes the newest turn.
+  </Accordion>
+
+  <Accordion title="GET /api/speech/settings">
+    The read-aloud voice, speed and auto-read choice, with every voice offered:
+    `{"voice": "af_bella", "speed": 100, "auto": false, "min_speed": 50,
+    "max_speed": 200, "voices": [{"id": "af_bella", "name": "Bella",
+    "accent": "american", "gender": "female", "quality": "A-"}, ...]}`.
+    `speed` is a percentage of normal speed. Stored as `read_aloud_voice`,
+    `read_aloud_speed` and `read_aloud_auto` in `~/.gaia/config.json`, which
+    the TUI reads too.
+  </Accordion>
+
+  <Accordion title="PUT /api/speech/settings">
+    Save any of `voice` (a Kokoro voice id), `speed` (50–200) and `auto`; the
+    others keep their value. **422** names an unknown voice or a speed out of
+    range, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="GET /api/speech/model">
+    Whether Lemonade has the `kokoro-v1` voice model on disk:
+    `{"downloaded": bool, "size_gb": float | null}`. The app checks it before
+    its first read so it can say the model is downloading. **503** when
+    Lemonade is unreachable, **502** when Lemonade doesn't list the model.
+  </Accordion>
+
+  <Accordion title="POST /api/speech">
+    Speak `text` (1–1000 characters) through Lemonade's `kokoro-v1` model and
+    return a 16-bit mono `audio/wav`, in the saved voice and speed unless the
+    body names `voice` or `speed`. Downloads the model on first use, which the
+    app announces after `GET /api/speech/model`. **422** for
+    empty or over-long text or a bad voice or speed, **503** when Lemonade is
+    unreachable, **502** when Lemonade can't make the speech; each `detail`
+    says why. The app splits a long reply into pieces and plays them back to
+    back.
   </Accordion>
 </AccordionGroup>
 
@@ -1370,6 +1440,34 @@ Deleting a chat deletes its copies.
     file indexed for Q&A.
   </Accordion>
 
+  <Accordion title="Recording progress events">
+    Long recording work streams `status` events with `"phase": "recording"`. `stage` is
+    a position in download, decode, transcribe, voices, prepare, analyze. `state` is 0
+    running, 1 done or 2 skipped. `percent` and `eta_seconds` are present once known;
+    both are estimates until a part of the recording finishes. `message` is an English
+    line for clients that draw no stages.
+
+    During analysis, each section that finishes also sends `"phase": "recording_found"`,
+    so a client can show results before the whole recording is read:
+
+    ```json
+    {"type": "status", "status": "working", "phase": "recording_found",
+     "message": "Section 1 of 3: 2 found", "section": 1, "sections": 3,
+     "start": "00:00", "end": "03:31", "summary": "...",
+     "items": [{"title": "...", "start": "00:21", "seconds": 21.0}]}
+    ```
+
+    Sections overlap, so an item near a seam can arrive in two of them; the finished
+    report merges it. Sections reused from an interrupted run arrive first.
+  </Accordion>
+  <Accordion title="POST /api/files/upload-media">
+    Save an audio or video recording as a chat attachment, for the agent to
+    transcribe. The request body is the raw file, streamed straight to disk, and
+    the `name` query parameter carries its file name. Returns **400** for a type
+    that is not a recording or an empty body, **413** past 64 GB, and **507** when
+    the drive lacks room. GAIA removes these copies after 14 days.
+  </Accordion>
+
   <Accordion title="GET /api/files/browse">
     Browse filesystem contents. Returns entries under a directory with size,
     mtime, and type metadata.
@@ -1457,8 +1555,8 @@ of that router's connector types.
 
 ### Session environment, outputs and agent info
 
-What one chat may reach, what it produced, and which tools its agent has,
-behind the session panel's Environment, Outputs and Agent info sections. Folder and internet changes are stored with
+What one chat may reach, what it produced, and which tools and skills its agent
+has, behind the session panel's Environment, Outputs, Skills and Agent info sections. Folder and internet changes are stored with
 the chat, applied to its agent before every turn, and applied to a running
 agent at once, so they take effect on its next step.
 
@@ -1555,8 +1653,8 @@ agent at once, so they take effect on its next step.
   </Accordion>
 
   <Accordion title="GET /api/sessions/{session_id}/capabilities">
-    The tools this chat's agent can call, behind the session panel's Agent
-    info section:
+    The tools this chat's agent can call and the skills it has loaded, behind
+    the session panel's Agent info and Skills sections:
 
     ```json
     {
@@ -1565,9 +1663,19 @@ agent at once, so they take effect on its next step.
       "tools": [
         {"name": "query_documents", "description": "Search the indexed documents ...", "category": "rag"},
         {"name": "mcp_github_list_issues", "description": "[MCP:github] List issues ...", "category": "mcp"}
+      ],
+      "skills": [
+        {"name": "gaia-voice", "how": "always"},
+        {"name": "analyze-recording", "how": "auto"}
       ]
     }
     ```
+
+    `skills` is in load order. `how` is `model` (the model called
+    `load_skill`), `auto` (GAIA loaded it when the model called one of its
+    [`loads_with`](/spec/agent-skills#skills-that-load-with-their-tools)
+    tools) or `always` (the agent loads it at startup). It is `null` for an
+    agent that runs as its own process, which doesn't report its skills.
 
     Read from the agent the chat talks to: the one GAIA keeps for the chat
     between turns, or, for an agent that runs as its own process (the Hub
@@ -1720,7 +1828,9 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. A file that can't be read is a **422** whose
+    enqueues it for indexing. Content already in the library returns the
+    existing document; if that document's stored file is gone, the new copy
+    takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do.
@@ -2120,9 +2230,9 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
-    Store approved discovery findings from the onboarding wizard. Items are
-    validated as knowledge creates, so a disallowed category 422s the whole
-    batch before anything is written.
+    Store the discovery findings a user approved in the memory dashboard's
+    discovery review. Items are validated as knowledge creates, so a disallowed
+    category 422s the whole batch before anything is written.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-inference">
@@ -2215,7 +2325,10 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/test">
-    Run the connector's health check.
+    Run the connector's health check and return `{"ok": bool, "detail": str}`.
+    An OAuth connector refreshes its token. An `mcp_server` connector starts
+    the server once and reports whether it started; a server that only checks
+    its key on a tool call still passes with a bad key.
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">
@@ -2388,7 +2501,8 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
   <Accordion title="POST /api/schedules">
     Create a scheduled task from a name, interval, and prompt. An optional
     `timezone` (IANA name, e.g. `America/Los_Angeles`) sets the zone its times
-    are in; it defaults to the server PC's zone. An unknown zone returns 400.
+    are in; it defaults to the server PC's zone. An unknown zone returns 400,
+    and so does a name that contains `/`.
   </Accordion>
 
   <Accordion title="POST /api/schedules/parse">
@@ -2968,6 +3082,20 @@ model with no known price reads as unknown, never $0. Cloud models from
     entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
+  </Accordion>
+
+  <Accordion title="GET /api/spending/chat/{session_id}">
+    Takes `since` and `model` as query parameters.
+    What one chat's cloud answers cost, and every chat's answers since `since`
+    (an ISO instant: the start of the viewer's local day). Sums the cost each
+    answer's turn summary saved, cache discounts included; answers on this PC
+    are left out. `paid` is true when `model` has a known cloud price, the only
+    time the composer shows it. `chat` carries `usd`, `answers`,
+    `unpriced_answers` (stopped or unpriced answers, counted apart, never as
+    $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per
+    answer); `today` carries `usd`, `answers`, `unpriced_answers` and `chats`.
+    **404** for an unknown chat, **422** when `since` isn't an ISO timestamp,
+    **500** when a saved answer's summary is unreadable.
   </Accordion>
 
   <Accordion title="PUT /api/spending/limit">

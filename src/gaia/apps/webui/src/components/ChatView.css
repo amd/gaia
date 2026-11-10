@@ -2,12 +2,17 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
-.history-notice {
+.history-notice,
+.library-notices {
     margin: 8px auto;
     max-width: 640px;
     text-align: center;
     font-size: 12px;
     color: var(--text-secondary);
+}
+
+.library-notices {
+    color: var(--text-primary);
 }
 
 .task-view {
@@ -49,6 +54,11 @@
     color: var(--accent-fill-text);
 }
 .task-header-right .task-header-private[data-private="true"]:hover { background: var(--accent-fill-hover); }
+.task-header-right .task-header-resources[aria-pressed="true"] {
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+}
+.task-header-right .task-header-resources[aria-pressed="true"]:hover { background: var(--accent-fill-hover); }
 
 .task-title {
     display: inline-flex;

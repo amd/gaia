@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, holdOnToolStatus, MESSAGES, mockApi, MODEL_LIST, NOW, shownText, SYSTEM_STATUS, TOOL_STATUS, useLocale, useTheme, withConnectors, withCrashedBackend, withAutomations, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -37,9 +37,23 @@ async function withArabicEnvironment(page: Page): Promise<void> {
     );
 }
 
+let unhandled: string[] = [];
+
+/** A 501 from mockApi that reached the screen; the screen shows a fixture gap, not the app. */
+async function expectNoFixtureGap(page: Page): Promise<void> {
+    await expect(page.locator('body'), 'a screen shows a missing fixture').not.toContainText('no fixture for');
+}
+
+test.afterEach(async ({ page }) => {
+    const seen = unhandled;
+    unhandled = [];
+    expect(seen, 'add a fixture to visual/fixtures.ts ROUTES for each call').toEqual([]);
+    await expectNoFixtureGap(page);
+});
+
 async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) => Promise<void>, theme: 'light' | 'dark' = 'light'): Promise<void> {
     await page.clock.setFixedTime(NOW);
-    await mockApi(page);
+    unhandled = await mockApi(page);
     await before?.(page);
     await useTheme(page, theme);
     await useLocale(page, locale);
@@ -55,6 +69,8 @@ const audit = (page: Page): Promise<string[]> =>
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
         const shown = (el: Element) => {
+            // Announced-only setup guidance is intentionally clipped from the visual layout.
+            if (el.closest('.setup-a11y-alert')) return false;
             const box = el.getBoundingClientRect();
             return box.width > 0 && box.height > 0 && el.checkVisibility();
         };
@@ -70,16 +86,38 @@ const audit = (page: Page): Promise<string[]> =>
 
         if (document.documentElement.scrollWidth > innerWidth) problems.push('the page scrolls sideways');
 
+        // An <option> holds plain text, so the English hint in brackets can't be
+        // styled quietly there and its brackets scramble in rtl; use t.bare.
+        // Language pickers (options tagged with lang) name each language in English on purpose.
+        for (const option of document.querySelectorAll('option:not([lang])')) {
+            const text = option.textContent ?? '';
+            if (arabic.test(text) && /\([^)]*[A-Za-z]{3,}[^)]*\)/.test(text)) {
+                problems.push(`an <option> carries the English hint: "${text.trim().slice(0, 50)}"`);
+            }
+        }
+
         for (const el of document.querySelectorAll('body *')) {
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
             const style = getComputedStyle(el);
-            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !inSideScroller(el)) {
+            // Screen-reader-only text is clipped to 1px, so its unwrapped overflow is never seen.
+            const srOnly = el.closest('.visually-hidden');
+            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !srOnly && !inSideScroller(el)) {
                 problems.push(`off screen: ${label(el)}`);
+            }
+
+            // A flex row can squeeze an icon to a speck when its neighbours are long.
+            if (el.tagName.toLowerCase() === 'svg' && box.width < 8 && el.closest('.composer-attachment')) {
+                problems.push(`icon squeezed to ${box.width.toFixed(1)}px: ${label(el.parentElement!)}`);
             }
 
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
+
+            // A long name that shrinks to nothing tells the reader nothing.
+            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+                problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
+            }
 
             // An English name cut off in rtl keeps its end and loses its start.
             if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
@@ -246,6 +284,19 @@ const audit = (page: Page): Promise<string[]> =>
             if (gap < 8) problems.push(`failed reply's text touches its bar (${Math.round(gap)}px): ${label(reply)}`);
         }
 
+        // An amount with its unit or sign reads as one token; split over two lines it reads as two.
+        for (const amount of document.querySelectorAll('.popover bdi[dir="ltr"]')) {
+            const text = amount.textContent?.trim() ?? '';
+            if (!shown(amount) || text.length > 16 || !/\d/.test(text)) continue;
+            const lines = new Set([...amount.getClientRects()].map((r) => Math.round(r.top)));
+            if (lines.size > 1) problems.push(`an amount wraps across lines: ${label(amount)}`);
+        }
+
+        // A popover that opens scrolled down hides its first lines behind the fold.
+        for (const popover of document.querySelectorAll('.popover')) {
+            if (shown(popover) && popover.scrollTop > 0) problems.push(`popover opens scrolled past its top: ${label(popover)}`);
+        }
+
         // An icon and its label need space between them, in either direction.
         for (const button of document.querySelectorAll('button')) {
             const icon = button.querySelector(':scope > svg');
@@ -261,6 +312,121 @@ const audit = (page: Page): Promise<string[]> =>
         return [...new Set(problems)];
     });
 
+// A reply that never ends, so the card stays up for the screenshot.
+const RECORDING_EVENTS = [
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 0, state: 1 },
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 2, state: 0, percent: 42, eta_seconds: 330 },
+];
+
+for (const [title, locale] of [
+    ['recording in progress, Arabic', 'ar'],
+    ['recording in progress, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, RECORDING_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().fill('Transcribe this');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.recording-progress-track')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        const fill = page.locator('.recording-progress-fill');
+        const track = page.locator('.recording-progress-track');
+        const [fillBox, trackBox] = [await fill.boundingBox(), await track.boundingBox()];
+        expect(fillBox!.width / trackBox!.width).toBeCloseTo(0.42, 1);
+        const startsAtStart = locale === 'ar'
+            ? Math.abs(fillBox!.x + fillBox!.width - (trackBox!.x + trackBox!.width))
+            : Math.abs(fillBox!.x - trackBox!.x);
+        expect(startsAtStart).toBeLessThan(1);
+        await page.screenshot({ path: info.outputPath(`recording-progress-${locale}.png`) });
+    });
+}
+
+// Sections read so far while the rest are analyzed, one in each script.
+const FOUND_EVENTS = [
+    { type: 'status', status: 'working', message: 'x', phase: 'recording', stage: 5, state: 0, percent: 67, eta_seconds: 40 },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 1, sections: 3, start: '00:00', end: '03:31',
+        summary: 'The speaker introduces the talk and begins his first story about dropping out of college.',
+        items: [{ title: 'Introduction and three stories', start: '00:21', seconds: 21 }, { title: 'Story 1: connecting the dots', start: '00:55', seconds: 55 }],
+    },
+    {
+        type: 'status', status: 'working', message: 'x', phase: 'recording_found',
+        section: 2, sections: 3, start: '02:06', end: '1:08:54',
+        summary: 'يتحدث عن تركه الجامعة وعن دروس الخط العربي.',
+        items: [{ title: 'ترك الجامعة واتباع الفضول', start: '02:06', seconds: 126 }],
+    },
+];
+
+for (const [title, locale] of [
+    ['recording found so far, Arabic', 'ar'],
+    ['recording found so far, English', 'en'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, FOUND_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().fill('Transcribe this');
+        await page.keyboard.press('Enter');
+        const found = page.locator('.recording-found');
+        await expect(found.locator('.recording-found-section')).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        // Times read left to right in both directions, and sit at the start edge.
+        const span = found.locator('.recording-found-span .recording-found-time').nth(1);
+        await expect(span).toHaveText('02:06–1:08:54');
+        await expect(span).toHaveAttribute('dir', 'ltr');
+        const row = found.locator('.recording-found-items li').first();
+        const [time, rowBox] = [await row.locator('.recording-found-time').boundingBox(), await row.boundingBox()];
+        const atStart = locale === 'ar'
+            ? Math.abs(time!.x + time!.width - (rowBox!.x + rowBox!.width))
+            : Math.abs(time!.x - rowBox!.x);
+        expect(atStart).toBeLessThan(1);
+        await found.screenshot({ path: info.outputPath(`recording-found-${locale}.png`) });
+    });
+}
+
+for (const [title, locale, name] of [
+    ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
+    ['recording with an Arabic name, in English', 'en', 'تسجيل مراجعة الأعمال الفصلية.m4a'],
+] as const) {
+    test(title, async ({ page }, info) => {
+        await open(page, '', locale);
+        await page.route((url) => url.pathname === '/api/files/upload-media', (route) =>
+            route.fulfill({
+                json: { filename: 'r.mp4', original_name: name, url: '/api/files/uploads/r.mp4', size: 5, content_type: 'video/mp4', is_image: false },
+            }),
+        );
+        await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
+        await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
+        await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath('recording.png') });
+    });
+}
+
 test('new chat', async ({ page }) => {
     await open(page);
     await expect(page.locator('html')).toHaveAttribute('dir', 'rtl');
@@ -273,6 +439,48 @@ test('finished answer', async ({ page }) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+const RECIPE_CARD = {
+    kind: 'guide', guideType: 'recipe', title: 'خبز الموز', description: 'رطب وسهل التحضير.',
+    notes: 'يحفظ ثلاثة أيام.', servings: 8,
+    items: ['2 cups flour', '3 ripe bananas', '1/2 cup sugar', '1 teaspoon baking soda'],
+    steps: ['Mix: اخلط المكونات الجافة', 'Bake 60 minutes at 350°F'],
+};
+const LOAN_CARD = {
+    kind: 'calculator', calculator: 'loan', title: '', currency: 'EUR',
+    inputs: { amount: 300_000, annualRatePercent: 6.5, years: 30, downPayment: 60_000 },
+};
+
+async function withGuideCards(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'وصفة خبز الموز وقسط قرض', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'بالهناء والشفاء.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'guides/show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
+                            { id: 2, type: 'tool', tool: 'calculators/show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`recipe and loan cards lay out in the interface direction (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withGuideCards);
+        await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
+        await expect(page.locator('.render-calc')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
+        await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
 
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
@@ -363,6 +571,59 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         expect(await audit(page)).toEqual([]);
     });
 }
+
+/** Every tile and the close button sit beside the docked session panel, not under it. */
+async function expectClearOfPanel(page: Page): Promise<void> {
+    const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;
+    for (const el of await page.locator('.resource-strip li, .resource-strip button').all()) {
+        await expect(el).toBeVisible();
+        const box = (await el.boundingBox())!;
+        expect(box.x + box.width <= panel.x || box.x >= panel.x + panel.width).toBe(true);
+    }
+}
+
+test('resource usage strip', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
+    await expect(strip.locator('li')).toHaveCount(5);
+    await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
+    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
+    // The close button sits at the row's end, which is the left in rtl.
+    const closeBox = (await strip.getByRole('button').boundingBox())!;
+    const firstTile = (await strip.locator('li').first().boundingBox())!;
+    expect(closeBox.x).toBeLessThan(firstTile.x);
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
+});
+
+test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
+        await p.route('**/api/system/resources', (route) =>
+            route.fulfill({
+                json: { ...RESOURCES, devices: [], networks: [], devices_error: "function 'D3DKMTEnumAdapters3' not found", networks_error: null },
+            }));
+    });
+    const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
+    await expect(strip.locator('li')).toHaveCount(3);
+    await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
+    await expect(strip.locator('li').last()).toContainText('غير متاح');
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-no-gpu.png' });
+});
+
+test('resource usage strip at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`);
+    const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
+    await expect(strip.locator('li')).toHaveCount(5);
+    await expect(strip.locator('.resource-spark').first()).toBeHidden();
+    // The closed sidebar drawer waits off screen at this width; judge the strip.
+    const problems = (await audit(page)).filter((p) => p.includes('resource') || p.includes('scrolls sideways'));
+    expect(problems).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-phone.png' });
+});
 
 for (const locale of ['ar', 'en'] as const) {
     for (const status of TOOL_STATUS) {
@@ -458,7 +719,18 @@ for (const locale of ['ar', 'en']) {
                 json: {
                     messages: [
                         { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the Q1 plan.', created_at: OLD_FILE.at, rag_sources: null },
-                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The plan has three goals.', created_at: OLD_FILE.at, rag_sources: null },
+                        {
+                            id: 2,
+                            session_id: ANSWER_SESSION,
+                            role: 'assistant',
+                            content: 'The plan has three goals.',
+                            created_at: OLD_FILE.at,
+                            rag_sources: null,
+                            library_notices: [
+                                'schedule-fall.xlsx was kept in your documents library for this chat.',
+                                'run.exe couldn\'t be added to your documents (.exe files are not supported).',
+                            ],
+                        },
                     ],
                     total: 2,
                 },
@@ -476,6 +748,8 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.msg-stats-ts')).toHaveText(month);
         await expect(page.getByText('q1-summary.csv')).toBeVisible();
         await expect(page.locator('.sp-list[aria-label]')).toContainText(month);
+        await expect(page.locator('.library-notices')).toContainText('schedule-fall.xlsx');
+        await expect(page.locator('.library-notices')).toContainText('run.exe');
         await page.getByText('The plan has three goals.').hover();
         await shot(page, `dates-${locale}-answer`);
         expect(await audit(page)).toEqual([]);
@@ -495,6 +769,68 @@ test('settings in the dark theme', async ({ page }) => {
     await expect(page.getByRole('dialog')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="voice"]').click();
+        await expect(page.locator('#read-aloud-voice')).toHaveValue('bf_emma');
+        await expect(page.locator('#read-aloud-speed')).toHaveValue('125');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reply that could not be read aloud (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route('**/api/speech', (route) =>
+                route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Lemonade Server is not reachable at http://127.0.0.1:13305' }) }),
+            );
+        }, theme);
+        const reply = page.locator('.msg-assistant').last();
+        await reply.hover();
+        await reply.locator('.msg-read-aloud').click();
+        await expect(reply.locator('.msg-read-aloud-error')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+test('the dynamic tools setting', async ({ page }) => {
+    await open(page);
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('tab', { name: 'متقدم' }).or(dialog.getByRole('button', { name: 'متقدم' })).first().click();
+    const title = dialog.locator('summary', { hasText: 'الأدوات الديناميكية' });
+    await title.scrollIntoViewIfNeeded();
+    await title.click();
+    await expect(dialog.getByText('يبدأ كل محادثة بأكثر أدوات GAIA استخدامًا', { exact: false })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('dynamic-tools-setting.png') });
+});
+
+/** Holds the chat stream open on one status event, so the live line stays up. */
+const holdStreamOn = (page: Page, event: object) =>
+    page.addInitScript((payload) => {
+        const real = window.fetch;
+        window.fetch = (input, init) => {
+            if (!String(input).includes('/chat/send')) return real(input, init);
+            const body = new ReadableStream({
+                start: (controller) => controller.enqueue(new TextEncoder().encode(`data: ${payload}\n\n`)),
+            });
+            return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+        };
+    }, JSON.stringify(event));
+
+for (const [locale, wording] of [['ar', 'جارٍ تحميل المزيد من الأدوات'], ['en', 'Loading more tools']]) {
+    test(`a tool re-read is worded in ${locale}`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            holdStreamOn(p, { type: 'status', status: 'working', phase: 'loading_tools', message: 'backend words' }));
+        const box = page.locator('textarea').first();
+        await box.fill('hello');
+        await box.press('Enter');
+        await expect(page.getByText(wording).first()).toBeVisible();
+        await page.screenshot({ path: test.info().outputPath('loading-tools.png') });
+        await expect(page.getByText('backend words')).toHaveCount(0);
+    });
+}
 
 /** How far each Arabic item name's text sits from the row's left and right edges. */
 const arabicNameGaps = (page: Page) =>
@@ -565,6 +901,38 @@ test.describe('English', () => {
         await open(page, `#${ANSWER_SESSION}`, 'en');
         await expect(page.getByText('Action items from Aug 28')).toBeVisible();
         expect(await audit(page)).toEqual([]);
+    });
+
+    test('resource usage strip', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        const strip = page.getByRole('region', { name: 'Resource usage on this PC' });
+        await expect(strip.getByText('S: 0 R: 8.0 Kbps')).toBeVisible();
+        await expect(strip.locator('li')).toHaveCount(5);
+        const closeBox = (await strip.getByRole('button', { name: 'Hide resource usage' }).boundingBox())!;
+        const firstTile = (await strip.locator('li').first().boundingBox())!;
+        expect(closeBox.x).toBeGreaterThan(firstTile.x);
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
+    });
+
+    test('resource usage strip on a wide window is one row', async ({ page }) => {
+        await page.setViewportSize({ width: 1920, height: 1000 });
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        const tiles = page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li');
+        await expect(tiles).toHaveCount(5);
+        const tops = await tiles.evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+        expect(new Set(tops).size).toBe(1);
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-wide.png' });
+    });
+
+    test('resource usage strip in the dark theme', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', undefined, 'dark');
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' }).locator('li')).toHaveCount(5);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-dark.png' });
     });
 
     test('documents', async ({ page }) => {
@@ -648,6 +1016,7 @@ const leftoverEnglish = (root: Page) =>
 
 /** Saves what a test sees when GAIA_VISUAL_SHOTS names a folder, so a person can read it. */
 async function shot(page: Page, name: string): Promise<void> {
+    await expectNoFixtureGap(page);
     const dir = process.env.GAIA_VISUAL_SHOTS;
     if (dir) await page.screenshot({ path: `${dir}/${name}.png` });
 }
@@ -657,10 +1026,11 @@ interface ModelPageOptions {
     status?: unknown;
     theme?: 'light' | 'dark';
     fireworks?: Record<string, unknown>;
+    localOnly?: boolean;
 }
 
-async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks }: ModelPageOptions = {}): Promise<void> {
-    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks), theme);
+async function openModelPage(page: Page, locale: string, { models = MODEL_LIST, status, theme = 'light', fireworks, localOnly = false }: ModelPageOptions = {}): Promise<void> {
+    await open(page, '', locale, (p) => withModelPage(p, models, SETUP_PLAN, status, fireworks, localOnly), theme);
     const sidebar = page.getByRole('button', { name: /Open sidebar/ });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -786,6 +1156,32 @@ for (const locale of ['ar', 'en']) {
 }
 
 for (const locale of ['ar', 'en']) {
+    test(`Local only privacy control (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [{ code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:13305' }],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="privacy"]').click();
+        const toggle = page.getByRole('switch');
+        await expect(toggle).toHaveAttribute('aria-checked', 'false');
+        await shot(page, `privacy-local-only-${locale}-off`);
+        await toggle.click();
+        await expect(toggle).toHaveAttribute('aria-checked', 'true');
+        await expect(page.locator('.settings-ok[role="status"]')).toBeVisible();
+        await shot(page, `privacy-local-only-${locale}-on-notice`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale, { localOnly: true });
+        const cloud = page.getByRole('radio', { name: /Fireworks AI/ });
+        await expect(cloud).toBeDisabled();
+        await shot(page, `model-${locale}-local-only-blocked`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
@@ -806,8 +1202,8 @@ for (const locale of ['ar', 'en']) {
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
-        const openConnectors = async (page: Page, rows?: unknown[]) => {
-            await open(page, '', locale, (p) => withConnectors(p, rows));
+        const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
+            await open(page, '', locale, (p) => withConnectors(p, rows, extra));
             await page.getByRole('button', { name: /Settings/ }).first().click();
             await page.getByRole('dialog').locator('[data-section="connectors"]').click();
             await expect(page.locator('.settings-pane-title')).toBeVisible();
@@ -820,6 +1216,24 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
             await shot(page, `connectors-${locale}-top`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connector GAIA could not read shows as unavailable, and search keeps working', async ({ page }) => {
+            const server = (name: string) => ({
+                id: name.toLowerCase(), display_name: name, type: 'mcp_server', description: `${name} tools`,
+                configured: false, configurable: true, enabled: true, mcp_env_keys: [], oauth_setup_fields: [],
+            });
+            await openConnectors(page, [
+                { id: 'microsoft', display_name: 'Microsoft', error: 'unavailable' },
+                ...['Git', 'Notion', 'Postgres', 'Memory', 'Filesystem', 'Fetch'].map(server),
+            ]);
+            const broken = page.locator('details[open] .connector-tile', { hasText: 'Microsoft' });
+            await expect(broken).toBeVisible();
+            await shot(page, `connectors-${locale}-unavailable`);
+            expect(await audit(page)).toEqual([]);
+            await page.locator('.connectors-section input[type=search]').fill('o');
+            await expect(page.locator('.connector-tile', { hasText: 'Notion' })).toBeVisible();
+            await expect(broken).toBeVisible();
         });
 
         test('every group and a tile open, with no button inside a button', async ({ page }) => {
@@ -837,11 +1251,97 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+                setup_url: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
+                config_fields: [{
+                    key: 'SLACK_MCP_XOXB_TOKEN', label: 'Slack bot token', kind: 'secret', required: true, placeholder: 'xoxb-…',
+                    help_md: 'Click **Create Slack app**, pick your workspace, then **Install to Workspace**. Then type `/invite @GAIA` in each channel GAIA should read.',
+                }],
+            }]);
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await expect(page.locator('.connector-setup-link')).toBeVisible();
+            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
+            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
+            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-setup`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('with only GAIA, a connected server has one switch that names the service', async ({ page }) => {
+            await openConnectors(page, [{
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
+                configured: true, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
+            }], {
+                'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', namespaced_agent_id: 'installed:gaia', consumes_mcp_servers: true }] },
+                'GET /connectors/mcp-slack/activations': { activations: { 'installed:gaia': true } },
+            });
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            const tile = page.locator('.connector-tile', { hasText: 'Slack' });
+            const row = tile.locator('.connection-grants .connector-toggle-row');
+            await expect(row).toContainText('GAIA');
+            await expect(row).toContainText('Slack');
+            await expect(tile.locator('input[type=checkbox]')).toHaveCount(1);
+            await expect(tile.locator('.grant-agent-card, .grants-empty')).toHaveCount(0);
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-mcp-switch`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('nothing connected: accounts start open', async ({ page }) => {
             await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
             await expect(page.locator('.connector-tile')).toBeVisible();
             await shot(page, `connectors-${locale}-none`);
             expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected server that will not start says so, with the reason', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, detail: 'Authentication failed - check your Slack tokens: invalid_auth (token revoked or expired; xoxb token for workspace T0123456789)' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-failed`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('a server that was only slow to start is not blamed on the token', async ({ page }) => {
+            const slack = {
+                id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', icon: null, category: 'general', tier: 'core',
+                description: 'Lets GAIA read and post in Slack.', product_url: 'https://example.com', docs_url: null,
+                configured: true, configurable: true, enabled: true, account_id: null, default_scopes: [], available_scopes: [],
+                mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [], supports_device_code: false,
+            };
+            await openConnectors(page, [slack]);
+            await page.route('**/api/connectors/mcp-slack/test', (route) => route.fulfill({
+                json: { ok: false, reason: 'timeout', detail: 'did not start within 10 seconds' },
+            }));
+            await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
+            await page.locator('.connector-detail .configure-actions .btn-secondary').first().click();
+            await expect(page.locator('.connector-check--failed')).toBeVisible();
+            await page.locator('.connector-check--failed summary').click();
+            await expect(page.locator('.connector-check--failed pre')).toBeVisible();
+            await page.locator('.connector-check--failed').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-check-slow`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {
@@ -982,6 +1482,22 @@ for (const locale of ['ar', 'en']) {
         });
     }
 
+    test(`desktop app and updates: status unreadable (${locale})`, async ({ page }) => {
+        const failure = "Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'";
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, {}, undefined, failure); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+        await expect(updates).toHaveAttribute('open', '');
+        await expect(updates).toContainText(locale === 'ar' ? 'تعذّرت قراءة حالة التحديث' : "Couldn't read the update status");
+        await expect(updates).not.toContainText(/up to date|محدّث/);
+        await expect(updates).not.toContainText(/handler|gaia-updater/i);
+        await expect(updates.getByRole('button', { name: locale === 'ar' ? 'إعادة المحاولة' : 'Try again' })).toBeVisible();
+        await updates.scrollIntoViewIfNeeded();
+        await shot(page, `updates-${locale}-unreadable`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
     test(`desktop app on a desktop with no tray (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
@@ -992,7 +1508,8 @@ for (const locale of ['ar', 'en']) {
         await expect(desktop).toBeVisible();
         await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
         await desktop.scrollIntoViewIfNeeded();
-        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).not.toContainText('AppIndicator');
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText(locale === 'ar' ? 'شريط التطبيقات' : 'dock');
         await shot(page, `desktop-${locale}-no-tray`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
@@ -1051,6 +1568,57 @@ for (const locale of ['ar', 'en']) {
         });
     }
 }
+
+const FLASH = 'fireworks.deepseek-v4p1-flash';
+
+/** The answer chat on DeepSeek on Fireworks, with three priced answers and a stopped one. */
+async function withCloudSpending(page: Page): Promise<void> {
+    const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION
+        ? { ...s, model: FLASH, effective_model: FLASH, inference_remote: true, inference_provider: 'fireworks', inference_provider_name: 'Fireworks AI' }
+        : s));
+    await page.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions, total: sessions.length } }));
+    await page.route('**/api/providers/active', (route) => route.fulfill({
+        json: { provider: 'fireworks', model: FLASH, label: 'DeepSeek V4.1 Flash', remote: true, is_default: false, restore: { status: 'none', message: null } },
+    }));
+    const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
+    await page.route((url) => url.pathname === `/api/spending/chat/${ANSWER_SESSION}`, (route) => route.fulfill({
+        json: {
+            paid: true, model: FLASH, price_source: 'Fireworks AI list price',
+            chat: {
+                usd: 0.0431, answers: 4, unpriced_answers: 1,
+                items: [
+                    { message_id: 2, created_at: at(40), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0214 },
+                    { message_id: 4, created_at: at(25), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0008 },
+                    { message_id: 6, created_at: at(12), model: 'DeepSeek V4.1 Flash', kind: 'unreported', usd: null },
+                    { message_id: 8, created_at: at(2), model: 'DeepSeek V4.1 Flash', kind: 'estimate', usd: 0.0209 },
+                ],
+            },
+            today: { usd: 0.3127, answers: 19, unpriced_answers: 1, chats: 5, since: NOW.toISOString() },
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`cloud spending chip and breakdown (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCloudSpending);
+        const chip = page.locator('.spend-meter');
+        await expect(chip).toContainText('$0.04');
+        await expect(chip).toContainText('$0.31');
+        await shot(page, `spend-chip-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await chip.click();
+        await expect(page.locator('.spend-meter-answers .context-meter-row')).toHaveCount(4);
+        await shot(page, `spend-popover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+test('no spending chip on a model on this PC', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'en');
+    await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+    await expect(page.locator('.spend-meter')).toHaveCount(0);
+});
 
 for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
@@ -1313,6 +1881,36 @@ async function expectVisibleTryAgain(page: Page, locale: string): Promise<void> 
         return o;
     });
     expect(opacity).toBeGreaterThan(0.99);
+}
+
+const FAILED_WITH_REPORT =
+    "The model call failed at step 1, so this request is unfinished. Couldn't reach the local LLM.\n\n"
+    + 'Nothing had run yet.\n\n'
+    + 'A problem report for this was saved on this PC as GF-20261104-192233-3f2a; nothing was sent anywhere.';
+
+/** A chat whose last turn failed and named the problem report GAIA saved for it. */
+async function withFailureReport(page: Page): Promise<void> {
+    await page.route(new RegExp(`/api/sessions/${ANSWER_SESSION}/messages(\\?|$)`), (route) => route.fulfill({
+        json: {
+            messages: [
+                { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Summarize the minutes', created_at: '2026-11-04T19:22:00Z', rag_sources: null },
+                { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: FAILED_WITH_REPORT, created_at: '2026-11-04T19:22:33Z', rag_sources: null },
+            ],
+            total: 2,
+        },
+    }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer offers its troubleshooting report (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailureReport);
+        const report = page.locator('.msg-report');
+        await expect(report.getByRole('button')).toHaveText(locale === 'ar' ? /حفظ تقرير لاستكشاف الأخطاء/ : /Save a troubleshooting report/);
+        await expect(report.locator('.msg-report-hint')).toContainText(locale === 'ar' ? 'لا يُرسَل شيء' : 'nothing is sent');
+        await report.scrollIntoViewIfNeeded();
+        await shot(page, `failed-answer-report-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PARTIAL_ANSWER = 'Coral reefs cover less than one percent of the ocean floor.';
@@ -1731,6 +2329,67 @@ test('window controls dim under the missing-model dialog too', async ({ page }) 
     expect(await refusedColors(page)).toEqual([]);
 });
 
+const LONG_TITLE = 'Quarterly budget review with finance, engineering and the regional leads, including the follow-up on the September numbers';
+const MANY_ATTENDEES = Array.from({ length: 30 }, (_, i) => `person.number.${i + 1}@example.com`);
+const CALENDAR_PROMPTS = {
+    create: { title: LONG_TITLE, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', notify_attendees: MANY_ATTENDEES, calendar_account: 'me@example.com', location: 'Room 4', description: 'Bring the Q3 numbers.' },
+    update: { event_id: 'abc', expected_title: LONG_TITLE, expected_start: '2026-11-03T14:00:00Z', notify_attendees: ['dana@example.com'], new_title: 'Budget sync', new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z' },
+    cancel: { event_id: 'abc', expected_title: 'اجتماع الميزانية', expected_start: '2026-11-03T14:00:00Z', notify_attendees: [] },
+} as const;
+
+/** A reply that asks one calendar approval and stays open: a closed stream dismisses the prompt. */
+async function replyWithCalendarApproval(page: Page, kind: keyof typeof CALENDAR_PROMPTS): Promise<void> {
+    const label = { create: 'creating', update: 'changing', cancel: 'cancelling' }[kind];
+    const event = JSON.stringify({ type: 'permission_request', tool: `calendar/${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
+    await page.addInitScript((line) => {
+        const realFetch = window.fetch;
+        window.fetch = (input, init) => (String(input).endsWith('/chat/send')
+            ? Promise.resolve(new Response(new ReadableStream({
+                start: (out) => out.enqueue(new TextEncoder().encode(`data: ${line}\n\n`)),
+            }), { headers: { 'Content-Type': 'text/event-stream' } }))
+            : realFetch(input, init));
+    }, event);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const kind of ['create', 'update', 'cancel'] as const) {
+        test(`calendar approval, ${kind} (${locale})`, async ({ page }, info) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => replyWithCalendarApproval(p, kind));
+            await page.locator('textarea').first().fill('Handle my calendar');
+            await page.keyboard.press('Enter');
+            const facts = page.getByTestId('perm-calendar');
+            await expect(facts).toBeVisible();
+            // The buttons stay reachable however many people are on the event.
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            // Dates follow the UI's language, so Arabic shows no English month names.
+            if (locale === 'ar') await expect(facts).not.toContainText(/Nov|AM|PM/);
+            else await expect(facts).toContainText('Nov');
+            await page.locator('.perm-card').screenshot({ path: info.outputPath(`calendar-${kind}-${locale}.png`) });
+            await page.screenshot({ path: info.outputPath(`calendar-${kind}-${locale}-page.png`) });
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+test('calendar approval fits a phone (ar)', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) => replyWithCalendarApproval(p, 'create'));
+    await page.locator('textarea').first().fill('Handle my calendar');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('perm-calendar')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('calendar-create-ar-phone.png') });
+    const offScreen = await page.locator('.perm-card *').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.width > 0 && (box.left < -1 || box.right > innerWidth + 1);
+        }).length,
+    );
+    expect(offScreen).toBe(0);
+    const actions = page.locator('.perm-card-actions');
+    await actions.scrollIntoViewIfNeeded();
+    await expect(actions).toBeInViewport();
+});
+
 /** Colors the desktop window would refuse: main.cjs takes only #rrggbb. */
 const refusedColors = (page: Page): Promise<string[]> =>
     page.evaluate(() =>
@@ -1744,7 +2403,10 @@ const WINDOW_CONTROLS_W = 138;
 
 for (const locale of ['ar', 'en']) {
     test(`the top notice keeps its action clear of the window controls (${locale})`, async ({ page }) => {
-        await open(page, '', locale, withWindowsControls);
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await withoutFlagship(p);
+        });
         await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
         const notice = page.locator('.app-notice').first();
         await expect(notice.getByRole('button')).toBeVisible();
@@ -1762,8 +2424,36 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the chat-create error sits below the window controls and is not a drag handle (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withWindowsControls(p);
+            await p.route((u) => u.pathname === '/api/sessions', async (route) => {
+                if (route.request().method() === 'POST') return route.fulfill({ json: SESSIONS[0] });
+                return route.fallback();
+            });
+            await p.route(`**/api/chat/permissions/${SESSIONS[0].id}`, async (route) => {
+                if (route.request().method() === 'GET') return route.fallback();
+                return route.fulfill({ status: 500, json: { detail: 'The permission service did not answer' } });
+            });
+        });
+        await page.evaluate((w) => document.documentElement.style.setProperty('--titlebar-controls-w', `${w}px`), WINDOW_CONTROLS_W);
+        await page.locator('textarea').first().fill('hello');
+        await page.keyboard.press('Enter');
+        const error = page.locator('.toast-dismissible');
+        await expect(error).toBeVisible();
+        const { top, region } = await error.evaluate((el) => ({
+            top: el.getBoundingClientRect().top,
+            region: getComputedStyle(el).getPropertyValue('-webkit-app-region'),
+        }));
+        expect(top).toBeGreaterThanOrEqual(48);
+        expect(region).toBe('no-drag');
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
-    await open(page);
+    await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
     await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
 });
@@ -2040,6 +2730,45 @@ test('the library path row fits a phone', async ({ page }) => {
     expect(clipped).toBe(0);
 });
 
+test('each line of an email being approved takes its own direction', async ({ page }) => {
+    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+    // The prompt lasts only while its stream is open, which a routed response can't do.
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
+        p.addInitScript((line) => {
+            const realFetch = window.fetch;
+            window.fetch = (input, init) =>
+                String(input).endsWith('/chat/send')
+                    ? Promise.resolve(new Response(new ReadableStream({
+                        start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                    }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                    : realFetch(input, init);
+        }, `data: ${JSON.stringify(event)}\n\n`),
+    );
+    await page.locator('textarea').last().fill('send it');
+    await page.keyboard.press('Enter');
+    const pre = page.getByTestId('perm-exact-text');
+    await expect(pre).toBeVisible();
+    const gaps = await pre.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const node = el.firstChild as Text;
+        const rectOf = (start: number, end: number) => {
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, end);
+            return range.getBoundingClientRect();
+        };
+        const source = node.data;
+        const arabicAt = source.indexOf('مرحبا');
+        return {
+            english: rectOf(0, source.indexOf('\n')).left - box.left,
+            arabic: box.right - rectOf(arabicAt, source.length).right,
+        };
+    });
+    expect(gaps.english).toBeLessThan(40);
+    expect(gaps.arabic).toBeLessThan(40);
+});
+
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {
     return async (page: Page) => {
@@ -2228,6 +2957,36 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced-end');
         });
 
+        test('advanced, a tool-recorded error next to one the user wrote', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            const badge = (text: string) => page.locator('.mem-knowledge-table tbody tr', { hasText: text }).locator('.mem-cat-badge');
+            const learned = badge('note-taker');
+            await expect(learned).toContainText(locale === 'ar' ? 'تعلّمه GAIA' : 'Learned by GAIA');
+            await expect(badge('hotel wifi')).toContainText(locale === 'ar' ? 'خطأ' : 'Error');
+            await expect(badge('hotel wifi')).not.toContainText(locale === 'ar' ? 'تعلّمه' : 'Learned');
+            if (locale === 'ar') {
+                // Read right to left: the Arabic verb sits right of "GAIA".
+                const [verbLeft, gaiaLeft] = await learned.evaluate((el) => {
+                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                    let node = walker.nextNode() as Text | null;
+                    while (node && !node.data.includes('تعلّمه')) node = walker.nextNode() as Text | null;
+                    if (!node) throw new Error('no Arabic label in the badge');
+                    const at = (word: string) => {
+                        const start = node!.data.indexOf(word);
+                        const range = document.createRange();
+                        range.setStart(node!, start);
+                        range.setEnd(node!, start + word.length);
+                        return range.getBoundingClientRect().left;
+                    };
+                    return [at('تعلّمه'), at('GAIA')];
+                });
+                expect(gaiaLeft).toBeLessThan(verbLeft);
+            }
+            await learned.scrollIntoViewIfNeeded();
+            await checkMemory(page, locale, 'advanced-errors');
+        });
+
         test('advanced, a row open and the add form', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Advanced/);
@@ -2365,6 +3124,64 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+/** Text where an object arrives crashes the screen that renders it, so each placement's fallback shows. */
+const BROKEN = { not: 'text' };
+const CRASHES: Record<'main' | 'sidebar' | 'window', { hash: string; before: (page: Page) => Promise<void> }> = {
+    main: {
+        hash: `#${ANSWER_SESSION}`,
+        before: (page) => page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+            route.fulfill({ json: { messages: [{ id: 1, session_id: ANSWER_SESSION, role: 'user', content: BROKEN, created_at: NOW.toISOString(), rag_sources: null }] } })),
+    },
+    sidebar: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/sessions', (route) =>
+            route.fulfill({ json: { sessions: [{ ...SESSIONS[0], title: BROKEN }], total: 1 } })),
+    },
+    window: {
+        hash: '',
+        before: (page) => page.route((url) => url.pathname === '/api/providers/active', (route) =>
+            route.fulfill({ json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true, restore: { status: 'failed', message: BROKEN } } })),
+    },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [placement, crash] of Object.entries(CRASHES)) {
+        test(`a crashed ${placement} shows its own fallback (${locale})`, async ({ page }, info) => {
+            const errors: string[] = [];
+            page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+            await open(page, crash.hash, locale, crash.before);
+            const fallback = page.getByRole('alert').filter({ has: page.locator('.error-boundary-title') });
+            await expect(fallback).toBeVisible();
+            await expect(fallback).toHaveCount(1);
+            expect(errors.some((e) => e.includes(`[ErrorBoundary] ${placement === 'window' ? 'app' : placement} failed to render`))).toBe(true);
+
+            const box = (await fallback.boundingBox())!;
+            const title = (await fallback.locator('.error-boundary-title').boundingBox())!;
+            if (placement === 'window') {
+                await expect(fallback).toHaveText(locale === 'ar' ? /أعد التحميل للمتابعة/ : /Reload to continue/);
+                expect(box.width).toBe(1400);
+                expect(box.height).toBe(900);
+                expect(Math.abs(title.y + title.height / 2 - 450)).toBeLessThan(80);
+            } else {
+                await expect(fallback).toHaveText(locale === 'ar' ? /بقية التطبيق لا تزال تعمل/ : /The rest of the app still works/);
+            }
+            if (placement === 'sidebar') {
+                expect(box.width).toBeLessThanOrEqual(261);
+                expect((await page.locator('.main-content').boundingBox())!.width).toBeGreaterThan(1100);
+                await expect(page.getByLabel(locale === 'ar' ? /رسالة/ : 'Message').first()).toBeVisible();
+            }
+            if (placement === 'main') {
+                await expect(page.locator('aside.sb')).toBeVisible();
+                const main = (await page.locator('.main-content').boundingBox())!;
+                expect(box.x).toBeGreaterThanOrEqual(main.x);
+                expect(box.x + box.width).toBeLessThanOrEqual(main.x + main.width + 1);
+            }
+            expect(await audit(page)).toEqual([]);
+            await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
         });
     }
 }

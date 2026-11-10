@@ -15,8 +15,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
+from gaia.daemon.sidecars.errors import (
+    SidecarError,
+    SidecarHTTPError,
+    SidecarSpawnError,
+)
 from gaia.ui.email_sidecar.router import router as email_router
 
 

@@ -17,6 +17,10 @@ asserting the two modules agree on the contract. No network, no real binary.
 """
 
 import hashlib
+import json
+import re
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -33,6 +37,9 @@ _AGENT_ID = "contract-toy"
 _VERSION = "1.0.0"
 _ARTIFACT_PATH = f"agents/{_AGENT_ID}/{_VERSION}/{_AGENT_ID}-{_PLATFORM_KEY}"
 _BASE_URL = "https://hub.test.example"
+_GO_CATALOG = (
+    Path(__file__).resolve().parents[2] / "tui" / "internal" / "catalog" / "catalog.go"
+)
 
 
 def _manifest() -> dict:
@@ -167,3 +174,87 @@ def test_wheel_kind_install_is_not_accepted_as_a_sidecar_binary(tmp_path):
             platform_key=_PLATFORM_KEY,
             lock_path=tmp_path / "absent.lock.json",
         )
+
+
+def test_the_frozen_app_refuses_a_wheel_agent_before_downloading_it(
+    tmp_path, monkeypatch
+):
+    """The desktop app's frozen gaia has no pip, so a wheel agent fails up front."""
+    wheel_path = (
+        f"agents/{_AGENT_ID}/{_VERSION}/{_AGENT_ID}-{_VERSION}-py3-none-any.whl"
+    )
+    manifest = _manifest()
+    manifest["versions"][_VERSION]["artifacts"] = [
+        {
+            "filename": f"{_AGENT_ID}-{_VERSION}-py3-none-any.whl",
+            "path": wheel_path,
+            "sha256": "0" * 64,
+            "size_bytes": 1,
+        }
+    ]
+
+    def _no_fetch(url: str, timeout: float = 120) -> bytes:
+        raise AssertionError(f"downloaded {url} it could never install")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(installer.InstallError, match="can't install packages"):
+        installer.install(
+            _AGENT_ID,
+            version=_VERSION,
+            manifest=manifest,
+            trusted=True,
+            base_url=_BASE_URL,
+            fetcher=_no_fetch,
+            run_pip=pytest.fail,
+            install_root=tmp_path,
+            skip_compatibility_check=True,
+            platform_key=_PLATFORM_KEY,
+        )
+    assert installer.read_sentinel(_AGENT_ID, tmp_path) is None
+
+
+def _go_string_const(source: str, name: str) -> str:
+    match = re.search(rf'^const {name} = "([^"]*)"', source, re.MULTILINE)
+    assert match, f"const {name} not found in {_GO_CATALOG}"
+    return match.group(1)
+
+
+def test_go_tui_reads_the_sentinel_the_real_installer_writes(tmp_path):
+    """The TUI's sentinel reader (catalog.go) must agree with installer.install's
+    real output: file name, every json field it decodes, and the binary kind
+    value that flips an agent to daemon transport (#3062)."""
+    go_source = _GO_CATALOG.read_text(encoding="utf-8")
+
+    installer.install(
+        _AGENT_ID,
+        version=_VERSION,
+        manifest=_manifest(),
+        trusted=True,
+        base_url=_BASE_URL,
+        fetcher=_fetcher,
+        run_pip=lambda args: pytest.fail("binary install must never call pip"),
+        install_root=tmp_path,
+        skip_compatibility_check=True,
+        platform_key=_PLATFORM_KEY,
+    )
+
+    assert _go_string_const(go_source, "SentinelName") == installer.SENTINEL_NAME
+    written = json.loads(
+        (tmp_path / _AGENT_ID / installer.SENTINEL_NAME).read_text(encoding="utf-8")
+    )
+
+    record = re.search(
+        r"^type InstalledRecord struct \{(.*?)^\}", go_source, re.MULTILINE | re.DOTALL
+    )
+    assert record, f"type InstalledRecord struct not found in {_GO_CATALOG}"
+    go_fields = re.findall(r'json:"([^",]+)', record.group(1))
+    assert "artifact_kind" in go_fields, go_fields
+    missing = sorted(set(go_fields) - set(written))
+    assert not missing, (
+        f"InstalledRecord decodes {missing}, which the installer's sentinel "
+        f"does not write (it writes {sorted(written)})"
+    )
+
+    go_binary = _go_string_const(go_source, "ArtifactKindBinary")
+    assert go_binary == installer.ARTIFACT_KIND_BINARY
+    assert written["artifact_kind"] == go_binary

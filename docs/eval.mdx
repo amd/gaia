@@ -234,7 +234,7 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
 <Steps>
   <Step title="Install eval dependencies">
     ```bash
-    uv pip install -e ".[eval]"
+    uv pip install -e ".[eval,ui]"
     ```
   </Step>
 
@@ -258,7 +258,7 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
       </Tab>
       <Tab title="Direct">
         ```bash
-        uv run python -m gaia.ui.server
+        python -m gaia.ui.server
         ```
       </Tab>
     </Tabs>

@@ -38,6 +38,7 @@ from gaia.agents.tools.file_edit import (
     file_read_record,
     read_first_preflight,
     stamp_of,
+    turn_of,
 )
 from gaia.agents.tools.path_access import (
     missing_file_error,
@@ -66,6 +67,38 @@ from gaia.security import BackupError
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
+
+
+def _canonical_tool_already_registered(tool_name: str, module_name: str) -> bool:
+    """Return whether a canonical implementation already owns *tool_name*.
+
+    File-search is composed with the file-I/O and filesystem mixins in several
+    profiles. Those mixins provide the authoritative implementations for the
+    overlapping generic tools; checking the registry before defining another
+    closure makes the result independent of registrar order.
+    """
+    from gaia.agents.base.tools import _BUILD_NAMES, _TOOL_REGISTRY
+
+    # The process-wide registry outlives an Agent.  Only reuse a canonical
+    # implementation that was registered earlier in this same build; an entry
+    # left by a different Agent belongs to that Agent's workspace and policy.
+    build = _BUILD_NAMES.get()
+    if build is None or tool_name not in build:
+        return False
+
+    entry = _TOOL_REGISTRY.get(tool_name)
+    function = entry.get("function") if entry else None
+    return getattr(function, "__module__", None) == module_name
+
+
+def _tool_or_reuse(tool_name: str, canonical_module: str, **kwargs):
+    """Register a tool unless its canonical sibling is already registered."""
+    from gaia.agents.base.tools import tool
+
+    if _canonical_tool_already_registered(tool_name, canonical_module):
+        return lambda function: function
+    return tool(**kwargs)
+
 
 #: Root-level operating-system trees a deep search walks last, so they cannot
 #: spend the budget before user folders. Applied only at a filesystem root,
@@ -285,10 +318,14 @@ _ORDINAL_QUARTERS = {
     "fourth": 4,
     "4th": 4,
 }
+_QUARTER_NUM = r"(?:Q|Qtr\.?|Quarter)\s*(?P<q>[1-4])"
+_YEAR4 = r"(?P<year>\d{4})"
 _QUARTER_PATTERNS = (
-    (re.compile(r"^(?P<year>\d{4})\s*-?\s*Q(?P<q>[1-4])$", re.I), False),
-    (re.compile(r"^Q(?P<q>[1-4])\s*-?\s*(?P<year>\d{4})$", re.I), False),
-    (re.compile(r"^Q(?P<q>[1-4])\s*['’](?P<year>\d{2})$", re.I), True),
+    (re.compile(rf"^{_YEAR4}\s*[-/]?\s*{_QUARTER_NUM}$", re.I), False),
+    (re.compile(rf"^{_QUARTER_NUM}\s*[-/,]?\s*{_YEAR4}$", re.I), False),
+    (re.compile(rf"^{_QUARTER_NUM}\s*['’](?P<year>\d{{2}})$", re.I), True),
+    (re.compile(rf"^(?P<q>[1-4])Q\s*[-/]?\s*{_YEAR4}$", re.I), False),
+    (re.compile(r"^(?P<q>[1-4])Q\s*['’]?(?P<year>\d{2})$", re.I), True),
 )
 _ORDINAL_QUARTER_RE = re.compile(
     r"^(?P<ord>first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter\s+"
@@ -296,6 +333,8 @@ _ORDINAL_QUARTER_RE = re.compile(
     re.I,
 )
 _RANGE_SPLIT_RE = re.compile(r"\s+to\s+|\s*:\s*", re.I)
+# Quarter-looking text the patterns above can't read; dateutil would misplace it.
+_QUARTER_TOKEN_RE = re.compile(r"\bQ[1-4]\b|\b[1-4]Q|\bqtrs?\b|\bquarter", re.I)
 
 
 def _parse_date_value(value: str):
@@ -330,6 +369,43 @@ def _parse_date_value(value: str):
     return None
 
 
+def _read_cell_date(value):
+    """Read a data cell as (("YYYY-MM", "YYYY-MM"), day), or None.
+
+    The span is inclusive: a quarter, year or month cell ('2025-Q1', '2025')
+    spans its whole period; any other date dateutil can read spans its one
+    month. ``day`` is the datetime when the cell names a day, else None.
+    Quarter-looking text no pattern reads ('Q1', 'Q3 FY25') is None:
+    dateutil would file it under a made-up month.
+    """
+    if isinstance(value, datetime):
+        ym = value.strftime("%Y-%m")
+        return (ym, ym), value
+    text = str(value).strip()
+    span = _parse_date_value(text)
+    if span is not None:
+        try:
+            return span, datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return span, None
+    if _QUARTER_TOKEN_RE.search(text):
+        return None
+    from dateutil import parser as date_parser
+
+    try:
+        dt = date_parser.parse(text, fuzzy=True)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    ym = dt.strftime("%Y-%m")
+    return (ym, ym), dt
+
+
+def _cell_month_span(value):
+    """The inclusive ("YYYY-MM", "YYYY-MM") span a data cell is dated in, or None."""
+    cell = _read_cell_date(value)
+    return None if cell is None else cell[0]
+
+
 def parse_date_range(date_range: str):
     """Parse an ``analyze_data_file`` date_range into inclusive month bounds.
 
@@ -345,6 +421,25 @@ def parse_date_range(date_range: str):
     if first is None or last is None or first[0] > last[1]:
         return None
     return first[0], last[1]
+
+
+def _cell_period(value):
+    """The breakdown period of a data cell, or None if it can't be placed.
+
+    ("month", "YYYY-MM", day-or-None) for a month or date, and
+    ("quarter", "YYYY-Qn", None) for a calendar quarter. A year cell spans
+    no single month or quarter, so it is None too.
+    """
+    cell = _read_cell_date(value)
+    if cell is None:
+        return None
+    (first, last), day = cell
+    if first == last:
+        return "month", first, day
+    year, start, end = first[:4], int(first[5:]), int(last[5:])
+    if last[:4] == year and start % 3 == 1 and end == start + 2:
+        return "quarter", f"{year}-Q{end // 3}", None
+    return None
 
 
 class FileSearchToolsMixin:
@@ -1097,8 +1192,12 @@ class FileSearchToolsMixin:
                     "operation": "search_directory",
                 }
 
-        @tool(
-            atomic=True,
+        # FileIOToolsMixin is canonical whenever this profile also has file I/O.
+        # Keep FileSearchToolsMixin's version for doc-only profiles, but reuse
+        # the already-registered implementation when composition order puts the
+        # canonical mixin first.
+        @_tool_or_reuse(
+            "read_file", "gaia.agents.tools.file_io_tools", atomic=True, override=True
         )
         def read_file(
             file_path: str, offset: int = 0, limit: Optional[int] = None
@@ -1531,7 +1630,9 @@ class FileSearchToolsMixin:
         def _workspace_target(args: Dict[str, Any]) -> Path:
             return _resolve_target(args["file_path"], None, _workspace_default(self))
 
-        @tool(
+        @_tool_or_reuse(
+            "write_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target, "overwriting"),
         )
@@ -1897,7 +1998,9 @@ class FileSearchToolsMixin:
 
         # --- New tool definitions ---
 
-        @tool(
+        @_tool_or_reuse(
+            "edit_file",
+            "gaia.agents.tools.file_io_tools",
             atomic=True,
             preflight=read_first_preflight(self, _workspace_target),
         )
@@ -1914,7 +2017,8 @@ class FileSearchToolsMixin:
             old_content must match exactly one location. Zero or several matches
             are errors that carry the file's current content, so a retry does not
             need a separate read. new_content replaces old_content only; to
-            rewrite the whole file, use write_file.
+            rewrite the whole file, use write_file. Repeating an edit already
+            applied this turn is refused.
 
             Security checks performed:
             1. Path allowlist validation (PathValidator)
@@ -1976,7 +2080,9 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path)
+                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
+                    resolved_path, old_content, new_content, turn_of(self)
+                )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
 
@@ -2042,6 +2148,7 @@ class FileSearchToolsMixin:
                 # Write updated content
                 _write_exact(resolved_path, updated_content)
                 reads.note(resolved_path)
+                reads.note_edit(resolved_path, old_content, new_content, turn_of(self))
 
                 # Audit the edit
                 edit_size = len(updated_content.encode("utf-8"))
@@ -2096,9 +2203,10 @@ class FileSearchToolsMixin:
                     "operation": "edit_file",
                 }
 
-        @tool(
-            atomic=True,
-        )
+        # Shares its name with FileSystemToolsMixin.browse_directory. Keep the
+        # historical FileSearch schema here; changing the owner changes the
+        # model-facing arguments and needs a separate eval-backed change.
+        @tool(atomic=True, override=True)
         def browse_directory(
             directory_path: str = None, show_hidden: bool = False, sort_by: str = "name"
         ) -> Dict[str, Any]:
@@ -2450,9 +2558,10 @@ class FileSearchToolsMixin:
                 columns: Comma-separated column names to focus on (optional)
                 group_by: Column name to group rows by; numeric columns are
                     summed per group, largest first (optional)
-                date_range: Keep only rows dated in this period (optional).
-                    A quarter ('2025-Q1', "Q1'25"), year, month ('2025-03'),
-                    day, or range ('2025-01 to 2025-06'). Else an error.
+                date_range: Rows dated in this period (optional): quarter
+                    ('2025-Q1', "Q1'25"), year, month, day, or range
+                    ('2025-01 to 2025-06'). Cells may use these forms. Else an
+                    error.
                 sheet: Workbook sheet to analyze (optional; default the sheet
                     the workbook opens on). Ignored for CSV/TSV.
 
@@ -2577,8 +2686,6 @@ class FileSearchToolsMixin:
 
                 # --- Date range filtering ---
                 if date_range:
-                    from dateutil import parser as date_parser
-
                     parsed_range = parse_date_range(date_range)
                     if parsed_range is None:
                         return {
@@ -2624,20 +2731,35 @@ class FileSearchToolsMixin:
                     date_col_filter = date_col_candidates[0]
 
                     filtered = []
+                    unreadable = []
+                    dated = 0
                     for row in rows:
                         dv = row.get(date_col_filter)
                         if dv is None or str(dv).strip() == "":
                             continue
-                        try:
-                            if isinstance(dv, datetime):
-                                dt = dv
-                            else:
-                                dt = date_parser.parse(str(dv), fuzzy=True)
-                            row_ym = dt.strftime("%Y-%m")
-                            if start_ym <= row_ym <= end_ym:
-                                filtered.append(row)
-                        except (ValueError, TypeError, OverflowError):
+                        span = _cell_month_span(dv)
+                        if span is None:
+                            unreadable.append(str(dv))
                             continue
+                        dated += 1
+                        if start_ym <= span[0] and span[1] <= end_ym:
+                            filtered.append(row)
+                    if unreadable and not dated:
+                        examples = ", ".join(repr(v) for v in unreadable[:3])
+                        return {
+                            "status": "error",
+                            "error": (
+                                f"date_range {date_range!r} could not be applied: "
+                                f"no value in column '{date_col_filter}' reads as "
+                                f"a date (e.g. {examples}). Cells must hold a "
+                                "quarter ('2025-Q1', 'Q1 2025'), year, month "
+                                "('2025-03') or date. Call again without "
+                                "date_range, using group_by="
+                                f"'{date_col_filter}' to split the rows by it."
+                            ),
+                            "has_errors": True,
+                            "operation": "analyze_data_file",
+                        }
                     rows = filtered
                     if not rows:
                         return {
@@ -2647,6 +2769,11 @@ class FileSearchToolsMixin:
                             "date_filter_applied": date_range,
                             "date_filter_parsed": {"start": start_ym, "end": end_ym},
                             "date_column": date_col_filter,
+                            **(
+                                {"date_rows_unreadable": len(unreadable)}
+                                if unreadable
+                                else {}
+                            ),
                             "message": (
                                 f"No rows in column '{date_col_filter}' fall "
                                 f"between {start_ym} and {end_ym} (inclusive), "
@@ -2687,6 +2814,8 @@ class FileSearchToolsMixin:
                     result["date_filter_applied"] = date_range
                     result["date_filter_parsed"] = {"start": start_ym, "end": end_ym}
                     result["date_column"] = date_col_filter
+                    if unreadable:
+                        result["date_rows_unreadable"] = len(unreadable)
 
                 # Infer column types
                 column_types = {}
@@ -2941,53 +3070,71 @@ class FileSearchToolsMixin:
                             monthly_totals: Dict[str, float] = {}
                             monthly_spending: Dict[str, float] = {}
                             monthly_income: Dict[str, float] = {}
-
-                            from dateutil import parser as date_parser
+                            quarterly_totals: Dict[str, float] = {}
+                            quarterly_spending: Dict[str, float] = {}
+                            quarterly_income: Dict[str, float] = {}
+                            unplaced = 0
 
                             for row in rows:
                                 date_val = row.get(primary_date_col)
                                 amount_val = _parse_numeric(row.get(primary_amount_col))
-                                if date_val is None or str(date_val).strip() == "":
+                                period = (
+                                    None
+                                    if date_val is None or str(date_val).strip() == ""
+                                    else _cell_period(date_val)
+                                )
+                                if period is None:
+                                    unplaced += 1
                                     continue
-
-                                try:
-                                    if isinstance(date_val, datetime):
-                                        dt = date_val
-                                    else:
-                                        dt = date_parser.parse(
-                                            str(date_val), fuzzy=True
-                                        )
-                                    month_key = dt.strftime("%Y-%m")
-                                    monthly_totals[month_key] = (
-                                        monthly_totals.get(month_key, 0) + amount_val
+                                kind, key, _day = period
+                                if kind == "quarter":
+                                    totals, spent, income = (
+                                        quarterly_totals,
+                                        quarterly_spending,
+                                        quarterly_income,
                                     )
-                                    if amount_val < 0:
-                                        monthly_spending[month_key] = (
-                                            monthly_spending.get(month_key, 0)
-                                            + abs(amount_val)
-                                        )
-                                    else:
-                                        monthly_income[month_key] = (
-                                            monthly_income.get(month_key, 0)
-                                            + amount_val
-                                        )
-                                except (ValueError, TypeError, OverflowError):
-                                    continue
+                                else:
+                                    totals, spent, income = (
+                                        monthly_totals,
+                                        monthly_spending,
+                                        monthly_income,
+                                    )
+                                totals[key] = totals.get(key, 0) + amount_val
+                                if amount_val < 0:
+                                    spent[key] = spent.get(key, 0) + abs(amount_val)
+                                else:
+                                    income[key] = income.get(key, 0) + amount_val
 
-                            if monthly_totals:
-                                sorted_months = sorted(monthly_totals.keys())
-                                spending["monthly_breakdown"] = [
+                            for name, label, totals, spent, income in (
+                                (
+                                    "monthly_breakdown",
+                                    "month",
+                                    monthly_totals,
+                                    monthly_spending,
+                                    monthly_income,
+                                ),
+                                (
+                                    "quarterly_breakdown",
+                                    "quarter",
+                                    quarterly_totals,
+                                    quarterly_spending,
+                                    quarterly_income,
+                                ),
+                            ):
+                                if not totals:
+                                    continue
+                                spending[name] = [
                                     {
-                                        "month": m,
-                                        "net": round(monthly_totals.get(m, 0), 2),
-                                        "spending": round(
-                                            monthly_spending.get(m, 0), 2
-                                        ),
-                                        "income": round(monthly_income.get(m, 0), 2),
+                                        label: k,
+                                        "net": round(totals.get(k, 0), 2),
+                                        "spending": round(spent.get(k, 0), 2),
+                                        "income": round(income.get(k, 0), 2),
                                     }
-                                    for m in sorted_months
+                                    for k in sorted(totals)
                                 ]
                                 spending["date_column"] = primary_date_col
+                            if unplaced:
+                                spending["date_rows_unplaced"] = unplaced
                     else:
                         spending["message"] = (
                             "Could not auto-detect amount columns. "
@@ -3042,30 +3189,31 @@ class FileSearchToolsMixin:
                         date_col = trend_date_cols[0]
                         amount_col = trend_amount_cols[0]
 
-                        from dateutil import parser as date_parser
-
                         monthly_data: Dict[str, List[float]] = {}
                         weekly_data: Dict[str, List[float]] = {}
+                        quarterly_data: Dict[str, List[float]] = {}
+                        trend_unplaced = 0
 
                         for row in rows:
                             date_val = row.get(date_col)
                             amount_val = _parse_numeric(row.get(amount_col))
-
-                            if date_val is None or str(date_val).strip() == "":
+                            period = (
+                                None
+                                if date_val is None or str(date_val).strip() == ""
+                                else _cell_period(date_val)
+                            )
+                            if period is None:
+                                trend_unplaced += 1
                                 continue
-
-                            try:
-                                if isinstance(date_val, datetime):
-                                    dt = date_val
-                                else:
-                                    dt = date_parser.parse(str(date_val), fuzzy=True)
-                                m_key = dt.strftime("%Y-%m")
-                                w_key = dt.strftime("%Y-W%W")
-
-                                monthly_data.setdefault(m_key, []).append(amount_val)
-                                weekly_data.setdefault(w_key, []).append(amount_val)
-                            except (ValueError, TypeError, OverflowError):
+                            kind, key, day = period
+                            if kind == "quarter":
+                                quarterly_data.setdefault(key, []).append(amount_val)
                                 continue
+                            monthly_data.setdefault(key, []).append(amount_val)
+                            if day is not None:
+                                weekly_data.setdefault(
+                                    day.strftime("%Y-W%W"), []
+                                ).append(amount_val)
 
                         if monthly_data:
                             monthly_summary = []
@@ -3106,6 +3254,19 @@ class FileSearchToolsMixin:
                                 )
                             # Limit weekly to most recent 20 weeks
                             trends["weekly"] = weekly_summary[-20:]
+
+                        if quarterly_data:
+                            trends["quarterly"] = [
+                                {
+                                    "period": quarter,
+                                    "total": round(sum(vals), 2),
+                                    "count": len(vals),
+                                    "average": round(sum(vals) / len(vals), 2),
+                                }
+                                for quarter, vals in sorted(quarterly_data.items())
+                            ]
+                        if trend_unplaced:
+                            trends["date_rows_unplaced"] = trend_unplaced
 
                         trends["date_column"] = date_col
                         trends["amount_column"] = amount_col

@@ -388,6 +388,13 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/automations"] {
 		t.Error("paletteCommands does not offer /automations")
 	}
+	// /read-aloud and /voice take arguments too (readaloud.go).
+	for _, cmd := range []string{"/read-aloud", "/voice"} {
+		seen[cmd] = true
+		if !known[cmd] {
+			t.Errorf("paletteCommands does not offer %s", cmd)
+		}
+	}
 
 	// The other direction: an entry nobody dispatches is a stale row that
 	// will mislead exactly the discoverability this feature exists for.
