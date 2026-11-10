@@ -1,14 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Include all JSON files in the interface directory
-include src/gaia/interface/*.json
-
-# Include all files in the img directory
-include src/gaia/interface/img/*
-
-# Include license and readme
-include LICENSE
+# Include readme
 include README.md
 
 # Include the pre-built Agent UI bundle so `pip install amd-gaia[ui]` ships a
