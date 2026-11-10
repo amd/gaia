@@ -27,6 +27,7 @@ Design notes:
 import asyncio
 import logging
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -69,32 +70,14 @@ GOALS_SESSION_SETTING = "agent_loop_session_id"
 # the honest default is "goal_driven" — which is exactly what the loop does.
 DEFAULT_AGENT_MODE = "goal_driven"
 
-# Warn once per process when a legacy-stored "autonomous" mode is normalized.
-_warned_legacy_autonomous = False
-
 
 def resolve_agent_mode(db) -> str:
-    """Return the effective agent mode: "manual" or "goal_driven".
+    """Return the stored agent mode: "manual" or "goal_driven".
 
-    "autonomous" mode's observation cycle is unimplemented (#2005), so a
-    legacy-stored "autonomous" value is normalized to "goal_driven" — the
-    behavior it always had — with a loud warning instead of a silent no-op
-    label. New writes of "autonomous" are rejected at the settings API.
+    A legacy "autonomous" value is rewritten when the database opens
+    (``ChatDatabase._migrate_legacy_agent_mode``).
     """
-    global _warned_legacy_autonomous
-    mode = db.get_setting("agent_mode") or DEFAULT_AGENT_MODE
-    if mode == "autonomous":
-        if not _warned_legacy_autonomous:
-            logger.warning(
-                "agent_mode 'autonomous' is stored in settings but its "
-                "observation cycle is not implemented (see "
-                "https://github.com/amd/gaia/issues/2005); running as "
-                "'goal_driven', which is what 'autonomous' has always "
-                "effectively done."
-            )
-            _warned_legacy_autonomous = True
-        return "goal_driven"
-    return mode
+    return db.get_setting("agent_mode") or DEFAULT_AGENT_MODE
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -427,15 +410,22 @@ class AgentLoop:
             store.update_goal_status(goal.id, "failed", progress_notes=note)
 
     def _get_actionable_goals(self) -> List[Any]:
-        """Return approved, queued goals from GoalStore."""
-        try:
-            from gaia.agents.base.goal_store import GoalStore
+        """Return approved, queued goals from GoalStore.
 
-            store = GoalStore()
-            return store.get_actionable_goals()[:5]
-        except Exception as exc:
-            logger.debug("AgentLoop: GoalStore lookup failed: %s", exc)
-            return []
+        Raises:
+            RuntimeError: The goal store could not be read; the tick reports it.
+        """
+        from gaia.agents.base.goal_store import GoalStore
+        from gaia.config import gaia_home
+
+        try:
+            return GoalStore().get_actionable_goals()[:5]
+        except (sqlite3.Error, OSError) as exc:
+            raise RuntimeError(
+                f"Could not read approved goals from {gaia_home() / 'goals.db'}: "
+                f"{exc}. Approved goals will not run until it opens; close other "
+                "GAIA windows using it and restart GAIA."
+            ) from exc
 
     # ── Tick execution ────────────────────────────────────────────────────────
 
