@@ -753,6 +753,9 @@ const messages: Messages = {
     'prompt.title.tool': 'هل تسمح بـ {tool}؟',
     'prompt.title.toolId': 'هل تسمح لـ GAIA باستخدام {tool}؟',
     'prompt.needsOk': 'يحتاج GAIA إلى موافقتك قبل {tool}.',
+    'prompt.trust.title': 'هل تثق بتعليمات هذا المجلد ومهاراته؟',
+    'prompt.trust.ask': 'سيضع GAIA ملفات CLAUDE.md وAGENTS.md والمهارات الموجودة في هذا المجلد في موجّه النموذج، الآن وفي كل مرة تعمل فيه.',
+    'prompt.trust.allow': 'الثقة بهذا المجلد',
     'prompt.path.title.file': 'هل تسمح لـ GAIA باستخدام هذا الملف؟',
     'prompt.path.title.folder': 'هل تسمح لـ GAIA باستخدام هذا المجلد؟',
     'prompt.path.title.location': 'هل تسمح لـ GAIA باستخدام هذا الموقع؟',
@@ -1872,7 +1875,7 @@ const messages: Messages = {
     'settings.desktop.menuBar': 'شريط القوائم',
     'settings.desktop.keepRunning': 'مواصلة التشغيل عند إغلاق النافذة',
     'settings.desktop.keepRunningHint': 'يبقى GAIA في {tray} مع تحميل نموذجك. للخروج استخدم قائمة {tray}.',
-    'settings.desktop.keepRunningNoTray': 'يؤدي إغلاق النافذة إلى تصغير GAIA مع إبقاء نموذجك محمّلًا. انقر GAIA في شريط التطبيقات لإظهاره، وللخروج انقر عليه بزر الفأرة الأيمن واختر «إنهاء».',
+    'settings.desktop.keepRunningNoTray': 'يؤدي إغلاق النافذة إلى تصغير GAIA مع إبقاء نموذجك محمّلًا. انقر GAIA في شريط التطبيقات أو في عرض «الأنشطة» لإظهاره، وللخروج انقر عليه بزر الفأرة الأيمن واختر «إنهاء».',
     'settings.desktop.startOnLogin': 'تشغيل GAIA عند تسجيل الدخول',
     'settings.desktop.startOnLoginHint': 'تبدأ أول محادثة في يومك دون انتظار فتح GAIA.',
     'settings.desktop.startMinimized': 'البدء في {tray}',
@@ -2658,6 +2661,11 @@ const messages: Messages = {
     'resources.error': 'تعذّرت قراءة استخدام هذا الجهاز. جارٍ إعادة المحاولة…',
     'resources.settings': 'إظهار استخدام الموارد في المحادثات',
     'resources.settingsHint': 'حمل المعالج والذاكرة وGPU وNPU والشبكة على هذا الجهاز، يُحدَّث كل ثانية.',
+    'errorBoundary.title': 'حدث خطأ ما',
+    'errorBoundary.body': 'واجه هذا الجزء من GAIA خطأً. بقية التطبيق لا تزال تعمل.',
+    'errorBoundary.bodyWindow': 'واجه GAIA خطأً. أعد التحميل للمتابعة.',
+    'errorBoundary.retry': 'إعادة المحاولة',
+    'errorBoundary.reload': 'إعادة التحميل',
 };
 
 export const ar: Locale = {

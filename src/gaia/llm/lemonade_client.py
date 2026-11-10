@@ -3206,6 +3206,23 @@ def catalog_context_window(entry: Dict[str, Any]) -> Optional[int]:
     return positive(entry.get("context_length"))
 
 
+def _json_type_name(value: Any) -> str:
+    """The JSON name for a decoded value's type, e.g. ``array`` for a list."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
 def record_cloud_models(models_payload: Optional[Dict[str, Any]]) -> None:
     """Remember which ids in a ``/api/v1/models`` payload are cloud-routed.
 
@@ -5321,7 +5338,10 @@ class LemonadeClient:
             LemonadeClientError: If the health check fails
         """
         for entry in self.health_check().get("all_models_loaded", []):
-            if not _model_ids_match(entry.get("model_name"), model_name):
+            if not (
+                _model_ids_match(entry.get("model_name"), model_name)
+                or _model_ids_match(entry.get("id"), model_name)
+            ):
                 continue
             launch = entry.get("launch_command") or []
             args = (entry.get("recipe_options") or {}).get("llamacpp_args") or ""
@@ -7614,11 +7634,50 @@ class LemonadeClient:
         if show_all:
             url += "?show_all=true"
         catalog = self._send_request("get", url, timeout=timeout)
-        for entry in catalog.get("data", []):
-            if entry.get("id"):
-                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+        self._check_model_list_shape(catalog)
+        self.remember_model_metadata(catalog["data"])
         record_cloud_models(catalog)
         return catalog
+
+    def remember_model_metadata(self, entries: Iterable[Dict[str, Any]]) -> None:
+        """Cache ``/models`` entries already read, exactly as ``list_models`` does.
+
+        Lets ``cloud_model_provider`` name a runtime-discovered provider for these
+        ids without reading the catalog again.
+        """
+        for entry in entries:
+            if entry.get("id"):
+                self._model_metadata.setdefault(entry["id"], {}).update(entry)
+
+    def _check_model_list_shape(self, catalog: Any) -> None:
+        """Raise ``LemonadeClientError`` unless *catalog* is ``{"data": [{...}]}``."""
+        if not isinstance(catalog, dict):
+            got = f"a JSON {_json_type_name(catalog)}"
+        elif not isinstance(catalog.get("data"), list):
+            got = (
+                f"'data' as a JSON {_json_type_name(catalog['data'])}"
+                if "data" in catalog
+                else "an object with no 'data' field"
+            )
+        else:
+            bad = next(
+                (
+                    (i, e)
+                    for i, e in enumerate(catalog["data"])
+                    if not isinstance(e, dict)
+                ),
+                None,
+            )
+            if bad is None:
+                return
+            got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
+        raise LemonadeClientError(
+            f"The model list{self._from_server()} isn't in the expected shape: "
+            f"expected an object whose 'data' is a list of model objects, got "
+            f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
+            "that it is up to date; see "
+            "https://amd-gaia.ai/docs/reference/troubleshooting"
+        )
 
     def cloud_model_provider(self, model: str) -> Optional[str]:
         """Return the provider for a built-in or previously discovered cloud model.
@@ -10705,7 +10764,7 @@ def initialize_lemonade(
         # Initialize for chat agent
         status = initialize_lemonade(agent="chat")
 
-        # Initialize for code agent with larger context
+        # Initialize with a larger context window
         status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
     # Named host/port win; otherwise LEMONADE_BASE_URL, which this defaulted
@@ -10720,23 +10779,3 @@ def initialize_lemonade(
         verbose=verbose,
         quiet=quiet,
     )
-
-
-def print_agent_profiles():
-    """Print all available agent profiles and their requirements."""
-    print("\n📋 Available Agent Profiles:\n")
-    print(f"{'Agent':<12} {'Display Name':<20} {'Context Size':<15} {'Models'}")
-    print("-" * 80)
-
-    for name, profile in AGENT_PROFILES.items():
-        models = ", ".join(profile.models) if profile.models else "None"
-        print(
-            f"{name:<12} {profile.display_name:<20} {profile.min_ctx_size:<15} {models}"
-        )
-
-    print("\n📦 Available Models:\n")
-    print(f"{'Key':<20} {'Model ID':<40} {'Type'}")
-    print("-" * 80)
-
-    for key, model in MODELS.items():
-        print(f"{key:<20} {model.model_id:<40} {model.model_type.value}")

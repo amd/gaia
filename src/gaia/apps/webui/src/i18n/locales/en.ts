@@ -753,6 +753,9 @@ export const enMessages = {
     'prompt.title.tool': 'Allow {tool}?',
     'prompt.title.toolId': 'Allow GAIA to use {tool}?',
     'prompt.needsOk': 'GAIA needs your OK before {tool}.',
+    'prompt.trust.title': "Trust this folder's instructions and skills?",
+    'prompt.trust.ask': "GAIA would put this folder's CLAUDE.md, AGENTS.md and skills in the model's prompt, now and every time you work in it.",
+    'prompt.trust.allow': 'Trust this folder',
     'prompt.path.title.file': 'Let GAIA use this file?',
     'prompt.path.title.folder': 'Let GAIA use this folder?',
     'prompt.path.title.location': 'Let GAIA use this location?',
@@ -1871,7 +1874,7 @@ export const enMessages = {
     'settings.desktop.menuBar': 'menu bar',
     'settings.desktop.keepRunning': 'Keep running when the window closes',
     'settings.desktop.keepRunningHint': 'GAIA stays in the {tray} with your model loaded. Quit from the {tray} menu.',
-    'settings.desktop.keepRunningNoTray': 'Closing the window minimizes GAIA with your model loaded. Click GAIA in the dock to bring it back; to quit, right-click it there and choose Quit.',
+    'settings.desktop.keepRunningNoTray': 'Closing the window minimizes GAIA with your model loaded. Click GAIA in your dock or the Activities overview to bring it back; to quit, right-click it there and choose Quit.',
     'settings.desktop.startOnLogin': 'Start GAIA when you sign in',
     'settings.desktop.startOnLoginHint': 'Your first chat of the day starts without waiting for GAIA to open.',
     'settings.desktop.startMinimized': 'Start in the {tray}',
@@ -2658,6 +2661,11 @@ export const enMessages = {
     'resources.error': "Can't read this PC's usage. Trying again…",
     'resources.settings': 'Show resource usage in chats',
     'resources.settingsHint': 'CPU, memory, GPU, NPU and network use on this PC, updated every second.',
+    'errorBoundary.title': 'Something went wrong',
+    'errorBoundary.body': 'This part of GAIA hit an error. The rest of the app still works.',
+    'errorBoundary.bodyWindow': 'GAIA hit an error. Reload to continue.',
+    'errorBoundary.retry': 'Try again',
+    'errorBoundary.reload': 'Reload',
 } as const;
 
 export const en: Locale = {

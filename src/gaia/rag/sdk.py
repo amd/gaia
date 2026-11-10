@@ -1823,8 +1823,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
@@ -3631,7 +3631,13 @@ These positions indicate where to split the text."""
         wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
-        Reindex a document (remove old chunks and add new ones).
+        Re-index a document that may have changed on disk.
+
+        Same path as :meth:`index_document` on an edited file: the new
+        version is extracted and embedded without the index lock, so searches
+        keep answering from the old version until it is swapped in. If the
+        re-index fails, the old version stays indexed. Unchanged bytes are not
+        re-embedded; the result then has ``already_indexed: True``.
 
         Args:
             file_path: Path to document to reindex
@@ -3641,63 +3647,14 @@ These positions indicate where to split the text."""
         Returns:
             Dict with indexing results and statistics (same as index_document)
         """
-        file_path = str(Path(file_path).absolute())
-        with self._state_lock:
-            previous_state = {
-                name: getattr(self, name).copy()
-                for name in (
-                    "chunks",
-                    "indexed_files",
-                    "chunk_to_file",
-                    "file_to_chunk_indices",
-                    "file_indices",
-                    "file_embeddings",
-                    "file_metadata",
-                    "file_access_times",
-                    "file_index_times",
-                    "file_content_keys",
-                    "file_stat_keys",
-                )
-            }
-            previous_state.update(
-                index=self.index, _access_counter=self._access_counter
-            )
-            # Keep remove+reindex under the same lock so readers never observe a
-            # gap where the document disappeared between generations. Query
-            # paths snapshot state quickly under this same lock and then do the
-            # expensive work outside it.
-            # Remove old version if it exists
-            if file_path in self.indexed_files:
-                self.log.info(f"Removing old version of {file_path}")
-                if not self.remove_document(file_path):
-                    return {
-                        "success": False,
-                        "error": "Failed to remove old version",
-                        "file_name": Path(file_path).name,
-                    }
-
-            # Index the new version
-            self.log.info(f"Indexing new version of {file_path}")
-            succeeded = False
-            result = None
-            try:
-                result = self.index_document(
-                    file_path,
-                    progress_callback=progress_callback,
-                    wait_callback=wait_callback,
-                )
-                succeeded = bool(result.get("success"))
-                if succeeded:
-                    result["reindexed"] = True
-                return result
-            finally:
-                if not succeeded:
-                    # Removal builds a fresh index, so the old generation is intact.
-                    for name, value in previous_state.items():
-                        setattr(self, name, value)
-                    if result is not None:
-                        result["total_indexed_files"] = len(self.indexed_files)
-                        result["total_chunks"] = len(self.chunks)
+        result = self.index_document(
+            file_path,
+            progress_callback=progress_callback,
+            wait_callback=wait_callback,
+        )
+        if result.get("success") and not result.get("already_indexed"):
+            result["reindexed"] = True
+        return result
 
     def is_current(self, file_path: str) -> bool:
         """Whether *file_path* is indexed from the bytes it holds now.
@@ -3869,28 +3826,34 @@ These positions indicate where to split the text."""
         )
         return chunks_ok and files_ok, evicted_files
 
-    def _has_indexing_capacity(self) -> bool:
+    def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
 
         This is a read-only check — it does not evict. When eviction is
         enabled, capacity is available if there is at least one document
         that could be evicted. When disabled, capacity requires being
-        under the limits.
+        under the limits. *replacing* names an indexed file about to be
+        swapped out, so its current generation is not counted.
         """
+        num_files = len(self.indexed_files)
+        num_chunks = len(self.chunks)
+        if replacing is not None and replacing in self.indexed_files:
+            num_files -= 1
+            num_chunks -= len(self.file_to_chunk_indices.get(replacing, []))
         files_at_limit = (
             self.config.max_indexed_files > 0
-            and len(self.indexed_files) >= self.config.max_indexed_files
+            and num_files >= self.config.max_indexed_files
         )
         chunks_at_limit = (
             self.config.max_total_chunks > 0
-            and len(self.chunks) >= self.config.max_total_chunks
+            and num_chunks >= self.config.max_total_chunks
         )
 
         if not files_at_limit and not chunks_at_limit:
             return True  # Under both limits
 
         # At limit — can we evict to make room?
-        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+        if self.config.enable_lru_eviction and num_files > 0:
             return True  # Eviction can free space (post-index)
 
         # At limit with no eviction possible
@@ -4159,13 +4122,10 @@ These positions indicate where to split the text."""
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
                         return stats
-                    if not self._drop_other_generation(file_path, stats):
-                        return stats
-
                     # Re-check capacity under the lock because another writer
                     # may have indexed or evicted documents while we were
                     # loading this cache entry from disk.
-                    if not self._has_indexing_capacity():
+                    if not self._has_indexing_capacity(replacing=file_path):
                         msg = (
                             f"Memory limit reached: {len(self.indexed_files)} files "
                             f"(max: {self.config.max_indexed_files}), "
@@ -4178,6 +4138,12 @@ These positions indicate where to split the text."""
                             print(f"❌ {msg}")
                         stats["error"] = msg
                         stats["memory_limit_reached"] = True
+                        return stats
+
+                    # Everything that can fail runs before the old generation
+                    # is dropped, so a failed re-index keeps serving it.
+                    file_index = self._create_faiss_index(file_embeddings)
+                    if not self._drop_other_generation(file_path, stats):
                         return stats
 
                     if self.index is None:
@@ -4201,8 +4167,6 @@ These positions indicate where to split the text."""
                             print(
                                 f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
-
-                    file_index = self._create_faiss_index(file_embeddings)
 
                     if self.index is None:
                         self.index = new_index
@@ -4341,14 +4305,11 @@ These positions indicate where to split the text."""
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     return stats
-                if not self._drop_other_generation(file_path, stats):
-                    return stats
-
                 # This second capacity check is intentional: the optimistic
                 # pre-flight above avoids expensive extraction work, while this
                 # locked check protects against TOCTOU drift after extraction
                 # and chunking finish.
-                if not self._has_indexing_capacity():
+                if not self._has_indexing_capacity(replacing=file_path):
                     msg = (
                         f"Memory limit reached: {len(self.indexed_files)} files "
                         f"(max: {self.config.max_indexed_files}), "
@@ -4361,6 +4322,29 @@ These positions indicate where to split the text."""
                         print(f"❌ {msg}")
                     stats["error"] = msg
                     stats["memory_limit_reached"] = True
+                    return stats
+
+                # Everything that can fail runs before the old generation
+                # is dropped, so a failed re-index keeps serving it.
+                if self.config.show_stats:
+                    print("🔍 Building per-file search index...")
+
+                file_index = self._create_faiss_index(file_embeddings)
+
+                # Persist before publishing any searchable state or ownership maps.
+                if self.config.show_stats:
+                    print("💾 Caching processed chunks...")
+                cache_data = {
+                    "chunks": new_chunks,
+                    "full_text": text,
+                    "metadata": file_metadata,
+                }
+                self._save_cache(cache_path, cache_data)
+                self._save_extracted_markdown(
+                    file_path, text, file_metadata, content_key
+                )
+
+                if not self._drop_other_generation(file_path, stats):
                     return stats
 
                 if self.index is None:
@@ -4385,24 +4369,6 @@ These positions indicate where to split the text."""
                         print(
                             f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
-
-                if self.config.show_stats:
-                    print("🔍 Building per-file search index...")
-
-                file_index = self._create_faiss_index(file_embeddings)
-
-                # Persist before publishing any searchable state or ownership maps.
-                if self.config.show_stats:
-                    print("💾 Caching processed chunks...")
-                cache_data = {
-                    "chunks": new_chunks,
-                    "full_text": text,
-                    "metadata": file_metadata,
-                }
-                self._save_cache(cache_path, cache_data)
-                self._save_extracted_markdown(
-                    file_path, text, file_metadata, content_key
-                )
 
                 if self.index is None:
                     self.index = new_index

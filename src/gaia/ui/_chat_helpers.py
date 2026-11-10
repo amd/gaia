@@ -1323,6 +1323,45 @@ def _ui_cloud_provider(model_id: str) -> str | None:
     return cloud_model_provider(model_id, metadata)
 
 
+def _runs_on_this_pc(model_id: Optional[str]) -> bool:
+    """True only when *model_id* is confirmed to run locally; for data that stays here.
+
+    A model GAIA declares in ``MODELS`` (exact id) is local without a network
+    call. Every other id must pass the Local only rule: each catalog entry it
+    names has a known local recipe, so an unlisted id, a ``collection.*`` router
+    or an id also listed as cloud all count as leaving the PC.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
+    """
+    from gaia.llm.lemonade_client import MODELS, LemonadeClient, LemonadeClientError
+    from gaia.llm.local_only import recipes_confirm_local, recipes_in_catalog
+
+    model_id = (model_id or "").strip()
+    if not model_id or model_id.lower().startswith("claude"):
+        return False
+    if _ui_cloud_provider(model_id):
+        return False
+    if any(req.model_id == model_id for req in MODELS.values()):
+        return True
+
+    def fetch_catalog() -> dict:
+        catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+        data = catalog.get("data") if isinstance(catalog, dict) else None
+        if not isinstance(data, list) or not all(isinstance(e, dict) for e in data):
+            raise LemonadeClientError(
+                "Lemonade's model list came back in an unexpected shape, so GAIA "
+                f"can't confirm '{model_id}' runs on this PC. Restart Lemonade in "
+                "Settings > Setup and try again."
+            )
+        return catalog
+
+    if not recipes_confirm_local(recipes_in_catalog(model_id, {}, fetch_catalog)):
+        return False
+    # Reading the catalog records the cloud ids it lists.
+    return not _ui_cloud_provider(model_id)
+
+
 def session_inference_location(
     session: dict, custom_model: str | None, registry=None
 ) -> InferenceLocation | None:
@@ -2559,10 +2598,10 @@ def _dispatch_sidecar_query(
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.config import GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
@@ -3415,6 +3454,7 @@ def _done_event(
     failed: bool = False,
     failure: Optional[str] = None,
     documents_added: Optional[list] = None,
+    library_notices: Optional[list[str]] = None,
 ) -> dict:
     """Build the closing ``done`` SSE payload for a persisted turn.
 
@@ -3438,6 +3478,8 @@ def _done_event(
         event["turn_summary"] = turn_summary
     if documents_added:
         event["documents_added"] = documents_added
+    if library_notices:
+        event["library_notices"] = library_notices
     return event
 
 
@@ -5157,7 +5199,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             db, request.session_id, sse_handler
         )
         if library_notices:
-            # One step: consecutive status steps overwrite each other in the chat.
+            # Live status makes the outcome visible before the turn closes; the
+            # same notices travel on `done` and the saved reply for reloads.
             notice = " ".join(library_notices)
             yield _sse({"type": "status", "status": "warning", "message": notice})
 
@@ -5291,6 +5334,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 inference_stats=inference_stats,
                 model_messages=model_messages,
                 turn_summary=turn_summary,
+                library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
             )
@@ -5326,6 +5370,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     else None
                 ),
                 documents_added=documents_added,
+                library_notices=library_notices,
             )
             done_data = json.dumps(done_event)
             yield f"data: {done_data}\n\n"
@@ -5393,6 +5438,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     agent_steps=steps_to_persist,
                     model_messages=result_holder.get("model_messages"),
                     turn_summary=turn_summary,
+                    library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
                 )
@@ -5403,6 +5449,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     turn_summary=turn_summary,
                     failed=failed,
                     documents_added=documents_added,
+                    library_notices=library_notices,
                 )
                 link_warning = (
                     turn_box["recording"].link_message(msg_id)

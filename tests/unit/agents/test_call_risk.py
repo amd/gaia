@@ -10,6 +10,7 @@ is wrong on the safe calls is the one people learn to ignore on the real ones.
 import pytest
 
 from gaia.agents.base.call_risk import call_risk, shell_command_risk
+from gaia.agents.base.command_facts import read_command
 
 
 @pytest.mark.parametrize(
@@ -62,6 +63,28 @@ def test_the_label_follows_the_command(command, risk):
 )
 def test_a_wrapper_takes_the_risk_of_what_it_runs(command):
     assert shell_command_risk(command) == "destructive"
+
+
+DISAGREEING_LINE = r"pytest \" ; curl x ; \""
+
+
+def test_an_unreadable_line_stays_opaque_for_the_risk_label():
+    # The risk label alone cannot show the guard working: `shell_command_risk`
+    # returns `execute` both for a command it read and for one it could not, so
+    # a label-only assertion would pass even with the guard removed. What
+    # distinguishes the safe outcome is that the line stays opaque rather than
+    # being split into segments by whichever shell read it as one command.
+    # `_risk_note` is not re-asserted here: it only raises the label to `write`,
+    # and `execute` already outranks that, so the result cannot change.
+    assert read_command(DISAGREEING_LINE).opaque is True
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["run_shell_command", "run_cli_command", "wait_for_condition"],
+)
+def test_no_shell_tool_labels_an_unreadable_line_by_one_reading(tool):
+    assert call_risk(tool, {"command": DISAGREEING_LINE}) == "execute"
 
 
 def test_tools_without_a_command_are_labelled_by_kind():

@@ -4,6 +4,7 @@
 
 import errno
 import os
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -188,6 +189,183 @@ def test_locked_indexed_document_reports_the_lock_and_keeps_its_index(
     assert result["error_type"] == "file_locked"
     assert _served(sdk) == served
     assert str(doc.absolute()) in sdk.indexed_files
+
+
+# --- the file watcher's re-index (reindex_document) -----------------------
+
+
+def _block_embedding(sdk):
+    """Hold the next embed until ``release`` is set; ``building`` marks its start."""
+    building = threading.Event()
+    release = threading.Event()
+    real_encode = sdk._encode_texts
+
+    def encode(texts, **kwargs):
+        building.set()
+        assert release.wait(timeout=30), "the test never released the embed"
+        return real_encode(texts, **kwargs)
+
+    sdk._encode_texts = encode
+    return building, release
+
+
+def test_watcher_reindex_does_not_block_document_queries(tmp_path, doc):
+    """A search answers from the old text while a large edit re-embeds (#6911)."""
+    sdk = _make(tmp_path)
+    sdk._encode_query = lambda _query: np.ones((1, 4), dtype="float32")
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW * 40, encoding="utf-8")
+    building, release = _block_embedding(sdk)
+    outcome = {}
+
+    def watcher():
+        outcome["result"] = sdk.reindex_document(str(doc))
+
+    def search():
+        outcome["chunks"], _ = sdk._retrieve_chunks("When is the launch?")
+        answered.set()
+
+    answered = threading.Event()
+    reindexing = threading.Thread(target=watcher)
+    reindexing.start()
+    try:
+        assert building.wait(timeout=10), "the re-embed never started"
+        threading.Thread(target=search, daemon=True).start()
+        searched_while_reindexing = answered.wait(timeout=10)
+    finally:
+        release.set()
+        reindexing.join(timeout=30)
+
+    assert searched_while_reindexing, "the search waited for the re-index"
+    assert outcome["chunks"] and all("Lisbon" in c for c in outcome["chunks"])
+    assert outcome["result"]["success"], outcome["result"]
+    assert outcome["result"]["reindexed"] is True
+    assert "Oslo" in _served(sdk)
+    assert "Lisbon" not in _served(sdk)
+
+
+def test_reindex_builds_without_holding_the_index_lock(tmp_path, doc):
+    """The old version stays served and the lock stays free mid-embed (#6911)."""
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW, encoding="utf-8")
+    building, release = _block_embedding(sdk)
+    outcome = {}
+
+    worker = threading.Thread(
+        target=lambda: outcome.update(result=sdk.reindex_document(str(doc)))
+    )
+    worker.start()
+    try:
+        assert building.wait(timeout=10), "the re-embed never started"
+        lock_free = sdk._state_lock.acquire(blocking=False)
+        if lock_free:
+            sdk._state_lock.release()
+        old_served = "Lisbon" in _served(sdk)
+    finally:
+        release.set()
+        worker.join(timeout=30)
+
+    assert outcome["result"]["success"], outcome
+    assert lock_free is True, "the index lock was held during the re-embed"
+    assert old_served is True
+    assert "Oslo" in _served(sdk)
+    assert "Lisbon" not in _served(sdk)
+
+
+def test_a_failed_reindex_keeps_documents_indexed_by_others(tmp_path, doc):
+    """A document indexed while a re-index builds survives that re-index failing."""
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW, encoding="utf-8")
+
+    other = tmp_path / "other.txt"
+    other.write_text("Another document entirely. " * 20, encoding="utf-8")
+    real_encode = sdk._encode_texts
+    state = {"indexed_other": False}
+
+    def encode(texts, **kwargs):
+        if not state["indexed_other"]:
+            state["indexed_other"] = True
+            assert sdk.index_document(str(other))["success"]
+            raise RuntimeError("embedder exploded")
+        return real_encode(texts, **kwargs)
+
+    sdk._encode_texts = encode
+    result = sdk.reindex_document(str(doc))
+
+    assert not result["success"], result
+    assert str(other) in sdk.indexed_files
+    assert "Another document entirely" in _served(sdk)
+    assert "Lisbon" in _served(sdk)
+    assert sdk.index.ntotal == len(sdk.chunks)
+
+
+def test_reindex_failure_restores_the_previous_state(tmp_path, doc):
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW, encoding="utf-8")
+
+    def boom(texts, **kwargs):
+        raise RuntimeError("embedder exploded")
+
+    sdk._encode_texts = boom
+    result = sdk.reindex_document(str(doc))
+
+    assert not result["success"], result
+    assert "Lisbon" in _served(sdk)
+    assert "Oslo" not in _served(sdk)
+    assert len(sdk.indexed_files) == 1
+
+
+@pytest.mark.parametrize("step", ["_save_cache", "_save_extracted_markdown"])
+def test_reindex_failing_at_publish_keeps_the_old_version(tmp_path, doc, step):
+    """Persisting the new version fails after the embed."""
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    doc.write_text(NEW, encoding="utf-8")
+
+    def fail(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    setattr(sdk, step, fail)
+    result = sdk.reindex_document(str(doc))
+
+    assert not result["success"], result
+    assert str(doc.absolute()) in sdk.indexed_files
+    assert "Lisbon" in _served(sdk)
+    assert "Oslo" not in _served(sdk)
+    assert sdk.index.ntotal == len(sdk.chunks)
+
+
+def test_reindex_at_the_memory_limit_replaces_in_place(tmp_path, doc):
+    """Replacing a file frees its own slot; it never trips the memory limit."""
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    sdk.config.enable_lru_eviction = False
+    sdk.config.max_indexed_files = 1
+    sdk.config.max_total_chunks = len(sdk.chunks)
+    doc.write_text(NEW, encoding="utf-8")
+
+    result = sdk.reindex_document(str(doc))
+
+    assert result["success"], result
+    assert "Oslo" in _served(sdk)
+    assert "Lisbon" not in _served(sdk)
+
+
+def test_reindex_of_a_touched_unchanged_file_does_not_reembed(tmp_path, doc):
+    sdk = _make(tmp_path)
+    assert sdk.index_document(str(doc))["success"]
+    encoded = sdk.encoded
+    os.utime(doc)
+
+    result = sdk.reindex_document(str(doc))
+
+    assert result["success"], result
+    assert result["already_indexed"] is True
+    assert "reindexed" not in result
+    assert sdk.encoded == encoded
 
 
 # --- the agent's index_document tool -------------------------------------

@@ -14,7 +14,7 @@
 # The Strix Point pool is shared with the RAG retrieval benchmark
 # (eval_retrieval.yml, up to 8 h), the RAG integration tests (test_rag.yml) and
 # the C++ integration tests (build_cpp.yml); the last two run on PRs, and the
-# email eval (test_email_agent_eval.yml) is disabled. Its jobs from 2026-10-05
+# email eval is gone. Its jobs from 2026-10-05
 # to 10-21 ran on six hosts, five of them on 10-21. Over that window no pool job
 # was running about 97% of the time, and the most at once was three.
 #

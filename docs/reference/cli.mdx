@@ -1867,7 +1867,7 @@ gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
 | `lemonade_env_url_ignored` | _(unset)_ | The `LEMONADE_BASE_URL` value GAIA's own server was chosen over in the Agent UI's setup. GAIA ignores that variable (and `LEMONADE_API_KEY`) while it still holds this value. `gaia config set lemonade_env_url_ignored ""` lets it apply again |
 | `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
-| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't). `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
+| `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't), after you trust the folder when asked. `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
@@ -2325,21 +2325,6 @@ gaia eval agent --iterations 5                     # Run each scenario 5 times f
 gaia eval agent --fix                              # Auto-fix failures with Claude Code
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
-
-Generate a report:
-```bash
-gaia report -d ./eval_results
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-d, --eval-dir` | `./output/evaluations` | Directory containing `.eval.json` files to analyze |
-| `-o, --output-file` | `LLM_Evaluation_Report.md` | Output filename for the markdown report |
-| `--summary-only` | off | Only display the summary on the console; don't save a report file |
-
-<Warning>
-  `gaia report` is registered but not currently dispatched ([#3488](https://github.com/amd/gaia/issues/3488)) — it prints top-level help and exits 0 instead of generating a report.
-</Warning>
 
 Visualize llama.cpp performance logs:
 ```bash
@@ -2819,13 +2804,14 @@ Skills are discovered from these roots, highest precedence first:
 <Tabs>
   <Tab title="list">
     ```bash
-    gaia skill list [--json] [--root ROOT]
+    gaia skill list [--json] [--root ROOT] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
     | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-project` \| `claude-import` |
+    | `--agent-dir DIR` | Also discover the skills an agent package bundles in `DIR/skills/`, as root `agent-bundled`. Repeatable. Exits `2` if `DIR/skills/` does not exist |
 
     ```
     NAME                         VERSION    TIER          ROOT           TOOLS
@@ -2838,13 +2824,14 @@ Skills are discovered from these roots, highest precedence first:
 
   <Tab title="info">
     ```bash
-    gaia skill info <name> [--json] [--body]
+    gaia skill info <name> [--json] [--body] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON (including the full frontmatter) instead of text |
     | `--body` | Also print the Markdown instructions |
+    | `--agent-dir DIR` | Also look in the skills an agent package bundles in `DIR/skills/`. Repeatable |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
   </Tab>

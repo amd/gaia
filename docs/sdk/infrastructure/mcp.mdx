@@ -136,7 +136,7 @@ claude mcp add gaia-code-index -- gaia mcp code-index --repo .
 |------|-----------|---------|
 | `search_code` | `query`, `scope` (`"all"` or `"code"`, default `"all"`), `top_k` (1-50, default 10) | Ranked chunks with `file_path`, `start_line`, `end_line`, `symbol_name`, `symbol_type`, `language`, `score`, `content` |
 | `get_index_status` | none | `indexed`, chunk and file counts, `embedding_model`, `rebuild_running`, and `progress` while a rebuild runs |
-| `rebuild_index` | `max_files` (default 5000), `model` (Lemonade embedding model) | `files_indexed`, `chunks_created`, `duration_seconds`, and `chunks_dropped` with a warning when some chunks failed to embed |
+| `rebuild_index` | `max_files` (default 5000), `model` (Lemonade embedding model) | `files_indexed`, `chunks_created`, `duration_seconds`; fails with the embedding error (model name and how to load it) if any batch can't be embedded |
 
 The first `rebuild_index` embeds every file and can take minutes on a large
 repository; later calls reuse unchanged files. Until an index exists,
