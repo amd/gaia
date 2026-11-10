@@ -21,11 +21,11 @@ import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
+from gaia.agents.base.command_wrappers import OFFLINE_WRAPPERS as _WRAPPERS
 from gaia.agents.base.denied_effects import (
     _ASSIGNMENT_RE,
     _SHELL_COMMAND_FLAGS,
     _SHELLS,
-    _WRAPPERS,
     NETWORK,
     _program,
     _split_segments,
