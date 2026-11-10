@@ -102,8 +102,7 @@ def _load_run_scorecard(run_dir: Path) -> dict:
         ):
             raise ValueError(
                 f"{path} is not a 'gaia eval agent' scorecard (missing "
-                f"'summary'/'scenarios'). Pass the run dir of an agent-eval "
-                f"run, not a 'gaia eval benchmark' output."
+                f"'summary'/'scenarios'). Pass the run dir of an agent-eval run."
             )
         cards.append(data)
     if len(cards) == 1:

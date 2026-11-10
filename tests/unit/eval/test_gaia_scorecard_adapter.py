@@ -167,7 +167,7 @@ class TestGenScorecardPayload:
             mod.build_payload(empty, **_BUILD_KWARGS)
 
     def test_benchmark_scorecard_rejected(self, tmp_path):
-        # A `gaia eval benchmark` output (scenarios but no summary) must not
+        # A file with scenarios but no summary must not
         # silently build a flagship card.
         mod = _load("gen_scorecard")
         run_dir = tmp_path / "run"
