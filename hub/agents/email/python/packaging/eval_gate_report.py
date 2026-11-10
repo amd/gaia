@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Email-triage eval gate-reader (report mode) — CI helper for test_email_agent_eval.yml.
+"""Email-triage eval gate-reader (report mode) — CI helper for the email eval.
 
 Reads the gate bars ONLY through the harness loaders (the single committed
 thresholds source under tests/fixtures/email/ — no thresholds inlined here),
