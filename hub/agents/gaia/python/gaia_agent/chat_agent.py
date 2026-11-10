@@ -1842,9 +1842,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         lacking = ["cloud storage", "file conversion", "live collaboration"]
         if not (self._offers_scheduling() or self._offers_calendar()):
             lacking.insert(0, "scheduling")
-        # The email tools only read mail, so sending stays unsupported either way.
+        # The core email tools only read; sending comes with the send-email skill.
         reads_email = bool(FEATURE_TOOLS["email"] & set(self._tools_registry))
-        lacking.insert(0, "sending email" if reads_email else "email")
+        if not reads_email:
+            lacking.insert(0, "email")
+        elif not self._offers_sending_email():
+            lacking.insert(0, "sending email")
         unsupported = f"**UNSUPPORTED:** {', '.join(lacking).capitalize()} — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md ."
         if "web_browse" in spec.tool_groups:
             unsupported += " Web browsing IS supported via `search_web` / `fetch_page` / `download_file`."
@@ -3366,6 +3369,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def _offers_calendar(self) -> bool:
         """This agent bundles the calendar skill and the model is offered it."""
         return self.BUNDLES_CALENDAR_SKILL and self.model_features.calendar
+
+    #: The send-email skill ships with this agent (GaiaAgent sets it).
+    BUNDLES_SEND_EMAIL_SKILL: ClassVar[bool] = False
+
+    def _offers_sending_email(self) -> bool:
+        """This agent bundles the send-email skill and the model is offered it."""
+        return self.BUNDLES_SEND_EMAIL_SKILL and self.model_features.email
 
     def _register_loop_control_tools(self) -> None:
         """Register set_loop_state and request_user_input tools for autonomous mode.

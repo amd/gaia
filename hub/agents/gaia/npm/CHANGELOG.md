@@ -8,6 +8,39 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+### Added
+
+- **The agent can draft, reply, forward and send mail.** A new bundled skill,
+  `send-email`, works on Gmail and Outlook through the mailbox the reading tools
+  use. The agent loads it when asked to send, reply to, forward or draft an
+  email, and its eight tools (`send-email/list_drafts`, `send-email/create_draft`,
+  `send-email/update_draft`, `send-email/discard_draft`, `send-email/send_draft`,
+  `send-email/send_now`, `send-email/reply_to_message`,
+  `send-email/forward_message`) join the tool list only then, so the registered
+  tool count stays 105 and a turn that only reads mail doesn't carry them. Gemma 4
+  E4B can't load it, as it isn't offered email. Each send shows the
+  account it goes out from, then the recipients, subject and body exactly as
+  they will go out, and needs a yes. If the connected mailbox changes while the
+  prompt waits, nothing is sent. A decline or timeout sends nothing, and a
+  failed send is reported, never retried:
+  `sent: false` means it didn't go, and `sent: "unknown"` means it may have, so
+  check Sent. A forward carries text only, and names the attachments it leaves out.
+  In the terminal, a long email must be scrolled to its end before `y` works.
+  Disguised subjects, addresses and display names are refused before the prompt.
+  Full access doesn't skip this: the prompt still appears where a person can
+  answer, and the send is refused where nobody can. Saving a new draft doesn't
+  ask, because nothing leaves the mailbox. Changing or deleting a saved draft
+  does, because it may be one the user wrote.
+- **New Google connections ask for `gmail.readonly` and `gmail.compose`, never
+  `gmail.modify`, and Microsoft for `Mail.ReadWrite` and `Mail.Send`.** A Google
+  connection made before this release holds only `gmail.readonly`: it keeps
+  reading, but drafting or sending on it returns an error naming `gmail.compose`
+  and saying to reconnect in Settings -> Connectors. A host app forwarding a
+  connection for `installed:gaia` now needs `gmail.readonly` and `gmail.compose`
+  in its consent.
+
+### Changed
+
 - **GAIA uses emoji only when there's feeling.** A plain question gets none.
   On Discord, the emoji becomes a reaction on your message, and replies there
   read like a person texting.

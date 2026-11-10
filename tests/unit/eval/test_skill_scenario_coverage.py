@@ -70,6 +70,10 @@ DEFERRED: dict[str, str] = {
         "the separate live Lemonade integration test covers the API path."
     ),
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
+    "send-email": (
+        "Every send needs a person to approve the exact message; the email eval "
+        "lane's fixture mailbox covers its tools once a scenario drives them."
+    ),
     "recommendations": "Subjective output; no stable rubric yet.",
     "research-report": "Requires live web search; non-deterministic ground truth.",
     "rss-digest": "Requires live feeds; non-deterministic ground truth.",
