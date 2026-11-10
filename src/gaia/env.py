@@ -201,7 +201,7 @@ def _configured_deny() -> set:
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
 
 
-def unfreeze_loader_paths(env: Dict[str, str], reset: bool = True) -> Dict[str, str]:
+def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
     """Give a child the library path the user had, not the frozen bundle's.
 
     PyInstaller on Linux points ``LD_LIBRARY_PATH`` at the bundle and keeps the
@@ -209,8 +209,6 @@ def unfreeze_loader_paths(env: Dict[str, str], reset: bool = True) -> Dict[str, 
     path (lemond, flm) loads its older libstdc++ and exits before it starts.
     Changes and returns *env*; a no-op unless frozen on Linux, and safe to
     repeat: a path that no longer starts with the bundle is the user's.
-    *reset* tells a PyInstaller binary the child runs to unpack its own bundle;
-    leave it off for a relaunch of this binary, which reuses ours for free.
     """
     if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
         return env
@@ -219,8 +217,32 @@ def unfreeze_loader_paths(env: Dict[str, str], reset: bool = True) -> Dict[str, 
         env["LD_LIBRARY_PATH"] = original
     elif _starts_with_bundle(env.get("LD_LIBRARY_PATH", "")):
         env.pop("LD_LIBRARY_PATH", None)
-    if reset:
-        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    # A PyInstaller binary the child runs must set up its own bundle: one that
+    # reuses ours expects our libraries on LD_LIBRARY_PATH.
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _reuse_this_bundle(env: Dict[str, str]) -> Dict[str, str]:
+    """*env* for a relaunch of this binary that reuses its unpacked bundle.
+
+    The relaunch skips setting up the bundle, so it finds its libraries only
+    through the path the bootloader gave this process: put the bundle back in
+    front of the user's path, as the bootloader does.
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if not (bundle and sys.platform.startswith("linux")):
+        return env
+    env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+    user = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if user is None:
+        current = env.get("LD_LIBRARY_PATH", "")
+        user = None if _starts_with_bundle(current) else (current or None)
+    if user is None:
+        env["LD_LIBRARY_PATH"] = bundle
+    else:
+        env["LD_LIBRARY_PATH"] = f"{bundle}:{user}"
+        env["LD_LIBRARY_PATH_ORIG"] = user
     return env
 
 
@@ -243,8 +265,8 @@ def child_env(
 
     A frozen build hands the user's library path, not its bundle's (see
     :func:`unfreeze_loader_paths`). *relaunch_self* is for a child that runs
-    ``sys.executable``: a one-file build then reuses this unpacked bundle
-    instead of extracting it again.
+    ``sys.executable``: it reuses this unpacked bundle, which a one-file build
+    would otherwise extract again (~25 s), so it gets the bundle's path.
     """
     blocked = _configured_deny() | {name.upper() for name in deny}
     env = {
@@ -252,9 +274,10 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
-    unfreeze_loader_paths(env, reset=not relaunch_self)
-    if relaunch_self:
-        env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+    if relaunch_self and getattr(sys, "frozen", False):
+        _reuse_this_bundle(env)
+    else:
+        unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
     return env

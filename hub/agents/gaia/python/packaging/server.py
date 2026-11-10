@@ -32,7 +32,6 @@ script itself, so such a pool fails rather than runs.
 from __future__ import annotations
 
 import multiprocessing
-import os
 import sys
 
 from gaia_agent.python_runner import dispatch as python_dispatch
@@ -40,10 +39,8 @@ from gaia_agent.python_runner import dispatch as python_dispatch
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.
     multiprocessing.freeze_support()
-    from gaia.env import unfreeze_loader_paths
-
-    # The loader read the bundle path at exec; children need the user's.
-    unfreeze_loader_paths(os.environ, reset=False)
+    # os.environ keeps the bundle's library path: this one-file binary's own
+    # relaunches reuse its bundle through it. Other programs get child_env().
     _python_exit = python_dispatch(sys.argv[1:])
     if _python_exit is not None:
         sys.exit(_python_exit)
