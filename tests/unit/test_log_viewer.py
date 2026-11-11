@@ -83,8 +83,10 @@ class TestRedact:
         # "lemonade" is the stock placeholder key; it is also in every path and module name.
         monkeypatch.setenv("SOME_LOCAL_API_KEY", "lemonade")
         monkeypatch.setenv("REAL_API_KEY", "fw_Abc123def456")
+        monkeypatch.setenv("SMTP_PASSWORD", "Sunshineforever")
         secrets = reader.env_secrets()
         assert "lemonade" not in secrets and "fw_Abc123def456" in secrets
+        assert "Sunshineforever" in secrets
         line = "gaia.daemon.lemonade_clients | C:/Users/a/.gaia/lemonade/lemond.log"
         assert reader.redact(line, ["lemonade"]) == line
         assert reader.redact_lines(line.encode(), ["lemonade"]) == line.encode()

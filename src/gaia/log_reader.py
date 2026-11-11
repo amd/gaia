@@ -153,13 +153,16 @@ def redact_lines(data: bytes, secrets: Iterable[str] = ()) -> bytes:
     return b"".join(out)
 
 
-def _is_secret_value(value: str) -> bool:
-    """False for a short value or a plain word such as the placeholder key "lemonade".
+#: Stock placeholder keys for local servers; each is also a word in paths and module names.
+_PLACEHOLDER_KEYS = frozenset({"lemonade", "ollama", "placeholder", "changeme"})
 
-    A word of letters only also sits in paths and module names; removing it
-    everywhere leaves a log nobody can read.
+
+def _is_secret_value(value: str) -> bool:
+    """False for a short value or a known placeholder key such as "lemonade".
+
+    Removing a placeholder everywhere leaves a log nobody can read.
     """
-    return len(value) >= 6 and not value.isalpha()
+    return len(value) >= 6 and value.lower() not in _PLACEHOLDER_KEYS
 
 
 def env_secrets() -> List[str]:
