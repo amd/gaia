@@ -172,12 +172,12 @@ export function yesOrNo(text: string): boolean | null {
     return null;
 }
 
-const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk|speak|listen)(ing)?\b|\bnot talking to you\b|\b(be|stay|keep) quiet\b|\bignore (us|me|this|that)\b|\bgo to sleep\b|\bstand ?by\b|\bavoid speaking\b/i;
+const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk|speak|listen)(ing)?\b|\bnot talking to you\b|\b(be|stay|keep) quiet\b|\bignore (us|me|this|that)\b|\bgo (?:back )?to sleep\b|\bstand ?by\b|\bavoid speaking\b|\bgood ?night\b|\bgood ?bye\b|\bthat'?s all(?: for now)?\b|\bwe'?re done\b/i;
 // Recognizers spell her name many ways, and sometimes fuse it with "hey" ("Hegaya").
 const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:he|hey)?(?:gaia|gaya|gaea|gaiya|gaija|kaia|kaya|guya|gyah?)\b[\s,.!?:-]*/i;
 
-/** How long after GAIA speaks a reply needs no "Hey GAIA". */
-export const FOLLOW_UP_MS = 20_000;
+/** A conversation stays open this long after GAIA last spoke; then she needs her name again. */
+export const FOLLOW_UP_MS = 60_000;
 
 function wakeWord(): boolean {
     return !!live?.status?.wake_word && !get().pushToTalk;
@@ -225,7 +225,7 @@ export function toggleMute(): void {
 
 /** Whether `text` asks GAIA to stay out of the conversation. */
 export function asksForQuiet(text: string): boolean {
-    return QUIET.test(text) && !NAME.test(text.replace(QUIET, ''));
+    return QUIET.test(text);
 }
 
 /** What follows GAIA's name (maybe nothing); null when she was not addressed. */
@@ -469,6 +469,18 @@ function onEvent(event: ServerEvent): void {
                 return;
             }
             let said = text;
+            if (asksForQuiet(text)) {
+                // "GAIA, go to sleep": back to waiting for her name, from any state.
+                addRow({ kind: 'user', text });
+                const already = get().standby;
+                standBy();
+                set({ phase: resting() });
+                if (!already) {
+                    note('voice.standbyOn');
+                    say('voice.standbyOn');
+                }
+                return;
+            }
             if (get().standby) {
                 // Asked to stay out of it: only her name brings her back.
                 const rest = afterName(text);
@@ -485,13 +497,6 @@ function onEvent(event: ServerEvent): void {
                     return;
                 }
                 said = rest;
-            } else if (asksForQuiet(text)) {
-                addRow({ kind: 'user', text });
-                standBy();
-                set({ phase: resting() });
-                note('voice.standbyOn');
-                say('voice.standbyOn');
-                return;
             }
             addRow({ kind: 'user', text: said });
             startTurn(said);

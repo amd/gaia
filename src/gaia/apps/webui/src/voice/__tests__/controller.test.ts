@@ -348,6 +348,18 @@ describe('voice mode turn loop', () => {
         expect(h.sendTurn).toHaveBeenCalledWith('Can you change your voice?', expect.anything());
     });
 
+    it('"GAIA, go to sleep" sends her back to waiting, and saying it twice changes nothing', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'Gaia, go to sleep.' });
+        expect(state().standby).toBe(true);
+        const spoken = socket().speak.mock.calls.length;
+        serve({ type: 'final', text: 'Hey GAIA, good night.' });
+        expect(state().standby).toBe(true);
+        expect(socket().speak.mock.calls.length).toBe(spoken);
+        expect(h.sendTurn).not.toHaveBeenCalled();
+    });
+
     it('her name alone wakes her and she says she is listening', async () => {
         const h = await open();
         serve({ type: 'ready', speech: true });
@@ -364,6 +376,9 @@ describe('voice mode turn loop', () => {
         expect(asksForQuiet('Stop listening.')).toBe(true);
         expect(asksForQuiet('Did Anna respond to my email?')).toBe(false);
         expect(asksForQuiet('Stop the music.')).toBe(false);
+        expect(asksForQuiet("Thanks GAIA, that's all for now.")).toBe(true);
+        expect(asksForQuiet('Go back to sleep.')).toBe(true);
+        expect(asksForQuiet('How do I get a good sleep?')).toBe(false);
         expect(afterName('okay Gaia, what time is it')).toBe('what time is it');
         expect(afterName('what a gala')).toBeNull();
         // How recognizers have actually written it.
