@@ -107,6 +107,28 @@ test("an entry another tool wrote for this AppImage stops GAIA writing a second"
   expect(fs.existsSync(theirs)).toBe(true);
 });
 
+test("the entry Gear Lever writes for this AppImage stops GAIA writing a second", () => {
+  // The second launcher rc15 and rc16 left behind.
+  expect(installAppImageLauncher(deps).status).toBe("written");
+  // Copied from Gear Lever on Fedora 44: Exec= starts with `env`, so only TryExec= names the file first.
+  const theirs = writeOther(
+    "gaia.desktop",
+    [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=GAIA",
+      `Icon=${path.join(home, "AppImages", ".icons", "gaia")}`,
+      `TryExec=${appImage}`,
+      `Exec=env DESKTOPINTEGRATION=1 ${appImage} --no-sandbox %U`,
+      "StartupWMClass=gaia-desktop",
+      "X-AppImage-Version=0.26.0-rc.16",
+      "",
+    ].join("\n")
+  );
+  expect(installAppImageLauncher(deps)).toEqual({ status: "kept-existing", entry: theirs });
+  expect(fs.existsSync(entryPath())).toBe(false);
+});
+
 test("a quoted, escaped Exec= or a TryExec= still matches this AppImage", () => {
   deps.env.APPIMAGE = path.join(home, "My Apps", "50% gaia.AppImage");
   writeOther("quoted.desktop", `[Desktop Entry]\nExec=${desktopExecArg(deps.env.APPIMAGE)} --flag\n`);
