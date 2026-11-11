@@ -5312,6 +5312,15 @@ def main():
         # An int is an exit status, never output to print.
         if isinstance(result, int):
             sys.exit(result)
+        if args.action == "prompt" and isinstance(result, dict):
+            # The answer already streamed to stdout; only end its line.
+            print()
+            stats = result.get("stats")
+            if stats:
+                print("\nStats:")
+                for key, value in stats.items():
+                    print(f"  {key}: {value}")
+            return
         if result:
             print(result)
         return
