@@ -10,6 +10,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, Info, Keyboard, List, Mic, MicOff, Pause, Square, Volume2, Wrench, X } from 'lucide-react';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useT } from '../../i18n/useT';
+import { VoiceQuickSettings } from './VoiceQuickSettings';
 import { useVoiceStore, type VoiceLogRow, type VoicePhase } from '../../stores/voiceStore';
 import {
     closeVoice, dismissPhoneNotice, holdEnd, holdStart, primaryAction, setCaptions, toggleMute, voiceLevels,
@@ -210,7 +211,7 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
                             <button
                                 type="button"
                                 className="vs-tbtn"
-                                aria-pressed={muted}
+                                aria-pressed={!muted}
                                 aria-label={t(muted ? 'voice.unmute' : 'voice.mute')}
                                 title={t(muted ? 'voice.unmute' : 'voice.mute')}
                                 disabled={failed}
@@ -220,6 +221,7 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
                             </button>
                         )}
                         {ccButton}
+                        <VoiceQuickSettings />
                         {!phone && (
                             <button type="button" className="vs-tbtn" onClick={closeVoice} aria-label={t('voice.close')} title={t.hint(t('voice.close'), 'Esc')}>
                                 <X size={16} />

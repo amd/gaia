@@ -234,6 +234,8 @@ export class SpeechPlayer {
     private node: AudioWorkletNode | null = null;
     private analyser: AnalyserNode;
     private gain: GainNode;
+    private volume = 1;
+    private ducked = false;
     private buf: Float32Array<ArrayBuffer>;
     private ready: Promise<void>;
     /** Samples pushed so far, at 24 kHz; the timeline caption highlights read against. */
@@ -265,7 +267,14 @@ export class SpeechPlayer {
 
     /** Lower the voice while a sound might be the user starting to talk. */
     duck(on: boolean): void {
-        this.gain.gain.setTargetAtTime(on ? 0.25 : 1, this.ctx.currentTime, 0.03);
+        this.ducked = on;
+        this.gain.gain.setTargetAtTime((on ? 0.25 : 1) * this.volume, this.ctx.currentTime, 0.03);
+    }
+
+    /** How loud GAIA speaks, 0 to 1. */
+    setVolume(volume: number): void {
+        this.volume = Math.min(1, Math.max(0, volume));
+        this.duck(this.ducked);
     }
 
     /** Whether speech is queued or playing. */

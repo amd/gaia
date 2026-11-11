@@ -721,3 +721,68 @@
     margin-block-start: 8px;
     border-radius: 10px;
 }
+
+/* The settings menu under the top bar's gear. */
+.vs-set {
+    position: relative;
+}
+
+.vs-set-panel {
+    position: absolute;
+    inset-block-start: 38px;
+    inset-inline-end: 0;
+    z-index: 5;
+    display: grid;
+    gap: 10px;
+    width: min(320px, calc(100vw - 32px));
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.vs-set-row {
+    display: grid;
+    grid-template-columns: 84px 1fr auto;
+    align-items: center;
+    gap: 10px;
+}
+
+.vs-set-row.is-check {
+    grid-template-columns: 1fr auto;
+}
+
+.vs-set-row select {
+    grid-column: 2 / -1;
+    min-width: 0;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: inherit;
+    font: inherit;
+}
+
+.vs-set-row input[type="range"] {
+    min-width: 0;
+}
+
+.vs-set-val {
+    min-width: 38px;
+    color: var(--text-secondary);
+    text-align: end;
+}
+
+.vs-set-note,
+.vs-set-error {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.vs-set-error {
+    color: var(--danger);
+}

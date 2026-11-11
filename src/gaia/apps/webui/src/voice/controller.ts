@@ -14,7 +14,7 @@
 import { toolRowText } from '../components/AgentActivity';
 import { getT, tEn } from '../i18n/useT';
 import { ApiError } from '../services/api';
-import { downloadVoiceModel, getVoiceStatus, type VoiceStatus } from '../services/voiceApi';
+import { downloadVoiceModel, getVoiceStatus, updateVoiceSettings, type VoiceStatus } from '../services/voiceApi';
 import { useChatStore } from '../stores/chatStore';
 import { useVoiceStore, VOICE_IDLE, type VoiceLogRow, type VoicePhase } from '../stores/voiceStore';
 import { log } from '../utils/logger';
@@ -601,6 +601,7 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
     player.onIdle = finishSpeakingIfDone;
+    player.setVolume(voiceVolume());
     let noticeSeen = true;
     try {
         noticeSeen = localStorage.getItem(PHONE_NOTICE_KEY) === '1';
@@ -709,6 +710,39 @@ export async function downloadModel(model: string): Promise<void> {
     set({ status });
     if (status.ready) retryVoice();
     else set({ error: failureFromStatus(status) });
+}
+
+const VOLUME_KEY = 'gaia:voice:volume';
+
+/** How loud GAIA speaks on this device, 0 to 1. */
+export function voiceVolume(): number {
+    try {
+        const saved = Number(localStorage.getItem(VOLUME_KEY) ?? '1');
+        return Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
+    } catch {
+        return 1; // storage blocked: full volume, not remembered
+    }
+}
+
+export function setVolume(volume: number): void {
+    live?.player.setVolume(volume);
+    try {
+        localStorage.setItem(VOLUME_KEY, String(volume));
+    } catch (err) {
+        log.ui.warn('Voice volume could not be remembered', err);
+    }
+}
+
+/** Turn waiting for "Hey GAIA" on or off, here and in Settings. */
+export function setWakeWord(on: boolean): void {
+    const me = live;
+    if (!me?.status) return;
+    updateVoiceSettings({ wake_word: on }).then((saved) => {
+        if (live !== me || !me.status) return;
+        me.status = { ...me.status, wake_word: saved.wake_word };
+        set({ status: me.status });
+        attend();
+    }, (err: unknown) => log.ui.warn('The wake word setting could not be saved', err));
 }
 
 export function setCaptions(on: boolean): void {

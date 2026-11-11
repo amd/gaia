@@ -163,3 +163,32 @@ async def test_speech_that_never_ends_reopens_the_recognizer(monkeypatch):
     await _until(lambda: "recovered" in kinds(events))
     assert len(made) == 2
     await session.close()
+
+
+async def test_a_voice_changed_mid_conversation_is_used_for_the_next_reply():
+    from test_voice_core import FakeSynth as Synth
+
+    chosen = {"voice": "af_bella", "speed": 1.0}
+    synth = Synth()
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    session = VoiceSession(
+        TARGET,
+        VoiceOptions(),
+        emit=emit,
+        sink=Sink(),
+        synthesizer=synth,
+        catalog=lambda: CATALOG,
+        listener_factory=lambda *_a, **_k: FakeListener("stalls"),
+        voice_settings=lambda: (chosen["voice"], chosen["speed"]),
+    )
+    await session.start()
+    chosen.update(voice="bm_george", speed=1.25)
+    await session.speak("How is this one?")
+    await session.speak_end()
+    await _until(lambda: "speaking_done" in kinds(events))
+    assert session.options.voice == "bm_george" and session.options.speed == 1.25
+    await session.close()
