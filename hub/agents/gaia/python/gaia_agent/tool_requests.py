@@ -44,16 +44,33 @@ _SHELL_ONLY_ANSWER = re.compile(
 # Spoken output: "read this aloud" shares no words with the tool's description, so
 # retrieval scored it under small talk.
 _SPEECH_NAMED = re.compile(
-    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
+    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech|narrate)\b",
+    re.IGNORECASE,
+)
+SPEECH_TOOLS = ("text_to_speech", "dictate_document")
+
+# A document turned into audio: "dictate this PDF", "make an audiobook of it".
+_DICTATION_NAMED = re.compile(
+    r"\bdictate\b|\baudio\s?books?\b"
+    r"|\b(?:in)?to\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\bas\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\b(?:audio|spoken)\s+version\b"
+    r"|\bread\s+\S+(?:\s+\S+){0,3}\s+to\s+me\b",
+    re.IGNORECASE,
+)
+# Audio that already exists is for the transcription tools, not for speech.
+_EXISTING_AUDIO = re.compile(
+    r"\b(?:video|recording|transcri\w+|podcast|song|music|meeting|voice\s?memo)\b",
+    re.IGNORECASE,
 )
 
 
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
-    Three signals: a registry tool name written out (``run_shell_command``), a
-    request that names the shell or can only be answered by it, and a request to
-    speak. Only names in *registry* are returned, so a profile without shell
+    Signals: a registry tool name written out (``run_shell_command``), a
+    request that names the shell or can only be answered by it, a request to
+    speak, and a request to turn a document into audio. Only names in *registry* are returned, so a profile without shell
     tools gets none.
     """
     names = set(registry)
@@ -69,10 +86,13 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         for name in SHELL_TOOLS:
             if name in names and name not in found:
                 found.append(name)
-    if (
-        _SPEECH_NAMED.search(user_input)
-        and "text_to_speech" in names
-        and "text_to_speech" not in found
-    ):
-        found.append("text_to_speech")
+    if _DICTATION_NAMED.search(user_input) and not _EXISTING_AUDIO.search(user_input):
+        wanted = SPEECH_TOOLS[::-1]
+    elif _SPEECH_NAMED.search(user_input):
+        wanted = SPEECH_TOOLS[:1]
+    else:
+        wanted = ()
+    for name in wanted:
+        if name in names and name not in found:
+            found.append(name)
     return found

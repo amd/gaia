@@ -14,6 +14,26 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Added
 
+- **The agent can turn a document into audio.** Ask it to dictate a PDF, Word,
+  Excel, text or Markdown file ("turn this PDF into audio", "read report.pdf to
+  me") and the new `dictate_document` tool records it with the local Kokoro
+  voice into an MP3 (or WAV), with a player in the Agent UI and the audio card in
+  the terminal app. It reads the document exactly as written, or rewrites tables,
+  charts, footnotes, web addresses and reference codes into spoken sentences;
+  `form="auto"` picks, and the result says which and why. A rewrite is saved next
+  to the audio as `<name>.script.md`. Long documents record piece by piece with
+  progress shown, one dictation covers about two hours of audio (120,000
+  characters), `pages="3-10"` picks PDF pages, and a longer document is refused
+  with the page range that fits. A scanned PDF without a text layer is refused.
+  English voices only; it never downloads the voice model mid-chat. A new bundled
+  skill, `dictation`, tells the agent when to ask and how to report; the
+  registered tool count goes from 105 to 106 and the tools gain a `speech` bundle
+  (`text_to_speech`, `dictate_document`) that `text_to_speech` moved into from
+  `desktop`.
+- **`text_to_speech` keeps a playable copy and can write MP3.** The audio now
+  always stays in GAIA's audio folder, so a player appears in the Agent UI even
+  when you save to your own folder, and `output_path` may end in `.mp3` as well
+  as `.wav`.
 - **The agent can draft, reply, forward and send mail.** A new bundled skill,
   `send-email`, works on Gmail and Outlook through the mailbox the reading tools
   use. The agent loads it when asked to send, reply to, forward or draft an

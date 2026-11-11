@@ -158,8 +158,16 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="desktop",
-        members=frozenset({"notify_desktop", "list_windows", "text_to_speech"}),
-        description="Desktop notifications, window listing, and text-to-speech.",
+        members=frozenset({"notify_desktop", "list_windows"}),
+        description="Desktop notifications and window listing.",
+    ),
+    ToolBundle(
+        name="speech",
+        members=frozenset({"text_to_speech", "dictate_document"}),
+        description=(
+            "Speak text or read a whole document aloud into an audio file "
+            "(text-to-speech, dictation, narration)."
+        ),
     ),
     ToolBundle(
         name="vision",
@@ -482,8 +490,16 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="desktop",
-        members=frozenset({"notify_desktop", "list_windows", "text_to_speech"}),
-        description="Desktop notifications, window listing, and text-to-speech.",
+        members=frozenset({"notify_desktop", "list_windows"}),
+        description="Desktop notifications and window listing.",
+    ),
+    ToolBundle(
+        name="speech",
+        members=frozenset({"text_to_speech", "dictate_document"}),
+        description=(
+            "Speak text or read a whole document aloud into an audio file "
+            "(text-to-speech, dictation, narration)."
+        ),
     ),
     ToolBundle(
         name="screenshot",

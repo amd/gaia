@@ -54,6 +54,10 @@ DEFERRED: dict[str, str] = {
     "check-in": "Scheduled-trigger skill; needs a clock fixture the runner lacks.",
     "coding": "Overlaps the code_index scenarios; needs its own corpus first.",
     "daily-brief": "Composes other skills; cover its parts before the composite.",
+    "dictation": (
+        "Needs the Kokoro voice on the runner and a listen-back check of the "
+        "audio; the text lanes can only judge whether the tool was called."
+    ),
     "github-triage": "Requires a live GitHub connector; not available in the lane.",
     "guides": (
         "The answer is a card the client draws; a skill scenario needs a judge "

@@ -38,6 +38,9 @@ SIDE_EFFECT_PATHS = {
     "export_transcript": ("export_path", "output_path"),
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
+    # Not script_path: the tool wrote the script from the document, and
+    # checking its figures against what the agent read would find no source.
+    "dictate_document": ("audio_path", "file_path"),
     "generate_image": ("file_path", "output_path", "image_path"),
     "generate_music": ("audio_path",),
     "generate_sound_effect": ("audio_path",),

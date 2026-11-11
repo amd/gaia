@@ -14,7 +14,6 @@ import re
 import shutil
 import sqlite3
 import threading
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set
@@ -60,7 +59,7 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import note_untracked
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
@@ -86,6 +85,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     BrowserToolsMixin,
     BrowserUseToolsMixin,
     CliSetupToolsMixin,
+    DictationToolsMixin,
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
@@ -557,6 +557,7 @@ class ChatAgent(
     AudioToolsMixin,
     AudioGenerationToolsMixin,
     WaitToolsMixin,
+    DictationToolsMixin,
     ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
@@ -3256,6 +3257,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         # ── TTS (voice output) ──────────────────────────────────────────────────
 
+        self.register_dictation_tools()
+
         @tool(timeout=900)
         def text_to_speech(
             text: str,
@@ -3263,17 +3266,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             voice: str = "",
             speed: Optional[float] = None,
         ) -> dict:
-            """Turn text into one WAV audio file with an installed local TTS model.
+            """Turn text into one audio file with an installed local TTS model.
 
-            Use this when the user asks to hear, narrate, or save text as audio.
-            It never downloads a model. Empty output_path writes a WAV to GAIA's
-            audio folder. Use a listed Kokoro voice; unknown voices are refused
-            before Lemonade can return a server error. Long text is split at
-            sentence boundaries and joined into one file.
+            Use when the user asks to hear, narrate or save text as audio; to
+            read a whole document aloud use dictate_document. Never downloads a
+            model. The audio is kept in GAIA's audio folder, where the app
+            plays it; output_path adds a copy where the user asked. Long text
+            is split at sentences and joined into one file.
 
             Args:
                 text: Text to speak.
-                output_path: Optional WAV destination. Empty uses GAIA's audio folder.
+                output_path: Optional destination ending in .wav or .mp3 (mp3
+                    is smaller). Empty saves a WAV in GAIA's audio folder only.
                 voice: Kokoro voice, such as af_bella, am_michael, bf_emma, or
                     bm_george. Omit to use the voice the user chose for
                     reading aloud.
@@ -3281,73 +3285,51 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     the user's chosen speed.
 
             Returns:
-                status, output_path, audio_path, duration_seconds, voice, model,
-                chunks.
+                status, audio_path (the app's copy), output_path,
+                duration_seconds, voice, model, chunks.
             """
-            import time
-
-            import gaia.config as gaia_config
+            from gaia.agents.tools.dictation_tools import (
+                CopyFailed,
+                copy_for_user,
+                format_of,
+                new_speech_file,
+                speech_settings,
+            )
             from gaia.audio.lemonade_tts import (
                 DEFAULT_TTS_MODEL,
-                DEFAULT_VOICE,
-                KOKORO_VOICES,
+                SPEECH_CHUNK_CHARS,
                 LemonadeTTSClient,
                 LemonadeTTSError,
-            )
-            from gaia.config import (
-                READ_ALOUD_MAX_SPEED,
-                READ_ALOUD_MIN_SPEED,
-                GaiaConfig,
-                GaiaConfigError,
+                _split_text,
             )
 
             # The same voice and speed the Agent UI and TUI read replies in.
             try:
-                saved = GaiaConfig.load()
-            except GaiaConfigError as exc:
+                voice, speed = speech_settings(voice, speed)
+            except ValueError as exc:
                 return {"status": "error", "error": str(exc)}
-            voice = voice or saved.read_aloud_voice or DEFAULT_VOICE
-            if speed is None:
-                speed = saved.read_aloud_speed / 100
-            if voice not in KOKORO_VOICES:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Unknown Kokoro voice '{voice}'. Choose one of: "
-                        f"{', '.join(KOKORO_VOICES)}."
-                    ),
-                }
-            low, high = READ_ALOUD_MIN_SPEED / 100, READ_ALOUD_MAX_SPEED / 100
-            if not low <= speed <= high:
-                return {
-                    "status": "error",
-                    "error": f"speed must be between {low} and {high}.",
-                }
             if not text or not text.strip():
                 return {"status": "error", "error": "text to speak must not be empty."}
-            if not output_path:
-                # Where the Agent UI serves inline audio from (gaia.ui.generated_media).
-                tts_dir = (
-                    Path(gaia_config.GAIA_CONFIG_DIR)
-                    / "cache"
-                    / "audio"
-                    / "generations"
-                )
-                tts_dir.mkdir(parents=True, exist_ok=True)
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                destination = tts_dir / f"speech_{ts}_{uuid.uuid4().hex[:10]}.wav"
-            else:
+            destination = None
+            audio_format = "wav"
+            if output_path:
                 destination = _workspace_target(self, output_path)
                 denied = write_access_error(self, destination)
                 if denied:
                     return denied
-            if destination.suffix.lower() != ".wav":
-                return {
-                    "status": "error",
-                    "error": "output_path must end in .wav for local speech output.",
-                }
+                audio_format = format_of(destination)
+                if audio_format is None:
+                    return {
+                        "status": "error",
+                        "error": "output_path must end in .wav or .mp3 for local "
+                        "speech output.",
+                    }
 
             model = DEFAULT_TTS_MODEL
+            # Recorded where the Agent UI serves inline audio from
+            # (gaia.ui.generated_media), then copied to where the user asked.
+            audio = new_speech_file("speech", audio_format)
+            pieces = _split_text(text.strip(), SPEECH_CHUNK_CHARS)
             try:
                 client = LemonadeTTSClient(
                     base_url=resolve_lemonade_base_url(
@@ -3356,26 +3338,31 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     model=model,
                 )
                 client.check_model_available()
-                before_change(destination, "text_to_speech")
-                duration, chunks = client.synthesize_to_wav_long(
-                    text, destination, voice=voice, speed=speed
+                duration = client.synthesize_file(
+                    pieces, audio, voice=voice, speed=speed, audio_format=audio_format
                 )
+                if destination is not None:
+                    copy_for_user(audio, destination, "text_to_speech")
+            except CopyFailed as exc:
+                return {"status": "error", "error": str(exc), "kept_at": str(audio)}
             except (ConnectionError, LemonadeTTSError, OSError, ValueError) as exc:
                 return {"status": "error", "error": str(exc)}
-            if not destination.is_file() or destination.stat().st_size == 0:
+            saved = destination or audio
+            if not saved.is_file() or saved.stat().st_size == 0:
                 return {
                     "status": "error",
-                    "error": f"Speech synthesis did not create a non-empty WAV at {destination}.",
+                    "error": f"Speech synthesis did not create a non-empty file at {saved}.",
                 }
             return {
                 "status": "success",
-                "output_path": str(destination),
-                "file_path": str(destination),
-                "audio_path": str(destination),
+                "output_path": str(saved),
+                "file_path": str(saved),
+                "audio_path": str(audio),
                 "duration_seconds": round(duration, 2),
+                "format": audio_format,
                 "voice": voice,
                 "model": model,
-                "chunks": chunks,
+                "chunks": len(pieces),
             }
 
         # Must run last so MCP tools don't bloat context before we know the base count.
@@ -3538,6 +3525,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - DictationToolsMixin (dictation_tools.py): dictate_document
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

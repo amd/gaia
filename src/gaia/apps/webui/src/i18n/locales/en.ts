@@ -312,6 +312,8 @@ export const enMessages = {
     'media.showFull': 'Show full size',
     'media.showSmaller': 'Show smaller',
     'media.audioUnplayable': "This audio can't be played. The file may have been moved or deleted.",
+    'media.savedTo': 'Saved to',
+    'media.listeningScript': 'Listening script:',
     // Recipe, workout and calculator cards
     'cards.tryGroup': 'Try an example',
     'cards.try': 'Try',

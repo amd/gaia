@@ -4,6 +4,7 @@
     "analyze_image",
     "answer_question_about_image",
     "check_cli_setup",
+    "dictate_document",
     "download_file",
     "fetch_page",
     "fetch_webpage",

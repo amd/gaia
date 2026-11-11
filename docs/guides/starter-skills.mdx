@@ -404,6 +404,21 @@ transcript, a structured list of what it contains, and answers about it.
 - **Configure** — an audio or video file, or a link such as YouTube. For meeting
   minutes use `transcribe-meeting`.
 
+### dictation
+
+Turns a document (PDF, Word, Excel, text or Markdown) into an MP3 you can
+listen to, read exactly as written or rewritten so tables, charts, footnotes and
+web addresses make sense by ear.
+
+- **Demonstrates** — a skill built around one tool that does the whole job, with
+  the skill deciding only when to ask and how to report the result.
+- **Consumes** — `dictate_document`, `text_to_speech`, `index_document`,
+  `dump_document`.
+- **Configure** — a document path or an attached file. The voice and speed are
+  the ones chosen for Read aloud, and the Kokoro voice model must be downloaded
+  (press Read aloud on any reply once, or `gaia download --agent talk`). See the
+  [dictation guide](/guides/dictation).
+
 ## Fork one
 
 This is the part that matters. Copying a skill and editing it is the whole

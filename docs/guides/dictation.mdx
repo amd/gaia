@@ -1,0 +1,146 @@
+---
+title: "Dictate a Document"
+description: "Turn a PDF, Word, Excel, text or Markdown file into an MP3 you can listen to, read exactly as written or rewritten so tables, charts and footnotes make sense by ear."
+icon: "headphones"
+---
+
+<Info>
+  **Source:** [`hub/skills/dictation/`](https://github.com/amd/gaia/tree/main/hub/skills/dictation) · [`src/gaia/agents/tools/dictation_tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/dictation_tools.py) · [`src/gaia/audio/dictation.py`](https://github.com/amd/gaia/blob/main/src/gaia/audio/dictation.py)
+</Info>
+
+You have a 40-page report and a commute. Give GAIA the file and say what you
+want in one sentence:
+
+```
+turn C:\reports\q3-review.pdf into audio
+```
+
+GAIA reads the whole document, records it with a voice that runs on your PC, and
+hands you an MP3 with a player in the chat. Nothing is uploaded: the voice runs
+in Lemonade Server. With a cloud chat model, the document's text goes to that
+provider only when GAIA rewrites it for listening (see [the two forms](#two-ways-to-read-it)).
+
+## What to say
+
+Any of these works:
+
+> *"Dictate this"*
+>
+> *"Read report.pdf to me"*
+>
+> *"Make an MP3 of this file"*
+>
+> *"Turn pages 3 to 10 of the PDF into audio, word for word"*
+
+In the [Agent UI](/guides/agent-ui), type the path or attach or drop the file on
+the composer, then ask. In the [terminal app](/guides/tui), type the path or drag
+the file in. No other setup is needed, and GAIA does not ask questions first
+unless the exact wording could matter (a contract, a medical text) and the
+document has tables or footnotes that a rewrite would change.
+
+## Formats
+
+| Document | Notes |
+|---|---|
+| PDF | Needs a text layer. A scan (pictures of pages) is refused, and GAIA offers to read it with the vision model first and dictate the text it finds |
+| Word `.docx` | |
+| Excel `.xlsx` | |
+| Text `.txt` and Markdown `.md` | |
+
+## Two ways to read it
+
+| Form | What you hear |
+|---|---|
+| **As written** | The author's exact words. Page marks, page numbers, line wraps and footnote marks are left out |
+| **Listening** | The chat model rewrites, part by part, whatever does not work by ear. Tables, charts and figures, footnotes, web and email addresses, and reference codes become spoken sentences |
+
+GAIA picks for you. By default it reads as written, and switches to listening
+only when the document has tables, charts, footnotes, web addresses or reference
+codes. The reply says which form it used and why. To choose yourself, say so:
+
+> *"Word for word"* or *"exactly as written"* reads as written.
+>
+> *"Make it easy to listen to"* rewrites for listening.
+
+A rewrite only knows what the document says about a chart (its title, caption
+and values), not what the picture shows.
+
+When GAIA rewrites, it saves the script next to the audio as `<name>.script.md`
+and tells you where it is, so you can read or correct exactly what was said.
+
+## Where the files go
+
+GAIA always keeps the recording in its own audio folder,
+`~/.gaia/cache/audio/generations/`, as `dictation_<document>_<time>_<id>.mp3`.
+That is what lets the Agent UI show a player in the chat.
+
+To get a copy somewhere else, name it:
+
+> *"Save it in my Documents folder"*
+>
+> *"Save it as C:\audio\q3-review.mp3"*
+
+The copy, and the script if there is one, go there too. In the Agent UI the card
+then shows **Saved to** with the path and **Listening script** with its path. The
+terminal app shows a card too, and **Ctrl+F** opens the audio in your PC's own
+player.
+
+## MP3 or WAV
+
+MP3 is the default. A 3-minute-16-second dictation came to 3.9 MB as an MP3 and
+about 9 MB as a WAV. Ask for WAV, or name a path ending in `.wav`, if you want
+that instead. GAIA encodes MP3 through Lemonade, so there is nothing else to
+install.
+
+## Long documents
+
+GAIA records piece by piece straight to disk and shows where it is, such as
+*Writing the listening script: part 2 of 7* and *Recording about 40 min of
+audio: part 12 of 60*. A long report takes several minutes. **Stop** cancels the
+dictation and saves nothing.
+
+One dictation covers about two hours of audio (120,000 characters of text). For
+a longer document GAIA tells you so, records the first page range that fits, and
+carries on with the next, so you end up with one file per range. You can also
+ask for a range yourself:
+
+> *"Dictate pages 1-60 of handbook.pdf"*
+
+## Change the voice, speed or a passage
+
+- **Voice and speed:** dictation uses what you chose under **Settings → Read
+  aloud** in the Agent UI, or `/voice` in the terminal app. Name another in your
+  request ("in the British male voice", "a bit faster") and GAIA records again with
+  that change. Speed runs from 0.5 to 2.0.
+- **A wrong passage:** ask for the fix ("it should say fifteen, not fifty"). GAIA
+  corrects that passage in the script and records the corrected text. Parts you did
+  not mention stay as they were.
+
+## How numbers and symbols are read
+
+So the voice says them clearly, GAIA spells things out before recording: `3.5`
+is "3 point 5", money with cents, version and section numbers are read as
+numbers, footnote marks are dropped, "e.g.", "i.e.", "p.", "No." and month
+abbreviations are said in full, `#123` is "number 123", and `https://` is left
+off a web address.
+
+## Limits and troubleshooting
+
+- **English voices only.** The Kokoro voices speak English, so another language is
+  read with an English accent. Other Lemonade speech models are not offered.
+- **Scanned PDFs** have no text to read. Let GAIA read the scan with the vision
+  model first; it then dictates the text it finds.
+- **"The voice model is not downloaded."** Dictation never downloads the voice in
+  the middle of a chat (~350 MB). Press **Read aloud** on any reply once in the Agent
+  UI, or run `gaia download --agent talk`, then ask again.
+- **Cannot reach Lemonade.** The app restarts the model server on its own; try again
+  in a moment.
+- **A rewrite stopped part-way** because the model ran out of room. Dictate the
+  document as written, or in smaller page ranges.
+
+## Related
+
+- [Reading replies aloud and the voice settings](/guides/agent-ui#settings)
+- [Voice interaction with `gaia talk`](/guides/talk)
+- [Transcription](/guides/transcription), the other direction: audio to text
+- [Starter skills: `dictation`](/guides/starter-skills#dictation)

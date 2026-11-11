@@ -81,3 +81,54 @@ def test_only_registered_tools_are_returned():
     """A profile without the shell tools gets no shell request."""
     assert requested_tools("run pwd in the shell", {"read_file"}) == []
     assert requested_tools("call delete_everything now", REGISTRY) == []
+
+
+SPEECH_REGISTRY = REGISTRY | {"text_to_speech", "dictate_document"}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Dictate this document",
+        "Turn this PDF into audio",
+        "read report.pdf to me",
+        "Make an audiobook of notes.md",
+        "Save it as an MP3",
+        "I'd like an audio version of the handbook",
+    ],
+)
+def test_a_document_asked_for_as_audio_gets_the_dictation_tool_first(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == [
+        "dictate_document",
+        "text_to_speech",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message", ["Read this aloud", "Say it out loud", "Narrate the story of the fox"]
+)
+def test_speaking_text_asks_for_text_to_speech_alone(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == ["text_to_speech"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Audio that already exists is the transcription tools' job.
+        "Listen to the recording and summarize it",
+        "Summarize the dictation transcript",
+        "Convert this video to audio",
+        "Save the transcript as an mp3",
+        "Transcribe this audio",
+        # Ordinary requests that share a word.
+        "I dictated notes yesterday",
+        "Convert it to PDF",
+        "Read the file",
+    ],
+)
+def test_requests_that_only_sound_like_speech_ask_for_nothing(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == []
+
+
+def test_speech_tools_are_only_offered_where_registered():
+    assert requested_tools("Dictate this document", REGISTRY) == []

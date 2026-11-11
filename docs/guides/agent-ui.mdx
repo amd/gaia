@@ -226,8 +226,11 @@ are exact even on a small local model.
 
 An image the agent generates shows in the answer; click it to see it full size.
 Music and sound effects it generates show a player with the file name and
-length (see [Local Music and Sound Effects](/guides/audio-generation)). Both
-still show when you reopen the chat. Only files GAIA saved in its own
+length (see [Local Music and Sound Effects](/guides/audio-generation)). So does
+speech the agent records: text it reads aloud, and a document it
+[dictates](/guides/dictation) into an MP3. When you ask for a copy in a folder
+of your own, the card also shows **Saved to** and, for a dictation rewritten for
+listening, **Listening script**. All of these still show when you reopen the chat. Only files GAIA saved in its own
 generation folders are shown this way. Speaking to GAIA through a microphone
 is not part of this; voice input is tracked in
 [#702](https://github.com/amd/gaia/issues/702).
@@ -928,8 +931,11 @@ speak English, so a reply in another language is read with an English accent.
 The first reading after a restart takes longer while Lemonade loads the voice.
 On a PC without the voice model, the first press downloads it once (~350 MB)
 and says so under the reply; reading starts when it finishes. (The agent's own
-`text_to_speech` tool never downloads it in the middle of a chat.)
-The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA when you ask it to save speech to a file.
+`text_to_speech` and `dictate_document` tools never download it in the middle of
+a chat; using Read aloud once is what makes them work.)
+The [terminal app](/guides/tui) uses the same voice and speed, and so does GAIA
+when you ask it to save speech to a file or to
+[dictate a document](/guides/dictation) into an MP3.
 
 **One chat at a time on the model.** A second chat sent while another is
 working waits its turn and says so ("Waiting for the GPU — 1st in line", also

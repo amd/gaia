@@ -100,6 +100,31 @@ describe('audio card', () => {
         expect(screen.queryByText(/Unsupported card type/)).toBeNull();
     });
 
+    it('plays an MP3 dictation and says where the copy and the script were saved', () => {
+        const { container } = render(
+            <RenderCard
+                render="audio"
+                data={{
+                    src: '/api/media/audio/dictation_report_1.mp3',
+                    path: 'C:\\Users\\u\\.gaia\\cache\\audio\\generations\\dictation_report_1.mp3',
+                    duration_seconds: 196.54,
+                    saved_to: 'C:\\Users\\u\\Documents\\report.mp3',
+                    script_path: 'C:\\Users\\u\\Documents\\report.script.md',
+                }}
+            />,
+        );
+        expect(container.querySelector('audio')?.getAttribute('src')).toBe('/api/media/audio/dictation_report_1.mp3');
+        expect(container.textContent).toContain('dictation_report_1.mp3 · 3:17');
+        const where = Array.from(container.querySelectorAll('.render-audio__where'));
+        expect(where.map((el) => el.textContent)).toEqual([
+            'Saved to C:\\Users\\u\\Documents\\report.mp3',
+            'Listening script: C:\\Users\\u\\Documents\\report.script.md',
+        ]);
+        // Paths stay left-to-right in an RTL chat, and are text: nothing here opens them.
+        expect(where.every((el) => el.querySelector('bdi[dir="ltr"]') !== null)).toBe(true);
+        expect(container.querySelector('.render-audio__where a')).toBeNull();
+    });
+
     it('renders with only a src', () => {
         const { container } = render(<RenderCard render="audio" data={{ src: '/api/media/audio/sfx.wav' }} />);
         expect(container.querySelector('audio')).not.toBeNull();
@@ -121,6 +146,8 @@ describe('audio card', () => {
         { src: '/api/media/audio/a.wav', duration_seconds: Number.NaN },
         { src: '/api/media/audio/a.wav', caption: 7 },
         { src: '/api/media/audio/a.wav', path: ['x'] },
+        { src: '/api/media/audio/a.mp3', saved_to: 7 },
+        { src: '/api/media/audio/a.mp3', script_path: {} },
     ])('rejects %j — no <audio>, invalid-payload fallback', (data) => {
         const { container } = render(<RenderCard render="audio" data={data} />);
         expect(container.querySelector('audio')).toBeNull();

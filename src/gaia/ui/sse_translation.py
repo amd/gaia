@@ -126,6 +126,11 @@ SUMMARY_VIEW_KEYS = (
     "file_path",
     "image_path",
     "audio_path",
+    # A recording's length, the user's copy and the listening script
+    # (``RESULT_AUDIO_KEYS`` in ``gaia.ui.sse_handler``).
+    "duration_seconds",
+    "saved_to",
+    "script_path",
     # How many chunks ``index_document`` stored, for the Document library.
     "num_chunks",
     # A ``search_web`` result's hits, so a relayed turn can cite them.

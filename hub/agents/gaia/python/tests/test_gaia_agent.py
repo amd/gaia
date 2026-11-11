@@ -215,6 +215,7 @@ CAPABILITIES = {
     "scratchpad (data-explore)": ("create_table", "list_tables"),
     "browser (research-report)": ("fetch_page", "fetch_webpage"),
     "file io (research-report)": ("read_file", "write_file"),
+    "speech (dictation)": ("dictate_document", "text_to_speech"),
     "audio generation (music-gen)": (
         "list_audio_generation_models",
         "generate_music",

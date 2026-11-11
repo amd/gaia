@@ -3285,6 +3285,17 @@ func (m ChatModel) phasePhrase() string {
 	return m.phase.label
 }
 
+// toolProgress is what the running tool last reported about itself: a phase
+// that is not one of the model's own, in the agent's words. "" when the tool
+// has said nothing.
+func (m ChatModel) toolProgress() string {
+	switch m.phase.name {
+	case "", "loading_model", "downloading_model", "reading", "loading_tools", "reasoning", "tool_call":
+		return ""
+	}
+	return m.phase.label
+}
+
 // renderLiveLine draws the one line that owns the spinner and the clock.
 func (m ChatModel) renderLiveLine(content string, elapsed time.Duration) string {
 	return "  " + m.spinner.View() + " " + thinkingStyle.Render(content) + "  " +
@@ -3423,7 +3434,13 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	// away two words per row of the longest lines in the log.
 	rows := wrapLog(clean(item.Content), suffix, width, headRows)
 	if live {
-		rows = wrapLogLead(clean(item.Content), suffix, width-elapsedReserve, width, headRows)
+		content := clean(item.Content)
+		// A long tool says where it is ("Recording part 12 of 60"); that is
+		// what is happening now, and the step's own row returns when it ends.
+		if progress := m.toolProgress(); progress != "" && item.Kind == "tool" {
+			content = progress
+		}
+		rows = wrapLogLead(content, suffix, width-elapsedReserve, width, headRows)
 	}
 
 	// Glyph and colour differ per kind; the wrap and the continuation indent do
