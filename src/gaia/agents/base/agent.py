@@ -703,7 +703,6 @@ class ToolExecutionTimeout(Exception):
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
-    "run_cli_command",
     # Installs software, and signs a CLI in to the user's account. Both mutate
     # the machine on the user's behalf, and neither can ever be pre-authorized:
     # the only grant that skips this gate covers ``run_shell_command`` reads
@@ -12562,7 +12561,6 @@ Do NOT wrap conversational replies in JSON.
                     _QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
-                        "query_indexed_documents",
                     )
                     if tool_name in _QUERY_TOOLS:
                         result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12845,7 +12843,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
-                    "query_indexed_documents",
                 )
                 if tool_name in _QUERY_TOOLS:
                     result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -13028,8 +13025,7 @@ Do NOT wrap conversational replies in JSON.
                 # This is a known failure pattern — the agent stops mid-workflow.
                 _INDEX_TOOLS = (
                     "index_document",
-                    "index_documents",
-                    "index_dir",
+                    "index_directory",
                     "index_folder",
                 )
                 _PLANNING_PHRASES = (
@@ -13067,7 +13063,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
-                    "query_indexed_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1

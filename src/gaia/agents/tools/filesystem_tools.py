@@ -746,10 +746,7 @@ class FileSystemToolsMixin:
 
                     elif ext == ".pdf":
                         try:
-                            try:
-                                import pypdf as _pdf
-                            except ImportError:
-                                import PyPDF2 as _pdf  # legacy fallback
+                            import pypdf as _pdf
 
                             with open(resolved, "rb") as f:
                                 reader = _pdf.PdfReader(f)
@@ -1905,18 +1902,10 @@ class FileSystemToolsMixin:
 
         def _read_pdf(path, mode):
             """Read PDF file."""
-            # Prefer ``pypdf`` (the modern maintained fork). Fall back to
-            # ``PyPDF2`` (deprecated legacy name) for older installs. The
-            # two share an identical API on the surface we use.
             try:
                 import pypdf as _pdf
             except ImportError:
-                try:
-                    import PyPDF2 as _pdf
-                except ImportError:
-                    return (
-                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
-                    )
+                return f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
 
             try:
                 with open(path, "rb") as f:

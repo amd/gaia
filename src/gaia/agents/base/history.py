@@ -632,7 +632,6 @@ DOCUMENT_TOOLS = frozenset(
         "summarize_document",
         "dump_document",
         "read_file",
-        "read_document",
     }
 )
 
