@@ -2184,7 +2184,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     — each `insight` event is a candidate fact awaiting approval. It runs on
     the machine's default local chat model (`default_model` in
     `~/.gaia/config.json`), never the chat's cloud model; a cloud
-    `default_model` ends the stream with an `error` event.
+    `default_model`, or a local one that isn't downloaded yet, ends the stream
+    with an `error` event rather than a download.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
