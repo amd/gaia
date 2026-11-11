@@ -1315,10 +1315,8 @@ class ChatAgent(
         # A dead embedder also means the full list, the one that slot holds.
         if not (self.tool_loader.jumped or self.tool_loader.session_disabled):
             return {}
-        client = getattr(getattr(self, "chat", None), "llm_client", None)
-        backend = getattr(client, "_backend", None)
-        slots = backend.slot_count(self.model_id) if backend is not None else 1
-        return {"id_slot": FULL_TOOLS_SLOT} if slots > FULL_TOOLS_SLOT else {}
+        # The provider drops the slot for a model that has too few.
+        return {"id_slot": FULL_TOOLS_SLOT}
 
     def _history_tool_schemas(self):
         """Budget history against the full list while the switch can still come.

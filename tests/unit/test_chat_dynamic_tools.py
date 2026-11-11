@@ -52,11 +52,6 @@ for _mod in _stubbed:
     sys.modules.pop(_mod, None)
 
 
-def _chat_with_slots(count):
-    backend = SimpleNamespace(slot_count=lambda _model: count)
-    return SimpleNamespace(llm_client=SimpleNamespace(_backend=backend))
-
-
 def _bare_agent(**attrs) -> ChatAgent:
     """A ChatAgent instance with only the attributes a method-under-test needs."""
     a = ChatAgent.__new__(ChatAgent)
@@ -66,7 +61,6 @@ def _bare_agent(**attrs) -> ChatAgent:
     a._memory_store = object()
     a._dynamic_tools_validated = False
     a.model_id = None
-    a.chat = _chat_with_slots(3)
     for k, v in attrs.items():
         setattr(a, k, v)
     return a
@@ -299,14 +293,6 @@ class TestSelectToolsForTurn:
         a = _selecting_agent(self.NAMES)
         assert a._select_tools_for_turn("call spare_tool now") == self.NAMES
         assert a._conversation_request_kwargs() == {"id_slot": FULL_TOOLS_SLOT}
-
-    @pytest.mark.parametrize("slots", [1, 2])
-    def test_a_model_without_the_third_slot_is_never_asked_for_it(self, slots):
-        a = _selecting_agent(self.NAMES)
-        a.chat = _chat_with_slots(slots)
-        a._select_tools_for_turn("call spare_tool now")
-        assert a.tool_loader.jumped is True
-        assert a._conversation_request_kwargs() == {}
 
     def test_asking_for_the_shell_jumps_only_when_the_shell_is_off_the_list(self):
         a = _selecting_agent(self.NAMES)
@@ -592,7 +578,6 @@ def searching():
         agent._tool_docs_sent = set()
         agent._tool_searches = 0
         agent._tool_notice_due = False
-        agent.chat = _chat_with_slots(3)
         agent._released_slots = set()
         agent._compose_system_prompt = lambda: "PROMPT"
         agent._active_tool_filter = None
