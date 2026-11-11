@@ -73,7 +73,11 @@ turn 3 accept an honest empty/unreadable result.
 `tests/fixtures/gaia/capture/` on
 **http://127.0.0.1:8765** (never port 4001) in CI; a local
 `util/run_eval_lane.py` run binds a free port and the runner rewrites the
-scenarios to it. All scenario URLs below assume that base URL; if the server picks a different default port, update the
+scenarios to it. Only the scenarios are rewritten, not what the server returns:
+links inside served feeds and pages (`rss/feed.xml`,
+`tiers_skills_web/feeds/*.xml`, `tiers_skills_web/web/companion_app.html`,
+`tiers_resilience/http/status_board_injected.html`) still name 8765, so on a
+local run a scenario that follows one of them reaches the wrong port. All scenario URLs below assume that base URL; if the server picks a different default port, update the
 `gaia_web`, `gaia_skills_lifecycle`, `gaia_skills_tasks`, and
 `gaia_skills_capture` scenarios together.
 
