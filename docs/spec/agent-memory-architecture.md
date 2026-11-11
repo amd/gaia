@@ -1869,25 +1869,10 @@ async def list_entities() -> List[Dict]:
 async def get_entity(entity: str) -> List[Dict]:
     """Get all knowledge linked to a specific entity."""
 
-# --- Contexts ---
-@router.get("/api/memory/contexts")
-async def list_contexts() -> List[Dict]:
-    """List all contexts with their knowledge counts.
-    Returns: [{"context": "work", "count": 68}, {"context": "personal", "count": 23}]"""
-
 # --- Tool Performance ---
 @router.get("/api/memory/tools")
 async def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
-
-@router.get("/api/memory/tools/{tool_name}/history")
-async def tool_history(tool_name: str, limit: int = 50) -> List[Dict]:
-    """Recent call history for a specific tool."""
-
-# --- Errors ---
-@router.get("/api/memory/errors")
-async def recent_errors(limit: int = 20) -> List[Dict]:
-    """Recent tool errors across all tools."""
 
 # --- Conversations ---
 @router.get("/api/memory/conversations")

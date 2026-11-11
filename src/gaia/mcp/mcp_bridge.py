@@ -179,8 +179,8 @@ class GAIAMCPBridge:
             "capabilities": ["query", "stream", "model_selection"],
         }
         self.agents["chat"] = {
-            "module": "gaia.chat.app",
-            "function": "main",
+            "module": "gaia.chat.sdk",
+            "class": "AgentSDK",
             "description": "Interactive chat",
             "capabilities": ["conversation", "history", "context_management"],
         }

@@ -20,7 +20,7 @@ func TestTheFlagshipShipsLaunchable(t *testing.T) {
 	if gaia == nil {
 		t.Fatalf("the seed catalog no longer has a %q entry", FlagshipID)
 	}
-	if !gaia.Status.IsLaunchable() {
+	if gaia.Status != StatusInstalled {
 		t.Errorf("the flagship ships as %s; it is what the TUI opens into", gaia.Status)
 	}
 	if gaia.Transport != TransportSubprocess {
@@ -60,7 +60,7 @@ func TestSetMockBinaryMakesTheSubprocessAgentLaunchable(t *testing.T) {
 	c.SetMockBinary("/tmp/mock-agent")
 
 	gaia := c.Get(FlagshipID)
-	if !gaia.Status.IsLaunchable() {
+	if gaia.Status != StatusInstalled {
 		t.Errorf("with --mock, the flagship is %s, want launchable", gaia.Status)
 	}
 	if gaia.BinaryPath != "/tmp/mock-agent" {

@@ -720,11 +720,11 @@ func TestSSEClientPushesHostOwnedTranscript(t *testing.T) {
 		t.Errorf("context[1] = %+v", q.Context[1])
 	}
 
-	if got := c.Transcript(); len(got) != 4 {
+	if got := c.transcriptSnapshot(); len(got) != 4 {
 		t.Errorf("transcript = %+v, want 4 entries after two turns", got)
 	}
 	c.ResetTranscript()
-	if got := c.Transcript(); len(got) != 0 {
+	if got := c.transcriptSnapshot(); len(got) != 0 {
 		t.Errorf("ResetTranscript left %+v", got)
 	}
 }
@@ -748,7 +748,7 @@ func TestSSEClientTranscriptFallsBackToStreamedTokens(t *testing.T) {
 	}
 	collect(t, ch)
 
-	tr := c.Transcript()
+	tr := c.transcriptSnapshot()
 	if len(tr) != 2 || tr[1].Content != "streamed answer" {
 		t.Fatalf("transcript = %+v", tr)
 	}
@@ -792,7 +792,7 @@ func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
 		t.Errorf("synthesized errors must be attributed to the tui, got %q", last.Source)
 	}
 	// A failed turn must not poison the next one's context.
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("a turn without `final` must not be appended to the transcript: %+v", tr)
 	}
 }
@@ -827,7 +827,7 @@ func TestSSEClientTerminalErrorEvent(t *testing.T) {
 	if last.Source != "" {
 		t.Errorf("a wire error must not be attributed to the tui, got %q", last.Source)
 	}
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("an errored turn must not be appended to the transcript: %+v", tr)
 	}
 }
@@ -1259,7 +1259,7 @@ func TestSSEClientCancelPostsToCancelEndpoint(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("a cancelled turn must not be appended to the transcript: %+v", tr)
 	}
 }

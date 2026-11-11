@@ -254,8 +254,7 @@ class TestCountTokens:
 # The judge's own sampling must be pinnable via a `temperature` constructor
 # kwarg, forwarded to every `messages.create` call site *only* when set —
 # leaving it unset must reproduce today's behavior exactly (no `temperature`
-# kwarg at all), since a non-judge caller (pdf_document_generator.py) relies
-# on the API default for fixture-generation diversity.
+# kwarg at all), so non-judge callers keep the API default.
 # ---------------------------------------------------------------------------
 
 

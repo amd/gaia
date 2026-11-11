@@ -255,11 +255,9 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
-            "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
             "pytest-xdist",
-            "pytest-rerunfailures",
             "pyfakefs",
             "matplotlib",
             "black",

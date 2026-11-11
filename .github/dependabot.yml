@@ -48,12 +48,7 @@ updates:
         patterns:
           - "*"
 
-  # Note: Electron framework (src/gaia/electron) is scanned via the root workspace
-  # configuration above, so no separate entry is needed.
-
   # JavaScript - Agent UI (flagship Electron + React + Vite app, published as @amd-gaia/agent-ui).
-  # The root workspace glob `src/gaia/apps/*/webui` does NOT match this path (it's `webui`
-  # directly under `apps/`, not under `apps/<name>/webui`), so it needs its own entry.
   - package-ecosystem: "npm"
     directory: "/src/gaia/apps/webui"
     schedule:
@@ -68,10 +63,6 @@ updates:
       agent-ui-dependencies:
         patterns:
           - "*"
-
-  # The example Electron app is a root workspace member (src/gaia/apps/*/webui).
-  # root-npm-dependencies owns that lockfile. A nested npm entry split upgrades
-  # across two red PRs (amd/gaia#3261).
 
   # JavaScript - standalone npm packages outside the root workspace: the
   # published flagship hub sidecar, the website, the docs proxy, the Cloudflare workers

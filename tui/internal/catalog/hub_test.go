@@ -275,7 +275,7 @@ func TestLoadInstalledAgentsReadsSentinels(t *testing.T) {
 	c.LoadInstalledAgents()
 
 	sidecar := c.Get("sidecar")
-	if sidecar == nil || !sidecar.Status.IsLaunchable() {
+	if sidecar == nil || sidecar.Status != StatusInstalled {
 		t.Fatalf("an installed sentinel did not make the agent launchable: %+v", sidecar)
 	}
 	if sidecar.InstalledVersion != "0.5.0" {

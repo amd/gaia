@@ -61,6 +61,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Tuple,
 )
 from uuid import uuid4
@@ -579,6 +580,77 @@ _STORAGE_REQUEST = re.compile(
     r"|log\s+(?:it|this|that)|add\b[^.?!]{0,40}\bmemory)\b",
     re.IGNORECASE,
 )
+#: The storage requests that mean "keep this in memory", not a file or a reminder.
+_KEEP_IN_MEMORY = re.compile(
+    r"remember|memori[sz]e|don'?t\s+forget"
+    r"|keep\s+(?:(?:it|this|that|them)\s+)?in\s+mind"
+    r"|(?:save|store|add)\b[^.?!\n]{0,40}\bmemory\b"
+    r"|make\s+a\s+note(?![^.?!\n]{0,60}?(?:\w\.[a-z0-9]{2,5}\b"
+    r"|\b(?:files?|readme|folder|document)\b))|learn\s+about\s+me",
+    re.IGNORECASE,
+)
+#: After the verb, what makes it a recall question ("remember what I said"), a
+#: reminder ("remember to call") or a login option ("remember me"), not a fact.
+_NOT_A_FACT = re.compile(
+    r"\s+(?:what|which|when|where|who|whom|whether|if|how|why|to|me)\b",
+    re.IGNORECASE,
+)
+#: How much of a paragraph is read for a request; a long paste is material.
+_REQUEST_SCAN_CHARS = 500
+#: Sent once when a turn that was asked to keep something ends without saving it.
+SAVE_WHEN_ASKED_PROMPT = (
+    "The user asked you to remember this, but no remember call ran, so nothing "
+    "was saved. Call `remember` now with what they asked you to keep, then give "
+    "your answer."
+)
+
+
+def _own_words(text: str) -> List[str]:
+    """The paragraphs where a user gives instructions: the first, and the last
+    unless the first introduces what follows ("Translate this letter:")."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) > 1:
+        introduces = paragraphs[0].endswith(":")
+        paragraphs = paragraphs[:1] if introduces else [paragraphs[0], paragraphs[-1]]
+    return [p[:_REQUEST_SCAN_CHARS] for p in paragraphs]
+
+
+_SENTENCE_END = re.compile(r"[.?!\n]|$")
+
+
+def _is_material(part: str, start: int) -> bool:
+    """True when the words at *start* are text the user is handing over, not
+    saying: after a colon ("Explain this quote: Remember that…") or in quotes."""
+    before = part[:start]
+    return (
+        part[start] == ":"
+        or before.count('"') % 2 == 1
+        or before.count("\N{LEFT DOUBLE QUOTATION MARK}")
+        > before.count("\N{RIGHT DOUBLE QUOTATION MARK}")
+    )
+
+
+def asks_to_keep_in_memory(text: str) -> bool:
+    """True when *text* asks the agent to remember something it says."""
+    for part in _own_words(text or ""):
+        for request in _STORAGE_REQUEST.finditer(part):
+            end = _SENTENCE_END.search(part, request.end())
+            verb = _KEEP_IN_MEMORY.search(part, request.start())
+            if (
+                verb
+                and verb.start() < request.end()
+                and not _is_material(part, request.start())
+                and not _NOT_A_FACT.match(part, verb.end())
+                # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
+                and (
+                    part[end.start() : end.end()] != "?"
+                    or re.match(r"\s+(?:that|this)\b", part[verb.end() :], re.I)
+                )
+            ):
+                return True
+    return False
+
+
 #: A short yes, which confirms a save the agent was refused and asked about.
 _AFFIRMATIVE = re.compile(
     r"^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please do|fine"
@@ -4566,6 +4638,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             cursor = end
         masked.append(text[cursor:])
         return "".join(masked)
+
+    def _unsaved_memory_request(self, tools_called: Set[str]) -> Optional[str]:
+        """The nudge to save, when the user asked to remember and nothing was saved."""
+        # A private chat saves nothing: remember would only refuse.
+        if getattr(self, "_incognito", False):
+            return None
+        # A scheduled or background prompt repeats: only a live request counts.
+        if getattr(getattr(self, "console", None), "background_mode", False):
+            return None
+        if "remember" not in getattr(self, "_tools_registry", {}):
+            return None
+        if tools_called & {"remember", "update_memory"}:
+            return None
+        text = getattr(self, "_original_user_input", None) or ""
+        if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
+            return None
+        return SAVE_WHEN_ASKED_PROMPT
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:

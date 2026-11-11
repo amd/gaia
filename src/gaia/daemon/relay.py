@@ -62,19 +62,14 @@ from gaia.daemon.sidecars.errors import (
     SidecarUnresponsiveError,
     UnknownAgentError,
 )
-from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
+from gaia.daemon.timeouts import agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 #: Connect timeout — a dead sidecar should fail fast on TCP connect.
 CONNECT_TIMEOUT = 10.0
-#: Read timeout between upstream chunks — spans a whole agent-loop step, so it
-#: matches the sidecar proxy's long per-request budget, not the connect one.
-# Compatibility alias for the historical floor; the request path resolves the
-# effective value with agent_read_timeout() so long-lived daemons see env changes.
-READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
-#: Cancel POST timeout — best-effort cleanup must never wait out READ_TIMEOUT.
+#: Cancel POST timeout — best-effort cleanup must never wait out the read timeout.
 CANCEL_TIMEOUT = 10.0
 
 #: Canonical event types that terminate a ``/query`` stream (frozen 7-event

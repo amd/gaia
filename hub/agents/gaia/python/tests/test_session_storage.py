@@ -115,6 +115,52 @@ def test_failed_write_keeps_previous_file(monkeypatch):
     ]
 
 
+@pytest.mark.usefixtures("gaia_home")
+def test_session_saved_with_path_permissions_still_loads():
+    manager = SessionManager(auto_cleanup=False)
+    path = manager.session_dir / "session_old.json"
+    path.write_text(
+        json.dumps(
+            {
+                "session_id": "session_old",
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-01T00:00:00",
+                "indexed_documents": ["/docs/a.pdf"],
+                "watched_directories": [],
+                "chat_history": [{"role": "user", "content": "hi"}],
+                "path_permissions": {
+                    "/docs": {
+                        "path": "/docs",
+                        "allowed": True,
+                        "timestamp": "2026-01-01T00:00:00",
+                        "recursive": True,
+                    }
+                },
+                "metadata": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    session = manager.load_session("session_old")
+
+    assert session.indexed_documents == ["/docs/a.pdf"]
+    assert session.chat_history == [{"role": "user", "content": "hi"}]
+    assert "path_permissions" not in session.to_dict()
+
+
+def test_existing_path_permissions_file_is_left_alone(gaia_home):
+    sessions = gaia_home / "sessions"
+    sessions.mkdir(parents=True)
+    legacy = sessions / "path_permissions.json"
+    legacy.write_text('{"/docs": {"allowed": true}}', encoding="utf-8")
+
+    manager = SessionManager(auto_cleanup=False)
+    assert manager.save_session(manager.create_session("session_new"))
+
+    assert legacy.read_text(encoding="utf-8") == '{"/docs": {"allowed": true}}'
+
+
 @pytest.fixture
 def isolated_tool_registry():
     from gaia.agents.base.tools import _TOOL_REGISTRY

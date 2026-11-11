@@ -320,12 +320,6 @@
             ]
           },
           {
-            "group": "Packaging",
-            "pages": [
-              "spec/electron-integration"
-            ]
-          },
-          {
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
@@ -564,6 +558,10 @@
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/spec/electron-integration",
+      "destination": "/sdk/sdks/agent-ui"
+    },
     {
       "source": "/plans/email-triage-agent",
       "destination": "/guides/email"

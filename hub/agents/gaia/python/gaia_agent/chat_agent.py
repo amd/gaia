@@ -51,7 +51,7 @@ from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
 
-from gaia.agents.base.agent import Agent, default_max_steps
+from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
@@ -73,7 +73,11 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
-from gaia.agents.base.tool_loader import ToolLoader, format_tool_docs
+from gaia.agents.base.tool_loader import (
+    ToolLoader,
+    format_tool_docs,
+    thin_tool_schema,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
@@ -424,6 +428,9 @@ class ChatAgentConfig:
     context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS
     context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS
     context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS
+
+    # Send earlier requests' reasoning back with their messages (see Agent).
+    resend_reasoning_across_requests: bool = False
 
     # Debug/output settings
     debug: bool = False
@@ -834,6 +841,7 @@ class ChatAgent(
             context_eviction_threshold_tokens=config.context_eviction_threshold_tokens,
             context_eviction_keep_steps=config.context_eviction_keep_steps,
             context_eviction_min_batch_tokens=config.context_eviction_min_batch_tokens,
+            resend_reasoning_across_requests=config.resend_reasoning_across_requests,
         )
 
         # Without this, throwaway scripts land in the user's project. One path
@@ -1245,7 +1253,13 @@ class ChatAgent(
         # most likely gone: one re-read now beats a second one at the next tool.
         if self.tool_loader.turns == 0 and getattr(self, "conversation_history", None):
             self.tool_loader.jump("resumed")
-        words = getattr(self, "_original_user_input", None) or user_input
+        from gaia.ui.session_environment import without_folder_note
+
+        # A folder path is not the user's words: one named "shell-scripts"
+        # would otherwise ask for the shell on every turn.
+        words = without_folder_note(
+            getattr(self, "_original_user_input", None) or user_input
+        )
         return self.tool_loader.select(
             words,
             self._tools_registry,
@@ -1297,9 +1311,31 @@ class ChatAgent(
 
     def _conversation_request_kwargs(self) -> Dict[str, Any]:
         """Continue on the primed slot once the session is on the full list."""
-        if self._dynamic_tools_active() and self.tool_loader.jumped:
-            return {"id_slot": FULL_TOOLS_SLOT}
-        return {}
+        if (
+            not self._thin_tool_schemas()
+            or getattr(self, "_memory_store", None) is None
+        ):
+            return {}
+        # A dead embedder also means the full list, the one that slot holds.
+        if not (self.tool_loader.jumped or self.tool_loader.session_disabled):
+            return {}
+        # The provider drops the slot for a model that has too few.
+        return {"id_slot": FULL_TOOLS_SLOT}
+
+    def _history_tool_schemas(self):
+        """Budget history against the full list while the switch can still come.
+
+        A search mid-turn grows ``tools=`` after history was fitted.
+        """
+        if (
+            not self._dynamic_tools_active()
+            or self.tool_loader.jumped
+            or not self._uses_native_tool_calls()
+        ):
+            return super()._history_tool_schemas()
+        return [
+            thin_tool_schema(schema) for schema in self._build_openai_tool_schemas()
+        ]
 
     def _admit_skill_tools(self, names: List[str]) -> bool:
         """Put a just-loaded skill's tools on the list."""
@@ -1382,10 +1418,13 @@ class ChatAgent(
             for name, text in loader.tool_docs(registry).items()
             if name != "search_tools"
         }
+        # A skill this model cannot load would only cost a failed load_skill.
+        compact = bool(withheld_tools(self.model_features))
         skill_docs = {
             name: f"{name}: {skill.description}"
             for name, skill in self.skill_manager.discover().items()
             if name not in self.loaded_skills
+            and not (compact and _withheld_skill_tools(self, skill))
         }
         try:
             tools = [
@@ -1870,7 +1909,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         load_tools_menu = ""
         if self._thin_tool_schemas() and self._uses_native_tool_calls():
             load_tools_menu = (
-                "\n\n**TOOLS:** Your list holds common tools; more exist. Only "
+                "\n\n**TOOLS:** Your list holds common tools; more exist, for "
+                "images, recordings, tables, the browser and email. Only "
                 "call a tool in your list. If the one you need is missing, call "
                 "search_tools with what you want to do. Never say you cannot do "
                 "something before you have searched. Full documentation appears "

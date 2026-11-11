@@ -500,12 +500,12 @@ class TestKnowledgeCRUD:
 
 
 # ===========================================================================
-# 3. Entity & Context Endpoints
+# 3. Entity Endpoints
 # ===========================================================================
 
 
-class TestEntityAndContextEndpoints:
-    """GET /api/memory/entities and /api/memory/contexts."""
+class TestEntityEndpoints:
+    """GET /api/memory/entities."""
 
     def test_list_entities(self, api_client, memory_store):
         """GET /api/memory/entities returns entity list with counts."""
@@ -534,19 +534,6 @@ class TestEntityAndContextEndpoints:
         assert len(data) >= 1
         assert all("sarah" in i["content"].lower() for i in data)
 
-    def test_list_contexts(self, api_client, memory_store):
-        """GET /api/memory/contexts returns context list with counts."""
-        _populate_test_data(memory_store)
-
-        resp = api_client.get("/api/memory/contexts")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-
-        context_names = [c["context"] for c in data]
-        assert "work" in context_names
-        assert "personal" in context_names
-
 
 # ===========================================================================
 # 4. Tool Performance Endpoints
@@ -554,7 +541,7 @@ class TestEntityAndContextEndpoints:
 
 
 class TestToolEndpoints:
-    """GET /api/memory/tools and tool history."""
+    """GET /api/memory/tools."""
 
     def test_tool_summary(self, api_client, memory_store):
         """GET /api/memory/tools returns per-tool stats."""
@@ -569,27 +556,6 @@ class TestToolEndpoints:
         tool_names = [t["tool_name"] for t in data]
         assert "remember" in tool_names
         assert "recall" in tool_names
-
-    def test_tool_history(self, api_client, memory_store):
-        """GET /api/memory/tools/{name}/history returns call history."""
-        _populate_test_data(memory_store)
-
-        resp = api_client.get("/api/memory/tools/recall/history")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-        assert len(data) >= 2  # 2 recall calls in test data
-
-    def test_recent_errors(self, api_client, memory_store):
-        """GET /api/memory/errors returns recent failures."""
-        _populate_test_data(memory_store)
-
-        resp = api_client.get("/api/memory/errors")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-        assert len(data) >= 1
-        assert data[0]["error"] == "query empty"
 
 
 # ===========================================================================

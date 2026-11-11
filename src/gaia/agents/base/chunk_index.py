@@ -44,9 +44,7 @@ INDEX_SHARE = 0.6
 MAX_CANDIDATES = 256
 
 #: Tools whose large text field is command output.
-OUTPUT_TOOLS = frozenset(
-    {"run_shell_command", "run_python", "execute_python_file", "run_tests"}
-)
+OUTPUT_TOOLS = frozenset({"run_shell_command", "run_python", "execute_python_file"})
 #: Carried by every condensed result, so the model learns the read from the result.
 FETCH_HINT = "read_tool_output(artifact, entry=n) returns one indexed part verbatim"
 #: Arguments whose value can name a part of the result (a symbol, a pattern).

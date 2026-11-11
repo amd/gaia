@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/status"
 	"github.com/amd/gaia/tui/internal/update"
 )
@@ -1042,14 +1043,7 @@ func downloadSize(models []gaiainit.Model) string {
 	if len(models) == 0 {
 		return ""
 	}
-	return formatGB(total)
-}
-
-func formatGB(gb float64) string {
-	if gb < 1 {
-		return fmt.Sprintf("%.0f MB", gb*1000)
-	}
-	return fmt.Sprintf("%.1f GB", gb)
+	return textutil.FormatGB(total)
 }
 
 // describeChat names a local chat model for the hand-off line.
@@ -1057,14 +1051,14 @@ func describeChat(m gaiainit.Model) string {
 	if m.SizeGB == nil {
 		return m.ID + " (on this machine)"
 	}
-	return fmt.Sprintf("%s (%s, on this machine)", m.ID, formatGB(*m.SizeGB))
+	return fmt.Sprintf("%s (%s, on this machine)", m.ID, textutil.FormatGB(*m.SizeGB))
 }
 
 func sizeSuffix(gb *float64) string {
 	if gb == nil {
 		return ""
 	}
-	return " (" + formatGB(*gb) + ")"
+	return " (" + textutil.FormatGB(*gb) + ")"
 }
 
 func modelSummaries(st gaiainit.Status) []string {
