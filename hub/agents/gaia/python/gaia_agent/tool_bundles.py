@@ -158,8 +158,13 @@ DOC_BUNDLES = [
     ),
     ToolBundle(
         name="desktop",
-        members=frozenset({"notify_desktop", "list_windows", "text_to_speech"}),
-        description="Desktop notifications, window listing, and text-to-speech.",
+        members=frozenset(
+            {"notify_desktop", "list_windows", "text_to_speech", "set_voice_setting"}
+        ),
+        description=(
+            "Desktop notifications, window listing, text-to-speech, and "
+            "changing GAIA's own voice, speed and volume."
+        ),
     ),
     ToolBundle(
         name="vision",
@@ -482,8 +487,13 @@ FULL_BUNDLES = [
     ),
     ToolBundle(
         name="desktop",
-        members=frozenset({"notify_desktop", "list_windows", "text_to_speech"}),
-        description="Desktop notifications, window listing, and text-to-speech.",
+        members=frozenset(
+            {"notify_desktop", "list_windows", "text_to_speech", "set_voice_setting"}
+        ),
+        description=(
+            "Desktop notifications, window listing, text-to-speech, and "
+            "changing GAIA's own voice, speed and volume."
+        ),
     ),
     ToolBundle(
         name="screenshot",

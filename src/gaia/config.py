@@ -97,6 +97,7 @@ def check_read_aloud_speed(value: int) -> int:
 VOICE_TURN_TAKING = ("hands_free", "push_to_talk")
 VOICE_MIN_SILENCE_MS = 300
 VOICE_MAX_SILENCE_MS = 1200
+VOICE_MAX_VOLUME = 100
 _VOICE_LANGUAGE_RE = re.compile(r"^(auto|[a-z]{2})$")
 _VOICE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 #: Checked when the file is read, so a bad value names its key at startup.
@@ -105,6 +106,7 @@ _VOICE_KEYS = (
     "voice_asr_model",
     "voice_turn_taking",
     "voice_silence_ms",
+    "voice_volume",
 )
 
 
@@ -148,6 +150,15 @@ def check_voice_silence_ms(value: int) -> int:
         raise GaiaConfigError(
             f"voice_silence_ms is how long a pause ends your turn, from "
             f"{VOICE_MIN_SILENCE_MS} to {VOICE_MAX_SILENCE_MS} ms, got {value}."
+        )
+    return value
+
+
+def check_voice_volume(value: int) -> int:
+    if not 0 <= value <= VOICE_MAX_VOLUME:
+        raise GaiaConfigError(
+            f"voice_volume is how loud GAIA speaks in voice mode, from 0 to "
+            f"{VOICE_MAX_VOLUME}, got {value}."
         )
     return value
 
@@ -273,6 +284,7 @@ class GaiaConfig:
         voice_silence_ms: How long a pause ends your turn (300-1200).
         voice_status_updates: Speak a short line before each step in voice mode.
         voice_captions: Show live captions in voice mode.
+        voice_volume: How loud GAIA speaks in voice mode, 0-100.
         voice_wake_word: In hands-free voice mode, answer only when addressed
             ("Hey GAIA") or just after GAIA spoke.
     """
@@ -306,6 +318,7 @@ class GaiaConfig:
     voice_status_updates: bool = True
     voice_captions: bool = True
     voice_wake_word: bool = True
+    voice_volume: int = 100
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -364,6 +377,8 @@ class GaiaConfig:
             return check_voice_turn_taking(value)
         if key == "voice_silence_ms":
             return check_voice_silence_ms(cls._whole_number(key, value))
+        if key == "voice_volume":
+            return check_voice_volume(cls._whole_number(key, value))
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):

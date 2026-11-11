@@ -3261,6 +3261,33 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",
                 }
 
+        # ── Her own voice settings ──────────────────────────────────────────────
+
+        @tool
+        def set_voice_setting(setting: str, value: str) -> dict:
+            """Change how GAIA herself sounds or listens in voice mode.
+
+            Use this when the user asks you to change your voice, speak
+            faster or slower, be louder or quieter, show or hide captions,
+            or stop or start waiting for "Hey GAIA". It takes effect from
+            your next spoken reply. These five are the only settings you can
+            change; for any other, tell the user where it is in Settings.
+
+            Args:
+                setting: voice, speed, volume, captions or wake_word.
+                value: voice takes a Kokoro voice id or name (af_bella,
+                    George); speed a percentage 50-200 (100 is normal);
+                    volume a percentage 0-100; captions and wake_word take
+                    on or off.
+
+            Returns:
+                status, and voice, speed, volume, wake_word and captions as
+                they are now; or status error with what to tell the user.
+            """
+            from gaia.voice.settings import change_voice_setting
+
+            return change_voice_setting(setting, value)
+
         # ── TTS (voice output) ──────────────────────────────────────────────────
 
         @tool(timeout=900)

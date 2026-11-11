@@ -14,7 +14,7 @@
 import { toolRowText } from '../components/AgentActivity';
 import { getT, tEn } from '../i18n/useT';
 import { ApiError } from '../services/api';
-import { downloadVoiceModel, getVoiceStatus, updateVoiceSettings, type VoiceStatus } from '../services/voiceApi';
+import { downloadVoiceModel, getVoiceSettings, getVoiceStatus, updateVoiceSettings, type VoiceSettings, type VoiceStatus } from '../services/voiceApi';
 import { useChatStore } from '../stores/chatStore';
 import { useVoiceStore, VOICE_IDLE, type VoiceLogRow, type VoicePhase } from '../stores/voiceStore';
 import { log } from '../utils/logger';
@@ -305,6 +305,8 @@ function startTurn(text: string): void {
         }),
         toolFinished: own((result, ok) => {
             setAsking(false);
+            // A setting GAIA just changed is heard in this very reply.
+            if (ok) refreshSettings();
             const row = [...get().log].reverse().find((r) => r.kind === 'tool' && !r.done);
             const image = ok ? imageIn(result) : undefined;
             if (row) patchRow(row.id, { done: true, ok, ...(result ? { result } : {}), ...(image ? { image } : {}) });
@@ -333,6 +335,8 @@ function startTurn(text: string): void {
 function endTurn(outcome: TurnOutcome): void {
     if (!live) return;
     setAsking(false);
+    // GAIA may have changed her own settings during the turn.
+    refreshSettings();
     set({ turnRunning: false });
     if (outcome.failed) {
         note('voice.turnFailed');
@@ -543,6 +547,7 @@ async function connect(): Promise<void> {
     }
     if (live !== me) return;
     me.status = status;
+    me.player.setVolume((status.volume ?? 100) / 100);
     set({
         status,
         pushToTalk: status.turn_taking === 'push_to_talk',
@@ -601,7 +606,6 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
     player.onIdle = finishSpeakingIfDone;
-    player.setVolume(voiceVolume());
     let noticeSeen = true;
     try {
         noticeSeen = localStorage.getItem(PHONE_NOTICE_KEY) === '1';
@@ -712,37 +716,48 @@ export async function downloadModel(model: string): Promise<void> {
     else set({ error: failureFromStatus(status) });
 }
 
-const VOLUME_KEY = 'gaia:voice:volume';
+/** Take in voice settings saved elsewhere: the menu, Settings, or GAIA herself. */
+function applySettings(saved: VoiceSettings): void {
+    if (!live?.status) return;
+    const before = live.status;
+    live.status = { ...before, wake_word: saved.wake_word, volume: saved.volume, captions: saved.captions };
+    live.player.setVolume(saved.volume / 100);
+    set({ status: live.status, ...(saved.captions !== before.captions && speaks() ? { captions: saved.captions } : {}) });
+    if (saved.wake_word !== before.wake_word) attend();
+}
 
-/** How loud GAIA speaks on this device, 0 to 1. */
+function refreshSettings(): void {
+    const me = live;
+    if (!me) return;
+    getVoiceSettings().then(
+        (saved) => { if (live === me) applySettings(saved); },
+        (err: unknown) => log.ui.warn('Voice settings could not be re-read', err),
+    );
+}
+
+/** How loud GAIA speaks, 0 to 1. */
 export function voiceVolume(): number {
-    try {
-        const saved = Number(localStorage.getItem(VOLUME_KEY) ?? '1');
-        return Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
-    } catch {
-        return 1; // storage blocked: full volume, not remembered
-    }
+    return (live?.status?.volume ?? 100) / 100;
 }
 
 export function setVolume(volume: number): void {
-    live?.player.setVolume(volume);
-    try {
-        localStorage.setItem(VOLUME_KEY, String(volume));
-    } catch (err) {
-        log.ui.warn('Voice volume could not be remembered', err);
-    }
+    const me = live;
+    if (!me) return;
+    me.player.setVolume(volume);
+    updateVoiceSettings({ volume: Math.round(volume * 100) }).then(
+        (saved) => { if (live === me) applySettings(saved); },
+        (err: unknown) => log.ui.warn('The volume could not be saved', err),
+    );
 }
 
 /** Turn waiting for "Hey GAIA" on or off, here and in Settings. */
 export function setWakeWord(on: boolean): void {
     const me = live;
     if (!me?.status) return;
-    updateVoiceSettings({ wake_word: on }).then((saved) => {
-        if (live !== me || !me.status) return;
-        me.status = { ...me.status, wake_word: saved.wake_word };
-        set({ status: me.status });
-        attend();
-    }, (err: unknown) => log.ui.warn('The wake word setting could not be saved', err));
+    updateVoiceSettings({ wake_word: on }).then(
+        (saved) => { if (live === me) applySettings(saved); },
+        (err: unknown) => log.ui.warn('The wake word setting could not be saved', err),
+    );
 }
 
 export function setCaptions(on: boolean): void {
