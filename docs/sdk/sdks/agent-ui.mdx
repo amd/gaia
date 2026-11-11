@@ -2445,6 +2445,35 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   </Accordion>
 </AccordionGroup>
 
+### Automations
+
+Settings → Automations: list, pause, resume and remove the reminders,
+summaries, alerts and triggers GAIA runs on its own
+([Automations guide](/guides/automations)). The routes read and write the same
+store as `gaia automation`. **Every route is local-PC only, reads included:** a
+trigger's check is a command that runs on this PC, and prompts can carry
+private detail. Mutating routes also require the `X-Gaia-UI: 1` header.
+
+<AccordionGroup>
+  <Accordion title="GET /api/automations">
+    `{automations, delivers}`. Each automation has `id`, `name`, `kind`
+    (`reminder`, `summary`, `alert` or `trigger`), `heartbeat`, `paused`,
+    `every_seconds`, `next_at`, `last_run_at`, `runs`, `prompt`, `say`, `check`,
+    `quiet`, `days` and `failures`. `delivers` is whether a paired Discord DM
+    receives what they send, or `null` when that could not be checked. 500 when
+    the store can't be read.
+  </Accordion>
+
+  <Accordion title="POST /api/automations/{ref}/{action}">
+    `action` is `pause` or `resume`; `ref` is an id or exact name. Returns the
+    changed automation. 404 when nothing matches.
+  </Accordion>
+
+  <Accordion title="DELETE /api/automations/{ref}">
+    Removes the automation and returns it. 404 when nothing matches.
+  </Accordion>
+</AccordionGroup>
+
 ### Goals
 
 Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
