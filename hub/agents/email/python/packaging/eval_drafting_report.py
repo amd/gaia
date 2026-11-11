@@ -13,17 +13,19 @@ thresholds inlined here. The manifest owns the enforce switch (data, not code).
 
 A judge credential is REQUIRED — the Claude judge cannot score drafts without
 one, and per CLAUDE.md's fail-loudly rule there is NO silent skip: its absence is
-a HARD FAILURE (exit 1), never a skip report and never an invented pass. Either
-``CLAUDE_CODE_OAUTH_TOKEN`` (used when no API key is set; driven through the ``claude`` CLI) or
-``ANTHROPIC_API_KEY`` will do — ``gaia.eval.judge_client`` owns the choice. The
-workflows that run this (release_agent_email.yml, test_email_agent_eval.yml,
-email_scorecard_refresh.yml) inject them from the matching secrets and never run
-on fork PRs, so a credential is always present in a legitimate run.
+a HARD FAILURE (exit 1), never a skip report and never an invented pass. The
+subscription (``CLAUDE_CODE_OAUTH_TOKEN`` or the ``claude`` CLI login) is used
+first, then ``ANTHROPIC_API_KEY`` — ``gaia.eval.claude_credential`` owns the
+order. A token with no ``claude`` CLI on PATH raises rather than counting. The
+workflow that runs this (email_scorecard_refresh.yml) injects them from the
+matching secrets and never runs on fork PRs, so a credential is always present
+in a legitimate run.
 
 Config comes from the environment (shell-agnostic):
   EMAIL_EVAL_MODEL         Lemonade model id (required)
-  CLAUDE_CODE_OAUTH_TOKEN  Judge credential when no API key is set
-  ANTHROPIC_API_KEY        Judge credential, takes precedence (neither set -> exit 1)
+  CLAUDE_CODE_OAUTH_TOKEN  Judge credential, used first (needs the `claude` CLI)
+  ANTHROPIC_API_KEY        Judge credential when there is no subscription
+                           (none set -> exit 1)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -75,8 +77,7 @@ def main() -> int:
             "eval cannot be scored.\n"
             f"{MISSING_CREDENTIAL_ERROR}"
             "  Where: the 'Voice-drafting quality eval' step in "
-            ".github/workflows/{release_agent_email,test_email_agent_eval,"
-            "email_scorecard_refresh}.yml.",
+            ".github/workflows/email_scorecard_refresh.yml.",
             file=sys.stderr,
         )
         return 1

@@ -14,6 +14,8 @@ So a grant is keyed on the *invocation*, not the tool name:
     run_shell_command  command="cd p && python -m pytest -q 2>&1"
                                                  ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
+    (safe host-resolved folder)                  ->  write_file:/project/*
+    (home/PATH/hidden safety path)               ->  write_file:/home/u/notes.md
 
 A shell grant covers a command *family*: the program and its subcommand,
 wherever it sits in a line. A ``cd``, a harmless redirection (``2>&1``) and a
@@ -37,6 +39,7 @@ it. Scoping keeps the affordance and takes away the blast radius.
 from __future__ import annotations
 
 import glob
+import ntpath
 import os
 import posixpath
 import re
@@ -50,6 +53,11 @@ from gaia.agents.base.command_facts import (
     effective_argv,
     line_words,
     read_command,
+)
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
 )
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
@@ -198,8 +206,9 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: "any command, as long as you poll with it".
 _SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
 
-#: Tools whose blast radius is one path. The grant is that exact path — not its
-#: directory: the prompt named a file, so the grant covers a file.
+#: Tools whose blast radius is one path. A prompt for a file inside a named
+#: folder may offer a chat-scoped folder grant; a bare filename stays exact so
+#: it cannot silently follow a changing working directory.
 PATH_TOOLS = frozenset(
     {
         "write_file",
@@ -232,11 +241,21 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: become "always allow any path" — each new path is asked about on its own.
 PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
+#: The prompt asking whether to read a project folder's CLAUDE.md, AGENTS.md and
+#: skills (:mod:`gaia.project_trust`). Not a registered tool, and ungrantable: the
+#: answer is kept per folder in the trust store, never as an "always" grant.
+PROJECT_TRUST_PROMPT_TOOL = "trust_project_folder"
+
+_UNGRANTABLE_TOOLS = frozenset(
+    {"capture_skill", PATH_ACCESS_PROMPT_TOOL, PROJECT_TRUST_PROMPT_TOOL}
+)
 
 #: Prompt argument set by the agent (never the model) when a script it runs sits
 #: in its own scratch folder. Such a call is never offered "always".
 SCRATCH_ARG = "_scratch_dir"
+#: Prompt-only absolute target derived by the host's file preflight. It makes a
+#: folder grant stable without changing the tool's model-supplied arguments.
+RESOLVED_PATH_ARG = "_resolved_file_path"
 
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
@@ -638,15 +657,64 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     raw = path_argument(args)
     if not raw:
         return None
-    # Normalised for matching, never resolved: this must stay a pure function of
-    # the arguments, so it cannot depend on the filesystem or the process's cwd.
+    # The key is built from the arguments; only whether a folder grant may cover
+    # the file reads the filesystem, so a link out of the folder keeps asking.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
-    display = posixpath.basename(normalised) or normalised
+    resolved_target = ""
+    resolved = args.get(RESOLVED_PATH_ARG)
+    if isinstance(resolved, str):
+        resolved_for_match = resolved.replace("\\", "/")
+        if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
+            resolved_target = posixpath.normpath(resolved_for_match)
+            parent = posixpath.dirname(resolved_target)
+            if (
+                parent not in ("", ".", "/")
+                and not re.fullmatch(r"[A-Za-z]:", parent)
+                and _folder_grant_is_safe(resolved_target, parent)
+            ):
+                return GrantScope(
+                    keys=(f"{tool_name}:{parent}/*",),
+                    label=f"{tool_name} on files in {parent}",
+                    subject=f"files in {parent}",
+                )
+    exact = resolved_target or normalised
+    exact_display = posixpath.basename(exact) or exact
     return GrantScope(
-        keys=(f"{tool_name}:{normalised}",),
-        label=f"{tool_name} on {display}",
-        subject=display,
+        keys=(f"{tool_name}:{exact}",),
+        label=f"{tool_name} on {exact_display}",
+        subject=exact_display,
     )
+
+
+def _folder_grant_is_safe(target: str, parent: str) -> bool:
+    """True when a grant on *parent* may cover writes to *target* unasked.
+
+    The write rules apply to where the file really lands as well as to the
+    folder that was asked about. A file whose resolved location is in another
+    folder, or that shares its content with another name, is asked about on
+    its own: a grant names one folder and covers nothing outside it.
+    """
+    try:
+        real_target = os.path.realpath(target)
+        real_parent = os.path.realpath(parent)
+    except (OSError, ValueError):
+        return False
+    if os.path.normcase(os.path.dirname(real_target)) != os.path.normcase(real_parent):
+        return False
+    if is_too_broad_folder(parent) or is_too_broad_folder(real_parent):
+        return False
+    for path in (target, real_target):
+        if has_hidden_part(path.replace("\\", "/").split("/")):
+            return False
+        if lands_where_code_runs(path):
+            return False
+    # Writes go into the file in place, so another name for it changes too.
+    try:
+        if os.path.isfile(real_target) and os.stat(real_target).st_nlink > 1:
+            return False
+    except OSError:
+        return False
+    return True
 
 
 def _named_scope(
@@ -664,6 +732,7 @@ __all__ = [
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
+    "PROJECT_TRUST_PROMPT_TOOL",
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
     "command_reaches_folder",

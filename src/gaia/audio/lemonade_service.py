@@ -62,6 +62,15 @@ class LemonadeAudioService:
             )
         return [entry for entry in models if isinstance(entry, dict)]
 
+    def _refuse_unless_local(self) -> None:
+        """Under Local only, refuse ``self.model`` unless the catalog says it's local."""
+        from gaia.llm.local_only import assert_model_permitted, recipes_in_catalog
+
+        assert_model_permitted(
+            self.model,
+            lambda m: recipes_in_catalog(m, {}, lambda: {"data": self.catalog()}),
+        )
+
     def ensure_model_pulled(
         self, label: str, say: Optional[Callable[[str], None]] = None
     ) -> None:

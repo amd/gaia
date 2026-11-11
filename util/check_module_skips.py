@@ -3,7 +3,7 @@
 
 """Fail a CI lane when one of its test files skips wholesale without a reason.
 
-A module-scope `pytest.importorskip("gaia_agent_chat")` turns a whole file into
+A module-scope `pytest.importorskip("gaia_agent")` turns a whole file into
 one `SKIPPED` line in any lane that lacks the wheel. Because the lane still
 *names* the file, `check_test_lane_coverage.py` counts it as covered, and #4206
 found ~214 tests that no lane had actually run.

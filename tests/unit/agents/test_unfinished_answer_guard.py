@@ -14,6 +14,7 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _requests_indexing,
     _unfinished_answer_kind,
 )
 from gaia.agents.base.verification import strip_verification_scope
@@ -51,9 +52,9 @@ FAILED_RUN_ENDINGS = [
         id="row5-just-need-to",
     ),
     pytest.param(
-        "I'll load the GitHub tools first.\n\n"
-        '<invoke name="load_tools">\n'
-        '<parameter name="names">["github"]</parameter>\n'
+        "I'll find the GitHub tools first.\n\n"
+        '<invoke name="search_tools">\n'
+        '<parameter name="query">github</parameter>\n'
         "</invoke>",
         "tool_markup",
         id="row7-invoke-markup",
@@ -249,10 +250,10 @@ def test_narration_is_reprompted_then_answer_accepted(agent):
 
 
 def test_tool_markup_is_reprompted_as_malformed_call(agent):
-    markup = '<invoke name="load_tools"><parameter name="names">x</parameter>'
+    markup = '<invoke name="search_tools"><parameter name="query">x</parameter>'
     sent = _stub_chat(agent, markup, "Loaded.")
 
-    result = agent.process_query("Load the tools", max_steps=10)
+    result = agent.process_query("Find the tools", max_steps=10)
 
     assert len(sent) == 2
     assert "tool call written out as text" in sent[1][-1]["content"]
@@ -266,7 +267,9 @@ def test_reprompts_are_bounded_per_turn(agent):
     result = agent.process_query("Do the task", max_steps=20)
 
     assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
-    assert _final_text(result) == f"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"
+    final = _final_text(result)
+    assert final.startswith("I didn't finish:")
+    assert f'"Executing step {_MAX_UNFINISHED_ANSWER_REPROMPTS}:"' in final
 
 
 def test_no_reprompt_on_last_step(agent):
@@ -275,7 +278,8 @@ def test_no_reprompt_on_last_step(agent):
     result = agent.process_query("Document the env var", max_steps=1)
 
     assert len(sent) == 1
-    assert _final_text(result) == NARRATION
+    assert _final_text(result).startswith("I didn't finish:")
+    assert NARRATION in _final_text(result)
 
 
 def test_completed_answer_is_not_reprompted(agent):
@@ -297,3 +301,235 @@ def test_completed_answer_is_not_reprompted(agent):
 )
 def test_answer_style_let_me_phrases_are_not_narration(answer):
     assert _unfinished_answer_kind(answer) is None
+
+
+def _stub_raw_chat(agent, *texts):
+    texts = list(texts)
+    sent = []
+
+    def _send(messages, *_, **__):
+        sent.append([dict(m) for m in messages])
+        resp = MagicMock()
+        resp.text = texts.pop(0)
+        resp.stats = {}
+        return resp
+
+    agent.chat = MagicMock(send_messages=MagicMock(side_effect=_send))
+    return sent
+
+
+def test_empty_reply_is_reprompted_then_answer_accepted(agent):
+    sent = _stub_raw_chat(agent, "", json.dumps({"thought": "", "answer": "71/100."}))
+
+    result = agent.process_query("Summarize the audit", max_steps=10)
+
+    assert len(sent) == 2
+    assert "Your last reply was empty" in sent[1][-1]["content"]
+    assert _final_text(result) == "71/100."
+
+
+def test_empty_reply_reprompts_are_bounded(agent):
+    sent = _stub_raw_chat(agent, *[""] * 5)
+
+    result = agent.process_query("Summarize the audit", max_steps=20)
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert "empty response from the language model" in _final_text(result)
+
+
+def _with_index_tool(agent):
+    agent._tools_registry["index_directory"] = {
+        "function": lambda **_: {},
+        "description": "Index a folder.",
+        "parameters": {},
+    }
+    return agent
+
+
+def test_asking_to_index_what_the_user_said_to_index_is_reprompted(agent):
+    _with_index_tool(agent)
+    sent = _stub_chat(
+        agent,
+        "Should I go ahead and index the entire folder so I can search it?",
+        "West had the highest revenue.",
+    )
+
+    result = agent.process_query(
+        "Index ~/reports and tell me which region led.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert "already told you to index it" in sent[1][-1]["content"]
+    assert _final_text(result) == "West had the highest revenue."
+
+
+def test_offer_to_index_is_kept_when_the_user_did_not_ask(agent):
+    _with_index_tool(agent)
+    offer = "Would you like me to index that folder?"
+    sent = _stub_chat(agent, offer)
+
+    result = agent.process_query("What is in ~/reports?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == offer
+
+
+# (user message this turn, model reply) pairs that must NOT be nudged.
+INDEX_NUDGE_FALSE_POSITIVES = [
+    pytest.param(
+        "Please do not index my private folder",
+        "Would you like me to index ~/Private?",
+        id="user-said-do-not-index",
+    ),
+    pytest.param(
+        "What's the refractive index of glass? Also what's in ~/big?",
+        "Do you want me to index all 40,000 files? It takes ~20 minutes.",
+        id="refractive-index-and-cost-warning",
+    ),
+    pytest.param(
+        "Index my reports folder.",
+        "I found two folders named Reports\u2026 Which one should I index?",
+        id="which-folder-choice",
+    ),
+    pytest.param(
+        "Index ~/reports",
+        "Should I index ~/reports or ~/old-reports?",
+        id="either-or-choice",
+    ),
+    pytest.param(
+        "what is the S&P 500 index",
+        "Should I index it?",
+        id="sp500-index",
+    ),
+    pytest.param("open index.html", "Should I index it?", id="index-html"),
+    pytest.param("don't index anything", "Should I index it?", id="dont-index"),
+    pytest.param(
+        "Never index my private folder", "Should I index it?", id="never-index"
+    ),
+    pytest.param(
+        "No need to index the folder", "Should I index it?", id="no-need-to-index"
+    ),
+    pytest.param(
+        "Do not, please, index my folder", "Should I index it?", id="do-not-please"
+    ),
+    pytest.param(
+        "I don't want you to index my files",
+        "Should I index them?",
+        id="dont-want-you-to-index",
+    ),
+    pytest.param(
+        "Index ~/reports, then summarize.",
+        "Should I indexify the files?",
+        id="indexify-no-word-boundary",
+    ),
+    pytest.param(
+        "Index ~/reports, then summarize.",
+        "Done. Tell me to index more folders if needed.",
+        id="closing-remark",
+    ),
+    pytest.param(
+        "Index ~/reports, then summarize.",
+        "Should I index the whole drive? That could take hours.",
+        id="scale-concern",
+    ),
+    pytest.param(
+        "Index ~/reports, then summarize.",
+        "I could index it. Should I index it now. Thanks",
+        id="not-a-question",
+    ),
+]
+
+
+@pytest.mark.parametrize("user_message,reply", INDEX_NUDGE_FALSE_POSITIVES)
+def test_index_nudge_false_positives_are_not_nudged(agent, user_message, reply):
+    _with_index_tool(agent)
+    sent = _stub_chat(agent, reply, "unused")
+
+    result = agent.process_query(user_message, max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == reply
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Please do not index my private folder",
+        "What's the refractive index of glass?",
+        "what is the S&P 500 index",
+        "open index.html",
+        "don't index anything",
+        "Please don't index my folder",
+        "indexify my folder",
+        "Tell me about the index",
+    ],
+)
+def test_non_requests_to_index_are_not_requests(text):
+    assert not _requests_indexing(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Index ~/reports",
+        "Index my reports folder.",
+        "Please re-index the docs folder",
+        r"Can you index C:\Users\me\docs?",
+        "Don't ask, just index ~/reports",
+        "Summarize Q2. Also index the reports.",
+    ],
+)
+def test_imperative_requests_to_index_are_requests(text):
+    assert _requests_indexing(text)
+
+
+def test_a_request_in_an_earlier_turn_does_not_count(agent):
+    _with_index_tool(agent)
+    agent.conversation_history = [
+        {"role": "user", "content": "Index ~/reports and tell me who led."},
+        {"role": "assistant", "content": "Nothing is indexed yet."},
+    ]
+    reply = "Should I proceed with indexing that directory now?"
+    sent = _stub_chat(agent, reply)
+
+    result = agent.process_query("What's the total across all eight?", max_steps=10)
+
+    assert len(sent) == 1
+    assert _final_text(result) == reply
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Should I index it?",
+        "Shall I go ahead and index that directory now?",
+        "Do you want me to index it?",
+        "Should I proceed with indexing that directory now?",
+    ],
+)
+def test_permission_questions_after_a_request_are_nudged(agent, answer):
+    _with_index_tool(agent)
+    sent = _stub_chat(agent, answer, "Done.")
+
+    agent.process_query("Index ~/reports, then summarize.", max_steps=10)
+
+    assert len(sent) == 2
+    assert "already told you to index it" in sent[1][-1]["content"]
+
+
+def test_index_nudge_is_bounded(agent):
+    _with_index_tool(agent)
+    sent = _stub_chat(agent, *["Should I index it?"] * 5)
+
+    result = agent.process_query("Index ~/reports", max_steps=20)
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result) == "Should I index it?"
+
+
+def test_no_nudge_without_an_index_tool(agent):
+    sent = _stub_chat(agent, "Should I index it?")
+
+    agent.process_query("Index ~/reports", max_steps=10)
+
+    assert len(sent) == 1

@@ -15,17 +15,28 @@
 import { parse as parseYaml } from "yaml";
 
 import { assertAuthorAllowed, authenticate } from "./auth";
-import { makeVersionEntry, rebuildIndex, upsertVersion } from "./catalog";
+import {
+  channelOfVersion,
+  channelsOf,
+  isPrerelease,
+  makeVersionEntry,
+  parseScorecardScore,
+  readResolvedAgentManifest,
+  rebuildIndex,
+  upsertVersion,
+} from "./catalog";
 import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
-  ARTIFACT_FILENAME_RE,
+  assertArtifactFilename,
   maxBytes,
   maxReferencedBytes,
   optionalTextPart,
   sha256Hex,
 } from "./multipart";
 import {
+  AGENT_RESERVED_FILENAMES,
+  aliasOf,
   artifactKey,
   capabilityMatrixKey,
   changelogKey,
@@ -38,9 +49,15 @@ import {
   skillKey,
   skillManifestKey,
   specKey,
-  writeAgentManifest,
+  updateAgentManifest,
 } from "./storage";
-import type { ArtifactInfo, Env } from "./types";
+import {
+  CHANNELS,
+  type AgentManifest,
+  type ArtifactInfo,
+  type Channel,
+  type Env,
+} from "./types";
 
 /** JSON with object keys sorted at every depth, so equal YAML documents compare equal. */
 function canonicalJson(value: unknown): string {
@@ -166,6 +183,24 @@ function selectArtifactSource(
   // that gap between the declared type and the runtime File.
   const file = part as File;
   return { artifactFile: file, filename: file.name };
+}
+
+/**
+ * Read the optional `channel` part. Absent means `stable`, which is how every
+ * publish behaved before channels existed.
+ */
+async function parseChannel(form: FormData): Promise<Channel> {
+  const text = (await optionalTextPart(form, "channel", "channel name"))?.trim();
+  if (text == null) return "stable";
+  if (!(CHANNELS as readonly string[]).includes(text)) {
+    throw new HttpError(
+      400,
+      "invalid_channel",
+      `Channel ${JSON.stringify(text)} is not one of ${CHANNELS.join(", ")}. Send ` +
+        `'next' for a release candidate, or omit the part to publish to stable.`
+    );
+  }
+  return text as Channel;
 }
 
 /** Hex-encode an ArrayBuffer (R2 returns checksums as raw bytes). */
@@ -355,18 +390,39 @@ export async function handlePublish(
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
   const packageFilesText = await optionalPackageFiles(form);
+  const channel = await parseChannel(form);
 
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
 
-  if (!ARTIFACT_FILENAME_RE.test(filename)) {
+  // index.schema.json bounds eval_score to 0-100; an out-of-range score would publish an invalid index.
+  const evalScore = parseScorecardScore(evalScorecardText ?? null);
+  if (evalScore !== undefined && (evalScore < 0 || evalScore > 100)) {
     throw new HttpError(
       400,
-      "invalid_artifact",
-      `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
-        `segment of letters, digits, '.', '_', '+', '-' (e.g. 'gaia_agent_chat-0.1.0-py3-none-any.whl').`
+      "invalid_eval_score",
+      `${manifest.id}@${manifest.version}: the eval scorecard's aggregate.value is ${evalScore}, ` +
+        `but eval_score must be between 0 and 100. Regenerate the scorecard ` +
+        `(gen_scorecard.py) or fix aggregate.value in its front matter.`
     );
   }
+
+  // `latest_version` is the stable channel and every existing client reads it,
+  // so a pre-release on stable would hand an RC to everyone.
+  if (channel === "stable" && isPrerelease(manifest.version)) {
+    throw new HttpError(
+      400,
+      "prerelease_on_stable",
+      `${manifest.id}@${manifest.version} is a pre-release and cannot be published to ` +
+        `the stable channel. Send channel=next, or publish a final version.`
+    );
+  }
+
+  assertArtifactFilename(
+    filename,
+    AGENT_RESERVED_FILENAMES,
+    "gaia_agent_chat-0.1.0-py3-none-any.whl"
+  );
 
   // One id namespace across every catalog lane (#2467): hub URLs, install
   // commands, and the catalog are keyed by id, so an agent may not shadow a
@@ -386,15 +442,40 @@ export async function handlePublish(
   // same manifest can join an existing version, but no published filename can
   // ever be overwritten.
   const existing = await readAgentManifest(env.BUCKET, manifest.id);
-  if (existing && existing.author !== manifest.author) {
+  // An alias pair is one package: its other id's owner owns this one too, and
+  // a version may live under only one of the two.
+  const aliasId = aliasOf(manifest.id);
+  const aliasManifest = aliasId ? await readAgentManifest(env.BUCKET, aliasId) : null;
+  const assertOwnedBy = (owner: AgentManifest | null): void => {
+    if (owner && owner.author !== manifest.author) {
+      throw new HttpError(
+        403,
+        "forbidden_scope",
+        `Agent '${owner.id}' is owned by author '${owner.author}'. A publish ` +
+          `with author '${manifest.author}' cannot update '${manifest.id}'.`
+      );
+    }
+  };
+  assertOwnedBy(existing ?? aliasManifest);
+  if (aliasManifest && channelOfVersion(aliasManifest, manifest.version)) {
     throw new HttpError(
-      403,
-      "forbidden_scope",
-      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
-        `with author '${manifest.author}' cannot update it.`
+      409,
+      "version_exists",
+      `${manifest.version} is already published under '${aliasId}', which '${manifest.id}' ` +
+        `aliases. Publish a new version.`
     );
   }
-  const versionExists = Boolean(existing?.versions[manifest.version]);
+  const heldBy = channelOfVersion(existing, manifest.version);
+  if (heldBy && heldBy !== channel) {
+    throw new HttpError(
+      409,
+      "channel_mismatch",
+      `${manifest.id}@${manifest.version} is already published to the ${heldBy} channel, ` +
+        `and a version's channel is fixed by its first publish. Send channel=${heldBy} ` +
+        `to add an artifact to it, or publish a new version.`
+    );
+  }
+  const versionExists = heldBy !== null;
   // Before the per-filename 409, so a changed manifest can't pass as the
   // publisher's "already published" success signal.
   if (versionExists) {
@@ -407,23 +488,45 @@ export async function handlePublish(
   // allowed; re-publishing the same filename is rejected. (Idempotent re-runs of
   // a release job should treat this 409 as "already published" — success.)
   //
-  // What counts as "published" differs by mode, and the distinction matters:
-  // inline, the R2 object only exists once the Worker has stored it, so its
-  // presence IS the record. By-reference, CI has already PUT the object before
-  // calling this, so the object always exists and heading it would 409 every
-  // time — the record is the AGENT MANIFEST, which only lists artifacts this
-  // endpoint accepted.
-  const alreadyPublished = byReference
-    ? Boolean(existing?.versions[manifest.version]?.artifacts?.some((a) => a.filename === filename))
-    : Boolean(await env.BUCKET.head(key));
-  if (alreadyPublished) {
-    throw new HttpError(
+  // The record of "published" is the AGENT MANIFEST in both modes, never the R2
+  // object: by-reference, CI PUTs the object before calling this; inline, a
+  // publish that failed after storing the bytes leaves an object the catalog
+  // never listed, and a retry must overwrite it rather than 409 on it (#3538).
+  const listedArtifact = (agent: AgentManifest | null): ArtifactInfo | undefined =>
+    (channel === "stable" ? agent?.versions : agent?.next_versions)?.[
+      manifest.version
+    ]?.artifacts?.find((a) => a.filename === filename);
+  const alreadyPublishedError = () =>
+    new HttpError(
       409,
       "version_exists",
       `Artifact ${filename} is already published under ${manifest.id}@${manifest.version} ` +
         `and is immutable. To add another platform binary use a distinct filename; ` +
         `to change this one, bump the version.`
     );
+  const concurrentPublishError = (detail: string) =>
+    new HttpError(
+      409,
+      "concurrent_publish_conflict",
+      `${detail} Installs of ${manifest.id}@${manifest.version} can fail their ` +
+        `checksum check. Publish one job at a time, and release a new version to ` +
+        `replace this one.`
+    );
+  const existingListed = listedArtifact(existing);
+  if (existingListed) {
+    // A retry whose first attempt committed the manifest but failed writing the
+    // index lands here; re-derive the index so the 409 doesn't leave it stale.
+    await rebuildIndex(env.BUCKET, now, new URL(request.url).origin);
+    // A racing loser may have overwritten the committed bytes; its re-run must stay red.
+    const stored = (await env.BUCKET.head(key))?.checksums?.sha256;
+    if (stored && hex(stored) !== existingListed.sha256) {
+      throw concurrentPublishError(
+        `The stored ${filename} under ${manifest.id}@${manifest.version} hashes to ` +
+          `${hex(stored)}, but the catalog lists sha256 ${existingListed.sha256}: a ` +
+          `racing publish overwrote the committed file.`
+      );
+    }
+    throw alreadyPublishedError();
   }
 
   let artifact: ArtifactInfo;
@@ -521,12 +624,41 @@ export async function handlePublish(
     });
   }
 
+  // The manifest write is the commit point: everything above is invisible to the
+  // catalog until it lands. Re-checked against the re-read manifest so a
+  // concurrent publish is merged, not overwritten.
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());
-  const updated = upsertVersion(existing, manifest, versionEntry);
-  await writeAgentManifest(env.BUCKET, updated);
+  const updated = await updateAgentManifest(env.BUCKET, manifest.id, (current) => {
+    assertOwnedBy(current);
+    const held = channelOfVersion(current, manifest.version);
+    if (held && held !== channel) {
+      throw new HttpError(
+        409,
+        "channel_mismatch",
+        `${manifest.id}@${manifest.version} was published to the ${held} channel ` +
+          `concurrently. Send channel=${held}, or publish a new version.`
+      );
+    }
+    const listed = listedArtifact(current);
+    if (listed) {
+      // Both racers wrote the same key, so ours may have replaced the winner's bytes.
+      if (listed.sha256 !== artifact.sha256) {
+        throw concurrentPublishError(
+          `Another publish of ${filename} under ${manifest.id}@${manifest.version} ` +
+            `committed first with sha256 ${listed.sha256}, while this one uploaded ` +
+            `${artifact.sha256} to the same key, so the stored file may no longer ` +
+            `match the listed checksum.`
+        );
+      }
+      throw alreadyPublishedError();
+    }
+    return upsertVersion(current, manifest, versionEntry, channel);
+  });
 
   const baseUrl = new URL(request.url).origin;
   const index = await rebuildIndex(env.BUCKET, now, baseUrl);
+  // Report the package as readers see it, which for an alias pair spans both ids.
+  const resolved = (await readResolvedAgentManifest(env.BUCKET, manifest.id)) ?? updated;
 
   return json(
     {
@@ -534,9 +666,13 @@ export async function handlePublish(
         id: manifest.id,
         version: manifest.version,
         artifact,
+        channel,
         // How many artifacts (platforms) now exist under this version.
-        version_artifacts: updated.versions[manifest.version].artifacts.length,
-        latest_version: updated.latest_version,
+        version_artifacts: (channel === "stable" ? updated.versions : updated.next_versions!)[
+          manifest.version
+        ].artifacts.length,
+        latest_version: resolved.latest_version,
+        channels: channelsOf(resolved),
       },
       catalog_agents: index.agents.length,
     },

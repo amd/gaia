@@ -40,11 +40,9 @@ from pathlib import Path
 # EmailAgentConfig.skill_set reads. Imported so the two cannot drift.
 from gaia_agent_email.config import SKILL_SET_ENV
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-log = logging.getLogger("gaia_agent_email.sidecar")
+from gaia.logger import get_logger
+
+log = get_logger("gaia_agent_email.sidecar")
 
 # Default sidecar bind. NOT 4001 (reserved). 8131 is unused here.
 DEFAULT_PORT = 8131
@@ -251,9 +249,9 @@ app = build_app()
 
 def _read_declared_skill_sets() -> list[str]:
     """Skill-set names this build declares. Raises if the manifest is unreadable."""
-    from gaia.hub.manifest import parse as parse_manifest
-
     from gaia_agent_email.agent import EmailTriageAgent
+
+    from gaia.hub.manifest import parse as parse_manifest
 
     return list(parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets.set_names)
 
@@ -314,6 +312,12 @@ def _add_serve_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv=None) -> int:
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
     try:
         from gaia.tls import use_os_trust_store
     except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"net/http"
 	"strings"
 
@@ -137,10 +138,11 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 				version.Have, version.Want, version.Reason),
 			// The version comes from the installed core, so a restart relaunches
 			// the same one; saying so stops the user looping on it.
-			Remedy: "Upgrade the installed GAIA core so it matches this app, or re-run " +
-				"the installer from https://amd-gaia.ai. A restart brings the same version back.",
-			Command: "pip install --upgrade amd-gaia",
-			Where:   daemonLog(),
+			Remedy: "Update GAIA so its core matches this app: re-run the installer " +
+				"from https://amd-gaia.ai/#install. A restart brings the same version back.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      daemonLog(),
 		}
 	}
 	// Without this an absent route read as "<op> failed: <the whole skew
@@ -148,10 +150,12 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 	var missing *daemon.RouteMissingError
 	if errors.As(err, &missing) {
 		return Diagnosis{
-			Cause:   "GAIA's background service is out of date.",
-			Remedy:  "Upgrade the installed GAIA core, then press r. A restart brings the same version back.",
-			Command: "pip install --upgrade amd-gaia",
-			Where:   daemonLog(),
+			Cause: "GAIA's background service is out of date.",
+			Remedy: "Update GAIA from https://amd-gaia.ai/#install, then press r. " +
+				"A restart brings the same version back.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      daemonLog(),
 		}
 	}
 	var stale *daemon.StaleError

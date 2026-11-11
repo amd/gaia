@@ -30,14 +30,13 @@
 # crash (CLAUDE.md fail-loudly — report mode softens "measured and worse",
 # never "didn't measure").
 #
-# REGRESSION GATE. Committed per-category baselines are expected under
-# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-gemma-4-e4b). NONE EXIST
-# YET — they are captured by the first full `workflow_dispatch` on this runner
-# (the dev boxes must never start Lemonade). Until then the compare step prints
-# a loud "first adoption — no baseline" notice per category and skips the diff;
-# once a baseline is committed, `gaia eval agent --compare` exit 2 surfaces as
-# a ::warning:: in report mode and fails the build under `enforce: true` (the
-# dispatch input).
+# REGRESSION GATE. Each category compares against the flagship baseline in
+# $BASELINE_DIR (tests/fixtures/eval_baselines/gaia-flagship): the same Strix
+# Halo pool, the same Gemma model and the same judge (its meta.json), with a
+# scorecard for every gaia_* category this workflow runs (#5197). A category
+# with no scorecard there prints a loud "no baseline" notice and skips the diff.
+# `gaia eval agent --compare` exit 2 surfaces as a ::warning:: in report mode
+# and fails the build under `enforce: true` (the dispatch input).
 #
 # MEMORY IS ON — a deliberate deviation from every other eval workflow (they
 # set GAIA_MEMORY_DISABLED=1). Persistent memory is core to the flagship
@@ -63,16 +62,15 @@
 # Self-hosted: needs a running Lemonade Server on AMD hardware + the Agent UI
 # backend, so it runs on the ephemeral devlab-dispatch Strix Halo pool. THIS
 # POOL IS WINDOWS: every inline `run:` is PowerShell 5.1 (see the shell
-# default) — do not reintroduce bash (test_eval_agent_gemma_consolidation.yml
-# documents the scar). Each job gets a fresh machine with its own Lemonade, so
-# it must NOT join the `lemonade-eval` slot: that group serialises by name
-# across machines and belongs to the persistent pool (see eval_flagship.yml).
+# default) — do not reintroduce bash. Each job gets a fresh machine with its
+# own Lemonade, so it must NOT join the `lemonade-eval` slot: that group
+# serialises by name across machines and belongs to the persistent pool (see
+# eval_flagship.yml).
 
 name: GAIA Agent Eval (judged scenarios, report mode)
 
 on:
-  # Manual trigger — the FULL run (all 16 categories, all tiers). This is also
-  # how the first Gemma baselines get captured on the runner.
+  # Manual trigger — the FULL run (all 16 categories, all tiers).
   workflow_dispatch:
     inputs:
       categories:
@@ -116,7 +114,7 @@ on:
         description: 'Claude Code subscription token (primary account); preferred over ANTHROPIC_API_KEY, as in eval_flagship.yml.'
         required: false
       CLAUDE_CODE_OAUTH_TOKEN_SECONDARY:
-        description: 'Secondary account token, used when vars.CLAUDE_ACCOUNT is secondary.'
+        description: 'Backup account. Used when the primary is out of quota, at the start or mid-run.'
         required: false
       ANTHROPIC_API_KEY:
         description: 'Judge/driver credential — REQUIRED; absent → the preflight fails the run before any eval spend, never a skip. (Declared optional only so `secrets: inherit` call sites need not name it.)'
@@ -157,7 +155,7 @@ env:
   # The checkout is outside this runner's home, so without this every
   # `setup.index_documents` scenario 403s (#3585). Declares the corpus only.
   GAIA_DOCUMENT_ROOTS: ${{ github.workspace }}\eval\corpus
-  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-gemma-4-e4b
+  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
   # Fixture server port — the corpus hardcodes http://127.0.0.1:8765
   # (tests/fixtures/gaia/README.md; never 4001/4200/8141/13305).
   FIXTURE_PORT: '8765'
@@ -268,11 +266,12 @@ jobs:
       # instead, on EVERY trigger (a run that cannot judge proves nothing).
       - name: Preflight — judge credential
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CODE_OAUTH_TOKEN) -and [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
-            Write-Host '::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. gaia eval agent drives + judges every scenario via claude -p, which needs the credential on this runner; without it the run could only produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass secrets: inherit from the calling workflow.'
+          if ([string]::IsNullOrWhiteSpace($env:CLAUDE_CODE_OAUTH_TOKEN) -and [string]::IsNullOrWhiteSpace($env:CLAUDE_CODE_OAUTH_TOKEN_SECONDARY) -and [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::None of CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN_SECONDARY or ANTHROPIC_API_KEY is set. gaia eval agent drives + judges every scenario via claude -p, which needs the credential on this runner; without it the run could only produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass secrets: inherit from the calling workflow.'
             exit 1
           }
           Write-Host "Judge credential present."
@@ -289,7 +288,7 @@ jobs:
           # branch's code) or session creation dies with ModuleNotFoundError.
           # Core gaia stays editable (-e .) so eval fixtures + thresholds
           # resolve in-repo.
-          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/gaia/python'
 
       - name: Check the venv interpreter
         env:
@@ -305,9 +304,9 @@ jobs:
               exit 1
             }
           }
-          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          & $env:VENV_PY -c "import gaia, gaia_agent"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent - the editable installs in the Setup Python Environment step are broken."
             exit 1
           }
           $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
@@ -327,6 +326,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
           claude --version
           if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      # The account this job runs on: the primary, or the secondary if the
+      # primary is out of quota. Both out fails here, naming both reset times.
+      - name: Pick the Claude account
+        id: claude_account
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          model: ${{ env.EVAL_MODEL }}
+          what: "The gaia agent eval"
+          python: ${{ env.VENV_PY }}
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -350,7 +361,7 @@ jobs:
       # repairs the one failure CI can repair (a stale registration), and the
       # --llamacpp-args flag loads it exactly the way gaia.rag.sdk does. On
       # failure, fail in seconds with a pointer — the deeper backend-cache
-      # recovery lives in test_eval_agent_gemma_consolidation.yml; run it (or
+      # recovery lives in eval_flagship.yml (agent-eval preflight); run it (or
       # its documented wipe) on the box rather than duplicating it here.
       - name: Preflight — embedder serves embeddings (memory-on run)
         run: |
@@ -368,7 +379,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in test_eval_agent_gemma_consolidation.yml (its embeddings preflight); run it on the box, then re-run this workflow."
+            Write-Host "::error::The embedder $($probe[-3]) cannot serve embeddings on this runner. This eval runs MEMORY-ON, so gaia_memory / gaia_rag / gaia_code would silently collapse into non-answers - refusing to spend the slot measuring nothing. Recovery: the backend-cache wipe documented in eval_flagship.yml (its agent-eval embeddings preflight); run it on the box, then re-run this workflow."
             exit 1
           }
 
@@ -390,9 +401,14 @@ jobs:
         # derivation on the job.
         timeout-minutes: ${{ github.event_name == 'pull_request' && 300 || 1980 }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          # Blank when the OAuth token is set: the judge adds --bare only with a key.
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          # The other account. The eval moves to it once if the first runs out of
+          # quota mid-run, and stops with a partial scorecard if both are out.
+          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
+          GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
         run: |
           # Deliberately NOT "Stop": the eval's stderr is piped through 2>&1
           # and under Stop the first stderr line becomes a terminating
@@ -417,6 +433,10 @@ jobs:
 
           # Children do not survive a step boundary, so the fixture server,
           # the backend, and every category run live in this ONE session.
+          # The agent under test runs shell commands; the backup token is for
+          # `claude -p` alone, so the children started here never inherit it.
+          $backupToken = $env:CLAUDE_CODE_OAUTH_TOKEN_BACKUP
+          Remove-Item Env:\CLAUDE_CODE_OAUTH_TOKEN_BACKUP -ErrorAction SilentlyContinue
           $fixtureLog = Join-Path $PWD "eval-out\fixtures.log"
           $fixture = Start-Process -FilePath $env:VENV_PY `
             -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","$env:FIXTURE_PORT" `
@@ -438,6 +458,7 @@ jobs:
             -RedirectStandardOutput $outLog `
             -RedirectStandardError $errLog `
             -NoNewWindow -PassThru
+          if ($backupToken) { $env:CLAUDE_CODE_OAUTH_TOKEN_BACKUP = $backupToken }
           if (-not $backend -or -not $fixture) {
             Write-Host "::error::Could not start gaia.ui.server / serve_fixtures.py - the venv install is broken."
             exit 1
@@ -493,6 +514,7 @@ jobs:
                 [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
               }
             }
+            $stoppedAt = $null
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
             Add-Summary "## Gaia eval wall clock"
             Add-Summary ""
@@ -547,6 +569,14 @@ jobs:
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min)"
               Add-Summary "| ``$category`` | $mins |"
 
+              if ($code -eq 3) {
+                # Claude stopped answering on every account. The runner already
+                # wrote this category's partial scorecard; keep it, start no more,
+                # and let the collect and upload steps report what ran.
+                Write-Host "::error title=Eval stopped - Claude unavailable::$category stopped part-way because Claude was unavailable on every configured account (the log above names the cause and reset times). Its partial scorecard is kept; later categories were not started."
+                $stoppedAt = $category
+                break
+              }
               if ($code -ne 0) {
                 # Never `exit $LASTEXITCODE` - on a launch failure it can be
                 # $null, which PowerShell turns into exit 0.
@@ -557,6 +587,10 @@ jobs:
 
             $swTotal.Stop()
             Add-Summary "| **total** | **$([math]::Round($swTotal.Elapsed.TotalMinutes, 1))** |"
+            if ($stoppedAt) {
+              Add-Summary ""
+              Add-Summary "**INCOMPLETE:** ``$stoppedAt`` stopped part-way because Claude was unavailable on every account; the categories after it never started. The partial scorecard is uploaded."
+            }
           }
           finally {
             # Persistent runner: never leave the stub registered for the next job.
@@ -567,6 +601,10 @@ jobs:
                 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
               }
             }
+          }
+          if ($stoppedAt) {
+            Write-Host "::error::This run is INCOMPLETE: $stoppedAt stopped part-way and the categories after it never started. Failing so it is never read as a full run."
+            exit 1
           }
 
       - name: Collect scorecards from the printed run directories
@@ -602,6 +640,10 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            $partial = (Get-Content -Raw -Encoding UTF8 "eval-out\$category\scorecard.json" | ConvertFrom-Json).partial
+            if ($partial) {
+              Write-Host "::error title=Partial scorecard - ${category}::$($partial.summary). The scenarios that ran are kept and uploaded; the rest are NOT_RUN and excluded from the comparison."
+            }
             $traces = Join-Path $runDir "traces"
             if (Test-Path $traces) {
               try { Copy-Item $traces "eval-out\$category\traces" -Recurse }
@@ -675,10 +717,9 @@ jobs:
             $category = $file.Directory.Name
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
             if (-not (Test-Path $baseline)) {
-              # No baselines exist until the first full workflow_dispatch on
-              # this runner commits them (dev boxes must never start
-              # Lemonade). Loud, per-category, never silent.
-              Write-Host "::notice::${category}: no committed baseline at $baseline - first adoption, comparison skipped. Capture baselines via a full workflow_dispatch run (--save-baseline) and commit them."
+              # A category the flagship baseline does not cover yet (e.g.
+              # gaia_git, gaia_resilience). Loud, per-category, never silent.
+              Write-Host "::notice::${category}: no committed baseline at $baseline, comparison skipped. Copy its scorecard unedited from a full eval_flagship.yml sweep on the Strix Halo pool and commit it there."
               continue
             }
             Write-Host "=================================================================="

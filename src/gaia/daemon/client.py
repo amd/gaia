@@ -33,6 +33,7 @@ from gaia.daemon.errors import (
     DaemonStartError,
     DaemonVersionError,
     LemonadeNotAnsweringError,
+    LemonadeStartFailedError,
 )
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -464,6 +465,33 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
     try:
+        agents = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    owned_sidecars = set()
+    if agents.status_code != 404:
+        if agents.status_code != 200:
+            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+        import psutil
+
+        for agent in agents.json().get("agents") or []:
+            pid = agent.get("pid")
+            if agent.get("state") != "running" or not isinstance(pid, int):
+                continue
+            owned_sidecars.add(pid)
+            try:
+                owned_sidecars.update(
+                    child.pid for child in psutil.Process(pid).children(recursive=True)
+                )
+            except psutil.Error:
+                # A launcher can exit while its packaged child is being
+                # reparented; an unavailable process contributes no children.
+                pass
+    try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
             headers=headers,
@@ -480,7 +508,11 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     users = [
         c.get("name") or c.get("kind") or "a GAIA app"
         for c in snapshot.get("clients") or []
-        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+        if any(
+            pid_alive(p)
+            for p in c.get("pids") or []
+            if p not in ours and p not in owned_sidecars
+        )
     ]
     if users:
         return f"{', '.join(users)} is still using it"
@@ -510,6 +542,31 @@ def _replace_outdated(inst: DaemonInstance, why: str) -> None:
             "stop when asked. Run `gaia daemon restart`. Where to look: `gaia "
             f"daemon logs` ({paths.log_path()})."
         )
+
+
+def replace_outdated_daemon() -> Optional[str]:
+    """Stop a daemon an update left running, even a busy one.
+
+    For a caller about to replace GAIA's Lemonade Server, which cuts off the
+    daemon's work anyway: left running, a daemon from the previous release
+    brings that release's server back as soon as the new one is stopped.
+
+    Returns:
+        Why the daemon was out of date, or None when none was.
+
+    Raises:
+        DaemonError: The outdated daemon would not stop.
+    """
+    with StartLock(timeout=_START_TIMEOUT):
+        inst = read_instance()
+        if inst is None or not pid_alive(inst.pid):
+            return None
+        stale = runs_replaced_install(inst)
+        if stale is None:
+            return None
+        _replace_outdated(inst, stale)
+        _set_deferred_notice(None)
+        return stale
 
 
 def missing_daemon_deps() -> list:
@@ -545,7 +602,10 @@ def _daemon_env(drop: tuple = ()) -> dict:
             os.path.abspath(entry) if entry else entry
             for entry in env["PYTHONPATH"].split(os.pathsep)
         )
-    return env
+    from gaia.llm.lemonade_choice import child_lemonade_env
+
+    # It and every sidecar it spawns would otherwise inherit an ignored address.
+    return child_lemonade_env(env)
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
@@ -841,9 +901,15 @@ def ensure_lemonade(
         ) from e
     if r.status_code == 503 and r.headers.get("Retry-After"):
         raise LemonadeNotAnsweringError(_error_detail(r))
-    if r.status_code != 200:
+    if r.status_code == 409:
         raise DaemonError(
-            f"the daemon could not start Lemonade Server: {_error_detail(r)}"
+            f"the daemon has no Lemonade Server of its own to start: "
+            f"{_error_detail(r)}"
+        )
+    if r.status_code != 200:
+        reason = _error_detail(r)
+        raise LemonadeStartFailedError(
+            f"the daemon could not start Lemonade Server: {reason}", reason=reason
         )
     return r.json()
 

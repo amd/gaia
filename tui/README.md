@@ -78,7 +78,7 @@ For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia-tui
+cd tui && make build                # -> tui/bin/gaia-tui (.exe on Windows)
 cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
 
@@ -185,7 +185,7 @@ fine.
 
 ## Choosing an AI provider
 
-Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+With the flagship agent, press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; once it connects it is kept in the OS credential store and
 handed back to Lemonade after a restart. Provider settings are shared with
@@ -340,8 +340,8 @@ that their agent-side context is unchanged, because their protocol has no reset.
 ## The `tui` prefix
 
 A leading `tui` word is accepted and dropped — `gaia-tui tui status` and
-`gaia-tui status` are the same command — so the `gaia tui …` form used
-elsewhere in the docs keeps working.
+`gaia-tui status` are the same command. It exists for older docs and scripts
+that spell the binary `gaia tui …`; new ones should use `gaia-tui`.
 
 ## Contributing: colours
 

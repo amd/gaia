@@ -153,7 +153,7 @@ def test_cli_turn_still_prompts_and_the_answer_is_honoured(project_layout, conso
 
 def test_chat_agent_validator_asks_its_console_before_prompting(monkeypatch):
     """The UI fix only holds if ChatAgent hands its validator the hook."""
-    chat = pytest.importorskip("gaia_agent_chat")
+    chat = pytest.importorskip("gaia_agent.chat_agent")
     config = chat.ChatAgentConfig(
         silent_mode=True,
         enable_browser=False,
@@ -161,8 +161,8 @@ def test_chat_agent_validator_asks_its_console_before_prompting(monkeypatch):
         enable_scratchpad=False,
     )
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         agent = chat.ChatAgent(config)
     monkeypatch.setattr("gaia.security._is_interactive", lambda: True)

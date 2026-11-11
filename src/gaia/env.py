@@ -8,6 +8,8 @@ starts for skills and tools get their environment from :func:`child_env`.
 
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional
 
 import dotenv
@@ -15,7 +17,23 @@ import dotenv
 NO_DOTENV_ENV_VAR = "GAIA_NO_DOTENV"
 CHILD_ENV_DENY_ENV_VAR = "GAIA_CHILD_ENV_DENY"
 
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# All a .env outside GAIA's install may supply. Paths, URLs, proxies, CAs,
+# loader variables and GAIA/Lemonade settings would let any folder redirect
+# or run code in GAIA, so they must come from the real environment.
+WORKING_DIR_CREDENTIALS = frozenset({"ANTHROPIC_API_KEY"})
+
+_working_dir_credentials: Dict[str, str] = {}
+_working_dir_credential_files: Dict[str, str] = {}
+_reported_dotenv_files: set = set()
+
+
+def _env_name(name: str) -> str:
+    """*name* as this OS compares environment names (Windows ignores case)."""
+    return name.upper() if os.name == "nt" else name
+
 
 # GAIA's own credentials: what the daemon hands its sidecars, plus the
 # engineering MCP pairing token. Kept in sync with gaia.daemon.constants,
@@ -25,6 +43,7 @@ _INTERNAL_SECRET_NAMES = frozenset(
         "GAIA_MODEL_BROKER_TOKEN",
         "GAIA_MODEL_BROKER_TOKEN_FILE",
         "GAIA_HOST_CUSTODY_SECRET",
+        "GAIA_HOST_KEYCHAIN_SECRET_FILE",
         "GAIA_ENGINEERING_TOKEN",
     }
 )
@@ -43,14 +62,132 @@ def dotenv_disabled() -> bool:
     return value.strip().lower() in _TRUTHY
 
 
-def load_env() -> bool:
-    """Load ``.env`` into ``os.environ`` unless ``GAIA_NO_DOTENV`` is set.
+def _install_tree_dotenv() -> Optional[Path]:
+    """The nearest ``.env`` at or above GAIA's own package directory.
 
-    Returns True when a ``.env`` file was found and loaded.
+    None in a frozen build: it unpacks under a shared temp folder, so a walk up
+    from there would reach a ``.env`` any local user can write.
+    """
+    if getattr(sys, "frozen", False):
+        return None
+    start = Path(__file__).resolve().parent
+    for folder in (start, *start.parents):
+        candidate = folder / ".env"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def _load_working_dir_credentials(path: Path) -> None:
+    """Keep the allowlisted credentials from *path*; name everything else."""
+    values = dotenv.dotenv_values(path)
+    names = {_env_name(name): name for name in WORKING_DIR_CREDENTIALS}
+    ignored = []
+    invalid = 0
+    for name, value in values.items():
+        allowed = names.get(_env_name(name))
+        if allowed is not None:
+            if value and allowed not in os.environ:
+                _working_dir_credentials.setdefault(allowed, value)
+                _working_dir_credential_files.setdefault(allowed, str(path))
+        elif _ENV_NAME_RE.match(name):
+            ignored.append(name)
+        else:
+            invalid += 1
+    key = str(path.resolve())
+    if (ignored or invalid) and key not in _reported_dotenv_files:
+        _reported_dotenv_files.add(key)
+        # Names come from the file: list only plain identifiers, never raw text.
+        parts = sorted(ignored) + ([f"{invalid} invalid names"] if invalid else [])
+        from gaia.logger import get_logger  # pylint: disable=import-outside-toplevel
+
+        get_logger(__name__).warning(
+            "Ignored %s from %r: a .env in the working directory may only supply "
+            "%s. Export the others in your shell instead.",
+            ", ".join(parts),
+            str(path),
+            ", ".join(sorted(WORKING_DIR_CREDENTIALS)),
+        )
+
+
+def load_env() -> bool:
+    """Load ``.env`` settings unless ``GAIA_NO_DOTENV`` is set.
+
+    The ``.env`` at or above GAIA's own install loads in full into
+    ``os.environ``, as it always has. A ``.env`` found from the working
+    directory instead may be any project's, so only
+    :data:`WORKING_DIR_CREDENTIALS` are read from it — kept out of
+    ``os.environ`` so no process GAIA starts inherits them (read them with
+    :func:`credential`) — and the other names it holds are logged as ignored.
+    Variables already set in the environment win. Returns True when a ``.env``
+    file was found.
     """
     if dotenv_disabled():
         return False
-    return dotenv.load_dotenv()
+    found = False
+    install = _install_tree_dotenv()
+    if install is not None:
+        dotenv.load_dotenv(install)
+        found = True
+    # usecwd: python-dotenv otherwise searches from this file, never the cwd.
+    cwd_path = dotenv.find_dotenv(usecwd=True)
+    if cwd_path and not (install and _same_file(Path(cwd_path), install)):
+        _load_working_dir_credentials(Path(cwd_path))
+        found = True
+    return found
+
+
+def credential(name: str) -> Optional[str]:
+    """*name* from the environment, else from a working-directory ``.env``.
+
+    For GAIA's own use only: the ``.env`` value never enters ``os.environ``.
+    """
+    return os.environ.get(name) or _working_dir_credentials.get(name)
+
+
+def working_dir_credential_file(name: str) -> Optional[str]:
+    """The working-directory ``.env`` that supplied *name*, when it was one.
+
+    None when the environment holds *name*, since that value is the one used.
+    """
+    if os.environ.get(name):
+        return None
+    return _working_dir_credential_files.get(name)
+
+
+def working_dir_credential(name: str) -> Optional[str]:
+    """*name* as a working-directory ``.env`` supplied it, else None."""
+    return _working_dir_credentials.get(name)
+
+
+def dotenv_credential_file(name: str, value: Optional[str] = None) -> Optional[str]:
+    """The ``.env`` file that supplied *value* for *name*, or None if the shell did.
+
+    *value* defaults to ``os.environ[name]``. Checks the working-directory file
+    (never merged into ``os.environ``) and the one at GAIA's install, which
+    :func:`load_env` merges in.
+    """
+    import gaia  # pylint: disable=import-outside-toplevel
+
+    if value is None:
+        value = os.environ.get(name)
+    if not value:
+        return _working_dir_credential_files.get(name)
+    if gaia.pre_dotenv_env(name) == value:
+        return None
+    if _working_dir_credentials.get(name) == value:
+        return _working_dir_credential_files.get(name)
+    install = _install_tree_dotenv()
+    if install is not None and dotenv.dotenv_values(install).get(name) == value:
+        return str(install)
+    return None
 
 
 def is_internal_secret(name: str) -> bool:
@@ -64,8 +201,60 @@ def _configured_deny() -> set:
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
 
 
+def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
+    """Give a child the library path the user had, not the frozen bundle's.
+
+    PyInstaller on Linux points ``LD_LIBRARY_PATH`` at the bundle and keeps the
+    user's value in ``LD_LIBRARY_PATH_ORIG``; a child that inherits the bundle
+    path (lemond, flm) loads its older libstdc++ and exits before it starts.
+    Changes and returns *env*; a no-op unless frozen on Linux, and safe to
+    repeat: a path that no longer starts with the bundle is the user's.
+    """
+    if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
+        return env
+    original = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if original is not None:
+        env["LD_LIBRARY_PATH"] = original
+    elif _starts_with_bundle(env.get("LD_LIBRARY_PATH", "")):
+        env.pop("LD_LIBRARY_PATH", None)
+    # A PyInstaller binary the child runs must set up its own bundle: one that
+    # reuses ours expects our libraries on LD_LIBRARY_PATH.
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _reuse_this_bundle(env: Dict[str, str]) -> Dict[str, str]:
+    """*env* for a relaunch of this binary that reuses its unpacked bundle.
+
+    The relaunch skips setting up the bundle, so it finds its libraries only
+    through the path the bootloader gave this process: put the bundle back in
+    front of the user's path, as the bootloader does.
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if not (bundle and sys.platform.startswith("linux")):
+        return env
+    env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+    user = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if user is None:
+        current = env.get("LD_LIBRARY_PATH", "")
+        user = None if _starts_with_bundle(current) else (current or None)
+    if user is None:
+        env["LD_LIBRARY_PATH"] = bundle
+    else:
+        env["LD_LIBRARY_PATH"] = f"{bundle}:{user}"
+        env["LD_LIBRARY_PATH_ORIG"] = user
+    return env
+
+
+def _starts_with_bundle(path: str) -> bool:
+    bundle = getattr(sys, "_MEIPASS", None)
+    return bool(bundle) and path.split(":")[0] == bundle
+
+
 def child_env(
-    extra: Optional[Mapping[str, str]] = None, deny: Iterable[str] = ()
+    extra: Optional[Mapping[str, str]] = None,
+    deny: Iterable[str] = (),
+    relaunch_self: bool = False,
 ) -> Dict[str, str]:
     """A fresh environment for a child process GAIA spawns.
 
@@ -73,6 +262,11 @@ def child_env(
     name listed in ``GAIA_CHILD_ENV_DENY`` (comma or space separated) or in
     ``deny``, with ``extra`` overlaid last — a name the caller passes
     explicitly is always delivered. ``os.environ`` is never modified.
+
+    A frozen build hands the user's library path, not its bundle's (see
+    :func:`unfreeze_loader_paths`). *relaunch_self* is for a child that runs
+    ``sys.executable``: it reuses this unpacked bundle, which a one-file build
+    would otherwise extract again (~25 s), so it gets the bundle's path.
     """
     blocked = _configured_deny() | {name.upper() for name in deny}
     env = {
@@ -80,6 +274,10 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
+    if relaunch_self and getattr(sys, "frozen", False):
+        _reuse_this_bundle(env)
+    else:
+        unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
     return env

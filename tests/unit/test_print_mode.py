@@ -5,6 +5,7 @@
 
 import io
 import json
+import logging
 import os
 import sys
 import types
@@ -36,8 +37,11 @@ def test_long_form_print_is_the_same_flag(parser):
 
 
 def test_bare_p_means_read_stdin(parser):
-    # const="" is what tells run() to read the prompt from stdin.
-    assert parser.parse_args(["-p"]).print_prompt == ""
+    assert parser.parse_args(["-p"]).print_prompt == print_mode.READ_STDIN
+
+
+def test_empty_p_is_not_a_request_to_read_stdin(parser):
+    assert parser.parse_args(["-p", ""]).print_prompt == ""
 
 
 def test_no_p_leaves_print_prompt_unset(parser):
@@ -159,6 +163,8 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
             "json",
             "--max-steps",
             "3",
+            "--attempts",
+            "2",
             "--dangerously-skip-permissions",
             "--base-url",
             "http://h:1/api/v1",
@@ -171,6 +177,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         output_format="json",
         verbose=False,
         max_steps=3,
+        attempts=2,
         skip_permissions=True,
         full_access=False,
         base_url="http://h:1/api/v1",
@@ -183,6 +190,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
     assert _run_main(monkeypatch, ["-p", "hi"]) == 1
     assert run.call_args.kwargs["output_format"] == "text"
     assert run.call_args.kwargs["skip_permissions"] is False
+    assert run.call_args.kwargs["attempts"] == 1
 
 
 @pytest.mark.parametrize(
@@ -192,6 +200,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--output-format", "json"],
         ["--verbose"],
         ["--max-steps", "3"],
+        ["--attempts", "2"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
         ["--model", "m", "chat"],
@@ -242,13 +251,47 @@ def test_read_prompt_prefers_the_argument(monkeypatch):
 
 def test_read_prompt_reads_and_strips_stdin(monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("  line one\nline two\n\n"))
-    assert print_mode.read_prompt("") == "line one\nline two"
+    assert print_mode.read_prompt(print_mode.READ_STDIN) == "line one\nline two"
+
+
+def test_read_prompt_decodes_raw_stdin_as_utf8_and_strips_bom(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO("\ufeffcafé 日本 🎉\n".encode("utf-8"))
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert print_mode.read_prompt(print_mode.READ_STDIN) == "café 日本 🎉"
+
+
+def test_read_prompt_rejects_non_utf8_raw_stdin(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO(b"\xff\xfehello")
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    with pytest.raises(ValueError, match="UTF-8"):
+        print_mode.read_prompt(print_mode.READ_STDIN)
+
+
+@pytest.mark.parametrize("prompt", ["", "   "])
+def test_an_empty_prompt_is_refused_without_touching_stdin(monkeypatch, prompt):
+    # A stdin that never closes: reading it is the hang this guards against.
+    class _Open:
+        def isatty(self):
+            return False
+
+        def read(self):
+            raise AssertionError("read stdin for an explicitly empty prompt")
+
+    monkeypatch.setattr(sys, "stdin", _Open())
+    with pytest.raises(ValueError, match="empty prompt"):
+        print_mode.read_prompt(prompt)
 
 
 def test_read_prompt_rejects_a_terminal(monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("", tty=True))
     with pytest.raises(ValueError, match="needs a prompt"):
-        print_mode.read_prompt("")
+        print_mode.read_prompt(print_mode.READ_STDIN)
 
 
 def test_read_prompt_rejects_missing_stdin(monkeypatch):
@@ -261,7 +304,40 @@ def test_read_prompt_rejects_missing_stdin(monkeypatch):
 def test_read_prompt_rejects_empty_stdin(monkeypatch, text):
     monkeypatch.setattr(sys, "stdin", _FakeStdin(text))
     with pytest.raises(ValueError, match="empty prompt"):
-        print_mode.read_prompt("")
+        print_mode.read_prompt(print_mode.READ_STDIN)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="the console code page is Windows-only"
+)
+def test_gaia_p_reads_a_prompt_redirected_from_a_file(tmp_path):
+    # `gaia -p < prompt.txt`: setting the console code page once shared this
+    # stdin, and cmd.exe moved the file to its end before the prompt was read.
+    import subprocess
+
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_bytes(b"fix the bug in a.py\n")
+    echo = (
+        "import sys\n"
+        "from gaia import print_mode\n"
+        "_read = print_mode.read_prompt\n"
+        "def _echo(p):\n"
+        "    print('PROMPT:' + _read(p)); sys.exit(0)\n"
+        "print_mode.read_prompt = _echo\n"
+        "from gaia.cli import main\n"
+        "sys.exit(main())\n"
+    )
+    with open(prompt, "rb") as stdin:
+        done = subprocess.run(
+            [sys.executable, "-c", echo, "-p"],
+            stdin=stdin,
+            capture_output=True,
+            cwd=tmp_path,
+            timeout=120,
+            check=False,
+        )
+    out = done.stdout.decode("utf-8", errors="replace")
+    assert "PROMPT:fix the bug in a.py" in out, done.stderr.decode(errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +489,11 @@ def stub_env(monkeypatch):
     init = MagicMock(return_value=(True, "http://detected:13305/api/v1"))
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
 
-    from gaia.logger import log_manager
-
-    monkeypatch.setattr(log_manager, "configure_agent_console", MagicMock())
+    manager = MagicMock()
+    monkeypatch.setattr("gaia.logger.configure", lambda *args, **kwargs: manager)
+    # print_mode's logger is bound at import; a logging test that ran first can
+    # leave its level at INFO, which would print a caught traceback to stderr.
+    monkeypatch.setattr("gaia.print_mode.log", MagicMock())
     return init
 
 
@@ -562,7 +640,7 @@ def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
 
 def test_run_reads_the_prompt_from_stdin(stub_env, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("piped prompt\n"))
-    assert print_mode.run("", model="m") == 0
+    assert print_mode.run(print_mode.READ_STDIN, model="m") == 0
     assert _agent().queries == ["piped prompt"]
 
 
@@ -574,7 +652,7 @@ def test_run_rejects_an_unknown_output_format_before_starting_anything(stub_env)
 
 def test_run_with_no_prompt_on_a_terminal_starts_nothing(stub_env, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", _FakeStdin("", tty=True))
-    assert print_mode.run("", model="m") == 1
+    assert print_mode.run(print_mode.READ_STDIN, model="m") == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "needs a prompt" in captured.err
@@ -591,12 +669,81 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
     assert _agent().drained
 
 
-def test_missing_flagship_wheel_is_an_actionable_runtime_error(
-    stub_env, monkeypatch, capsys
-):
+class _Outcome:
+    def __init__(
+        self, terminal_type, final_answer=None, error_detail=None, failed=False
+    ):
+        self.terminal_type = terminal_type
+        self.final_answer = final_answer
+        self.error_detail = error_detail
+        self.failed = failed
+
+
+@pytest.fixture
+def relay(stub_env, monkeypatch):
+    """No importable agent, as in the frozen app: the turn goes to the sidecar."""
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+
+    class Calls(list):
+        outcome = _Outcome("final", final_answer="pong from the binary")
+
+    calls = Calls()
+
+    def run_query(agent_id, query, **kwargs):
+        calls.append((agent_id, query, kwargs))
+        return calls.outcome
+
+    monkeypatch.setattr("gaia.daemon.agent_query.run_query", run_query)
+    return calls
+
+
+def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
+    relay, capsys, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    assert print_mode.run("q", model="m", output_format="json") == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["result"] == "pong from the binary" and not record["is_error"]
+    [(agent_id, query, kwargs)] = relay
+    assert (agent_id, query, kwargs["model"]) == ("gaia", "q", "m")
+    # The agent works in the caller's folder, as an in-process -p would.
+    assert kwargs["working_directory"] == str(tmp_path)
+    assert kwargs["allowed_paths"] == [str(tmp_path)]
+
+
+def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
+    """The daemon brings up the model server for its agent, as it does for the
+    Agent UI; starting one here would race it."""
+    assert print_mode.run("q", model="m") == 0
+    stub_env.assert_not_called()
+
+
+def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="Couldn't reach the local LLM.", failed=True
+    )
     assert print_mode.run("q", model="m") == 1
-    assert "re-run `gaia -p`" in capsys.readouterr().err
+    assert "Couldn't reach the local LLM" in capsys.readouterr().err
+
+
+def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
+    relay.outcome = _Outcome("error", error_detail="model failed to load")
+    assert print_mode.run("q", model="m") == 1
+    assert "model failed to load" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flags, named",
+    [
+        ({"skip_permissions": True}, "--dangerously-skip-permissions"),
+        ({"full_access": True}, "--full-access"),
+        ({"base_url": "http://h:1/api/v1"}, "--base-url"),
+    ],
+)
+def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
+    assert print_mode.run("q", model="m", **flags) == 1
+    assert named in capsys.readouterr().err
+    assert relay == []
 
 
 # ---------------------------------------------------------------------------
@@ -803,3 +950,161 @@ def test_main_forwards_full_access(monkeypatch):
     _run_main(monkeypatch, ["-p", "hi", "--full-access"])
     assert run.call_args.kwargs["full_access"] is True
     assert run.call_args.kwargs["skip_permissions"] is False
+
+
+def test_a_failure_with_no_recorded_error_says_its_status_once(stub_env, capsys):
+    class _Incomplete(_StubAgent):
+        def process_query(self, text):
+            return {"status": "incomplete", "result": "partial", "conversation": []}
+
+    sys.modules["gaia_agent.agent"].GaiaAgent = _Incomplete
+    assert print_mode.run("q", model="m") == 1
+    assert capsys.readouterr().err.count("ended with status") == 1
+
+
+def test_an_unexpected_failure_does_not_log_its_traceback_at_info(
+    stub_env, capsys, caplog
+):
+    class _Boom(_StubAgent):
+        def process_query(self, text):
+            raise ConnectionError("reset")
+
+    sys.modules["gaia_agent.agent"].GaiaAgent = _Boom
+    with caplog.at_level(logging.INFO):
+        assert print_mode.run("q", model="m") == 1
+    assert not [r for r in caplog.records if r.exc_info]
+
+
+@pytest.mark.parametrize("value", ["0", "5", "two"])
+def test_attempts_out_of_range_is_a_usage_error(monkeypatch, value):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    assert _run_main(monkeypatch, ["-p", "hi", "--attempts", value]) == 2
+    run.assert_not_called()
+
+
+def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
+    """Stub the server, the attempts and the final turn; record what they got."""
+    from gaia import attempts
+
+    seen = {}
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(print_mode, "_start_server", lambda m, b: None)
+
+    def fake_attempts(text, count, flags):
+        seen.update(text=text, count=count, flags=flags)
+        records = [
+            {
+                "is_error": False,
+                "status": "success",
+                "num_steps": 2,
+                "num_tool_calls": 3,
+                "input_tokens": 100,
+                "cached_tokens": 10,
+                "output_tokens": 5,
+                "duration_s": 1.0,
+                "result": "draft",
+            },
+            {"is_error": True, "status": "error", "error": "boom"},
+        ]
+        return text + " +MERGE", records, scratch
+
+    def fake_turn(text, **kw):
+        seen.update(final=text, extra_paths=kw.get("extra_paths"))
+        if final_raises:
+            raise final_raises
+        return {
+            "type": "result",
+            "is_error": False,
+            "status": "success",
+            "result": "merged",
+            "num_steps": 4,
+            "num_tool_calls": 1,
+            "input_tokens": 1000,
+            "cached_tokens": 0,
+            "output_tokens": 50,
+        }
+
+    monkeypatch.setattr(attempts, "run_attempts", fake_attempts)
+    monkeypatch.setattr(print_mode, "_run_turn", fake_turn)
+    return seen, scratch
+
+
+def test_attempts_pass_flags_merge_in_place_and_sum_usage(
+    monkeypatch, tmp_path, capsys
+):
+    seen, scratch = _attempt_doubles(monkeypatch, tmp_path)
+    code = print_mode.run(
+        "Review it",
+        model="m1",
+        output_format="json",
+        attempts=2,
+        max_steps=7,
+        full_access=True,
+        base_url="http://h:1/api/v1",
+    )
+    assert code == 0
+    # Full access implies skipping permissions; attempts get the same model and server.
+    assert seen["flags"] == [
+        "--model",
+        "m1",
+        "--max-steps",
+        "7",
+        "--full-access",
+        "--base-url",
+        "http://h:1/api/v1",
+    ]
+    assert seen["count"] == 2 and seen["final"] == "Review it +MERGE"
+    # The final turn may read the drafts, and they are gone afterwards.
+    assert seen["extra_paths"] == [str(scratch)] and not scratch.exists()
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    record = json.loads(out)
+    assert record["result"] == "merged"
+    assert record["input_tokens"] == 1100 and record["num_steps"] == 6
+    assert record["cached_tokens"] == 10 and record["output_tokens"] == 55
+    assert [a["is_error"] for a in record["attempts"]] == [False, True]
+    assert "result" not in record["attempts"][0]  # drafts' text isn't repeated
+    # A partly failed run still says why each failed attempt failed.
+    assert record["attempts"][1]["error"] == "boom"
+    assert record["attempts"][0]["error"] is None
+
+
+def test_attempts_skip_permissions_only_when_asked(monkeypatch, tmp_path):
+    seen, _ = _attempt_doubles(monkeypatch, tmp_path)
+    print_mode.run("t", attempts=2)
+    assert seen["flags"] == []
+    (tmp_path / "scratch").mkdir()
+    print_mode.run("t", attempts=2, skip_permissions=True)
+    assert seen["flags"] == ["--dangerously-skip-permissions"]
+
+
+def test_drafts_are_removed_even_when_the_final_turn_fails(
+    monkeypatch, tmp_path, capsys
+):
+    _, scratch = _attempt_doubles(
+        monkeypatch, tmp_path, final_raises=RuntimeError("down")
+    )
+    assert print_mode.run("t", output_format="json", attempts=2) == 1
+    assert not scratch.exists()
+    out = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "RuntimeError: down" in json.loads(out)["error"]
+
+
+def test_one_attempt_never_copies_the_folder(monkeypatch):
+    from gaia import attempts
+
+    monkeypatch.setattr(
+        attempts, "run_attempts", MagicMock(side_effect=AssertionError("copied"))
+    )
+    monkeypatch.setattr(
+        print_mode,
+        "_run_turn",
+        lambda text, **kw: {
+            "type": "result",
+            "is_error": False,
+            "status": "success",
+            "result": "ok",
+        },
+    )
+    assert print_mode.run("t", attempts=1) == 0

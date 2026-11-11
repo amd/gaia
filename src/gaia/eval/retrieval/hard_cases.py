@@ -43,7 +43,6 @@ class CaseContext:
     repo: Dataset
     model: Optional[str]
     answers: bool
-    financebench: Optional[Dataset] = None
     log: Callable[[str], None] = print
     rag_overrides: Dict[str, object] = field(default_factory=dict)
 
@@ -227,64 +226,46 @@ def exact_duplicate(ctx: CaseContext) -> dict:
     )
 
 
-def near_duplicate_filings(ctx: CaseContext) -> dict:
-    """Same company, consecutive years: does retrieval stay in the asked-about filing?"""
-    fb = ctx.financebench
-    if fb is None:
-        return _result(
-            "near_duplicate_filings",
-            "Near-duplicate filings (same company, other years)",
-            "skipped",
-            "Needs the FinanceBench download (full suite only).",
-        )
-    families = ("ADOBE_", "3M_")
-    docs = [d for d in fb.documents if d.id.startswith(families) and "10K" in d.id]
-    doc_ids = {d.id for d in docs}
-    questions = [q for q in fb.questions if set(q.doc_ids) <= doc_ids]
-    bench = ctx.bench(ctx.workdir / "near-duplicate", docs)
-    bench.build()
-    ranks, precision = [], []
-    for q in questions:
-        evidence, _ = bench.evidence_for(q)
-        ranked, _ = bench.sdk_search(q.question, depth=5)
-        ranks.append(bench._rank(ranked, evidence))  # pylint: disable=protected-access
-        wanted = {e.path for e in evidence}
-        precision.append(
-            sum(1 for i in ranked if i in bench.spans and bench.spans[i].path in wanted)
-            / max(len(ranked), 1)
-        )
-    summary = retrieval_summary(ranks, ks=(1, 5))
-    share = sum(precision) / len(precision) if precision else 0.0
-    return _result(
-        "near_duplicate_filings",
-        "Near-duplicate filings (same company, other years)",
-        "measured",
-        f"With {len(docs)} filings from two companies indexed, recall@5 is "
-        f"{summary.get('recall@5', 0):.0%} and {share:.0%} of the top-5 chunks come from the "
-        "filing the question names.",
-        documents=sorted(doc_ids),
-        questions=len(questions),
-        retrieval=summary,
-        right_filing_share_top5=round(share, 3),
+def image_only_pdf(src: Path, dest: Path, dpi: int = 150) -> None:
+    """Write *dest*: every page of *src* rendered to an image, with no text layer."""
+    import pypdfium2 as pdfium  # pylint: disable=import-outside-toplevel
+
+    from gaia.utils.parsing import (  # pylint: disable=import-outside-toplevel
+        PDFIUM_LOCK,
+    )
+
+    pages = []
+    with PDFIUM_LOCK:
+        original = pdfium.PdfDocument(src)
+        try:
+            for index in range(len(original)):
+                page = original[index]
+                try:
+                    bitmap = page.render(scale=dpi / 72)
+                    try:
+                        # convert() copies out of the bitmap's buffer.
+                        pages.append(bitmap.to_pil().convert("RGB"))
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+        finally:
+            original.close()
+    # Saved at the render DPI, each image page keeps the original page size.
+    pages[0].save(
+        dest, format="PDF", save_all=True, append_images=pages[1:], resolution=dpi
     )
 
 
 def scanned_pdf(ctx: CaseContext) -> dict:
     """Pass when an image-only PDF is either read (VLM) or refused loudly, never indexed empty."""
-    import pymupdf  # pylint: disable=import-outside-toplevel
-
     from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
 
     src = _doc(ctx.repo, "oil_gas_manual")
     work = ctx.workdir / "scanned"
     work.mkdir(parents=True, exist_ok=True)
     scanned = work / "scanned_oil_gas_manual.pdf"
-    with pymupdf.open(src.path) as original, pymupdf.open() as out:
-        for page in original:
-            pix = page.get_pixmap(dpi=150)
-            image_page = out.new_page(width=page.rect.width, height=page.rect.height)
-            image_page.insert_image(image_page.rect, pixmap=pix)
-        out.save(scanned)
+    image_only_pdf(src.path, scanned)
 
     rag = make_rag(work / "rag-cache", [work], ctx.model, **ctx.rag_overrides)
     vlm_on = (
@@ -570,4 +551,4 @@ PR_CASES = (
     capacity_eviction,
     scanned_pdf,
 )
-FULL_CASES = PR_CASES + (near_duplicate_filings, prompt_injection, query_history_leak)
+FULL_CASES = PR_CASES + (prompt_injection, query_history_leak)

@@ -5,9 +5,12 @@ a procedure written for a model to follow, plus the tools it needs. Unlike an
 agent, it does not run on its own, so it is a separate lane with its own package
 format and publish contract ([#2467](https://github.com/amd/gaia/issues/2467)).
 
-This directory is the AMD **starter pack** (#893): fourteen worked examples, each
-demonstrating a different platform primitive (RAG, scratchpad SQL, memory,
-browser, file I/O, image generation). They are meant to be copied and edited,
+This directory is the AMD **starter pack** (#893): twenty-two worked examples,
+each demonstrating a different platform primitive (RAG, scratchpad SQL,
+memory, browser, file I/O, CLI grants, email, audio and music, image
+generation, and skills that ship their own tools: `rss-digest`; `calendar` and
+`send-email`, whose writes always ask the user first; and `guides` and
+`calculators`, whose tools draw a card in the client). They are meant to be copied and edited,
 not used verbatim — see the
 [starter skills guide](https://amd-gaia.ai/docs/guides/starter-skills).
 
@@ -32,9 +35,19 @@ that surface: `SKILL.md`'s front matter already carries the identity
 matter and ships the directory beside it as the bundle — a second manifest would
 only create two places for the same facts to disagree.
 
-`name` must equal the directory name; a mismatch is a load error, not a warning.
+Keep `name` equal to the directory name. `gaia skill import` installs under the `name` in the file even if the folder is called something else.
 
-## Use one locally
+## Use one
+
+Every skill here is published to the hub with each GAIA release, signed by the AMD
+key GAIA trusts out of the box (v0.25.4 and later). Browse them at https://amd-gaia.ai/hub.
+
+```bash
+gaia skill search report
+gaia skill install research-report
+```
+
+Or copy one from a clone:
 
 ```bash
 gaia skill import hub/skills/research-report   # copy into ~/.gaia/skills/
@@ -47,19 +60,22 @@ file claims — the tier records what *you* verified, not what the author assert
 
 ## Publishing
 
-**By pull request only.** The hub's publish endpoint is gated on a
-maintainer-held token, so a contributor never handles one; `gaia skill publish`
-is what maintainers run *after* a PR merges. Before opening one:
+**By pull request only.** Every final release tag runs
+[`release_skills.yml`](../../.github/workflows/release_skills.yml), which signs and
+publishes each skill whose `version` is not on the hub yet. Hub versions are
+immutable, so **bump `version:` whenever you change a skill** — the release fails
+on a published version whose files changed. Before opening a PR:
 
 ```bash
 gaia skill audit ./hub/skills/<name>/    # exit 0 (ALLOW) is what merges cleanly
 ```
 
 The **Skill Audit (deterministic gate)** check is required on every PR that
-touches a skill — `BLOCK` fails outright, `REVIEW` holds for maintainer sign-off.
+touches a skill — in `hub/skills/`, anything other than `ALLOW` fails it.
 Merging is not a tier promotion: the audit verdict plus publisher signing decide
 the tier.
 
-Contributing your own skill? It goes in
-[`skills/community/`](../../skills/community/), not here. Full route in the
-[skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).
+Contributing your own skill? It goes **here**, in `hub/skills/<name>/`, by pull
+request. Once it merges, the next final release publishes it with the rest. The
+walkthrough is [Build and Publish a Skill](https://amd-gaia.ai/docs/guides/building-skills);
+the format is in the [skill format spec](https://amd-gaia.ai/docs/spec/agent-skills).

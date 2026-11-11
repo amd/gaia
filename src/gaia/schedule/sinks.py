@@ -1,3 +1,6 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Output sinks for scheduled runs.
 
 A sink decides *where* a scheduled run's output goes. Per the GAIA no-fallback
@@ -16,7 +19,8 @@ from typing import Any, Dict
 import requests
 
 TELEGRAM_API = "https://api.telegram.org"
-_NOTIFICATION_SYSTEMS = ("Darwin", "Linux")
+_NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
+_WINDOWS_NOTIFICATION_STARTUP_GRACE_S = 3
 
 
 def validate(sink: str, sink_args: Dict[str, Any]) -> None:
@@ -102,25 +106,79 @@ def _to_notification(output: str, sink_args: Dict[str, Any]) -> None:
     try:
         if system == "Darwin":
             script = f"display notification {_osa(output)} with title {_osa(title)}"
-            subprocess.run(["osascript", "-e", script], check=True)
+            subprocess.run(["osascript", "-e", script], check=True, timeout=30)
         elif system == "Linux":
-            subprocess.run(["notify-send", title, output], check=True)
+            subprocess.run(["notify-send", title, output], check=True, timeout=30)
+        elif system == "Windows":
+            _to_windows_notification(title, output)
         else:
             raise NotImplementedError(
                 f"notification sink is not implemented for {system!r}; "
                 f"use --sink stdout, file:<path>, or telegram instead"
             )
     except FileNotFoundError as e:
-        tool = "osascript" if system == "Darwin" else "notify-send"
+        tool = (
+            "osascript"
+            if system == "Darwin"
+            else "PowerShell" if system == "Windows" else "notify-send"
+        )
         raise FileNotFoundError(
             f"notification sink needs {tool!r} on PATH ({system}): {e}. "
             f"Install it or choose a different --sink."
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"notification sink did not finish posting within {e.timeout:g}s. "
+            f"Choose a different --sink or check the desktop notification daemon."
         ) from e
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
             f"notification sink failed to post (exit {e.returncode}). "
             f"Choose a different --sink or check the desktop notification daemon."
         ) from e
+
+
+def _to_windows_notification(title: str, output: str) -> None:
+    """Show a Windows notification without interpolating user text into PowerShell."""
+    try:
+        from plyer import notification
+    except ImportError:
+        pass
+    else:
+        # Do not silently substitute another notifier if installed plyer fails.
+        notification.notify(title=title, message=output, timeout=5)
+        return
+
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "[System.Windows.Forms.MessageBox]::Show("
+        "[string]$env:GAIA_NOTIFY_MESSAGE, [string]$env:GAIA_NOTIFY_TITLE)"
+    )
+    env = os.environ.copy()
+    env["GAIA_NOTIFY_TITLE"] = title
+    env["GAIA_NOTIFY_MESSAGE"] = output
+    process = subprocess.Popen(
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        return_code = process.wait(timeout=_WINDOWS_NOTIFICATION_STARTUP_GRACE_S)
+    except subprocess.TimeoutExpired:
+        # MessageBox::Show remains open until the user dismisses it. Once
+        # PowerShell stayed alive through startup, the notification is on
+        # screen; do not make a scheduled job wait for user interaction.
+        return
+    if return_code:
+        stderr = (
+            process.stderr.read().decode(errors="replace") if process.stderr else ""
+        )
+        raise RuntimeError(
+            f"Windows notification PowerShell exited with code {return_code}: "
+            f"{stderr[:200]}. Choose a different --sink or check PowerShell."
+        )
 
 
 def _osa(text: str) -> str:

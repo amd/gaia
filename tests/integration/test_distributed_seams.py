@@ -188,12 +188,13 @@ def test_canonical_event_set_matches_translator_outputs():
 
     # The translator's producible types: the terminal set + every type its
     # per-event maps can emit. We assert the harness's set is exactly the frozen
-    # vocabulary (the seven, plus the additive-MINOR needs_input from #2469) and
+    # vocabulary (including the additive-MINOR needs_input and reasoning events)
     # that the translator never emits something outside it.
     assert CANONICAL_EVENT_TYPES == frozenset(
         {
             "status",
             "token",
+            "reasoning",
             "tool_call",
             "tool_result",
             "needs_confirmation",
@@ -498,9 +499,9 @@ def test_custody_scopes_reads_to_the_calling_agent():  # pragma: no cover - pend
     ),
 )
 def test_migration_is_idempotent(tmp_path, monkeypatch):
-    """Run the migration twice against a real, populated pre-v2 ``~/.gaia``
-    fixture: the first run relocates the legacy stores into custody, the second
-    is a no-op that never rewrites them (the schema stamp gates the re-run)."""
+    """Run the migration twice against a real, populated ``~/.gaia`` fixture:
+    the first run stamps the schema without copying the live stores into
+    custody, the second is a no-op (the schema stamp gates the re-run)."""
     from gaia.agents.base.memory_store import MemoryStore
     from gaia.daemon import migrate
     from gaia.ui.database import ChatDatabase
@@ -529,20 +530,14 @@ def test_migration_is_idempotent(tmp_path, monkeypatch):
     assert first["status"] == migrate.MigrationState.MIGRATED
     assert first["from_version"] == 0
     assert first["to_version"] == migrate.SCHEMA_VERSION
-    assert migrate.custody_sessions_db().exists()
-    assert migrate.custody_memory_db().exists()
+    assert not list(migrate.custody_dir().rglob("*.db"))
 
-    # Fingerprint the migrated custody store; a second run must not rewrite it.
     stamp_before = migrate.schema_stamp_path().read_text(encoding="utf-8")
-    sessions_dst = migrate.custody_sessions_db()
-    mtime_before = sessions_dst.stat().st_mtime_ns
 
     second = migrate.run_migrations()
     assert second["status"] == migrate.MigrationState.CURRENT
     assert second["applied"] == []
     assert second["from_version"] == migrate.SCHEMA_VERSION
-    # Idempotent: the already-migrated store and the stamp are untouched.
-    assert sessions_dst.stat().st_mtime_ns == mtime_before
     assert migrate.schema_stamp_path().read_text(encoding="utf-8") == stamp_before
 
 

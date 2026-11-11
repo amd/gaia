@@ -51,7 +51,7 @@ Two harnesses, one CI pipeline.
 - **Scores are recomputed in code, not trusted from the judge.** A judge that writes "PASS" over a correctness of 2 gets overruled (`runner.py` `_SCORE_WEIGHTS` and the status re-derivation).
 - **The outcome suite grades mechanically where it can.** Tests pass or they don't, and a change only counts as "verified" when a passing run follows the agent's last edit. That's the article's "programmatic grader first".
 - **Judge controls exist for the task suite.** A known-good, a fabricated and a do-nothing attempt must each score in the right band. The scenario judge has no equivalent.
-- **Provenance and integrity are enforced.** Wrong agent type → `INFRA_ERROR`; missing or unmeasured scenarios fail the integrity gate; `--compare` warns on a judge-model mismatch.
+- **Provenance and integrity are enforced.** Wrong agent type → `INFRA_ERROR`; missing or unmeasured scenarios fail the integrity gate; `--compare` refuses (exit 3) a baseline measured with a different agent model or eval model.
 - **Repeats are wired, just unused.** `--iterations` folds N runs into `stable-pass` / `flaky` / `stable-fail` with pass rate and score spread. #4470 adds `gaia eval tasks propose`, which sets gate limits from the worst of N runs.
 - **Real-failure intake has started.** `--capture-session` turns an Agent UI session into a scenario draft. The in-flight tier work (t1–t4, `gaia_resilience`, `gaia_git`) is organized around difficulty, and `gaia_resilience` measures the #4428 blocker loop directly.
 

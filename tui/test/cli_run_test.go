@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
@@ -41,12 +43,26 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-cli-test-no-policy.json"))
 	// A gate that finds Lemonade down must report it, not start the
 	// developer's real server under an isolated HOME and leave it running.
 	restore := preflight.StubLemonadeAutoStartForTest(
 		func(context.Context) (bool, string, string) { return false, "", "" })
+	// Clients built with no StartCommand must not spawn a real daemon and
+	// leave it running; tests that need one pass their own launcher.
+	restoreDaemon := daemon.StubDefaultStartForTest(func(context.Context) (*exec.Cmd, error) {
+		return nil, errors.New("test: no daemon")
+	})
+	daemonHome, err := os.MkdirTemp("", "gaia-tui-test-daemon-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv(daemon.EnvHome, daemonHome)
 	code := m.Run()
 	restore()
+	restoreDaemon()
+	_ = os.RemoveAll(daemonHome)
 	if builtDir != "" {
 		_ = os.RemoveAll(builtDir)
 	}

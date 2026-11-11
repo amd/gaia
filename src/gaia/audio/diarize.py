@@ -18,17 +18,20 @@ Everything is fetched on first use, never at import or startup.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 import wave
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from gaia.env import child_env
 from gaia.logger import get_logger
+from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 from gaia.utils.archive import ArchiveError, safe_extract
 
 log = get_logger(__name__)
@@ -169,6 +172,84 @@ def diarize(
     ]
 
 
+def diarize_in_child(
+    wav_path: os.PathLike | str,
+    num_speakers: Optional[int] = None,
+    cluster_threshold: float = DEFAULT_CLUSTER_THRESHOLD,
+) -> List[SpeakerSpan]:
+    """:func:`diarize` in its own process, ended at once on Stop.
+
+    sherpa-onnx holds the GIL for its whole run: in the Agent UI server that
+    froze every request, keepalives included, for minutes on a long recording.
+
+    Raises:
+        DiarizationError: the child failed; its message says why.
+        ToolCancelled: the agent stopped waiting.
+    """
+    if getattr(sys, "frozen", False):
+        # A frozen binary has no interpreter to start a child with.
+        return diarize(wav_path, num_speakers, cluster_threshold)
+
+    with tempfile.TemporaryDirectory(prefix="gaia-diarize-") as scratch:
+        spans_file = Path(scratch) / "spans.json"
+        errors_file = Path(scratch) / "errors.txt"
+        with errors_file.open("w", encoding="utf-8") as errors:
+            child = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "gaia.audio.diarize",
+                    str(Path(wav_path).expanduser()),
+                    str(spans_file),
+                    str(num_speakers or 0),
+                    str(cluster_threshold),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+                env=_child_env_with_this_gaia(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            cancel = current_cancel_event()
+            while True:
+                try:
+                    child.wait(timeout=0.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    if cancel is not None and cancel.is_set():
+                        child.kill()
+                        child.wait()
+                        raise ToolCancelled() from None
+        if child.returncode != 0:
+            said = errors_file.read_text(encoding="utf-8", errors="replace").strip()
+            raise DiarizationError(
+                said.splitlines()[-1]
+                if said
+                else f"Speaker identification exited with code {child.returncode}."
+            )
+        if not spans_file.is_file():
+            raise DiarizationError(
+                f"Speaker identification ran in {sys.executable} but returned "
+                "no result. That interpreter may import a different GAIA "
+                f"install than {Path(__file__).parents[2]}."
+            )
+        return [
+            SpeakerSpan(**span)
+            for span in json.loads(spans_file.read_text(encoding="utf-8"))
+        ]
+
+
+def _child_env_with_this_gaia() -> dict:
+    """The child must import this copy of GAIA, not another install."""
+    here = str(Path(__file__).resolve().parents[2])
+    inherited = os.environ.get("PYTHONPATH")
+    return child_env(
+        extra={
+            "PYTHONPATH": os.pathsep.join([here, inherited] if inherited else [here])
+        }
+    )
+
+
 def _read_wav(path: Path):
     """Read a mono WAV as float32 samples in -1..1."""
     import numpy as np
@@ -210,10 +291,23 @@ def _ensure_package(say: Callable[[str], None]) -> None:
             f"or use a source checkout. See {DOCS_URL}"
         )
 
+    from gaia.agents.install_hints import (
+        PackageInstallerUnavailableError,
+        format_command,
+        resolve_pip_frontend,
+    )
+
+    # GAIA's installer builds its venv with uv, which has no pip in it.
+    try:
+        frontend = resolve_pip_frontend()
+    except PackageInstallerUnavailableError as e:
+        raise DiarizationError(f"{e} See {DOCS_URL}") from e
+    manual = format_command([*frontend.display, "sherpa-onnx"])
+
     say("Installing the speaker-identification engine (about 40 MB, once)...")
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", "sherpa-onnx"],
+            [*frontend.argv, "--quiet", "sherpa-onnx"],
             check=True,
             capture_output=True,
             text=True,
@@ -229,13 +323,12 @@ def _ensure_package(say: Callable[[str], None]) -> None:
         raise DiarizationError(
             "Could not install sherpa-onnx, which provides speaker "
             f"identification: {(e.stderr or e.stdout or '').strip()[:400]}\n"
-            f"Install it manually with: {sys.executable} -m pip install "
-            f"sherpa-onnx\nSee {DOCS_URL}"
+            f"Install it manually with: {manual}\nSee {DOCS_URL}"
         ) from e
     except subprocess.TimeoutExpired as e:
         raise DiarizationError(
             "Installing sherpa-onnx timed out. Install it manually with: "
-            f"{sys.executable} -m pip install sherpa-onnx\nSee {DOCS_URL}"
+            f"{manual}\nSee {DOCS_URL}"
         ) from e
 
     importlib.invalidate_caches()
@@ -307,3 +400,24 @@ def _unpack_models(archive: Path, target: Path) -> None:
             f"Could not unpack the segmentation model: {e}. Delete "
             f"{target} and try again."
         ) from e
+
+
+def _child_main(argv: List[str]) -> int:
+    wav_path, spans_file, speakers, threshold = argv
+    try:
+        spans = diarize(
+            wav_path,
+            num_speakers=int(speakers) or None,
+            cluster_threshold=float(threshold),
+        )
+    except DiarizationError as e:
+        print(e, file=sys.stderr)
+        return 3
+    Path(spans_file).write_text(
+        json.dumps([asdict(span) for span in spans]), encoding="utf-8"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_child_main(sys.argv[1:]))
