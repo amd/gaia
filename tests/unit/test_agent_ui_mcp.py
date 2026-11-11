@@ -269,7 +269,7 @@ class TestStreamChatEventLog:
     """The eval judge reads event_log as what the agent actually did."""
 
     @staticmethod
-    def _run(events):
+    def _result(events):
         from gaia.mcp.servers.agent_ui_mcp import _stream_chat
 
         def _fake_post(url, json=None, stream=False, timeout=None, headers=None):
@@ -280,7 +280,34 @@ class TestStreamChatEventLog:
             return resp
 
         with patch("gaia.mcp.servers.agent_ui_mcp.requests.post", _fake_post):
-            return _stream_chat("http://localhost:4200", "sess-1", "hi")["event_log"]
+            return _stream_chat("http://localhost:4200", "sess-1", "hi")
+
+    @classmethod
+    def _run(cls, events):
+        return cls._result(events)["event_log"]
+
+    def test_a_failed_turn_is_an_error_with_its_reason(self):
+        reason = "The GAIA agent isn't ready yet: the model is not downloaded."
+        result = self._result(
+            [
+                {"type": "agent_error", "content": reason},
+                {"type": "done", "failed": True},
+            ]
+        )
+        assert result["status"] == "error"
+        assert result["detail"] == reason
+        assert result["content"] == ""
+
+    def test_a_completed_turn_carries_no_error_status(self):
+        result = self._result(
+            [
+                {"type": "agent_error", "content": "Retrying"},
+                {"type": "answer", "content": "Hello."},
+                {"type": "done", "content": "Hello."},
+            ]
+        )
+        assert "status" not in result
+        assert result["content"] == "Hello."
 
     def test_a_no_argument_call_shows_no_args_line(self):
         log = self._run(

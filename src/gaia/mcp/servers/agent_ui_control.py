@@ -238,7 +238,10 @@ class TurnTracker:
             failed = bool(event.get("failed")) or self.error is not None
             if failed and self.error is None:
                 self.error = str(
-                    event.get("failure") or event.get("content") or "Unknown error"
+                    event.get("failure")
+                    or event.get("content")
+                    or self._last_error_detail()
+                    or "The turn failed and the backend gave no reason."
                 )
             self._finish_locked(
                 (
@@ -299,6 +302,12 @@ class TurnTracker:
         self.pending_prompt = prompt
         if confirm_id and self._on_prompt is not None:
             self._on_prompt(confirm_id, self.session_id)
+
+    def _last_error_detail(self) -> Optional[str]:
+        for step in reversed(self.steps):
+            if step["type"] == "error" and step.get("detail"):
+                return step["detail"]
+        return None
 
     def _last_tool_step(self) -> Optional[Dict[str, Any]]:
         for step in reversed(self.steps):

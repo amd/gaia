@@ -805,6 +805,18 @@ def test_failed_done_without_fatal_event_keeps_the_failure_reason():
     assert view["error"] == "The model stopped before it could finish."
 
 
+def test_failed_done_with_no_reason_reports_the_turns_error_step():
+    """The backend ends a turn the agent never started with a bare failed done."""
+    reason = "The GAIA agent isn't ready yet: the model is not downloaded."
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "agent_error", "content": reason})
+    t.apply({"type": "done", "failed": True})
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == reason
+
+
 def test_nonfatal_agent_error_does_not_fail_the_turn():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "agent_error", "content": "Retrying"})

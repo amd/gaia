@@ -24,7 +24,7 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `get_session` | Get details of a specific session |
 | `delete_session` | Delete a session and all its messages |
 | `get_messages` | Get all messages in a session (with agent steps) |
-| `send_message` | Send a message and block until the turn ends (streams to the web UI) |
+| `send_message` | Send a message and block until the turn ends (streams to the web UI). A failed turn returns `status: "error"` with the reason in `detail` |
 | `start_message` | Send a message and return once the backend accepts the turn |
 | `turn_status` | Streaming or idle, the pending permission prompt or question, current step, elapsed time |
 | `wait_for_turn` | Block until the turn is idle, a prompt or question is pending, or the answer contains some text |
