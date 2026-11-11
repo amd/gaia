@@ -127,7 +127,6 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"send-email/discard_draft":    RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
-	"run_cli_command":     RiskDestructive,
 	"wait_for_condition":  RiskDestructive,
 	"run_python":          RiskDestructive,
 	"execute_python_file": RiskDestructive,
@@ -157,7 +156,6 @@ var confirmationRiskTiers = map[string]RiskTier{
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
 	"run_shell_command":    "Run this command?",
-	"run_cli_command":      "Run this command?",
 	"wait_for_condition":   "Poll with this command?",
 	"run_python":           "Run this Python code?",
 	"execute_python_file":  "Run this Python file?",
@@ -208,7 +206,6 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
-	"run_cli_command":     "command",
 	"wait_for_condition":  "command",
 	"run_python":          "code",
 	"execute_python_file": "code",
@@ -483,7 +480,6 @@ func (m ConfirmationModel) RunID() string       { return m.runID }
 func (m ConfirmationModel) Seq() uint64         { return m.seq }
 func (m ConfirmationModel) Action() string      { return m.action }
 func (m ConfirmationModel) State() ConfirmState { return m.state }
-func (m ConfirmationModel) Tier() RiskTier      { return m.tier }
 func (m ConfirmationModel) Pending() bool       { return m.state == ConfirmationPending }
 
 // Deliverable reports whether answering this prompt actually reaches the agent.

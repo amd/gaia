@@ -17,7 +17,6 @@ import {
     FolderOpen,
     BarChart3,
     Globe,
-    Code2,
     FileEdit,
     Copy,
     Check,
@@ -71,17 +70,14 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     analyze_data_file: BarChart3,
     // Shell & code
     run_shell_command: Terminal,
-    execute_code: Code2,
     // RAG & documents
     query_documents: BookOpen,
     query_specific_file: BookOpen,
     search_indexed_chunks: BookOpen,
-    semantic_search: BookOpen,
     evaluate_retrieval: BookOpen,
     index_document: Database,
     index_documents: Database,
     index_directory: Database,
-    index_file: Database,
     list_indexed_documents: Database,
     summarize_document: FileText,
     dump_document: FileText,
@@ -97,7 +93,6 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     search_web: Globe,
     fetch_page: Link,
     fetch_webpage: Link,
-    analyze_data: BarChart3,
     // GAIA agent: files, memory, questions
     find_files: Search,
     edit_file: FileEdit,

@@ -1370,7 +1370,7 @@ def _lemonade_without_a_key(sent, gateway_url=AMD_GATEWAY):
 @pytest.mark.parametrize("env_var", [GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"])
 def test_lemonade_gets_the_token_the_claude_route_sends(manager, monkeypatch, env_var):
     """Replaying only the stored token left Claude on GAIA's env token."""
-    from gaia.llm.gateway import resolve_gateway_token
+    from gaia.llm.gateway import resolve_gateway_token_with_source
 
     monkeypatch.setenv(env_var, "env-token")
     stored = MagicMock(return_value="stored-token")
@@ -1380,7 +1380,7 @@ def test_lemonade_gets_the_token_the_claude_route_sends(manager, monkeypatch, en
     ):
         assert manager.ensure_authenticated(recall=stored) is True
 
-    assert sent[0]["api_key"] == "env-token" == resolve_gateway_token()
+    assert sent[0]["api_key"] == "env-token" == resolve_gateway_token_with_source()[0]
     stored.assert_not_called()
 
 
@@ -1549,9 +1549,9 @@ def _run_auth(monkeypatch, *, token, no_remember=False, stored=None):
 def test_auth_leaves_both_routes_on_the_new_token(monkeypatch, capsys):
     store = _run_auth(monkeypatch, token="new-token", stored="old-token")
     assert store["token"] == "new-token"
-    from gaia.llm.gateway import resolve_gateway_token
+    from gaia.llm.gateway import resolve_gateway_token_with_source
 
-    assert resolve_gateway_token() == "new-token"
+    assert resolve_gateway_token_with_source()[0] == "new-token"
     assert "Claude gateway models" not in capsys.readouterr().err
 
 

@@ -881,7 +881,7 @@ gaia agent status [<id>] [--json]
 
 <CodeGroup>
 ```bash Set a model preference
-gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
+gaia agent configure chat --model Qwen3.6-35B-A3B-GGUF
 ```
 
 ```bash Check health and status
@@ -1126,7 +1126,7 @@ gaia chat --watch ./docs
 
 ```bash Custom Settings
 gaia chat \
-  --model Qwen3.5-35B-A3B-GGUF \
+  --model Qwen3.6-35B-A3B-GGUF \
   --stream \
   --show-stats
 ```
@@ -1451,9 +1451,11 @@ Configure MCP servers that your agents can connect to. Servers are saved to `~/.
 #### Managing MCP servers (`add` / `remove`)
 
 <Note>
-`gaia mcp add` and `gaia mcp remove` were removed in #977 — MCP servers are now
-configured through the connectors framework. Run `gaia connectors --help` for the
-current commands. `gaia mcp list` (below) still lists configured servers.
+`gaia mcp add` and `gaia mcp remove` were removed. Set up a catalog server in
+Settings → Connectors or with `gaia connectors configure <id> --set KEY=VALUE`.
+For a server outside the catalog, add an entry to `~/.gaia/mcp_servers.json`; a
+command for that is planned ([#977](https://github.com/amd/gaia/issues/977)).
+`gaia mcp list` (below) still lists configured servers.
 </Note>
 
 #### `gaia mcp list`
@@ -1846,7 +1848,7 @@ command.
 ```bash
 gaia config show                                  # print current config + file path
 gaia config get default_model                     # read one value
-gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
+gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 ```
 
 | Key | Default | Purpose |
@@ -2025,11 +2027,11 @@ keeping work and personal defaults separate. Two equivalent ways:
 
 ```bash
 # 1. The --config flag (on `gaia config`, `gaia chat`, `gaia llm`, `gaia prompt`)
-gaia config set default_model Qwen3.5-35B-A3B-GGUF --config ./project.gaia.json
+gaia config set default_model Qwen3.6-35B-A3B-GGUF --config ./project.gaia.json
 gaia llm "hello" --config ./project.gaia.json          # uses that file's default_model
 
 # 2. The GAIA_CONFIG_FILE env var (or GAIA_CONFIG_DIR for just the directory)
-GAIA_CONFIG_FILE=./project.gaia.json gaia config set default_model Qwen3.5-35B-A3B-GGUF
+GAIA_CONFIG_FILE=./project.gaia.json gaia config set default_model Qwen3.6-35B-A3B-GGUF
 GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"
 ```
 
@@ -2104,8 +2106,8 @@ gaia download --agent chat
 ```
 📥 Downloading 3 model(s) for 'chat'...
 
-📥 Qwen3.5-35B-A3B-GGUF
-   ⏳ [1/31] Qwen3.5-35B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
+📥 Qwen3.6-35B-A3B-GGUF
+   ⏳ [1/31] Qwen3.6-35B-A3B-Q4_K_M.gguf: 3.5 GB/17.7 GB (20%)
    ...
    ✅ Download complete
 
@@ -4208,7 +4210,10 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ### Diagnostics Command
 
-Bundle system info and logs into a tarball for bug reports.
+Bundle system info and logs into a tarball for bug reports. When GAIA uses a
+Lemonade you run yourself, the bundle also holds that server's recent log lines,
+with secrets removed, as `lemonade/server-log.txt`; GAIA's own Lemonade
+contributes its `lemond.log`.
 
 ```bash
 gaia diagnostics [OPTIONS]

@@ -8,6 +8,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
+  dropped its earlier reasoning when the next message arrived, while the model's
+  chat template had shown it. So every turn after a tool call re-read the whole
+  previous tool turn, including any file it had read. The flagship now sends
+  that reasoning back. On a measured six-turn session, tokens re-read after the
+  first turn fell 60%. The model now also sees its earlier reasoning. After a
+  `/model` switch the agent stops sending it, so a new model never receives
+  another model's reasoning.
+
 - **The terminal header recognizes cloud models with custom IDs.** After a
   `/model` switch, the status uses the live client’s catalog provider, matching
   the switch notice instead of reporting a custom-prefixed cloud model as local.

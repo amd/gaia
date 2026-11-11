@@ -18,8 +18,6 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
@@ -29,8 +27,10 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
+from gaia.llm.retry import parse_retry_after
 from gaia.logger import get_logger
 from gaia.tool_cancellation import ToolCancelled
+from gaia.utils.paths import WINDOWS_DEVICE_NAMES
 
 log = get_logger(__name__)
 
@@ -668,22 +668,7 @@ _SEARCH_GATE = _SearchGate(min_interval=1.5)
 
 def _retry_after_seconds(response: requests.Response) -> Optional[float]:
     """The ``Retry-After`` header in seconds (delta or HTTP-date), if present."""
-    value = (response.headers or {}).get("Retry-After")
-    if not value:
-        return None
-    value = str(value).strip()
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        log.debug("Unparseable Retry-After header: %r", value)
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return parse_retry_after(response.headers)
 
 
 def fetch_error_text(exc: Exception) -> str:
@@ -1575,11 +1560,7 @@ class WebClient:
     # Windows opens the console device instead of a file, and ``CON.txt``
     # still resolves to the device. Avoid these even on non-Windows so
     # downloads remain portable.
-    _WINDOWS_RESERVED = frozenset(
-        {"CON", "PRN", "AUX", "NUL"}
-        | {f"COM{i}" for i in range(1, 10)}
-        | {f"LPT{i}" for i in range(1, 10)}
-    )
+    _WINDOWS_RESERVED = frozenset(name.upper() for name in WINDOWS_DEVICE_NAMES)
 
     @staticmethod
     def _sanitize_filename(raw_name: str) -> str:

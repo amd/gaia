@@ -255,7 +255,7 @@ def test_a_timed_out_test_does_not_tell_the_user_to_delete_their_models():
 
     assert _verify(cmd, _client(), inference) is False
     text = "\n".join(printed)
-    assert "uninstall --models" not in text, text
+    assert "--force-models" not in text, text
     assert "stopped answering" in text
 
 

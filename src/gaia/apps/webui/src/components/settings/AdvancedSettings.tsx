@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
-import { ChevronDown, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ChevronDown, Loader2, CheckCircle2, AlertCircle, ScrollText } from 'lucide-react';
 import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
+import { SaveAllLogs } from '../LogsDialog';
+import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
@@ -290,6 +292,8 @@ export function AdvancedSettings() {
                 )}
             </section>
 
+            <LogsCard />
+
             <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
                 <ModelServerPanel />
                 <LemonadeServerSection />
@@ -393,6 +397,24 @@ export function AdvancedSettings() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Every log GAIA keeps, one click away, and all of them saved as one file to share. */
+function LogsCard() {
+    const t = useT();
+    const show = useLogsStore((s) => s.show);
+    return (
+        <section className="settings-card" aria-labelledby="settings-logs-title">
+            <h3 className="settings-label" id="settings-logs-title">{t('logs.title')}</h3>
+            <p className="settings-hint">{t('logs.settingsHint')}</p>
+            <div className="settings-row">
+                <button type="button" className="btn-secondary" onClick={() => show('gaia')}>
+                    <ScrollText size={13} aria-hidden="true" /> {t('logs.view')}
+                </button>
+            </div>
+            <SaveAllLogs />
+        </section>
+    );
+}
 
 function SaveError({ message }: { message: string }) {
     const t = useT();
