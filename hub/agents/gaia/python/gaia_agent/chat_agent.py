@@ -2299,6 +2299,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
+            failed = self._mcp_manager.failed_servers_for_agent(
+                self._namespaced_agent_id()
+            )
+            if failed:
+                reasons = "; ".join(f"{srv} ({err})" for srv, err in failed.items())
+                self._set_mcp_dropped_notice(
+                    f"MCP servers that could not start: {reasons}. Check their "
+                    "command and settings in Settings > Connectors."
+                )
+                return
             self._set_mcp_dropped_notice(None)
         except Exception as e:  # pylint: disable=broad-except
             # A broken MCP setup must not stop the agent; the user is told.

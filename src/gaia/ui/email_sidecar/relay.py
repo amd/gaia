@@ -306,6 +306,8 @@ def _dispatch_one(
             "type": "status",
             "message": str(event.get("message", "")),
         }
+        if event.get("level") == "warning":
+            status["status"] = "warning"
         # The phase is what makes it the live line ("Reading your request").
         for key in ("phase", "words", "chars", "queue"):
             if key in event:

@@ -315,8 +315,8 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
-        // Merge consecutive status steps
-        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+        // Merge consecutive status steps, never over a warning
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
