@@ -1,6 +1,6 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""GAIA may change five voice settings herself, and nothing else."""
+"""GAIA may change six voice settings herself, and nothing else."""
 
 import pytest
 
@@ -17,13 +17,14 @@ def gaia_home(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path))
 
 
-def test_only_the_five_safe_settings_are_hers():
+def test_only_the_six_safe_settings_are_hers():
     assert set(AGENT_VOICE_SETTINGS) == {
         "voice",
         "speed",
         "volume",
         "wake_word",
         "captions",
+        "chime",
     }
 
 
@@ -60,7 +61,9 @@ def test_volume_is_zero_to_a_hundred():
     assert GaiaConfig.load().voice_volume == 40
 
 
-@pytest.mark.parametrize("name", ["wake_word", "wake word", "Wake-Word", "captions"])
+@pytest.mark.parametrize(
+    "name", ["wake_word", "wake word", "Wake-Word", "captions", "chime"]
+)
 def test_switches_take_on_or_off(name):
     key = name.lower().replace(" ", "_").replace("-", "_")
     assert change_voice_setting(name, "off")[key] is False

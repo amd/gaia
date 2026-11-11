@@ -60,6 +60,7 @@ class VoiceStatus(BaseModel):
     captions: bool
     wake_word: bool = True
     volume: int = 100
+    chime: bool = True
 
 
 class DownloadRequest(BaseModel):
@@ -75,6 +76,7 @@ class VoiceSettings(BaseModel):
     captions: bool = True
     wake_word: bool = True
     volume: int = 100
+    chime: bool = True
 
 
 class VoiceSettingsUpdate(BaseModel):
@@ -86,6 +88,7 @@ class VoiceSettingsUpdate(BaseModel):
     captions: Optional[bool] = None
     wake_word: Optional[bool] = None
     volume: Optional[int] = None
+    chime: Optional[bool] = None
 
 
 _SETTING_KEYS = {
@@ -97,6 +100,7 @@ _SETTING_KEYS = {
     "captions": "voice_captions",
     "wake_word": "voice_wake_word",
     "volume": "voice_volume",
+    "chime": "voice_chime",
 }
 
 
@@ -143,11 +147,15 @@ def _config() -> GaiaConfig:
 
 
 def _voice_now() -> tuple:
-    """The voice and speed saved right now, as (voice, speed)."""
+    """What is saved right now, as (voice, speed, chime)."""
     from gaia.audio.lemonade_tts import DEFAULT_VOICE
 
     config = GaiaConfig.load()
-    return config.read_aloud_voice or DEFAULT_VOICE, config.read_aloud_speed / 100
+    return (
+        config.read_aloud_voice or DEFAULT_VOICE,
+        config.read_aloud_speed / 100,
+        config.voice_chime,
+    )
 
 
 def _language(config: GaiaConfig, app_language: str) -> str:
@@ -181,6 +189,7 @@ async def voice_status(lang: str = "en") -> VoiceStatus:
         captions=config.voice_captions,
         wake_word=config.voice_wake_word,
         volume=config.voice_volume,
+        chime=config.voice_chime,
     )
     try:
         catalog = await asyncio.to_thread(_catalog)
@@ -326,6 +335,7 @@ async def voice_session(websocket: WebSocket) -> None:
             hands_free=config.voice_turn_taking == "hands_free",
             speak=language == "en",
             english=language == "en",
+            chime=config.voice_chime,
         )
         return VoiceSession(
             target,

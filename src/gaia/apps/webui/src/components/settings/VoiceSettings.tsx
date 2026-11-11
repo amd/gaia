@@ -256,6 +256,12 @@ export function VoiceSettings() {
                             disabled={saving}
                             onChange={() => save({ wake_word: !settings.wake_word })}
                         />
+                        <Toggle
+                            label={t('voice.settings.chime')}
+                            checked={settings.chime}
+                            disabled={saving}
+                            onChange={() => save({ chime: !settings.chime })}
+                        />
                         {saveError && <p className="settings-error" role="alert">{t('voice.settings.saveFailed', { reason: saveError })}</p>}
                     </section>
                 </>

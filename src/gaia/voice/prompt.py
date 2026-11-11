@@ -24,7 +24,7 @@ VOICE_TURN_NOTE = (
     "so there. "
     "Never tell the user to type a command or open a terminal: offer to do it "
     "yourself, or name the Settings screen where they can. "
-    "To change your own voice, speed, volume, captions or wake word, call "
+    "To change your own voice, speed, volume, captions, chime or wake word, call "
     "set_voice_setting; other settings are the user's to change in Settings. "
     "After </spoken>, write the details worth reading; when there are none, "
     "write nothing more."

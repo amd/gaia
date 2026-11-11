@@ -49,6 +49,8 @@ interface Live {
     replacing: boolean;
     /** GAIA asked for a yes or no and is waiting to hear it. */
     asking: boolean;
+    /** GAIA's speech is still playing here, as last told to the server. */
+    playing: boolean;
     /** Runs out when the user's hold on GAIA's attention does. */
     attention: ReturnType<typeof setTimeout> | null;
     /** Where each spoken piece starts on the playback timeline. */
@@ -135,10 +137,24 @@ function finishSpeakingIfDone(): void {
     attend();
 }
 
+/** Tell the server whether GAIA's voice can still be heard here. */
+function playback(on: boolean): void {
+    if (!live || live.playing === on) return;
+    live.playing = on;
+    live.socket?.playback(on);
+}
+
+/** Drop everything GAIA has queued to say, at once. */
+function hush(): void {
+    if (!live) return;
+    live.player.flush();
+    playback(false);
+}
+
 /** Barge-in: silence GAIA here first, then tell the server. */
 function bargeIn(): void {
     if (!live) return;
-    live.player.flush();
+    hush();
     live.socket?.interrupt();
     live.speechSent = false;
     stopTicker();
@@ -161,7 +177,7 @@ const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk
 const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:he|hey)?(?:gaia|gaya|gaea|gaiya|gaija|kaia|kaya|guya|gyah?)\b[\s,.!?:-]*/i;
 
 /** How long after GAIA speaks a reply needs no "Hey GAIA". */
-export const FOLLOW_UP_MS = 10_000;
+export const FOLLOW_UP_MS = 20_000;
 
 function wakeWord(): boolean {
     return !!live?.status?.wake_word && !get().pushToTalk;
@@ -262,6 +278,8 @@ export function isBackchannel(text: string): boolean {
 
 function startTurn(text: string): void {
     if (!live) return;
+    // A new request never plays under the end of the last answer.
+    if (live.player.playing) bargeIn();
     live.spokenSoFar = '';
     live.spokeThisTurn = false;
     live.answerRow = null;
@@ -379,7 +397,7 @@ function onEvent(event: ServerEvent): void {
             live.player.duck(event.on);
             return;
         case 'barge_in':
-            live.player.flush();
+            hush();
             live.speechSent = false;
             stopTicker();
             if (get().caption) set({ caption: { ...get().caption!, lit: Infinity } });
@@ -455,7 +473,8 @@ function onEvent(event: ServerEvent): void {
                 // Asked to stay out of it: only her name brings her back.
                 const rest = afterName(text);
                 if (rest === null) {
-                    set({ heard: '', heardPartial: false, phase: resting() });
+                    // Heard, not sent: say why, so silence doesn't look broken.
+                    set({ heard: '', heardPartial: false, phase: resting(), caption: { kind: 'status', text: getT()('voice.sayName'), lit: Infinity } });
                     return;
                 }
                 attend();
@@ -495,7 +514,7 @@ function onEvent(event: ServerEvent): void {
             finishSpeakingIfDone();
             return;
         case 'flush':
-            live.player.flush();
+            hush();
             return;
         case 'error':
             // Only tts_failed reaches here; the session goes on in text.
@@ -514,7 +533,7 @@ function fail(failure: VoiceFailure): void {
     log.ui.warn(`Voice mode stopped: ${failure.code}`, failure.detail ?? '');
     if (live) {
         live.mic.stop();
-        live.player.flush();
+        hush();
         live.socket?.close();
         live.socket = null;
         stopTicker();
@@ -567,7 +586,11 @@ async function connect(): Promise<void> {
     if (get().pushToTalk || me.userPaused) me.mic.pause();
     me.socket = new VoiceSocket('voice', status.language, {
         onEvent,
-        onAudio: (pcm) => { if (live === me) me.player.push(pcm); },
+        onAudio: (pcm) => {
+            if (live !== me) return;
+            me.player.push(pcm);
+            playback(true);
+        },
         onFailure: (failure) => { if (live === me) fail(failure); },
     });
 }
@@ -603,10 +626,13 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
     const player = new SpeechPlayer(ctx);
     const mic = new MicCapture(ctx, (frame) => live?.socket?.sendAudio(frame));
     live = {
-        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false, asking: false, attention: null,
+        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false, asking: false, attention: null, playing: false,
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
-    player.onIdle = finishSpeakingIfDone;
+    player.onIdle = () => {
+        playback(false);
+        finishSpeakingIfDone();
+    };
     let noticeSeen = true;
     try {
         noticeSeen = localStorage.getItem(PHONE_NOTICE_KEY) === '1';
@@ -721,7 +747,7 @@ export async function downloadModel(model: string): Promise<void> {
 function applySettings(saved: VoiceSettings): void {
     if (!live?.status) return;
     const before = live.status;
-    live.status = { ...before, wake_word: saved.wake_word, volume: saved.volume, captions: saved.captions };
+    live.status = { ...before, wake_word: saved.wake_word, volume: saved.volume, captions: saved.captions, chime: saved.chime };
     live.player.setVolume(saved.volume / 100);
     set({ status: live.status, ...(saved.captions !== before.captions && speaks() ? { captions: saved.captions } : {}) });
     if (saved.wake_word !== before.wake_word) attend();
@@ -748,6 +774,16 @@ export function setVolume(volume: number): void {
     updateVoiceSettings({ volume: Math.round(volume * 100) }).then(
         (saved) => { if (live === me) applySettings(saved); },
         (err: unknown) => log.ui.warn('The volume could not be saved', err),
+    );
+}
+
+/** Turn the "heard you" tone on or off, here and in Settings. */
+export function setChime(on: boolean): void {
+    const me = live;
+    if (!me?.status) return;
+    updateVoiceSettings({ chime: on }).then(
+        (saved) => { if (live === me) applySettings(saved); },
+        (err: unknown) => log.ui.warn('The chime setting could not be saved', err),
     );
 }
 

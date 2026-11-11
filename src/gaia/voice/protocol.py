@@ -8,6 +8,7 @@ Client → server (JSON text frames):
     {"type": "speak_end"}            the spoken block is complete
     {"type": "interrupt"}            barge-in: drop queued and playing speech
     {"type": "commit"}               end the utterance now
+    {"type": "playback", "on": bool} the host is (not) still playing GAIA's speech
     {"type": "expect", "on": bool}   a yes/no answer is awaited: short words count
     {"type": "stop"}                 close the session
 Client → server (binary): PCM16 16 kHz mono mic frames, when the host has no
@@ -78,6 +79,8 @@ async def run_voice_socket(
                 await session.interrupt()
             elif kind == "commit":
                 await session.commit()
+            elif kind == "playback":
+                session.playback(bool(command.get("on")))
             elif kind == "expect":
                 session.expecting_answer = bool(command.get("on"))
             elif kind == "stop":

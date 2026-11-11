@@ -9,7 +9,7 @@ import { useT } from '../../i18n/useT';
 import { getSpeechSettings, updateSpeechSettings, type SpeechSettings } from '../../services/speechApi';
 import { useVoiceStore } from '../../stores/voiceStore';
 import { log } from '../../utils/logger';
-import { setVolume, setWakeWord, voiceVolume } from '../../voice/controller';
+import { setChime, setVolume, setWakeWord, voiceVolume } from '../../voice/controller';
 
 const SPEEDS = [80, 90, 100, 110, 125, 150];
 
@@ -21,6 +21,7 @@ export function VoiceQuickSettings() {
     const [volume, setVolumeState] = useState(() => Math.round(voiceVolume() * 100));
     const wakeWord = useVoiceStore((s) => s.status?.wake_word !== false);
     const pushToTalk = useVoiceStore((s) => s.pushToTalk);
+    const chime = useVoiceStore((s) => s.status?.chime !== false);
     const boxRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -101,6 +102,10 @@ export function VoiceQuickSettings() {
                             <input type="checkbox" checked={wakeWord} onChange={() => setWakeWord(!wakeWord)} />
                         </label>
                     )}
+                    <label className="vs-set-row is-check">
+                        <span>{t('voice.settings.chime')}</span>
+                        <input type="checkbox" checked={chime} onChange={() => setChime(!chime)} />
+                    </label>
                     <p className="vs-set-note">{t('voice.quick.note')}</p>
                     {failed && <p className="vs-set-error" role="alert">{t('voice.quick.failed')}</p>}
                 </div>

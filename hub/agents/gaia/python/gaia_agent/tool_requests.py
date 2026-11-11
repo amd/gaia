@@ -55,6 +55,7 @@ _VOICE_SETTING_NAMED = re.compile(
     r"|\b(?:different|another|male|female|british|american)\s+voice\b"
     r"|\bchange\s+(?:the\s+)?voice\b"
     r"|\bwake\s+word\b"
+    r"|\b(?:the|that|your)\s+(?:beep|chime|ding|tone)\b"
     r"|\b(?:turn|switch)\s+(?:the\s+)?captions\s+(?:on|off)\b"
     r"|\b(?:turn|switch)\s+(?:on|off)\s+(?:the\s+)?captions\b"
     r"|\b(?:be|a\s+(?:bit|little))\s+(?:louder|quieter)\b"
