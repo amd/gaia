@@ -934,7 +934,8 @@ gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what is available to install so you know which id to pass.
+`gaia agent list` shows the agents available to install so you know which id to pass.
+Skills (`gaia skill`) and app components in the same catalog are not listed.
 An installed agent shows the version on disk with an `[installed]` marker, plus the
 catalog's latest version when the two differ. This is the supported way to provision a sidecar
 agent on a machine with no UI.

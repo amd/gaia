@@ -165,6 +165,27 @@ def test_list_shows_catalog_with_installed_marker(monkeypatch, capsys):
     assert "gaia agent install <id>" in out
 
 
+def test_list_offers_only_agents_not_skills_apps_or_components(monkeypatch, capsys):
+    _patch_list(
+        monkeypatch,
+        agents=[
+            {"id": "agent-ui", "type": "app", "latest_version": "0.25.0"},
+            {"id": "coding", "type": "skill", "latest_version": "0.2.1"},
+            {"id": "email", "type": "agent", "latest_version": "0.6.0"},
+            {"id": "gaia", "type": "agent", "latest_version": "0.3.5"},
+            {"id": "terminal-hub", "type": "component", "latest_version": "0.25.4"},
+        ],
+        installed={"terminal-hub": _Installed("0.25.4")},
+    )
+    cli.handle_agent_list(Namespace(agent_action="list"))
+    listed = [
+        ln.split()[0]
+        for ln in capsys.readouterr().out.splitlines()
+        if ln.startswith("  ")
+    ]
+    assert listed == ["email", "gaia"]
+
+
 def test_list_shows_installed_version_not_catalog_latest(monkeypatch, capsys):
     _patch_list(
         monkeypatch,

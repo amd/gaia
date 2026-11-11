@@ -9532,16 +9532,22 @@ def handle_agent_list(_args):
 
     installed = installer.list_installed()
 
-    available = []
+    catalog_entries = []
     offline = False
     try:
         result = catalog.load_index()
-        available = result.agents
+        catalog_entries = result.agents
         offline = result.offline
     except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
         print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
 
-    available_ids = {e.get("id") for e in available}
+    # The catalog also carries skills, apps and components; this lists agents.
+    available = [
+        e
+        for e in catalog_entries
+        if catalog.entry_package_type(e) == catalog.DEFAULT_PACKAGE_TYPE
+    ]
+    available_ids = {e.get("id") for e in catalog_entries}
     if available:
         suffix = " (offline cache)" if offline else ""
         print(f"Available to install{suffix}:")
