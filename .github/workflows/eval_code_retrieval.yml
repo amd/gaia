@@ -50,6 +50,7 @@ jobs:
 
   retrieval:
     name: Code retrieval (${{ github.event_name == 'push' && 'nightly' || (github.event.inputs.suite || 'pr') }})
+    # No pull_request trigger; adding one needs a fork/draft guard (self-hosted pool).
     needs: eval-gate
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
