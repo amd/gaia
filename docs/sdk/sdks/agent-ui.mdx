@@ -2401,7 +2401,8 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   <Accordion title="GET /api/messaging/discord">
     Connection, pairing and bridge state, plus every link setup opens:
     `connected`, `paired`, `running`, `state`, `detail`, `bot_name`,
-    `owner_name`, `pairing_code`, `portal_url`, `invite_url`,
+    `owner_name`, `autostart`, `always_allowed`, `pairing_code`, `portal_url`,
+    `invite_url`,
     `bot_profile_url` and more.
   </Accordion>
 
@@ -2418,7 +2419,19 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   </Accordion>
 
   <Accordion title="POST /api/messaging/discord/stop">
-    Stops the bridge. 500 when it does not stop.
+    Stops the bridge, and keeps it stopped the next time a GAIA app opens. 500
+    when it does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/restart">
+    Stops the bridge and starts it again. 500, leaving it as it was, when it
+    does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/forget-always">
+    Forgets every "Always allow" answered in Discord, so GAIA asks again. A
+    running bridge is restarted so its agent forgets them too. 500, forgetting
+    nothing, when the bridge does not stop.
   </Accordion>
 
   <Accordion title="POST /api/messaging/discord/pair">
