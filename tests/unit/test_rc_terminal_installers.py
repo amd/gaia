@@ -170,7 +170,7 @@ def test_the_final_release_job_steps(publish):
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
-        "Download Desktop Installer (Linux DEB + AppImage)",
+        "Download Desktop Installer (Linux DEB + AppImage + Flatpak)",
         "Check every desktop installer is attached",
         "actions/setup-python@v7",
         "Check the update manifests name only attached files",

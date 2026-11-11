@@ -26,6 +26,7 @@ const { drawStateIcon, drawOverlayIcon, STATES } = require("./tray-icons.cjs");
 const { validateActivity, deriveTrayView, buildMenuTemplate } = require("./tray-state.cjs");
 const { backendJson, fetchWorkInProgress } = require("./quit-guard.cjs");
 const { desktopExecArg } = require("./appimage-launcher.cjs");
+const { APP_ID: FLATPAK_APP_ID, isFlatpak } = require("./flatpak.cjs");
 
 /** Why the model can't be freed right now, from the backend's work list; null when it can. */
 function describeBusy(work) {
@@ -344,7 +345,7 @@ class TrayManager {
     return this.config.tray.startMinimized && this.trayHost.available;
   }
 
-  /** @returns {{available: boolean, reason: null | "checking" | "no-host" | "check-failed"}} */
+  /** @returns {{available: boolean, reason: null | "checking" | "no-host" | "check-failed", via?: "background-apps"}} */
   get trayHost() {
     return this._host || { available: false, reason: "checking" };
   }
@@ -355,6 +356,7 @@ class TrayManager {
       throw new TypeError("TrayManager.setHost expects {available: boolean, reason}");
     }
     this._host = { available: host.available, reason: host.available ? null : host.reason };
+    if (host.available && host.via) this._host.via = host.via;
     if (!host.available) {
       console.log(
         `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
@@ -409,6 +411,12 @@ class TrayManager {
       return {
         message: "GAIA is still running, minimized.",
         detail: `${loaded} Click GAIA in your dock or the Activities overview to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+      };
+    }
+    if (this.trayHost.via === "background-apps") {
+      return {
+        message: "GAIA is still running in the background.",
+        detail: `${loaded} Open GAIA again from your apps to bring the window back. To stop it, open the system menu, choose Background Apps and close GAIA.`,
       };
     }
     const where = process.platform === "darwin" ? "menu bar" : "tray";
@@ -909,15 +917,27 @@ class TrayManager {
   }
 
   _linuxAutostartFile() {
+    if (isFlatpak()) {
+      // A Flatpak's XDG_CONFIG_HOME is its own; the desktop reads the host's folder.
+      // Its own file name, so it never takes over or removes another GAIA install's entry.
+      const hostConfig = process.env.HOST_XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
+      return path.join(hostConfig, "autostart", `${FLATPAK_APP_ID}.desktop`);
+    }
     const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
     return path.join(configHome, "autostart", LINUX_AUTOSTART_FILE);
+  }
+
+  /** The command the desktop runs at sign-in. */
+  _linuxAutostartExec() {
+    // The Flatpak's exe is a path inside the sandbox, which the desktop can't run.
+    if (isFlatpak()) return `flatpak run ${FLATPAK_APP_ID}`;
+    // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
+    return desktopExecArg(process.env.APPIMAGE || app.getPath("exe"));
   }
 
   /** Electron has no login items on Linux; desktops read XDG autostart entries. */
   _applyLinuxAutostart(enabled) {
     const file = this._linuxAutostartFile();
-    // An AppImage's exe is a temporary mount; APPIMAGE is the file the user runs.
-    const exe = process.env.APPIMAGE || app.getPath("exe");
     try {
       if (enabled) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -928,7 +948,7 @@ class TrayManager {
             "Type=Application",
             "Name=GAIA",
             "Comment=Start GAIA when you sign in",
-            `Exec=${desktopExecArg(exe)}`,
+            `Exec=${this._linuxAutostartExec()}`,
             "X-GNOME-Autostart-enabled=true",
             "",
           ].join("\n"),

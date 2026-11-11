@@ -479,7 +479,7 @@ export const BACKEND_RUNNING = {
 export async function withDesktopBridges(
     page: Page,
     update: Record<string, unknown> = {},
-    host: { available: boolean; reason: string | null } = { available: true, reason: null },
+    host: { available: boolean; reason: string | null; via?: string } = { available: true, reason: null },
     statusReadError?: string,
 ): Promise<void> {
     await page.addInitScript(({ state, host, running, readError }) => {

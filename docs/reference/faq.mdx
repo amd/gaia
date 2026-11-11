@@ -19,6 +19,7 @@ icon: "circle-question"
     - **Windows:** Settings → Apps → Installed apps → GAIA → Uninstall
     - **macOS:** Drag GAIA from `/Applications` to the Trash
     - **Linux (Debian/Ubuntu):** `sudo apt remove gaia-desktop` (`apt purge` also preserves personal data; run `/opt/GAIA/resources/core/gaia uninstall --purge` first to delete it)
+    - **Linux (Flatpak):** Uninstall GAIA in **Software**, or run `flatpak uninstall ai.amd.gaia`
     - **Linux (AppImage):** Delete the `.AppImage` file
 
     By default, uninstalling keeps your chats and documents. To remove your data — chats, documents, memory, settings and saved keys — run `gaia uninstall --purge` from a terminal before you uninstall the app, using the `gaia` inside it. It keeps your connector setup and your own skills:

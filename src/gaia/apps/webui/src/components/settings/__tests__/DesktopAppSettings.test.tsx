@@ -127,6 +127,19 @@ describe('DesktopAppSettings', () => {
         },
     );
 
+    it('the Flatpak on GNOME points at Background Apps, never a tray', async () => {
+        host = { available: true, reason: null, via: 'background-apps' };
+        saved = { ...DEFAULTS, startMinimized: true };
+        render(<DesktopAppSettings />);
+        const keep = /keep running when the window closes/i;
+        await waitFor(() => expect(toggle(keep)).toBeEnabled());
+        expect(toggle(keep)).toHaveAccessibleDescription(/running in the background.*Open GAIA again.*Background Apps/i);
+        expect(toggle(/start in the background/i)).toBeEnabled();
+        expect(toggle(/start in the background/i)).toBeChecked();
+        expect(toggle(/start in the background/i)).toHaveAccessibleDescription(/Open GAIA again to show it/i);
+        expect(screen.queryByText(/tray/i)).toBeNull();
+    });
+
     it('while the tray check is still running, the toggles work as usual', async () => {
         host = { available: false, reason: 'checking' };
         render(<DesktopAppSettings />);

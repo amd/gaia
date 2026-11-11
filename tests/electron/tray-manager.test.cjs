@@ -1242,4 +1242,38 @@ describe("start at login", () => {
       else process.env.APPIMAGE = prevAppImage;
     }
   });
+
+  test("the Flatpak writes its entry where the desktop reads it, and runs through flatpak", async () => {
+    setPlatform("linux");
+    const path = require("path");
+    const os = require("os");
+    const prevXdg = process.env.XDG_CONFIG_HOME;
+    // What the sandbox sets: its own config folder, which no desktop reads.
+    process.env.XDG_CONFIG_HOME = "/home/u/.var/app/ai.amd.gaia/config";
+    process.env.FLATPAK_ID = "ai.amd.gaia";
+    try {
+      newTray(createMockWindow());
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+      const entry = fs.writeFileSync.mock.calls.find((c) => String(c[0]).endsWith(".desktop"));
+      // Its own file name: the AppImage and .deb own gaia-agent-ui.desktop.
+      expect(path.normalize(entry[0])).toBe(
+        path.join(os.homedir(), ".config", "autostart", "ai.amd.gaia.desktop")
+      );
+      expect(entry[1]).toContain("Exec=flatpak run ai.amd.gaia\n");
+      expect(entry[1]).not.toContain("/app/");
+
+      // A host that moved its config folder: Flatpak passes the real one in.
+      fs.writeFileSync.mockClear();
+      process.env.HOST_XDG_CONFIG_HOME = "/home/u/cfg";
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: false } });
+      await electronMock.ipcMain.simulateInvoke("tray:set-config", { tray: { startOnLogin: true } });
+      const moved = fs.writeFileSync.mock.calls.find((c) => String(c[0]).endsWith(".desktop"));
+      expect(path.normalize(moved[0])).toBe(path.normalize("/home/u/cfg/autostart/ai.amd.gaia.desktop"));
+    } finally {
+      delete process.env.FLATPAK_ID;
+      delete process.env.HOST_XDG_CONFIG_HOME;
+      if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prevXdg;
+    }
+  });
 });

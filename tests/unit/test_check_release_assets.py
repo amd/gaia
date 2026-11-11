@@ -53,6 +53,7 @@ def _desktop(version: str) -> list[str]:
         f"{ui}-x64-setup.exe",
         f"{ui}-x64-setup.exe.blockmap",
         f"{ui}-x86_64.AppImage",
+        f"{ui}-x86_64.flatpak",
     ]
 
 

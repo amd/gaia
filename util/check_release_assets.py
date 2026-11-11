@@ -79,6 +79,7 @@ def promised_assets(rel: ReleaseTag, windows_setup: bool = True) -> list[str]:
         f"{ui}-arm64.zip.blockmap",
         f"{ui}-amd64.deb",
         f"{ui}-x86_64.AppImage",
+        f"{ui}-x86_64.flatpak",
         *UPDATE_FEEDS,
         *TUI_FILES,
         *CORE_FILES,

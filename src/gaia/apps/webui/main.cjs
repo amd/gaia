@@ -86,6 +86,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const { probeTrayHost } = require("./services/tray-host.cjs");
+const { shareTmpDirAcrossLaunches } = require("./services/flatpak.cjs");
 const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
 const { revealWhenReady } = require("./services/window-reveal.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
@@ -1188,6 +1189,8 @@ registerProtocolHandler();
 // process to call it gets `true`, every subsequent launch on the same
 // machine gets `false` and should immediately quit. The first instance
 // receives a `second-instance` event and surfaces its window.
+// A Flatpak launch has a private /tmp, where Chromium keeps the lock's socket.
+shareTmpDirAcrossLaunches();
 const gotTheSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotTheSingleInstanceLock) {
   console.log("[main] Another GAIA Agent UI instance is already running — quitting");

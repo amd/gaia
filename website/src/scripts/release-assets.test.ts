@@ -16,6 +16,7 @@ import {
   PLATFORM_ORDER,
   artifactFileName,
   desktopArtifactFileName,
+  desktopExtraFileNames,
   type InstallerKey,
 } from './download-target';
 
@@ -93,5 +94,19 @@ describe('the desktop app', () => {
     const attached = [...new Set(named)];
     expect(attached).toHaveLength(3);
     expect(DESKTOP_PLATFORMS.map((p) => desktopArtifactFileName(p, V)).sort()).toEqual(attached.sort());
+  });
+
+  // The .deb and the Flatpak are in the list only; publish.yml refuses to
+  // release without either, so both names must be the ones it checks for.
+  it('lists the Linux packagings publish.yml requires on the release', () => {
+    const required = job(PUBLISH, 'github-release');
+    for (const { name } of desktopExtraFileNames('linux-x64', V)) {
+      expect(required).toContain(`"${name.replace(V, '${v}')}"`);
+      expect(PUBLISH).toContain(`\`${name.replace(V, '@NPM_VERSION@')}\``);
+    }
+    expect(desktopExtraFileNames('linux-x64', V).map((e) => e.name)).toEqual([
+      'gaia-agent-ui-1.2.3-amd64.deb',
+      'gaia-agent-ui-1.2.3-x86_64.flatpak',
+    ]);
   });
 });

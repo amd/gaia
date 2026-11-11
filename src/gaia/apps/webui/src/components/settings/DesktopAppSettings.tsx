@@ -24,6 +24,15 @@ const NO_TRAY_HINT: Partial<Record<keyof TraySettings, MessageKey>> = {
     minimizeToTray: 'settings.desktop.keepRunningNoTray',
 };
 
+/** Wording where GNOME's Background Apps stands in for the tray (the Flatpak). */
+const BACKGROUND_APPS: Partial<Record<keyof TraySettings, { label?: MessageKey; hint: MessageKey }>> = {
+    minimizeToTray: { hint: 'settings.desktop.keepRunningBackground' },
+    startMinimized: {
+        label: 'settings.desktop.startMinimizedBackground',
+        hint: 'settings.desktop.startMinimizedBackgroundHint',
+    },
+};
+
 /** Why those toggles are off, or null while they work (or the check hasn't finished). */
 function noTrayHint(host: TrayHost | null): MessageKey | null {
     if (host?.reason === 'no-host') return 'settings.desktop.noTray';
@@ -74,11 +83,13 @@ export function DesktopAppSettings() {
                 <span className="settings-label" id="desktop-app-label">{t('settings.desktop.title')}</span>
                 {TOGGLES.map(({ key, label, hint }) => {
                     const blockedBy = NEEDS_TRAY.has(key) ? noTray : null;
-                    const shownHint = (noTray && NO_TRAY_HINT[key]) || hint;
+                    const background = host?.via === 'background-apps' ? BACKGROUND_APPS[key] : undefined;
+                    const shownLabel = background?.label ?? label;
+                    const shownHint = background?.hint ?? ((noTray && NO_TRAY_HINT[key]) || hint);
                     return (
                         <div key={key}>
                             <label className="setting-row">
-                                <span>{t(label, { tray: TRAY })}</span>
+                                <span>{t(shownLabel, { tray: TRAY })}</span>
                                 <span className="toggle-switch">
                                     <input
                                         type="checkbox"
@@ -89,7 +100,7 @@ export function DesktopAppSettings() {
                                         // The switch being saved stays focusable; disabling it would drop keyboard focus.
                                         disabled={!!blockedBy || !settings || (saving !== null && saving !== key)}
                                         aria-busy={saving === key}
-                                        aria-label={t(label, { tray: TRAY })}
+                                        aria-label={t(shownLabel, { tray: TRAY })}
                                     />
                                     <span className="toggle-track" />
                                 </span>

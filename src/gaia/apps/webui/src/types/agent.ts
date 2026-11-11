@@ -73,6 +73,8 @@ export interface TraySettings {
 export interface TrayHost {
   available: boolean;
   reason: null | 'checking' | 'no-host' | 'check-failed';
+  /** No tray, but GNOME lists the hidden Flatpak under Background Apps. */
+  via?: 'background-apps';
 }
 
 export interface TrayConfig {

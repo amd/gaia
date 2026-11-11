@@ -76,6 +76,31 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
     Want the terminal instead, or as well? Its `.deb` and `.rpm` are on [amd-gaia.ai](https://amd-gaia.ai/#install) — see [Terminal UI](/guides/tui#installing).
   </Tab>
 
+  <Tab title="Linux (Fedora, Flatpak)">
+    The Flatpak is the build for Fedora, and for any distro that has Flatpak. It brings its own system libraries, so it doesn't depend on the ones your distro ships.
+
+    1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
+    2. Download **`gaia-agent-ui-X.Y.Z-x86_64.flatpak`**
+    3. Double-click the file. **Software** opens it; click **Install**. The first install also downloads the runtime the app runs on (about 1 GB), from Flathub.
+    4. Launch GAIA from your app grid
+
+    Or install from a terminal:
+    ```bash
+    flatpak install --user ./gaia-agent-ui-X.Y.Z-x86_64.flatpak
+    ```
+
+    What is different from the other Linux builds:
+
+    - **Closing the window** on GNOME 44 or newer leaves GAIA running under **Background Apps** (in the system menu), where you can quit it. Open GAIA again to bring the window back. On an older GNOME, or a desktop with no tray, closing minimizes GAIA instead.
+    - **Its data is its own.** Chats and settings live in `~/.var/app/ai.amd.gaia/.gaia` and downloaded models in `~/.var/app/ai.amd.gaia/.cache`, not in the `~/.gaia` and `~/.cache` that an AppImage, `.deb` or terminal install uses, so nothing carries over from those.
+    - **Files it can reach:** your Documents, Downloads, Desktop, Pictures, Music and Videos folders. Files anywhere else aren't visible to it.
+    - **Updating:** it doesn't update itself. Download the newer `.flatpak` and open it; it installs over the old one and keeps your data.
+
+    <Note>
+    The Flatpak is new in GAIA 0.26. It has been run on Fedora 44 with GNOME; chatting with a model on a GPU or NPU from inside it has not been tested yet. If something doesn't work, please [open an issue](https://github.com/amd/gaia/issues/new).
+    </Note>
+  </Tab>
+
   <Tab title="Linux (other distros)">
     1. Go to [GitHub Releases](https://github.com/amd/gaia/releases/latest)
     2. Download **`gaia-agent-ui-X.Y.Z-x86_64.AppImage`**
@@ -318,6 +343,9 @@ says so and you install the `.dmg` from the releases page.
 
 To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching.
 
+The Flatpak doesn't update itself, and its Updates section says so: download the
+newer `.flatpak` and open it.
+
 ## Uninstalling
 
 GAIA follows the platform convention: removing the app leaves your user data (chats, documents, downloaded models) behind by default. To remove the data too, run the `gaia uninstall` CLI from a terminal — it has tiered flags so you can decide exactly what to keep.
@@ -360,6 +388,13 @@ To also remove your data, run this as your own user before you remove the packag
 /opt/GAIA/resources/core/gaia uninstall --purge
 ```
 
+### Linux (Flatpak)
+Open **Software**, find GAIA under **Installed** and click **Uninstall**, or run:
+```bash
+flatpak uninstall ai.amd.gaia
+```
+Your data stays in `~/.var/app/ai.amd.gaia/`. To remove it too, add `--delete-data` to that command, or delete the folder.
+
 ### Linux (AppImage)
 Delete the `.AppImage` file. Its app-grid entry hides itself once the file is gone; to remove it too, delete `~/.local/share/applications/gaia-desktop.desktop` and `~/.local/share/icons/hicolor/256x256/apps/gaia-desktop.png`. To also remove your data, delete `~/.gaia/`.
 
@@ -389,6 +424,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
 | The frozen `gaia` the one-line installer runs (Linux and macOS) | `~/.gaia/core/` |
 | The copy of its `gaia` an AppImage runs, which outlives the AppImage's mount | `~/.gaia/app-core/` |
+| The Flatpak's copy of `~/.gaia/`, and its downloaded models | `~/.var/app/ai.amd.gaia/.gaia/`, `~/.var/app/ai.amd.gaia/.cache/` |
 | Agent run traces | `~/.gaia/traces/` |
 | Daemon state (token, custody database, logs) | `~/.gaia/host/` (`$GAIA_HOME/host/` when `GAIA_HOME` is set) |
 | Models (managed by Lemonade) | `~/.cache/lemonade/models/` |
