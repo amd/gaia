@@ -1,0 +1,40 @@
+---
+title: "Brave Search"
+icon: "magnifying-glass"
+description: "Give GAIA web and local search through the Brave Search API."
+---
+
+<Info>
+  **Connector ID:** `mcp-brave-search` · **Type:** `mcp_server` · **Package:** `@modelcontextprotocol/server-brave-search@0.6.2` (launched with `npx`; needs Node 18+)
+</Info>
+
+## Step 1 — Get an API key
+
+Sign up at <a href="https://api-dashboard.search.brave.com/" target="_blank">api-dashboard.search.brave.com</a>, pick a plan (there is a free tier), and copy the key.
+
+## Step 2 — Configure GAIA
+
+```bash
+gaia connectors configure mcp-brave-search --set BRAVE_API_KEY=BSA...
+```
+
+Or in the Agent UI: **Connectors** in the sidebar → **Brave Search** → paste the key → **Save**.
+
+The secret is stored in your OS keyring; `~/.gaia/mcp_servers.json` holds only a `$keyring` reference.
+
+## Step 3 — Use it
+
+Grant and activate it for the agent (the tile's **Per-agent** toggle does both):
+
+```bash
+gaia connectors grants grant mcp-brave-search installed:gaia --scopes "*"
+gaia connectors activations activate mcp-brave-search installed:gaia
+```
+
+Then click **Personalize GAIA** on the tile, or type `/connectors personalize mcp-brave-search` in the TUI, if you want GAIA to learn from your recent activity. It's optional — see [Connectors](/connectors#personalize-gaia).
+
+<Note>GAIA already searches the web without a key; Brave adds a second index and local (place) results.</Note>
+
+## Revoking access
+
+`gaia connectors disconnect mcp-brave-search`, or **Disconnect** on the tile. Revoke the token at the provider too if it may have leaked.

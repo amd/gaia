@@ -66,6 +66,9 @@ const (
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
+	// The Connectors entry: the TUI's toolbar button, so it outlives the
+	// scroll and mouse hints but yields to anything about the current state.
+	rankToolbar = 50
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -119,6 +122,9 @@ func (m ChatModel) statusHints() []hint {
 	// earlier turns; a user who does not know that concludes history is gone.
 	// The warm-up stage has no transcript to scroll or select — it replaces
 	// the transcript entirely.
+	if m.connectorsHintShown() {
+		hints = append(hints, hint{text: connectorsHint, rank: rankToolbar})
+	}
 	if !(m.warming && !m.warmHidden) {
 		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
 		// The terminal's drag-select stops at the window's edge; Ctrl+T is the
