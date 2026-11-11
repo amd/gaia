@@ -184,3 +184,16 @@ async def test_real_speech_is_a_turn(fake_lemonade):  # noqa: F811
     events, sink = await heard(fake_lemonade, "Check my email.", vowel(1000))
     assert {"type": "final", "text": "Check my email."} in events
     assert pcm.earcon() in sink.frames
+
+
+async def test_a_bare_yes_counts_when_a_question_is_open(fake_lemonade):  # noqa: F811
+    _, target = await fake_lemonade(transcript="Okay.", stop_after=10)
+    s, events, _ = await _session(target)
+    await s.start()
+    s.expecting_answer = True
+    for frame in frames(np.concatenate([vowel(300), silence(700)])):
+        await s.feed_mic(frame)
+        await asyncio.sleep(0.01)
+    await _until(lambda: any(e["type"] in ("final", "ignored") for e in events))
+    await s.close()
+    assert {"type": "final", "text": "Okay."} in events

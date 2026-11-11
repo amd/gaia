@@ -66,6 +66,8 @@ export class VoiceSocket {
     speakEnd(): void { this.send({ type: 'speak_end' }); }
     interrupt(): void { this.send({ type: 'interrupt' }); }
     commit(): void { this.send({ type: 'commit' }); }
+    /** A yes/no answer is awaited, so a bare "yes" is not dropped as a noise. */
+    expect(on: boolean): void { this.send({ type: 'expect', on }); }
 
     /** End the session from this side. */
     close(): void {

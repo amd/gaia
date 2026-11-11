@@ -130,6 +130,8 @@ class VoiceSession:
         # Voiced milliseconds of utterances whose transcript is still to come.
         self._voiced: Deque[int] = deque()
         self._sustained = False
+        #: The app asked a yes/no question: a bare "yes" or "okay" is the answer.
+        self.expecting_answer = False
         self._hold: Optional[asyncio.Task] = None
         self._duck: Optional[asyncio.Task] = None
         # Stage marks of the turn in flight, for the timing event.
@@ -316,6 +318,13 @@ class VoiceSession:
                 await self._apply(self._turns.noise())
                 await self._rest()
                 return
+            if self.expecting_answer:
+                # An answer to a question is never a backchannel or a half-thought.
+                await self._apply(self._turns.noise())
+                if self.speaking:
+                    await self.interrupt()
+                await self._emit({"type": "final", "text": text.strip()})
+                return
             await self._apply(self._turns.final(text, self.speaking))
         else:
             await self._emit(event)
@@ -328,7 +337,11 @@ class VoiceSession:
             return "not_words"
         if voiced_ms < MIN_VOICED_MS:
             return "not_voiced"
-        if is_filler(text) and voiced_ms < FILLER_VOICED_MS:
+        if (
+            is_filler(text)
+            and voiced_ms < FILLER_VOICED_MS
+            and not self.expecting_answer
+        ):
             return "filler"
         return None
 

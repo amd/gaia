@@ -28,6 +28,8 @@ export interface VoiceHost {
     sendTurn: (text: string, tap: VoiceTurnTap) => boolean;
     /** Stop the running turn, as the Stop button does. */
     stopTurn: () => void;
+    /** Answer this chat's open permission prompt. False when there is none. */
+    answerPermission: (allow: boolean) => boolean;
 }
 
 /** Everything that lives only while the screen is open. */
@@ -45,6 +47,8 @@ interface Live {
     pending: string[];
     /** The running turn is being stopped because the user said something new. */
     replacing: boolean;
+    /** GAIA asked for a yes or no and is waiting to hear it. */
+    asking: boolean;
     /** Where each spoken piece starts on the playback timeline. */
     pieces: Array<{ kind: SpeakKind; words: number; start: number }>;
     spokenSoFar: string;
@@ -139,6 +143,28 @@ function bargeIn(): void {
     if (caption) set({ caption: { ...caption, lit: Infinity } });
 }
 
+const NO = /\b(no|nope|don'?t|do not|stop|cancel|deny|never ?mind)\b/i;
+const YES = /\b(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|go for it|allow|approve|please)\b/i;
+
+/** A spoken answer to "yes or no?": true, false, or null when it was neither. */
+export function yesOrNo(text: string): boolean | null {
+    if (NO.test(text)) return false;
+    if (YES.test(text)) return true;
+    return null;
+}
+
+function setAsking(on: boolean): void {
+    if (!live || live.asking === on) return;
+    live.asking = on;
+    live.socket?.expect(on);
+}
+
+/** Say a fixed line out loud, or caption it when this language has no voice. */
+function say(key: Parameters<ReturnType<typeof getT>>[0]): void {
+    if (speaks()) live?.socket?.speak(tEn(key), 'status');
+    else set({ caption: { kind: 'status', text: getT()(key), lit: Infinity } });
+}
+
 const BACKCHANNELS = new Set(['yeah', 'yep', 'yes', 'ok', 'okay', 'right', 'sure', 'mhm', 'mm', 'hmm', 'uh', 'huh', 'i', 'see', 'got', 'it', 'cool', 'nice', 'great', 'wow', 'oh', 'ah']);
 const FLOOR_WORDS = new Set(['stop', 'wait', 'no', 'hold', 'cancel', 'pause', 'quiet', 'enough']);
 
@@ -187,12 +213,15 @@ function startTurn(text: string): void {
             addRow({ kind: 'tool', text: '', tool: step.tool, label: toolRowText(step, getT()), done: false });
             set((s) => ({ tools: s.tools + 1 }));
         }),
-        needsYou: own(() => {
-            note('voice.needsYou');
-            if (speaks()) live?.socket?.speak(tEn('voice.needsYou'), 'status');
-            else set({ caption: { kind: 'status', text: getT()('voice.needsYou'), lit: Infinity } });
+        needsYou: own((kind) => {
+            // A permission can be answered out loud; a question card is answered on screen.
+            const key = kind === 'permission' ? 'voice.askYesNo' : 'voice.needsYou';
+            if (kind === 'permission') setAsking(true);
+            note(key);
+            say(key);
         }),
         toolFinished: own((result, ok) => {
+            setAsking(false);
             const row = [...get().log].reverse().find((r) => r.kind === 'tool' && !r.done);
             if (row) patchRow(row.id, { done: true, ok, ...(result ? { result } : {}) });
         }),
@@ -219,6 +248,7 @@ function startTurn(text: string): void {
 
 function endTurn(outcome: TurnOutcome): void {
     if (!live) return;
+    setAsking(false);
     set({ turnRunning: false });
     if (outcome.failed) {
         note('voice.turnFailed');
@@ -288,6 +318,19 @@ function onEvent(event: ServerEvent): void {
             set({ heard: text, heardPartial: false });
             if (!text) {
                 if (!get().turnRunning && get().phase === 'thinking') set({ phase: resting() });
+                return;
+            }
+            if (get().turnRunning && live.asking) {
+                addRow({ kind: 'user', text });
+                const answer = yesOrNo(text);
+                if (answer === null || !live.host.answerPermission(answer)) {
+                    if (answer === null) say('voice.yesOrNo');
+                    else setAsking(false);
+                    return;
+                }
+                setAsking(false);
+                note(answer ? 'voice.allowed' : 'voice.denied');
+                set({ phase: 'thinking' });
                 return;
             }
             if (get().turnRunning) {
@@ -431,7 +474,7 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
     const player = new SpeechPlayer(ctx);
     const mic = new MicCapture(ctx, (frame) => live?.socket?.sendAudio(frame));
     live = {
-        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false,
+        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false, asking: false,
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
     player.onIdle = finishSpeakingIfDone;
