@@ -64,6 +64,7 @@ export function VoiceQuickSettings() {
                         <span>{t('voice.quick.volume')}</span>
                         <input
                             type="range"
+                            aria-label={t('voice.quick.volume')}
                             min={0}
                             max={100}
                             step={5}

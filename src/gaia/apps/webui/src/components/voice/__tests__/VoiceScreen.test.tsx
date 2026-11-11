@@ -10,6 +10,21 @@ import { VOICE_ERROR_CODES } from '../../../voice/protocol';
 const controller = vi.hoisted(() => ({
     closeVoice: vi.fn(), primaryAction: vi.fn(), holdStart: vi.fn(), holdEnd: vi.fn(), setCaptions: vi.fn(),
     dismissPhoneNotice: vi.fn(), retryVoice: vi.fn(), downloadModel: vi.fn(async () => undefined),
+    toggleMute: vi.fn(), setVolume: vi.fn(), setWakeWord: vi.fn(), voiceVolume: vi.fn(() => 0.6),
+}));
+const speech = vi.hoisted(() => ({
+    settings: {
+        voice: 'af_bella', speed: 100, auto: false, min_speed: 50, max_speed: 200,
+        voices: [
+            { id: 'af_bella', name: 'Bella', accent: 'american', gender: 'female', quality: 'A-' },
+            { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+        ],
+    },
+    update: vi.fn(),
+}));
+vi.mock('../../../services/speechApi', () => ({
+    getSpeechSettings: vi.fn(async () => speech.settings),
+    updateSpeechSettings: (change: object) => { speech.update(change); return Promise.resolve({ ...speech.settings, ...change }); },
 }));
 vi.mock('../../../voice/controller', () => ({
     ...controller,
@@ -102,6 +117,50 @@ describe('VoiceScreen states', () => {
         expect(container.querySelector('.vs-row.is-tool .vs-call-res')).toHaveTextContent('4 PDFs found');
         expect(container.querySelector('.vs-result table')).not.toBeNull();
         expect(container.querySelector('.vs-count')).toHaveTextContent('1');
+    });
+
+    it('waiting for her name says so instead of "Listening"', () => {
+        const { container } = show({ phase: 'listening', standby: true });
+        expect(container.querySelector('.vs-state')).toHaveTextContent('Say "Hey GAIA"');
+    });
+
+    it('the microphone button mutes and says which way it will go', () => {
+        const { unmount } = show({ phase: 'listening' });
+        fireEvent.click(screen.getByRole('button', { name: 'Mute microphone' }));
+        expect(controller.toggleMute).toHaveBeenCalledOnce();
+        unmount();
+        show({ phase: 'paused', muted: true });
+        expect(screen.getByRole('button', { name: 'Unmute microphone' })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('push-to-talk has no mute button: the microphone is off until held', () => {
+        show({ phase: 'ptt_idle', pushToTalk: true });
+        expect(screen.queryByRole('button', { name: 'Mute microphone' })).toBeNull();
+    });
+
+    it('the settings menu changes volume, voice, speed and the wake word', async () => {
+        show({ phase: 'listening', status: { ...STATUS, wake_word: true, volume: 60 } });
+        fireEvent.click(screen.getByRole('button', { name: 'Voice settings' }));
+        const voice = await screen.findByRole('combobox', { name: 'Voice' });
+        await screen.findByRole('option', { name: /George/ });
+        fireEvent.change(voice, { target: { value: 'bm_george' } });
+        expect(speech.update).toHaveBeenCalledWith({ voice: 'bm_george' });
+        fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), { target: { value: '125' } });
+        expect(speech.update).toHaveBeenCalledWith({ speed: 125 });
+        const volume = screen.getByRole('slider', { name: 'Volume' });
+        expect(volume).toHaveValue('60');
+        fireEvent.change(volume, { target: { value: '35' } });
+        expect(controller.setVolume).toHaveBeenCalledWith(0.35);
+        fireEvent.click(screen.getByRole('checkbox', { name: /Hey GAIA/ }));
+        expect(controller.setWakeWord).toHaveBeenCalledWith(false);
+    });
+
+    it('a picture a tool made is shown under its row', () => {
+        const { container } = show({
+            phase: 'thinking',
+            log: [{ id: 1, kind: 'tool', text: '', tool: 'generate_image', done: true, ok: true, image: 'C:\\Users\\me\\fox 1.png' }],
+        });
+        expect(container.querySelector('img.vs-shot')).toHaveAttribute('src', '/api/files/image?path=C%3A%5CUsers%5Cme%5Cfox%201.png');
     });
 
     it('Arabic voice: one notice, captions forced on', () => {
