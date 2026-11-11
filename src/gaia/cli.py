@@ -9385,6 +9385,7 @@ def _diag_log_files(gaia_dir):
     files += [(p, "logs/") for p in sorted((gaia_dir / "logs").glob("*.log"))]
     files.append((daemon_paths.log_path(), "host/"))
     files.append((lemonade_home() / "lemonade" / "lemond.log", "lemonade/"))
+    files.append((gaia_dir / "discord" / "bridge.log", "discord/"))
     files += [
         (p, f"agents/{p.parent.parent.name}/logs/")
         for p in sorted(gaia_agents_dir().glob("*/logs/*.log"))

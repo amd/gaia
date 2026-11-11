@@ -278,7 +278,9 @@ class GatewayTransport:
 
     def _message(self, message: Any) -> InboundMessage:
         discord = self._discord
+        replied = getattr(getattr(message, "reference", None), "resolved", None)
         return InboundMessage(
+            reply_to=str(getattr(replied, "content", "") or ""),
             id=str(message.id),
             channel_id=str(message.channel.id),
             author_id=str(message.author.id),

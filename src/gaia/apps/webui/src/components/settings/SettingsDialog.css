@@ -1024,6 +1024,12 @@
     border-block-start: 1px solid var(--border-light);
 }
 
+.messaging-always-list {
+    margin: 4px 0 8px;
+    padding-inline-start: 1.25em;
+    overflow-wrap: anywhere;
+}
+
 /* ── Automations ───────────────────────────────────────────────── */
 
 .automation-list {
