@@ -1533,7 +1533,7 @@ The MCP Bridge allows other applications to use GAIA agents as MCP servers.
 
 ### Quick Start
 
-Install MCP support:
+The GAIA installer includes MCP support. A pip or source install adds it with:
 ```bash
 uv pip install -e ".[mcp]"
 ```
@@ -1693,8 +1693,9 @@ running with `gaia-tui --control`; the server finds it through
 
 Serves GAIA's semantic code search for one repository over stdio, so an
 external code assistant can find code by meaning. Embeddings run on your local
-Lemonade Server, and the index is cached in `~/.gaia/code_index/`. It needs
-the `[mcp]` and `[rag]` extras.
+Lemonade Server, and the index is cached in `~/.gaia/code_index/`. The GAIA
+installer includes what it needs; a pip or source install needs the `[mcp]` and
+`[rag]` extras.
 
 | Option | Default | Description |
 |--------|---------|-------------|

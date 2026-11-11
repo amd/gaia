@@ -12,10 +12,15 @@ import time
 
 import numpy as np
 
+from gaia.audio.sounddevice_hint import sounddevice_missing_message
+
 try:
     import sounddevice as sd
-except ImportError:
+
+    _SD_IMPORT_ERROR = None
+except (ImportError, OSError) as _e:  # OSError: installed, but no PortAudio
     sd = None
+    _SD_IMPORT_ERROR = _e
 
 from gaia.audio.lemonade_tts import (
     DEFAULT_VOICE,
@@ -172,8 +177,7 @@ class KokoroTTS:
     def _require_sounddevice() -> None:
         if sd is None:
             raise ImportError(
-                "sounddevice is required to play speech.\n"
-                'Install it with: uv pip install "amd-gaia[talk]"'
+                sounddevice_missing_message("playing speech", _SD_IMPORT_ERROR)
             )
 
     def generate_speech_streaming(
