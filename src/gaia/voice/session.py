@@ -24,6 +24,7 @@ from gaia.voice.chunker import ClauseChunker, first_sentence
 from gaia.voice.errors import VoiceError
 from gaia.voice.lemonade import LemonadeTarget, require_downloaded
 from gaia.voice.listener import RealtimeListener
+from gaia.voice.turns import Decision, TurnTaker
 
 log = get_logger(__name__)
 
@@ -113,6 +114,11 @@ class VoiceSession:
         self._closed = False
         self._limit_sent = False
         self.speaking = False
+        self._turns = TurnTaker()
+        self._hold: Optional[asyncio.Task] = None
+        self._duck: Optional[asyncio.Task] = None
+        # Stage marks of the turn in flight, for the timing event.
+        self._marks: dict = {}
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -148,6 +154,8 @@ class VoiceSession:
         if self._closed:
             return
         self._closed = True
+        self._cancel("_hold")
+        self._cancel("_duck")
         for task in (self._reader, self._speaker):
             if task is not None:
                 task.cancel()
@@ -206,6 +214,7 @@ class VoiceSession:
             if line:
                 self._queue.put_nowait(_Piece(line, "status", self._generation))
             return
+        self._mark("text")
         for piece in self._chunker.feed(text):
             self._queue.put_nowait(_Piece(piece, "spoken", self._generation))
 
@@ -225,6 +234,7 @@ class VoiceSession:
             self._queue.get_nowait()
         if self._sink is not None:
             await self._sink.flush()
+        self._turns.speaking_done()
         if self.speaking:
             self.speaking = False
             await self._emit({"type": "speech_stopped_by_user"})
@@ -237,14 +247,94 @@ class VoiceSession:
 
     async def _read_listener(self) -> None:
         assert self._listener is not None
+        conversing = self.options.purpose == "voice" and self.options.hands_free
         try:
             async for event in self._listener.events():
+                if conversing:
+                    await self._converse(event)
+                    continue
                 if event["type"] == "speech_stopped":
                     # Heard you, before the transcript lands.
                     await self.play_earcon()
                 await self._emit(event)
         except VoiceError as e:
             await self._emit(e.to_event())
+
+    async def _converse(self, event: dict) -> None:
+        """Hands-free voice: the turn-taker decides what each sound means."""
+        kind = event["type"]
+        if kind == "speech_started":
+            self._cancel("_hold")
+            await self._emit(event)
+            await self._apply(self._turns.speech_started(self.speaking))
+        elif kind == "partial":
+            await self._emit(event)
+            await self._apply(self._turns.partial(event.get("text", ""), self.speaking))
+        elif kind == "speech_stopped":
+            self._marks = {"stopped": time.monotonic()}
+            await self._emit(event)
+        elif kind == "final":
+            await self._apply(self._turns.final(event.get("text", ""), self.speaking))
+        else:
+            await self._emit(event)
+
+    async def _apply(self, decision: Decision) -> None:
+        if decision.duck is not None:
+            if not decision.duck:
+                self._cancel("_duck")
+            await self._emit({"type": "duck", "on": decision.duck})
+        if decision.duck_ms:
+            self._cancel("_duck")
+            self._duck = asyncio.create_task(
+                self._after(decision.duck_ms, self._turns.duck_timeout)
+            )
+        if decision.barge_in:
+            await self.interrupt()
+            await self._emit({"type": "barge_in"})
+        if decision.holding is not None:
+            await self._emit({"type": "holding", "text": decision.holding})
+        if decision.hold_ms:
+            self._cancel("_hold")
+            self._hold = asyncio.create_task(
+                self._after(decision.hold_ms, self._turns.timeout)
+            )
+        if decision.turn:
+            self._marks.setdefault("stopped", time.monotonic())
+            self._marks["turn"] = time.monotonic()
+            await self.play_earcon()
+            await self._emit({"type": "final", "text": decision.turn})
+
+    async def _after(self, ms: int, then) -> None:
+        await asyncio.sleep(ms / 1000)
+        await self._apply(then())
+
+    def _cancel(self, name: str) -> None:
+        task = getattr(self, name)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        setattr(self, name, None)
+
+    def _mark(self, name: str) -> Optional[dict]:
+        """Record a stage of the turn in flight; returns the timing event once,
+        when the first audio of the reply goes out."""
+        if "turn" not in self._marks or name in self._marks:
+            return None
+        self._marks[name] = time.monotonic()
+        if name != "audio":
+            return None
+        m = self._marks
+        text = m.get("text", m["audio"])
+
+        def ms(a: float, b: float) -> int:
+            return int(round((b - a) * 1000))
+
+        return {
+            "type": "timing",
+            "heard_ms": ms(m["stopped"], m["turn"]),
+            "think_ms": ms(m["turn"], text),
+            "voice_ms": ms(text, m["audio"]),
+            "total_ms": ms(m["stopped"], m["audio"]),
+        }
 
     async def _warm_tts(self) -> None:
         try:
@@ -303,6 +393,7 @@ class VoiceSession:
             if piece.generation != self._generation:
                 continue
             if samples is None:
+                self._turns.speaking_done()
                 if self.speaking:
                     self.speaking = False
                     await self._emit({"type": "speaking_done"})
@@ -310,6 +401,10 @@ class VoiceSession:
             if not self.speaking:
                 self.speaking = True
                 await self._emit({"type": "speaking", "kind": piece.kind})
+            if piece.kind == "spoken":
+                timing = self._mark("audio")
+                if timing:
+                    await self._emit(timing)
             await self._emit(
                 {"type": "spoken_piece", "kind": piece.kind, "text": piece.text}
             )
