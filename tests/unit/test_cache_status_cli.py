@@ -125,10 +125,14 @@ def test_status_does_not_follow_a_link_out_of_the_cache(
 
 @pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
 @pytest.mark.parametrize("link", ["linkout", "rag/linkout"])
+@pytest.mark.parametrize("has_isjunction", [True, False], ids=["py312", "pre312"])
 def test_status_does_not_follow_a_junction_out_of_the_cache(
-    isolated_cache, tmp_path, monkeypatch, capsys, caplog, link
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog, link, has_isjunction
 ):
     import _winapi
+
+    if not has_isjunction:
+        monkeypatch.delattr(os.path, "isjunction", raising=False)
 
     elsewhere = tmp_path / "bin"
     _write(elsewhere / "huge.bin", 4096)
@@ -142,6 +146,28 @@ def test_status_does_not_follow_a_junction_out_of_the_cache(
         ["rag", "100", "B", "1", "file"],
         ["Total", "100", "B", "1", "file"],
     ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reparse tags are Windows-only")
+def test_a_non_junction_reparse_point_is_still_counted(tmp_path, monkeypatch):
+    import stat as stat_mod
+
+    folder = tmp_path / "placeholder"
+    folder.mkdir()
+    real_lstat = os.lstat
+
+    class _Placeholder:
+        st_file_attributes = stat_mod.FILE_ATTRIBUTE_REPARSE_POINT
+        st_reparse_tag = 0x9000001A  # IO_REPARSE_TAG_CLOUD_6, a OneDrive placeholder
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(
+        os,
+        "lstat",
+        lambda p, *a, **k: _Placeholder() if str(p) == str(folder) else real_lstat(p),
+    )
+    assert _Placeholder.st_reparse_tag != stat_mod.IO_REPARSE_TAG_MOUNT_POINT
+    assert cli._is_link(folder) is False
 
 
 def test_a_folder_that_cannot_be_read_is_counted_not_dropped(

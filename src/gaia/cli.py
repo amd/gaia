@@ -8042,10 +8042,11 @@ def _is_link(path) -> bool:
     import stat as stat_mod
 
     try:
-        attrs = getattr(os.lstat(path), "st_file_attributes", 0)
+        tag = getattr(os.lstat(path), "st_reparse_tag", 0)
     except OSError:  # gone; the size walk reports it as unreadable
         return False
-    return bool(attrs & getattr(stat_mod, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    # Only junctions: OneDrive placeholders are reparse points too, and hold real data.
+    return tag == getattr(stat_mod, "IO_REPARSE_TAG_MOUNT_POINT", -1)
 
 
 def _cache_folder_usage(folder: Path) -> tuple:
