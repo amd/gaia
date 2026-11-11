@@ -10,14 +10,14 @@ This is an **administrator / operations guide**. End users don't need to read th
 
 ## Why we sign
 
-Every GAIA Agent UI release ships installers for Windows (NSIS `.exe`), macOS (DMG), and Linux (DEB + AppImage). On Windows and macOS, **unsigned** installers trigger scary OS warnings:
+Every GAIA Agent UI release ships installers for Windows (NSIS `.exe`), macOS (DMG), and Linux (DEB, AppImage and Flatpak). On Windows and macOS, **unsigned** installers trigger scary OS warnings:
 
 - **Windows SmartScreen**: *"Windows protected your PC"* — the user has to click *More info* → *Run anyway*
 - **macOS Gatekeeper**: *"GAIA Agent UI cannot be opened because the developer cannot be verified"* — the user has to right-click → *Open* → *Open*
 
 Both of these are **the leading cause of install abandonment** for unsigned consumer apps. Code signing eliminates them.
 
-Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard mechanism — no extra setup beyond the GitHub-managed signing key.
+The Linux DEB and AppImage are GPG-signed via electron-builder's standard mechanism — no extra setup beyond the GitHub-managed signing key. The Flatpak bundle is not signed; Flatpak checks the runtime it pulls from Flathub against Flathub's own key.
 
 ## Architecture
 
@@ -49,6 +49,7 @@ Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard 
 | **macOS** | Apple Developer ID + notarytool | `.p12` cert + Apple ID | $99/yr (Apple Developer Program) |
 | **Linux DEB** | electron-builder GPG | GPG private key | Free |
 | **Linux AppImage** | electron-builder GPG | GPG private key | Free |
+| **Linux Flatpak** | not signed | — | — |
 
 ## Windows: SignPath setup
 
