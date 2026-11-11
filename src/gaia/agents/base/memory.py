@@ -6185,6 +6185,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            ctx = mixin._memory_context
+            copies = mixin._memory_store.copies_of(
+                knowledge_id, None if ctx == "global" else (ctx, "global")
+            )
             try:
                 # forget(), not delete(): extraction must not learn it again.
                 removed = mixin._memory_store.forget(knowledge_id)
@@ -6193,6 +6197,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             matches: List[Dict] = []
             candidates: List[Dict] = []
             erased_ids = [knowledge_id] if removed else []
+            if removed:
+                erased_ids += [kid for kid in copies if mixin._memory_store.forget(kid)]
             if not removed:
                 description = knowledge_id
                 try:

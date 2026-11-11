@@ -472,6 +472,20 @@ def _merged_duplicate(new: str, existing: str) -> Optional[str]:
     return None
 
 
+def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
+    """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
+
+    Only a ``person:`` tag names someone other than the user. Any other tag
+    ("user", "health") is a label on the user's own fact, so an untagged copy
+    of it is the same memory: the remember tool tags, extraction often doesn't.
+    """
+    if entity is None:
+        return "(k.entity IS NULL OR lower(k.entity) NOT LIKE 'person:%')", ()
+    if entity.lower().startswith("person:"):
+        return "k.entity = ?", (entity,)
+    return "(k.entity = ? OR k.entity IS NULL)", (entity,)
+
+
 # ============================================================================
 # Timestamp helper
 # ============================================================================
@@ -1423,7 +1437,7 @@ class MemoryStore:
     ) -> str:
         """Store a knowledge entry with deduplication.
 
-        Restating an entry in the same category+context+entity merges into it
+        Restating an entry in the same category+context+subject merges into it
         and keeps the fuller wording; a different fact that shares most of its
         words is stored as a new entry (see ``_merged_duplicate``).
         Validates due_at is a valid ISO 8601 string if provided.
@@ -1619,35 +1633,22 @@ class MemoryStore:
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:
             return None
+        same_subject, subject_params = _same_subject_sql(entity)
 
         try:
-            # Scope dedup by category + context + entity
-            if entity is not None:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity = ? AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context, entity),
-                )
-            else:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity IS NULL AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context),
-                )
+            # Scope dedup by category + context + subject
+            cursor = self._conn.execute(
+                f"""
+                SELECT k.id, k.content
+                FROM knowledge k
+                JOIN knowledge_fts f ON k.rowid = f.rowid
+                WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
+                      AND {same_subject} AND k.superseded_by IS NULL
+                ORDER BY rank
+                LIMIT 25
+                """,
+                (safe_query, category, context, *subject_params),
+            )
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
                 overlap = _word_overlap(content, existing_content)
@@ -1675,12 +1676,12 @@ class MemoryStore:
                     FROM knowledge k
                     JOIN knowledge_fts f ON k.rowid = f.rowid
                     WHERE knowledge_fts MATCH ? AND k.context = ?
-                          AND k.entity IS ? AND k.superseded_by IS NULL
+                          AND {same_subject} AND k.superseded_by IS NULL
                           AND k.category IN ({",".join("?" * len(kinds))})
                     ORDER BY rank
                     LIMIT 25
                     """,
-                    (safe_query, context, entity, *kinds),
+                    (safe_query, context, *subject_params, *kinds),
                 )
                 words = _same_words(content)
                 for existing_id, existing_content in cursor.fetchall():
@@ -2313,6 +2314,38 @@ class MemoryStore:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def copies_of(
+        self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
+    ) -> List[str]:
+        """Ids of other current rows that store the same fact as *knowledge_id*.
+
+        A copy has the same words bar filler ("User is allergic to mango" and
+        "Allergic to mango.") about the same subject (``_same_subject_sql``),
+        in a chat-writable category. *contexts* limits it to those contexts;
+        None searches all. Forgetting one memory must take these with it.
+        """
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT content, entity FROM knowledge WHERE id = ?", (knowledge_id,)
+            ).fetchone()
+            if row is None:
+                return []
+            content, entity = row
+            same_subject, params = _same_subject_sql(entity)
+            kinds = sorted(EXTRACTABLE_CATEGORIES)
+            sql = (
+                "SELECT k.id, k.content FROM knowledge k WHERE k.id != ? "
+                f"AND {same_subject} AND k.superseded_by IS NULL "
+                f"AND k.category IN ({','.join('?' * len(kinds))})"
+            )
+            args: tuple = (knowledge_id, *params, *kinds)
+            if contexts is not None:
+                sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
+                args += tuple(contexts)
+            rows = self._conn.execute(sql, args).fetchall()
+        words = _dedup_tokens(content)
+        return [kid for kid, other in rows if words and _dedup_tokens(other) == words]
 
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.
