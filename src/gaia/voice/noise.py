@@ -80,6 +80,29 @@ def is_noise_text(text: str, *, english: bool = True) -> bool:
     return False
 
 
+#: Where one sentence ends: a line break, or end punctuation before a space.
+_BREAK = re.compile(r"\n+|(?<=[.!?])\s+")
+
+
+def _sentences(text: str):
+    return [s.strip() for s in _BREAK.split(text or "") if s.strip()]
+
+
+def tidy(text: str) -> str:
+    """One line, without a sentence the recognizer wrote twice in a row."""
+    kept = []
+    for sentence in _sentences(text):
+        if not kept or sentence.lower() != kept[-1].lower():
+            kept.append(sentence)
+    return " ".join(kept)
+
+
+def is_loop(text: str) -> bool:
+    """Whether *text* is one sentence over and over, as recognizers do with noise."""
+    sentences = [s.lower() for s in _sentences(text)]
+    return len(sentences) >= 3 and len(set(sentences)) == 1
+
+
 def is_filler(text: str) -> bool:
     """Whether *text* is what a recognizer invents for a noise; alone it is no turn."""
     cleaned = re.sub(r"[^a-z' ]", "", (text or "").lower()).strip()

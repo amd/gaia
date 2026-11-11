@@ -30,7 +30,9 @@ from gaia.voice.noise import (
     MIN_VOICED_MS,
     SpeechMeter,
     is_filler,
+    is_loop,
     is_noise_text,
+    tidy,
 )
 from gaia.voice.turns import Decision, TurnTaker
 
@@ -416,6 +418,7 @@ class VoiceSession:
                 await self._apply(self._turns.noise())
                 await self._rest()
                 return
+            text = tidy(text)
             if self.expecting_answer:
                 # An answer to a question is never a backchannel or a half-thought.
                 await self._apply(self._turns.noise())
@@ -431,7 +434,7 @@ class VoiceSession:
         """Why this final is not the user speaking, or None when it is."""
         if not text.strip():
             return "silence"
-        if is_noise_text(text, english=self.options.english):
+        if is_noise_text(text, english=self.options.english) or is_loop(text):
             return "not_words"
         if voiced_ms < MIN_VOICED_MS:
             return "not_voiced"
