@@ -102,7 +102,7 @@ class TestTheMessageIsActionable:
     def test_it_says_what_to_try_next(self, recorder):
         message = recorder.device_error_message("open", OSError("nope"))
         assert "--audio-device-index" in message
-        assert "asr-list-audio-devices" in message
+        assert "gaia test --test-type asr-list-audio-devices" in message
 
     def test_it_copes_when_even_the_device_query_fails(self, recorder):
         with patch.object(sd, "query_devices", side_effect=OSError("no such device")):

@@ -3350,9 +3350,9 @@ afterwards (or `swebench <run_dir>` does, later).
     )
 
     # MCP Client commands (connect to external MCP servers).
-    # `add` and `remove` moved to `gaia connectors mcp add/remove` (#977) so
-    # configuration goes through the connectors framework with keyring-backed
-    # secrets and per-agent grants.
+    # `add` and `remove` were removed (#976). Catalog servers go through
+    # `gaia connectors configure`; a custom server is an entry in
+    # mcp_servers.json until `gaia connectors mcp` exists (#977).
 
     mcp_list_parser = mcp_subparsers.add_parser(
         "list", help="List configured MCP servers"

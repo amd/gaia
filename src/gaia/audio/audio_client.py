@@ -558,7 +558,7 @@ class AudioClient:
                     f"WARNING: No audio detected from microphone (peak level: {max_energy:.6f}).\n"
                     f"  - Check that your microphone is not muted\n"
                     f"  - Try a different device: gaia talk --audio-device-index <N>\n"
-                    f"  - List devices with: gaia test asr-list-audio-devices"
+                    f"  - List devices with: gaia test --test-type asr-list-audio-devices"
                 )
             else:
                 self.log.debug(f"Mic check passed (peak level: {max_energy:.4f})")
@@ -569,7 +569,7 @@ class AudioClient:
             print(
                 f"WARNING: Could not open the microphone ({e}).\n"
                 f"  - Try a different device: gaia talk --audio-device-index <N>\n"
-                f"  - List devices with: gaia test asr-list-audio-devices"
+                f"  - List devices with: gaia test --test-type asr-list-audio-devices"
             )
         finally:
             if stream:
@@ -683,7 +683,7 @@ class AudioClient:
                             "\r\033[K"
                             "No speech detected. Check your microphone or try:\n"
                             "  gaia talk --audio-device-index <N>\n"
-                            "  gaia test asr-list-audio-devices"
+                            "  gaia test --test-type asr-list-audio-devices"
                         )
 
         except Exception as e:
