@@ -10,7 +10,7 @@ REM simply will not exist, no matter what PYTHONPATH says (a frozen binary
 REM ignores it).
 setlocal
 set REPO=%~dp0..\..\
-set PYTHONPATH=%REPO%src;%REPO%hub\agents\gaia\python;%REPO%hub\agents\chat\python
+set PYTHONPATH=%REPO%src;%REPO%hub\agents\gaia\python
 set PATH=%REPO%scripts\dev\bin;%PATH%
 cd /d "%REPO%"
 if not exist "%REPO%tui\bin\gaia-tui.exe" (

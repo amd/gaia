@@ -605,8 +605,9 @@ class TestDownloadFileToolScreensBeforeWriting:
             result = tools["download_file"]("https://evil.example/x", save_to=tmpdir)
 
         assert callable(captured["screen"])
-        assert "Error" in result
-        assert "blocked by security policy" in result
+        assert result["executed"] is False
+        assert result["status"] == "error"
+        assert "blocked by security policy" in result["error"]
 
     def test_allowed_filename_passes_the_screen(self):
         """An ordinary filename is not blocked."""

@@ -18,7 +18,7 @@ if (-not $env:ANTHROPIC_API_KEY) {
   if ($envline) { $env:ANTHROPIC_API_KEY = $envline.Line.Split('=', 2)[1].Trim() }
 }
 
-$env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
+$env:PYTHONPATH = "$root\src;$root\hub\agents\gaia\python"
 $env:GAIA_TUI_HOME = "$home_eval\tui-home"
 $env:GAIA_AGENT_LOG = "$home_eval\agent-session.log"
 $env:GAIA_MEMORY_DISABLED = '1'   # embedder = Lemonade = forbidden on this box

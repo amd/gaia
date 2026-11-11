@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Uni
 from urllib.parse import urlsplit
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
@@ -44,6 +45,15 @@ _NEAR_EMPTY_NOTE = (
     "if you have one; otherwise try another source, or report the value as not "
     "found.]"
 )
+
+
+class _DownloadRefused(ValueError):
+    """The destination screen refused the file before anything was written."""
+
+
+def _download_refusal(reason: str) -> Dict[str, Any]:
+    """A download the write policy stopped before it ran."""
+    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
 
 def _download_denied(validator, dest_path: Path) -> str:
@@ -751,7 +761,7 @@ class BrowserToolsMixin:
             url: str,
             save_to: str = "~/Downloads",
             filename: str = None,
-        ) -> str:
+        ) -> Union[str, Dict[str, Any]]:
             """Download a file from a URL to the local filesystem.
 
             Downloads the file and saves it locally. Useful for getting documents,
@@ -778,7 +788,7 @@ class BrowserToolsMixin:
                 resolved_dir = str(Path(save_to).expanduser().resolve())
                 is_blocked, reason = validator.is_write_blocked(resolved_dir)
                 if is_blocked:
-                    return f"Error: {reason}"
+                    return _download_refusal(reason)
 
             # WebClient calls this with the final file path before creating
             # anything, so a refusal leaves the filesystem untouched.
@@ -786,7 +796,7 @@ class BrowserToolsMixin:
                 if validator:
                     is_blocked, reason = validator.is_write_blocked(str(dest_path))
                     if is_blocked:
-                        raise ValueError(
+                        raise _DownloadRefused(
                             f"Downloaded file blocked by security policy: {reason}"
                         )
                     # Ask about the folder when it can be granted whole, so one
@@ -796,7 +806,7 @@ class BrowserToolsMixin:
                     if validator.grant_refusal_reason(str(target)):
                         target = dest_path
                     if not validator.is_path_allowed(str(target), prompt_user=True):
-                        raise ValueError(_download_denied(validator, dest_path))
+                        raise _DownloadRefused(_download_denied(validator, dest_path))
                 before_change(dest_path, "download_file")
 
             try:
@@ -806,6 +816,8 @@ class BrowserToolsMixin:
                     filename=filename,
                     on_path_resolved=_screen_destination,
                 )
+            except _DownloadRefused as e:
+                return _download_refusal(str(e))
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
