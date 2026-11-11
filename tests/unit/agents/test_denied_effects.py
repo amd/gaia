@@ -1061,6 +1061,23 @@ def test_start_process_reads_every_way_of_passing_the_script(tmp_path):
         assert Effect(PATH, changed) in effects, command
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "`date`" && rm keep.txt',
+        'x="`cat a.txt`"; rm keep.txt',
+        "start /b cmd /c del keep.txt",
+        "start /d . cmd /c del keep.txt",
+        'start "" /wait cmd /c del keep.txt',
+        "gsudo powershell -Command Remove-Item keep.txt",
+        "gsudo -u admin cmd /c del keep.txt",
+    ],
+)
+def test_a_launcher_or_backtick_keeps_the_command_it_runs(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
 def test_start_process_writes_where_it_redirects_output(tmp_path):
     effects = effects_of_shell_command(
         "Start-Process notepad -RedirectStandardOutput out.log", str(tmp_path)

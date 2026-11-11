@@ -641,9 +641,17 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
     """Every effect a shell command line has, segment by segment."""
     if depth > 3 or not isinstance(command, str):
         return set()
+    effects = _effects_of_line(command, cwd, depth)
+    if '`"' in command:
+        # PowerShell's `" nests a quote, but in sh the backtick ends a
+        # substitution, so read the line both ways.
+        effects |= _effects_of_line(command.replace('`"', "'"), cwd, depth)
+    return effects
+
+
+def _effects_of_line(command: str, cwd: str, depth: int) -> Set[Effect]:
+    """Effects of one reading of a shell command line."""
     effects: Set[Effect] = set()
-    # PowerShell's `" nests a quote in a quoted string; read it as the other quote.
-    command = command.replace('`"', "'")
     for segment in _split_segments(command):
         tokens = _tokens(segment)
         # ``cd repo && python run_tests.py`` runs repo/run_tests.py.
@@ -777,13 +785,24 @@ def _past_launcher(tokens: List[str]) -> List[str]:
     """*tokens* without cmd's ``start ["title"] /switches`` or ``gsudo -flags``."""
     head = _program(tokens[0]) if tokens else ""
     if head == "start":
-        words = [w for w in tokens[1:] if not _SLASH_SWITCH_RE.match(w)]
-        # The title is the quoted first word: empty, or more than one word.
-        if words and (not words[0].strip("'\"") or " " in words[0]):
-            words = words[1:]
+        words, titled = list(tokens[1:]), False
+        # Only start's own title and switches lead: ``start cmd /c x`` keeps /c.
+        while words:
+            # The title is the quoted first word: empty, or more than one word.
+            if not titled and (not words[0].strip("'\"") or " " in words[0]):
+                titled = True
+                words.pop(0)
+            elif _SLASH_SWITCH_RE.match(words[0]):
+                if words.pop(0).lower() == "/d" and words:
+                    words.pop(0)
+            else:
+                break
         return words or tokens
     if head == "gsudo":
-        words = [w for w in tokens[1:] if not w.startswith("-")]
+        words = list(tokens[1:])
+        while words and words[0].startswith("-"):
+            if words.pop(0).lower() in ("-u", "--user", "-i", "--integrity") and words:
+                words.pop(0)
         return words or tokens
     return tokens
 
