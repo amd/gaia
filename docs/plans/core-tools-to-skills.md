@@ -32,11 +32,11 @@ All three need one small framework change first (see [the mechanism](#the-mechan
 - The 8 live-browser tools only register with the `[browser]` extra. They were measured
   separately with the driver check stubbed: 972 tokens, so 15,825 in total with
   Playwright installed.
-- **Compact tier today:** `model_features.COMPACT` withholds scratchpad, five email
-  tools, image generation and three hub tools, 2,308 tokens. The fix on
-  `claude/skills-hub-evaluation-plan-b4e2a7` hides the other three email tools too
-  (540 more; see [findings](#findings-outside-this-plan)). With that fix, Gemma-4-E4B
-  sees about **12,005 tokens**.
+- **Compact tier today:** `model_features.COMPACT` withholds scratchpad, eight email
+  tools, image generation and three hub tools. When this was measured it withheld only
+  five email tools (2,308 tokens); #6842 added the other three (540 more; see
+  [findings](#findings-outside-this-plan)), so Gemma-4-E4B now sees about
+  **12,005 tokens**.
 - Eval coverage is a word match of each tool name across `eval/scenarios/*`.
 - Per-tool counts add up to about 90 tokens more than the rendered total, because the
   JSON array wrapping tokenizes differently. The savings below use the per-tool sums.
@@ -112,8 +112,7 @@ once, when the model asks for the skill. Every other turn is byte-identical.
 - **One-turn asks that skip the catalogue.** "Copy that to my clipboard" fails if the
   model answers without calling `load_skill`. This is the main risk. Each move needs a
   selection scenario in which the model has to load the skill first.
-  `eval/scenarios/gaia_skills_selection/` on `claude/skills-hub-evaluation-plan-b4e2a7`
-  is the place for them. None of `music-gen`, `image-gen` or `inbox-triage` has a
+  A new `eval/scenarios/gaia_skills_selection/` category is the place for them. None of `music-gen`, `image-gen` or `inbox-triage` has a
   load-path scenario today.
 - **Prompt text that names hidden tools.** The data rules advertise `generate_image`
   and `transcribe_media` by name. They also say "UNSUPPORTED: Email" while eight email
@@ -139,10 +138,10 @@ run in parallel with the gating work.
 
 ## Findings outside this plan
 
-- **Already fixed on `claude/skills-hub-evaluation-plan-b4e2a7`:** on `dca0ef8f1`,
+- **Fixed in #6842:** at measurement time (`dca0ef8f1`),
   `FEATURE_TOOLS["email"]` missed `get_thread`, `list_connected_mailboxes` and
   `list_waiting_on_you`. That let compact models read the mailbox through
-  `list_waiting_on_you`, which the skills-hub eval caught on Gemma-4-E4B. The fix adds
+  `list_waiting_on_you`, which the skills-hub eval caught on Gemma-4-E4B. #6842 adds
   all three, plus a test that checks the list against every tool the email mixin
   registers.
 - The data-file rules say email is unsupported, yet the flagship registers eight email
