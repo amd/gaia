@@ -309,6 +309,11 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
+        // A context notice keeps its own row: it never merges with a neighbour.
+        if (step.notice || prev?.notice) {
+            result.push({ ...step });
+            return;
+        }
         // Merge consecutive thinking steps; concatenate so accumulated text survives.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
             const merged = (prev.detail || '') + (step.detail || '');
@@ -438,6 +443,7 @@ function isWarning(row: ActivityRow): boolean {
 
 /** Whether a row draws anything; the live line, not a row, says what the model is doing. */
 function shownWhenDone(row: ActivityRow): boolean {
+    if (row.notice) return true;
     return row.type !== 'status' && !(row.type === 'thinking' && !(row.detail || '').trim());
 }
 
@@ -544,6 +550,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
             // While the turn runs, the live checklist below stands in for it.
             return step === livePlan ? null : <PlanChecklist key={step.id} step={step} />;
         }
+        if (step.notice) return <FlowNotice key={step.id} step={step} />;
         if (step.type === 'status') return <FlowWarning key={step.id} step={step} />;
         if (step.type === 'error') return <FlowError key={step.id} step={step} />;
         if (step.type === 'policy_alert') return <FlowPolicyAlert key={step.id} step={step} />;
@@ -647,6 +654,17 @@ function FlowWarning({ step }: { step: AgentStep }) {
     return (
         <div className="flow-warning" role="status">
             <AlertCircle size={13} />
+            <span>{step.label}</span>
+        </div>
+    );
+}
+
+// ── Flow: a lasting notice, e.g. older tool results moved out of the prompt ──
+
+function FlowNotice({ step }: { step: AgentStep }) {
+    return (
+        <div className="flow-warning flow-notice" role="status">
+            <FileText size={13} />
             <span>{step.label}</span>
         </div>
     );

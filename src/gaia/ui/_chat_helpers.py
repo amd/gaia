@@ -2077,6 +2077,18 @@ _relayed_contexts: dict = {}
 _relayed_contexts_lock = threading.Lock()
 
 
+def _context_eviction_step(event: dict, step_id: int, timestamp: int) -> dict:
+    """The saved row for a context eviction, so the notice survives a reload."""
+    return {
+        "id": step_id,
+        "type": "status",
+        "label": event.get("message", ""),
+        "active": False,
+        "notice": True,
+        "timestamp": timestamp,
+    }
+
+
 def record_relayed_context(
     session_id: str, usage: Optional[dict], reason: Optional[str]
 ) -> None:
@@ -5035,6 +5047,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "success": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
+                    )
+                elif (
+                    event_type == "status" and event.get("status") == "context_reduced"
+                ):
+                    step_id += 1
+                    captured_steps.append(
+                        _context_eviction_step(
+                            event,
+                            step_id,
+                            int(asyncio.get_running_loop().time() * 1000),
+                        )
                     )
                 elif event_type == "policy_alert":
                     step_id += 1

@@ -39,6 +39,12 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
         });
         return;
     }
+    // Older tool results moved out of the prompt: a lasting row, never folded into progress.
+    if (status === 'context_reduced') {
+        const step = agentEventToStep({ ...event, message: msg }, stepIdRef);
+        if (step) store.addAgentStep({ ...step, active: false, notice: true });
+        return;
+    }
     if (event.phase && msg) store.setLiveStatus(msg, event.phase);
     // The client's own wait notice is not a step of the turn.
     if (event.phase === 'waiting') return;

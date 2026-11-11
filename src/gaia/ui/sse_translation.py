@@ -373,6 +373,15 @@ class CanonicalTranslator:
         message = str(event.get("message", ""))
         if event.get("channel") == DEBUG_CHANNEL:
             return self._debug_status(message)
+        if event.get("status") == "context_reduced":
+            # Each batch is news, even worded like the last one.
+            return [
+                {
+                    "type": "status",
+                    "message": message,
+                    "context_reduced": event.get("context_reduced") or {},
+                }
+            ]
         if event.get("retracts_answer"):
             # Never deduplicated: each one takes back the text since the last.
             self._last_status = message

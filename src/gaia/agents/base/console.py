@@ -551,6 +551,17 @@ class OutputHandler(ABC):
         """
         ...
 
+    def print_context_eviction(self, event: Dict[str, Any]):
+        """Say that older tool results were put away to keep the window clear.
+
+        ``event`` is the batch the agent built (``reason``, ``evicted_results``,
+        ``evicted_tokens_est``, ``items``…). Shown through :meth:`print_info`
+        here; a console with a structured channel sends the event itself.
+        """
+        from gaia.agents.base.context_eviction import context_eviction_message
+
+        self.print_info(context_eviction_message(event))
+
     def print_skill_use(  # pylint: disable=unused-argument
         self, name: str, loaded: List[str], how: str
     ):

@@ -32,7 +32,8 @@
         "gaia_version"
       ],
       "phase_extension": ["phase", "words", "chars"],
-      "history_cut_extension": ["history_cut"]
+      "history_cut_extension": ["history_cut"],
+      "context_reduced_extension": ["context_reduced"]
     },
     "token": { "fields": ["delta"] },
     "tool_call": { "fields": ["tool", "args", "narration"] },

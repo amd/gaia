@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Opt-in: move read tool results out before the window fills.** With
+  `GAIA_CONTEXT_EVICTION=on`, tool results the model has already read leave
+  the prompt, oldest first, when the next call plus one more result would not
+  fit. Each stays re-readable through its handle, the Agent UI and TUI
+  transcript say so, and conversation turns are never touched. If the model
+  answers over results it never re-read, it is asked once to re-read them.
+  `ChatAgentConfig` gains `context_eviction_headroom_tokens` (5000);
+  `context_eviction_threshold_tokens` and `context_eviction_min_batch_tokens`
+  now default to `None` and `context_eviction_keep_steps` to 2 (was 8), and
+  `"auto"` no longer depends on a cloud model's cached-input price.
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

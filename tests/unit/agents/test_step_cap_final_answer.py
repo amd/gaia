@@ -584,7 +584,7 @@ def test_closing_overflow_not_retried_when_the_trim_cannot_fit(agent):
     # one result frees only 100, and the projection still lands past the
     # window, so a retry would only hit the same refusal.
     with patch(
-        "gaia.agents.base.agent.request_tokens",
+        "gaia.agents.base.context_eviction.ContextEvictor.raw_tokens",
         side_effect=[900, 800],
     ):
         with pytest.raises(_ClosingOverflow) as caught:
@@ -609,7 +609,7 @@ def test_closing_overflow_that_cannot_fit_archives_nothing(agent):
     _stub_chat(agent, OverflowError(_TOO_LONG))
 
     with patch(
-        "gaia.agents.base.agent.request_tokens",
+        "gaia.agents.base.context_eviction.ContextEvictor.raw_tokens",
         side_effect=[900, 800],
     ):
         with pytest.raises(_ClosingOverflow):

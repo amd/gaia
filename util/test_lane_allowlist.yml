@@ -25,6 +25,7 @@ files:
   tests/integration/eval/test_sidecar_eval_gaia.py: Scores the flagship sidecar against a real model; real_model marker, self-hosted Strix Halo only.
 
   # A live Lemonade Server with models loaded.
+  tests/integration/test_context_overflow_lemonade.py: Drives a 10-document chain through a real model under a 16K eviction budget; needs a live Lemonade Server and holds its model for minutes (opt-in, GAIA_STRESS_LEMONADE=1).
   tests/integration/test_chat_rag_pdf_chat_e2e.py: Chats over an indexed PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_chat_rag_pdf_e2e.py: Indexes and queries a PDF end to end; needs a live Lemonade Server with the chat and embedding models.
   tests/integration/test_pptx_rag_e2e.py: Answers questions over an indexed PPTX; needs a live Lemonade Server with the chat and embedding models.

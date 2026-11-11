@@ -89,6 +89,9 @@
     flex-shrink: 0;
     color: var(--accent-yellow);
 }
+.flow-notice > svg {
+    color: var(--text-secondary);
+}
 
 .flow-live-line {
     padding: 2px 0;
