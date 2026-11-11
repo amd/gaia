@@ -865,12 +865,16 @@ jobs:
           else
             WHAT="prepared the bump to v${TARGET}, but it did not pass the checks run before a PR is opened (its changes went beyond what a bump may touch, the pin or docs-version checks failed, or filing proposals or opening the PR failed), so **no PR was opened**. If *publish* got as far as pushing \`${BRANCH}\`, delete that branch before re-running. Feature-proposal issues may already be filed"
           fi
+          RERUN="via the workflow's *Run workflow* button (force_version=${TARGET})"
+          if [ "$TARGET" = "unknown" ]; then
+            RERUN="via the workflow's *Run workflow* button"
+          fi
           cat > "$RUNNER_TEMP/tracking-issue.md" <<EOF
           The Lemonade version-bump workflow $WHAT.
 
           - Failing run: $RUN_URL
 
-          Re-run via the workflow's *Run workflow* button (force_version=${TARGET}) or bump \`LEMONADE_VERSION\` in \`src/gaia/version.py\` by hand.
+          Re-run $RERUN or bump \`LEMONADE_VERSION\` in \`src/gaia/version.py\` by hand.
 
           cc @kovtcharov-amd
           EOF
@@ -891,11 +895,12 @@ jobs:
           assignees: kovtcharov-amd
 
   # Close the tracking issue once a run shows the bump is done. That is decided from
-  # job results and main's own pin, never from anything the agent job reported.
+  # job results and main's own pin. The one agent-job output it reads, `stopped`, can
+  # only keep the issue open: report is filing it in that run.
   resolve:
     needs: [bump, verify, proposals, publish]
     if: >-
-      always() && needs.bump.result == 'success'
+      always() && needs.bump.result == 'success' && needs.bump.outputs.stopped != 'true'
       && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 10

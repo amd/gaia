@@ -366,7 +366,13 @@ def _main(argv: Sequence[str] | None, run: Runner) -> int:
             selector=selector,
             run=run,
         )
-        write_output("issue", issue_number(ref))
+        try:
+            number = issue_number(ref)
+        except ValueError as e:
+            # The issue was filed or updated; only the output a later step reads is missing.
+            print(f"::error::{e}. The issue was written, but no step output was set.")
+            return 1
+        write_output("issue", number)
         return code
 
     selector.keys = {validate_key(k) for k in _lines(args.key)}

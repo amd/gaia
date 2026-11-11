@@ -137,6 +137,23 @@ def test_an_issue_ref_without_a_number_is_refused():
         auto_issue.issue_number("https://github.com/amd/gaia/issues/new")
 
 
+def test_a_filed_issue_without_a_number_fails_the_step_cleanly(
+    tmp_path, monkeypatch, capsys
+):
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    class NoNumberGh(FakeGh):
+        def __call__(self, argv):
+            out = super().__call__(argv)
+            return "filed\n" if list(argv)[:2] == ["issue", "create"] else out
+
+    assert _report(NoNumberGh(), tmp_path) == 1
+    assert "::error::no issue number in 'filed'" in capsys.readouterr().out
+    assert output.read_text(encoding="utf-8") == ""
+
+
 def test_rerun_comments_on_the_marked_issue_instead_of_filing(tmp_path):
     gh = FakeGh([_issue(12, "anything", key="wf/failure")])
     assert _report(gh, tmp_path, title="a reworded title") == 0

@@ -172,10 +172,13 @@ def test_the_jobs_run_in_order_and_only_on_a_packaged_bump(jobs):
     assert sorted(resolve["needs"]) == ["bump", "proposals", "publish", "verify"]
     assert " ".join(resolve["if"].split()) == (
         "always() && needs.bump.result == 'success' "
+        "&& needs.bump.outputs.stopped != 'true' "
         "&& !contains(needs.*.result, 'failure') "
         "&& !contains(needs.*.result, 'cancelled')"
     )
-    assert "needs.bump.outputs" not in str(resolve)
+    # `stopped` only keeps the issue open on a run where report files it.
+    rest = str(resolve).replace("needs.bump.outputs.stopped != 'true'", "")
+    assert "needs.bump.outputs" not in rest
 
 
 def test_later_jobs_trust_only_verifys_target(jobs):
@@ -772,6 +775,14 @@ def test_report_says_unknown_when_verify_set_no_target(tmp_path):
     result, title, body = _report(tmp_path, TARGET="", STOPPED="true")
     assert result.returncode == 0, result.stderr
     assert title.endswith("(target vunknown)")
+    assert "force_version" not in body
+    assert "*Run workflow* button or bump" in body
+
+
+def test_report_names_the_rerun_input_for_a_checked_target(tmp_path):
+    result, _, body = _report(tmp_path, TARGET=TARGET, STOPPED="true")
+    assert result.returncode == 0, result.stderr
+    assert f"(force_version={TARGET})" in body
 
 
 def test_report_prints_no_unchecked_target(tmp_path):
