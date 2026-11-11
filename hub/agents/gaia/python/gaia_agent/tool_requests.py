@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List
 
-SHELL_TOOLS = ("run_shell_command", "get_shell_state")
+# Core only: naming a tool off the short list forces the session's one jump.
+SHELL_TOOLS = ("run_shell_command",)
 
 # The user names the shell. "Terminal" and "bash" are ordinary English too, so
 # they count only as the place something is run ("in the terminal").
@@ -47,14 +48,27 @@ _SPEECH_NAMED = re.compile(
     r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
 )
 
+# A file only an off-list tool can open. The prompt names these tools, and a
+# model cannot call what its list does not hold.
+_MEDIA_NAMED = (
+    (
+        re.compile(r"\.(?:png|jpe?g|gif|bmp|webp|tiff?)\b", re.IGNORECASE),
+        "analyze_image",
+    ),
+    (
+        re.compile(r"\.(?:mp3|wav|m4a|flac|ogg|mp4|mkv|mov|webm)\b", re.IGNORECASE),
+        "transcribe_media",
+    ),
+)
+
 
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
-    Three signals: a registry tool name written out (``run_shell_command``), a
-    request that names the shell or can only be answered by it, and a request to
-    speak. Only names in *registry* are returned, so a profile without shell
-    tools gets none.
+    Four signals: a registry tool name written out (``run_shell_command``), a
+    request that names the shell or can only be answered by it, a request to
+    speak, and a named picture or recording. Only names in *registry* are
+    returned, so a profile without shell tools gets none.
     """
     names = set(registry)
     found: List[str] = []
@@ -75,4 +89,7 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         and "text_to_speech" not in found
     ):
         found.append("text_to_speech")
+    for pattern, name in _MEDIA_NAMED:
+        if pattern.search(user_input) and name in names and name not in found:
+            found.append(name)
     return found
