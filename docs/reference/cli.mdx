@@ -259,7 +259,9 @@ Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — 
 ### Confirming dangerous tools
 
 Shell commands, file writes, and an agent's own destructive tools (email send /
-forward / permanent delete, calendar RSVP) prompt before they run:
+forward / permanent delete, calendar RSVP, the flagship's calendar create,
+change and cancel, and its mail send, reply, forward and draft edits) prompt
+before they run:
 
 ```
 ⚠️  Confirm: send_now
@@ -750,7 +752,7 @@ gaia kill [OPTIONS]
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `--lemonade` | flag | Kill Lemonade Server and child processes |
+| `--lemonade` | flag | Stop the Lemonade Server GAIA uses: GAIA's own server with its child processes, or, by its port, the server `LEMONADE_BASE_URL` or setup chose when it runs on this machine. Only a process identified as Lemonade is killed: any other program on that port is left running and named. Exits 0 if it isn't running, 1 if it can't be stopped |
 | `--port` | integer | Kill the GAIA/Lemonade process listening on a specific port |
 | `--daemons` | flag | List every running GAIA daemon with its pid, age and home folder, and stop the orphaned ones |
 
@@ -1897,9 +1899,12 @@ It applies everywhere GAIA sends a prompt or a key:
   cloud provider, enter a gateway token, or switch to a cloud model.
 - The web-search tool that answers through Perplexity's cloud AI is turned off.
 
-Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway or Claude)
-from `default_model` and `last_model` in `config.json`, and prints what it cleared
-and the local model GAIA uses instead. `gaia config show` lists the policy file and the current level.
+Setting it also clears a saved cloud model (Fireworks, AMD LLM Gateway, Claude, or
+any other gateway model Lemonade lists) from `default_model` and `last_model` in
+`config.json`, and prints what it cleared and the local model GAIA uses instead. A
+saved id that only Lemonade can identify as cloud is checked against its model list;
+if Lemonade can't be reached, that id stays saved and the command warns that it
+wasn't checked. `gaia config show` lists the policy file and the current level.
 
 What it does not cover:
 
@@ -2804,13 +2809,14 @@ Skills are discovered from these roots, highest precedence first:
 <Tabs>
   <Tab title="list">
     ```bash
-    gaia skill list [--json] [--root ROOT]
+    gaia skill list [--json] [--root ROOT] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
     | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-project` \| `claude-import` |
+    | `--agent-dir DIR` | Also discover the skills an agent package bundles in `DIR/skills/`, as root `agent-bundled`. Repeatable. Exits `2` if `DIR/skills/` does not exist |
 
     ```
     NAME                         VERSION    TIER          ROOT           TOOLS
@@ -2823,13 +2829,14 @@ Skills are discovered from these roots, highest precedence first:
 
   <Tab title="info">
     ```bash
-    gaia skill info <name> [--json] [--body]
+    gaia skill info <name> [--json] [--body] [--agent-dir DIR]
     ```
 
     | Option | Description |
     |--------|-------------|
     | `--json` | Emit JSON (including the full frontmatter) instead of text |
     | `--body` | Also print the Markdown instructions |
+    | `--agent-dir DIR` | Also look in the skills an agent package bundles in `DIR/skills/`. Repeatable |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
   </Tab>
@@ -4102,9 +4109,9 @@ remove them all with `gaia uninstall --purge`.
 
 ### Cache Command
 
-Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,
-context7 library docs, etc.). Caches live under `~/.gaia/cache/` (Windows:
-`%LOCALAPPDATA%/gaia/cache/`).
+Inspect or clear GAIA's on-disk caches. They live under `~/.gaia/cache/` on every
+platform (`$GAIA_HOME/cache/` when `GAIA_HOME` is set), one folder per feature,
+such as `rag` for document Q&A and `context7` for library docs.
 
 ```bash
 gaia cache {status,clear} [OPTIONS]
@@ -4114,14 +4121,14 @@ gaia cache {status,clear} [OPTIONS]
 
 | Action | Description |
 |--------|-------------|
-| `status` | Print size and location of each cache directory |
-| `clear` | Remove cache contents (scoped by flags below) |
+| `status` | List each folder in the cache directory with its size and file count, largest first, then Context7's service and rate-limit status |
+| `clear` | Clear the Context7 cache (flags below) |
 
 **Flags for `clear`:**
 
 | Flag | Description |
 |------|-------------|
-| `--all` | Remove every cache directory (safe: preserves models under `~/.gaia/models/`) |
+| `--all` | Clear every cache `gaia cache clear` manages; today that is only the Context7 cache |
 | `--context7` | Clear only the Context7 MCP library-docs cache |
 
 **Examples:**

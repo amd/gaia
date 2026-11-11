@@ -27,7 +27,7 @@ without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
 cheap.
 
 Per-agent shape is injected, not hardcoded: ``agent_id`` (drives ``respond_url``),
-``render_tool_map`` (which tool draws which card), ``action_labels`` +
+``action_labels`` +
 ``summary_renderer`` (how a gated action is described to the human). Defaults are
 generic, so an agent that needs none of it constructs with just ``agent_id``.
 
@@ -73,13 +73,18 @@ import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG, plain_risk_note
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    RISK_NOTE_ARG,
+    plain_risk_note,
+)
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
     SCRATCH_ARG,
 )
+from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
 from gaia.ui.event_narration import (
     DEBUG_CHANNEL,
     derive_narration,
@@ -167,9 +172,6 @@ class CanonicalTranslator:
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
             this is a parameter and not a constant: a hardcoded ``/v1/email/...``
             silently points every other agent's client at the wrong sidecar.
-        render_tool_map: ``tool name -> card key`` for ``tool_result.render``
-            (spec §4.2). Must mirror the caller's
-            ``SSEOutputHandler._RENDER_TOOL_TO_LANG``.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole
             confirmation summary, when an agent wants domain detail (recipients,
@@ -186,7 +188,6 @@ class CanonicalTranslator:
         run_id: str,
         *,
         agent_id: str,
-        render_tool_map: Optional[Dict[str, str]] = None,
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
         debug: Optional[bool] = None,
@@ -197,7 +198,6 @@ class CanonicalTranslator:
         self._reasoning = reasoning
         self._agent_id = agent_id
         self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
-        self._render_tool_map = dict(render_tool_map or {})
         self._action_labels = dict(action_labels or {})
         self._summary_renderer = summary_renderer
         # Buffered tool_start awaiting its tool_args (spec §6.3). Shape:
@@ -433,6 +433,7 @@ class CanonicalTranslator:
     def _on_tool_result(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         self._result_seen_since_call = True
         data = event.get("result_data")
+        has_card_payload = isinstance(data, dict) and bool(data)
         if data is None:
             # The handler's tool_result event is a summary view; carry the
             # available structured bits so the generic result card has content.
@@ -450,11 +451,11 @@ class CanonicalTranslator:
             # nor the latency the preview line is made of.
             "preview": derive_preview(tool, event),
         }
-        # A handler-attached card (e.g. an edit's diff) outranks the tool map.
+        # The handler names the card only when it lifted one, so a failed call
+        # never draws an "Invalid payload" card ahead of the model's retry; and a
+        # name without a typed payload stays a plain result, never a broken card.
         render = event.get("render")
-        if not isinstance(render, str) or not render:
-            render = self._render_tool_map.get(self._last_tool or "")
-        if render:
+        if isinstance(render, str) and render and has_card_payload:
             canonical["render"] = render
         return [canonical]
 
@@ -553,9 +554,12 @@ class CanonicalTranslator:
             note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
                 event.get("risk")
             )
+        elif tool in PATH_TOOLS or tool in CALENDAR_WRITE_TOOLS:
+            # A file prompt's note says what else a yes grants; a calendar
+            # prompt's, that its text holds characters that don't show.
+            note = str(args.get(RISK_NOTE_ARG) or "")
         else:
-            # A file prompt's note says what else a yes grants.
-            note = str(args.get(RISK_NOTE_ARG) or "") if tool in PATH_TOOLS else ""
+            note = ""
         if note:
             summary = f"{summary}\n{note}"
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
@@ -605,6 +609,13 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        # A calendar card shows the checked values: the addresses as notified,
+        # the event's real title, text with its hidden characters as codes.
+        if tool in CALENDAR_WRITE_TOOLS:
+            shown_args, _ = bounded_prompt_args(
+                {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
+            )
+            prompt_context["shown_args"] = shown_args
         # Where a relative write really lands; the model's own spelling stays in args.
         shown_path = args.get("file_path")
         if isinstance(shown_path, str) and shown_path != call_args.get("file_path"):
@@ -663,12 +674,16 @@ class CanonicalTranslator:
         ``action`` field, not here. Agents with domain detail worth showing
         (recipients, paths) pass ``summary_renderer``.
         """
+        if isinstance(args.get(EXACT_TEXT_ARG), str):
+            return args[EXACT_TEXT_ARG]
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
         # The prompt's title already says what kind of action this is; the
         # body is the one thing the decision turns on, shown once.
         if tool in COMMAND_SUMMARY_TOOLS or tool in CODE_SUMMARY_TOOLS:
             return render_command_summary(tool, args)
+        if tool in CALENDAR_WRITE_TOOLS:
+            return render_calendar_summary(args)
         if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(args.get("path"), str):
             return _path_access_question(args)
         if tool == PROJECT_TRUST_PROMPT_TOOL and isinstance(args.get("folder"), str):
@@ -799,6 +814,15 @@ def render_labelled_summary(
 #: :func:`render_command_summary` instead of as a ``key="value"`` clause.
 COMMAND_SUMMARY_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
+#: The bundled calendar skill's writes, as they register once it loads.
+CALENDAR_WRITE_TOOLS = frozenset(
+    {
+        "calendar/create_calendar_event",
+        "calendar/update_calendar_event",
+        "calendar/cancel_calendar_event",
+    }
+)
+
 
 #: Longest a command may be before its middle is elided. Head AND tail are
 #: kept: for a shell line the part the decision turns on is often at the end.
@@ -815,7 +839,7 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG})
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG})
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
@@ -920,6 +944,42 @@ def _split_leading_cd(command: str) -> "tuple[str, str]":
             if sep and tail.strip():
                 return target.strip().strip('"').strip("'"), tail.strip()
     return "", command
+
+
+def render_calendar_summary(args: Dict[str, Any]) -> str:
+    """What a calendar change does, whole: the generic clause cuts long attendee lists.
+
+    Attendees go last, because a terminal too short for them clips the middle and says
+    so, and the event and its changes must survive that.
+    """
+
+    def plain(key: str) -> str:
+        value = str(args.get(key) or "")
+        return strip_untrusted_field_markers(value).strip()
+
+    def span(begins: str, ends: str) -> str:
+        return f"{plain(begins)} to {plain(ends)}" if plain(ends) else plain(begins)
+
+    rows = [
+        ("Title", plain("title")),
+        ("Event", plain("expected_title")),
+        ("When", span("start", "end") or plain("expected_start")),
+        ("New title", plain("new_title")),
+        ("New time", span("new_start", "new_end")),
+        ("Account", plain("calendar_account")),
+        ("Location", plain("location")),
+        ("New location", plain("new_location")),
+        ("Description", plain("description")),
+        ("New description", plain("new_description")),
+    ]
+    lines = [f"{label}: {value}" for label, value in rows if value]
+    people = args.get("notify_attendees")
+    names = [
+        strip_untrusted_field_markers(str(p))
+        for p in (people if isinstance(people, list) else [])
+    ]
+    lines.append(f"Notifies: {', '.join(names) or 'nobody'}")
+    return "\n".join(lines)
 
 
 def render_command_summary(

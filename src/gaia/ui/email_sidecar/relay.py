@@ -51,8 +51,8 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PROJECT_TRUST_PROMPT_TOOL,
 )
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.event_narration import derive_narration
 from gaia.ui.sse_handler import (
@@ -287,6 +287,9 @@ def _dispatch_one(
                     args[RISK_NOTE_ARG] = str(context["risk_note"])
                 if context.get("file_path"):
                     args["file_path"] = str(context["file_path"])
+                # What GAIA checked, in place of the model's own spelling.
+                if isinstance(context.get("shown_args"), dict):
+                    args.update(context["shown_args"])
             if args:
                 request["args"] = args
                 if event.get("args_truncated"):
@@ -380,7 +383,9 @@ def _dispatch_one(
         if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
             out["mcp_output"] = data["mcp_output"]
         render = event.get("render")
-        if render:
+        # "media" is the terminal's card; the Agent UI draws generated media
+        # itself (``media_card``) from the path the payload carries.
+        if render and render != "media":
             out["render"] = render
         handler._emit(out)
 
@@ -790,8 +795,13 @@ def relay_query(
                 # The user answered or the sidecar's wait ended. A last event
                 # needs no model, so the turn ends without waiting in line.
                 if event.get("type") not in ("final", "error"):
-                    handler.come_back_to_model()
-                    if handler.cancelled.is_set():
+                    retake = handler.come_back_to_model()
+                    if retake is not True:
+                        # ``False`` means the handler emitted the named fatal
+                        # retake error; ``None`` is an ordinary user Stop. Keep
+                        # those terminal paths distinct (#6019).
+                        if retake is False:
+                            terminated = True
                         break
             if _dispatch_one(
                 handler, event, profile, answers_confirmations, offers_always
