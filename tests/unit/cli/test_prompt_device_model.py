@@ -78,7 +78,7 @@ def _run_main(argv, monkeypatch, devices):
         cli.main()
     except SystemExit as exc:
         return exc.code
-    # A normal return (the response dict) is success.
+    # A normal return is success.
     return 0
 
 
@@ -181,6 +181,36 @@ def test_saved_default_model_still_applies_without_device(
 
     assert code == 0
     assert calls["init"]["model"] == SAVED_DEFAULT
+
+
+def test_answer_is_printed_once(gaia_home, monkeypatch, capsys):
+    class _StreamingClient:
+        def __init__(self, **_):
+            pass
+
+        async def prompt(self, message):
+            # The real client prints each chunk as it streams.
+            print("Hello there", end="", flush=True)
+            yield "Hello there"
+
+        def get_stats(self):
+            return {"input_tokens": 3, "output_tokens": 2}
+
+    monkeypatch.setattr(
+        cli,
+        "initialize_lemonade_for_agent",
+        lambda agent, **kw: (True, "http://localhost:13305/api/v1"),
+    )
+    monkeypatch.setattr(cli, "GaiaCliClient", _StreamingClient)
+    monkeypatch.setattr(cli, "_gaia_cli_client_params", lambda kwargs: {})
+
+    code = _run_main(["prompt", "hi", "--stats"], monkeypatch, _devices())
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert out.count("Hello there") == 1
+    assert "{" not in out
+    assert "input_tokens: 3" in out
 
 
 def _probe_raises(monkeypatch, exc):

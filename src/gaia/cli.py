@@ -559,14 +559,16 @@ async def async_main(action, **kwargs):
             log.error("Message is required for prompt action.")
             print("❌ Error: Message is required for prompt action.")
             sys.exit(1)
-        response = ""
-        async for chunk in client.prompt(kwargs["message"]):
-            response += chunk
+        # The client prints the answer as it streams; returning it would print it again.
+        async for _chunk in client.prompt(kwargs["message"]):
+            pass
+        print()
         if kwargs.get("show_stats", False):
             stats = client.get_stats()
             if stats:
-                return {"response": response, "stats": stats}
-        return {"response": response}
+                for key, value in stats.items():
+                    print(f"{key}: {value}")
+        return None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
