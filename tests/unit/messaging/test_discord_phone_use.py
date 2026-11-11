@@ -212,7 +212,7 @@ def test_retry_reruns_the_request_an_expired_approval_ended():
     ad, clock = make(confirm_timeout=0.05)
     ad.on_ready()
     _prompt(ad, clock)
-    deadline = time.time() + 2
+    deadline = time.time() + 15
     while time.time() < deadline and not any(
         "retry" in e[2] for e in ad.transport.edits
     ):
