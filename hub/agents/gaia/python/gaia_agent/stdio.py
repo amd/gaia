@@ -536,14 +536,19 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
-    cloud_provider = cloud_model_provider(model_id) if not is_claude else None
+    lookup = getattr(getattr(chat, "llm_client", None), "cloud_model_provider", None)
+    location = resolve_inference_location(
+        model_id,
+        use_claude=is_claude,
+        cloud_provider_lookup=lookup if callable(lookup) else None,
+    )
     event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
         "model_display": _model_display_name(model_id, is_claude),
-        "model_backend": "claude" if is_claude else cloud_provider or "lemonade",
-        "model_remote": is_claude or bool(cloud_provider),
+        "model_backend": location.provider,
+        "model_remote": location.remote,
         # The header shows these, not an install record that may name another build.
         "agent_version": agent_version,
         "gaia_version": gaia_version,
@@ -627,8 +632,11 @@ def _is_chat_target(entry: Dict[str, Any]) -> bool:
     return "chat" in labels or not (_NON_CHAT_LABELS & labels)
 
 
-def _lemonade_models(base_url: Optional[str]) -> List[str]:
+def _lemonade_models(base_url: Optional[str]) -> Dict[str, Dict[str, Any]]:
     """Downloaded local and discovered Fireworks/AMD chat models Lemonade serves.
+
+    Maps each id, in sorted order, to its catalog entry, so a switch can hand
+    the entry to the new client instead of reading the catalog a second time.
 
     Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
     the codebase uses) rather than a bespoke ``requests`` call, so base_url
@@ -649,16 +657,15 @@ def _lemonade_models(base_url: Optional[str]) -> List[str]:
             f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
             f"{start_advice()}"
         ) from exc
-    return sorted(
-        {
-            m["id"]
-            for m in catalog.get("data", [])
-            if m.get("id")
-            and (m.get("downloaded") or cloud_model_provider(m["id"], m))
-            and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
-            and _is_chat_target(m)
-        }
-    )
+    switchable = {
+        m["id"]: m
+        for m in catalog.get("data", [])
+        if m.get("id")
+        and (m.get("downloaded") or cloud_model_provider(m["id"], m))
+        and cloud_model_provider(m["id"], m) in {None, "fireworks", "amd"}
+        and _is_chat_target(m)
+    }
+    return {model_id: switchable[model_id] for model_id in sorted(switchable)}
 
 
 #: Snapshot of everything a switch mutates, for an all-or-nothing apply.
@@ -680,6 +687,7 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "resend_reasoning": getattr(agent, "resend_reasoning_across_requests", None),
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
@@ -703,6 +711,8 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["resend_reasoning"] is not None:
+        agent.resend_reasoning_across_requests = snapshot["resend_reasoning"]
     if snapshot["model_features"] is not None:
         agent.model_features = snapshot["model_features"]
     if snapshot["instance_tools"] is not None:
@@ -745,6 +755,13 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # Earlier turns' reasoning belongs to the old model: it can't hit the new
+        # model's cache, and some reasoner APIs reject it in input.
+        if (
+            getattr(agent, "resend_reasoning_across_requests", False)
+            and agent.model_id != snapshot["model_id"]
+        ):
+            agent.resend_reasoning_across_requests = False
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
@@ -860,7 +877,7 @@ def _wait_for_gaia_lemonade(
 
 def _reachable_lemonade_models(
     agent: Any, target: str, on_status: Optional[Callable[[str], None]]
-) -> Tuple[Optional[str], List[str]]:
+) -> Tuple[Optional[str], Dict[str, Dict[str, Any]]]:
     """``(base_url, models)`` from the server the live client talks to.
 
     GAIA's own server is briefly unreachable while the daemon restarts it, so
@@ -904,20 +921,13 @@ def _apply_local_switch(
             model=target,
             base_url=base_url,
             system_prompt=chat.config.system_prompt,
+            # The switch message and the rebuilt prompt name the provider from it.
+            model_metadata=[available[target]],
         )
-        # Warm the catalog metadata now, before this client answers anything.
-        # cloud_model_provider() only recognises a runtime-discovered provider
-        # (an id outside the fireworks./amd. prefixes) once list_models() has
-        # read it — and both the switch message below and the system prompt
-        # _apply_switch is about to rebuild call it on this same client
-        # (#4365).
-        refresh = getattr(new_client, "refresh_model_catalog", None)
-        if callable(refresh):
-            refresh()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Reachability was already confirmed above — this covers whatever else
-        # LemonadeClient's constructor (or the catalog warm-up) could still
-        # reject. Nothing on agent/chat has moved yet.
+        # LemonadeClient's constructor could still reject. Nothing on
+        # agent/chat has moved yet.
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
 
     _apply_switch(
@@ -1500,7 +1510,11 @@ def run_turn(
     agent.console = handler
     if state is not None:
         state.attach(handler)
-    translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID, debug=dev)
+    translator = CanonicalTranslator(
+        run_id=None,
+        agent_id=AGENT_ID,
+        debug=dev,
+    )
     result: Dict[str, Any] = {}
 
     def _run() -> None:

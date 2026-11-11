@@ -100,7 +100,9 @@ const audit = (page: Page): Promise<string[]> =>
             if (!shown(el)) continue;
             const box = el.getBoundingClientRect();
             const style = getComputedStyle(el);
-            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !inSideScroller(el)) {
+            // Screen-reader-only text is clipped to 1px, so its unwrapped overflow is never seen.
+            const srOnly = el.closest('.visually-hidden');
+            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !srOnly && !inSideScroller(el)) {
                 problems.push(`off screen: ${label(el)}`);
             }
 
@@ -437,6 +439,48 @@ test('finished answer', async ({ page }) => {
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+const RECIPE_CARD = {
+    kind: 'guide', guideType: 'recipe', title: 'خبز الموز', description: 'رطب وسهل التحضير.',
+    notes: 'يحفظ ثلاثة أيام.', servings: 8,
+    items: ['2 cups flour', '3 ripe bananas', '1/2 cup sugar', '1 teaspoon baking soda'],
+    steps: ['Mix: اخلط المكونات الجافة', 'Bake 60 minutes at 350°F'],
+};
+const LOAN_CARD = {
+    kind: 'calculator', calculator: 'loan', title: '', currency: 'EUR',
+    inputs: { amount: 300_000, annualRatePercent: 6.5, years: 30, downPayment: 60_000 },
+};
+
+async function withGuideCards(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'وصفة خبز الموز وقسط قرض', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'بالهناء والشفاء.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'guides/show_recipe', active: false, success: true, render: 'guide', data: RECIPE_CARD },
+                            { id: 2, type: 'tool', tool: 'calculators/show_loan_calculator', active: false, success: true, render: 'calculator', data: LOAN_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`recipe and loan cards lay out in the interface direction (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withGuideCards);
+        await expect(page.locator('.render-guide__title', { hasText: 'خبز الموز' })).toBeVisible();
+        await expect(page.locator('.render-calc')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
+        await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
 
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
@@ -1337,6 +1381,22 @@ for (const locale of ['ar', 'en']) {
         });
     }
 
+    test(`desktop app and updates: status unreadable (${locale})`, async ({ page }) => {
+        const failure = "Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'";
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, {}, undefined, failure); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+        await expect(updates).toHaveAttribute('open', '');
+        await expect(updates).toContainText(locale === 'ar' ? 'تعذّرت قراءة حالة التحديث' : "Couldn't read the update status");
+        await expect(updates).not.toContainText(/up to date|محدّث/);
+        await expect(updates).not.toContainText(/handler|gaia-updater/i);
+        await expect(updates.getByRole('button', { name: locale === 'ar' ? 'إعادة المحاولة' : 'Try again' })).toBeVisible();
+        await updates.scrollIntoViewIfNeeded();
+        await shot(page, `updates-${locale}-unreadable`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
     test(`desktop app on a desktop with no tray (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
@@ -1589,6 +1649,137 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-parsed-hint')).toBeVisible();
             await check(page, 'form-invalid');
         });
+    });
+}
+
+const LOG_LINES = [
+    { text: '2026-11-04 10:05:37.798 [Info] (main) Starting Lemonade Server...', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:05:37.799 [Info] (main)   Cache dir: C:\\Users\\you\\.gaia\\lemonade\\cache', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:06:11.730 [Warn] (FastFlowLM) NPU is busy with another process; retrying the load', severity: 'warning', tag: 'FastFlowLM' },
+    { text: `2026-11-04 10:06:12.004 [Info] (Process) Tools JSON: [{"function":{"description":"${'List the skills installed on this machine. '.repeat(12)}"}}]`, severity: 'info', tag: 'Process' },
+    { text: '2026-11-04 10:06:15.512 [Error] (FLM) flm serve exited with code 1: device or resource busy', severity: 'error', tag: 'FLM' },
+];
+
+const LOG_STATES: Array<[string, Record<string, unknown>]> = [
+    ['gaia', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 1200, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: true, reason: null, detail: null }],
+    ['gaia-down', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 0, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: false, reason: null, detail: null }],
+    ['yours', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: 'stream', available: true, lines: LOG_LINES, cursor: '5', reset: false, dropped: 0, log_path: null, server_answering: true, reason: null, detail: null }],
+    ['yours-down', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: false, reason: 'not_running', detail: 'Lemonade not reachable at http://localhost:13305/api/v1: connection refused' }],
+    ['remote', { owner: 'remote', base_url: 'http://10.0.0.7:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: true, reason: 'remote', detail: 'ws://10.0.0.7:9000/logs/stream: ClientConnectorError' }],
+];
+
+const GAIA_LINES = [
+    { text: '[2026-11-04 11:48:15,102] | INFO | gaia.ui.server | server.py:991 | Agent UI backend listening on 127.0.0.1:4200', severity: 'info', tag: null },
+    { text: '[2026-11-04 11:48:16,311] | WARNING | gaia.llm.lemonade_client | lemonade_client.py:5828 | Model load took 41.2 s', severity: 'warning', tag: null },
+    { text: "[2026-11-04 11:48:17,004] | ERROR | gaia.ui.routers.chat | chat.py:412 | Turn failed: Couldn't reach the local LLM", severity: 'error', tag: null },
+    { text: 'Traceback (most recent call last):', severity: null, tag: null },
+    { text: '  File "C:\\Users\\you\\gaia\\llm\\providers\\lemonade.py", line 450, in chat', severity: null, tag: null },
+];
+
+const LOG_FILES = {
+    sources: [
+        { id: 'model_server', files: [] },
+        { id: 'gaia', files: [{ name: 'gaia.log', path: 'C:\\Users\\you\\.gaia\\gaia.log', size_bytes: 9_700_000, modified: 1 }] },
+        { id: 'service', files: [{ name: 'daemon.log', path: 'C:\\Users\\you\\.gaia\\host\\daemon.log', size_bytes: 120_000, modified: 1 }] },
+        {
+            id: 'agent',
+            files: [
+                { name: 'gaia-agent.log', path: 'C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', size_bytes: 2_048_000, modified: 2 },
+                { name: 'gaia/sidecar-54747.log', path: 'C:\\Users\\you\\.gaia\\agents\\gaia\\logs\\sidecar-54747.log', size_bytes: 51_200, modified: 1 },
+            ],
+        },
+        { id: 'desktop', files: [{ name: 'electron-main.log', path: 'C:\\Users\\you\\.gaia\\electron-main.log', size_bytes: 30_000, modified: 1 }] },
+        { id: 'other', files: [] },
+    ],
+};
+
+const fileRead = (path: string, lines: unknown[]) => ({
+    owner: null, base_url: null, source: 'file', available: true, lines, cursor: '400', reset: false,
+    dropped: 0, log_path: path, server_answering: null, reason: null, detail: null,
+});
+
+/** Every log route: each log whole once, then no new lines, so following doesn't repeat it. */
+async function withLogs(page: Page, server: Record<string, unknown>): Promise<void> {
+    await page.route('**/api/providers/local/status', (route) => route.fulfill({ json: LOCAL_STATUS }));
+    await page.route(/\/api\/logs(\/|\?|$)/, (route) => {
+        const url = new URL(route.request().url());
+        const source = url.pathname.split('/api/logs/')[1];
+        if (!source) return route.fulfill({ json: LOG_FILES });
+        const body = source === 'model_server' ? server
+            : source === 'gaia' ? fileRead('C:\\Users\\you\\.gaia\\gaia.log', GAIA_LINES)
+            : source === 'agent' ? fileRead('C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', GAIA_LINES)
+            : { ...fileRead('', []), available: false, source: null, log_path: null, reason: 'no_file' };
+        return route.fulfill({ json: url.searchParams.has('after') ? { ...body, lines: [], reset: false } : body });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, body] of LOG_STATES) {
+        test(`model server log from the model popover: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withLogs(p, body));
+            await page.locator('.sb-location').click();
+            await page.locator('.popover .model-status').getByRole('button', { name: locale === 'ar' ? /سجلّ خادم النماذج/ : /Model server log/ }).click();
+            const dialog = page.locator('.log-viewer');
+            await expect(dialog).toBeVisible();
+            await expect(dialog.locator('.spin')).toHaveCount(0);
+            if (body.available) {
+                const lines = dialog.locator('.log-viewer-lines');
+                await expect(lines).toBeVisible();
+                // Log text reads left to right in every language.
+                expect(await lines.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+                await expect(dialog.locator('.log-viewer-lines')).toHaveCount(0);
+            }
+            await shot(page, `log-viewer-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+            // No sideways scroll: a long line wraps inside the box.
+            expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        });
+    }
+
+    test(`model server log at phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withLogs(p, LOG_STATES[1][1]));
+        const sidebar = page.getByRole('button', { name: /Open sidebar|فتح الشريط الجانبي/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.locator('.sb-location').click();
+        await page.locator('.popover .model-status .btn-secondary').filter({ has: page.locator('svg.lucide-scroll-text') }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.locator('.log-viewer-lines')).toBeVisible();
+        // Opens on the newest line, whole.
+        await expect.poll(() => dialog.locator('.log-viewer-lines').evaluate((el) =>
+            JSON.stringify({ gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), sh: el.scrollHeight, ch: el.clientHeight, st: el.scrollTop }))).toContain('"gap":0');
+        await shot(page, `log-viewer-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    });
+
+    test(`GAIA's logs from Settings › Advanced, then the agent's files (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withLogs(p, LOG_STATES[0][1]); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('region', { name: locale === 'ar' ? /السجلات/ : 'Logs' });
+        await expect(card).toBeVisible();
+        await shot(page, `log-viewer-${locale}-settings-card`);
+        expect(await audit(page)).toEqual([]);
+        await card.getByRole('button', { name: locale === 'ar' ? /عرض السجلات/ : 'View logs' }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.getByRole('tab', { selected: true })).toHaveText(locale === 'ar' ? /GAIA/ : 'GAIA');
+        await expect(dialog.locator('.log-viewer-lines')).toContainText('Turn failed');
+        await shot(page, `log-viewer-${locale}-gaia-tab`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /الوكيل/ : 'Agent' }).click();
+        await expect(dialog.getByRole('combobox')).toHaveValue('gaia-agent.log');
+        await shot(page, `log-viewer-${locale}-agent-tab`);
+        expect(await audit(page)).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /تطبيق سطح المكتب/ : 'Desktop app' }).click();
+        await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+        await shot(page, `log-viewer-${locale}-nothing-written`);
+        expect(await audit(page)).toEqual([]);
+        expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     });
 }
 
@@ -2168,6 +2359,67 @@ test('window controls dim under the missing-model dialog too', async ({ page }) 
     expect(await refusedColors(page)).toEqual([]);
 });
 
+const LONG_TITLE = 'Quarterly budget review with finance, engineering and the regional leads, including the follow-up on the September numbers';
+const MANY_ATTENDEES = Array.from({ length: 30 }, (_, i) => `person.number.${i + 1}@example.com`);
+const CALENDAR_PROMPTS = {
+    create: { title: LONG_TITLE, start: '2026-11-03T09:00:00-05:00', end: '2026-11-03T10:00:00-05:00', notify_attendees: MANY_ATTENDEES, calendar_account: 'me@example.com', location: 'Room 4', description: 'Bring the Q3 numbers.' },
+    update: { event_id: 'abc', expected_title: LONG_TITLE, expected_start: '2026-11-03T14:00:00Z', notify_attendees: ['dana@example.com'], new_title: 'Budget sync', new_start: '2026-11-04T14:00:00Z', new_end: '2026-11-04T15:00:00Z' },
+    cancel: { event_id: 'abc', expected_title: 'اجتماع الميزانية', expected_start: '2026-11-03T14:00:00Z', notify_attendees: [] },
+} as const;
+
+/** A reply that asks one calendar approval and stays open: a closed stream dismisses the prompt. */
+async function replyWithCalendarApproval(page: Page, kind: keyof typeof CALENDAR_PROMPTS): Promise<void> {
+    const label = { create: 'creating', update: 'changing', cancel: 'cancelling' }[kind];
+    const event = JSON.stringify({ type: 'permission_request', tool: `calendar/${kind}_calendar_event`, tool_label: `${label} calendar event`, args: CALENDAR_PROMPTS[kind], confirm_id: `perm-${kind}` });
+    await page.addInitScript((line) => {
+        const realFetch = window.fetch;
+        window.fetch = (input, init) => (String(input).endsWith('/chat/send')
+            ? Promise.resolve(new Response(new ReadableStream({
+                start: (out) => out.enqueue(new TextEncoder().encode(`data: ${line}\n\n`)),
+            }), { headers: { 'Content-Type': 'text/event-stream' } }))
+            : realFetch(input, init));
+    }, event);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const kind of ['create', 'update', 'cancel'] as const) {
+        test(`calendar approval, ${kind} (${locale})`, async ({ page }, info) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => replyWithCalendarApproval(p, kind));
+            await page.locator('textarea').first().fill('Handle my calendar');
+            await page.keyboard.press('Enter');
+            const facts = page.getByTestId('perm-calendar');
+            await expect(facts).toBeVisible();
+            // The buttons stay reachable however many people are on the event.
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            // Dates follow the UI's language, so Arabic shows no English month names.
+            if (locale === 'ar') await expect(facts).not.toContainText(/Nov|AM|PM/);
+            else await expect(facts).toContainText('Nov');
+            await page.locator('.perm-card').screenshot({ path: info.outputPath(`calendar-${kind}-${locale}.png`) });
+            await page.screenshot({ path: info.outputPath(`calendar-${kind}-${locale}-page.png`) });
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+test('calendar approval fits a phone (ar)', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) => replyWithCalendarApproval(p, 'create'));
+    await page.locator('textarea').first().fill('Handle my calendar');
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('perm-calendar')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('calendar-create-ar-phone.png') });
+    const offScreen = await page.locator('.perm-card *').evaluateAll((els) =>
+        els.filter((el) => {
+            const box = el.getBoundingClientRect();
+            return box.width > 0 && (box.left < -1 || box.right > innerWidth + 1);
+        }).length,
+    );
+    expect(offScreen).toBe(0);
+    const actions = page.locator('.perm-card-actions');
+    await actions.scrollIntoViewIfNeeded();
+    await expect(actions).toBeInViewport();
+});
+
 /** Colors the desktop window would refuse: main.cjs takes only #rrggbb. */
 const refusedColors = (page: Page): Promise<string[]> =>
     page.evaluate(() =>
@@ -2506,6 +2758,45 @@ test('the library path row fits a phone', async ({ page }) => {
         }).length,
     );
     expect(clipped).toBe(0);
+});
+
+test('each line of an email being approved takes its own direction', async ({ page }) => {
+    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+    // The prompt lasts only while its stream is open, which a routed response can't do.
+    await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
+        p.addInitScript((line) => {
+            const realFetch = window.fetch;
+            window.fetch = (input, init) =>
+                String(input).endsWith('/chat/send')
+                    ? Promise.resolve(new Response(new ReadableStream({
+                        start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                    }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                    : realFetch(input, init);
+        }, `data: ${JSON.stringify(event)}\n\n`),
+    );
+    await page.locator('textarea').last().fill('send it');
+    await page.keyboard.press('Enter');
+    const pre = page.getByTestId('perm-exact-text');
+    await expect(pre).toBeVisible();
+    const gaps = await pre.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const node = el.firstChild as Text;
+        const rectOf = (start: number, end: number) => {
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, end);
+            return range.getBoundingClientRect();
+        };
+        const source = node.data;
+        const arabicAt = source.indexOf('مرحبا');
+        return {
+            english: rectOf(0, source.indexOf('\n')).left - box.left,
+            arabic: box.right - rectOf(arabicAt, source.length).right,
+        };
+    });
+    expect(gaps.english).toBeLessThan(40);
+    expect(gaps.arabic).toBeLessThan(40);
 });
 
 /** The desktop app's updater in a given state; the browser preview has none. */

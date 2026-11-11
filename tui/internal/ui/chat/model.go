@@ -392,9 +392,9 @@ type ChatModel struct {
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
 	// panel implemented only in the root model is absent there — which is why
-	// /help did nothing at all on that path. Under the hub, root intercepts
-	// ToggleHelpMsg before it reaches here and this stays closed, so the two
-	// never both draw.
+	// /help did nothing at all on that path. Under the root model, root
+	// intercepts ToggleHelpMsg before it reaches here and this stays closed, so
+	// the two never both draw.
 	help components.HelpState
 
 	// palette is the "/" command palette's open/selected state. Its filter
@@ -606,9 +606,8 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 	return m.applyFirstBootGate()
 }
 
-// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
-// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
-// rather than NewChatModel's default of the display name.
+// NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
+// agent, so agentID is the catalog id rather than NewChatModel's display name.
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
@@ -1279,6 +1278,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case mediaActionResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: mediaStatus(msg.path, msg.action, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case pasteClipboardMsg:
 		text := normalizePastedText(msg.text)
 		if msg.err != nil || strings.TrimSpace(text) == "" {
@@ -1607,6 +1614,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		})
 		m.updateViewport()
 		return m, nil
+
+	case tea.KeyCtrlF:
+		return m, m.mediaActionCmd("open")
+
+	case tea.KeyCtrlG:
+		return m, m.mediaActionCmd("reveal")
 
 	case tea.KeyCtrlV:
 		// Reaches here only when the terminal did NOT already turn this into a
@@ -2518,6 +2531,7 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 	m.confirmRows = 0
 	if m.confirmation != nil {
+		m.confirmation.SetMaxRows(budget - 1)
 		m.confirmRows = lipgloss.Height(m.confirmation.View())
 		// The transcript keeps at least one row. Past that the modal is
 		// clipped rather than allowed to push the composer and status bar off

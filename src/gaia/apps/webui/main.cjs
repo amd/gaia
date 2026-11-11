@@ -87,6 +87,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 const TrayManager = require("./services/tray-manager.cjs");
 const { probeTrayHost } = require("./services/tray-host.cjs");
 const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
+const { revealWhenReady } = require("./services/window-reveal.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -743,8 +744,8 @@ function createWindow() {
   });
 
   // Show window when ready (unless --minimized or startMinimized config)
-  mainWindow.once("ready-to-show", () => {
-    console.log("[main] ready-to-show fired");
+  revealWhenReady(mainWindow, (via) => {
+    console.log(`[main] Window ready to show (${via})`);
     Promise.resolve(trayHostReady).then(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       // Never start hidden where no tray icon would bring the window back.
@@ -838,7 +839,8 @@ async function loadApp() {
 function reopenWindow() {
   createWindow();
   // Asked for from the tray or the dock: show it even when starting minimized.
-  mainWindow.once("ready-to-show", () => mainWindow && mainWindow.show());
+  const reopened = mainWindow;
+  revealWhenReady(reopened, () => !reopened.isDestroyed() && reopened.show());
   if (trayManager) trayManager.mainWindow = mainWindow;
   if (notificationService) notificationService.mainWindow = mainWindow;
   loadApp().catch((err) => {

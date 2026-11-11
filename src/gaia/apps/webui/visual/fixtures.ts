@@ -472,13 +472,17 @@ export const BACKEND_RUNNING = {
     nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
 };
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+/**
+ * The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer.
+ * `statusReadError`: `getStatus` rejects with it, as when the updater's IPC handler is missing.
+ */
 export async function withDesktopBridges(
     page: Page,
     update: Record<string, unknown> = {},
     host: { available: boolean; reason: string | null } = { available: true, reason: null },
+    statusReadError?: string,
 ): Promise<void> {
-    await page.addInitScript(({ state, host, running }) => {
+    await page.addInitScript(({ state, host, running, readError }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -494,11 +498,11 @@ export async function withDesktopBridges(
                 backend: { getState: async () => running, restart: async () => running, onState: () => () => {} },
             }),
             gaiaUpdater: {
-                getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
+                getStatus: readError ? async () => { throw new Error(readError); } : same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, { state: update, host, running: BACKEND_RUNNING });
+    }, { state: update, host, running: BACKEND_RUNNING, readError: statusReadError ?? null });
 }
 
 /** A desktop app whose backend crashed: `restarting` or, once restarts ran out, `stopped`. */

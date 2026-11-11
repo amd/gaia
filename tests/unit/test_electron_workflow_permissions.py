@@ -1,8 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The Electron build and test workflows run with a read-only token (#3528).
+"""The Electron test workflow runs with a read-only token (#3528).
 
-Both only check out, build, test and upload artifacts, none of which needs a
+It only checks out, builds, tests and uploads artifacts, none of which needs a
 write scope. A job that later needs one should grant it at the job level.
 """
 
@@ -22,7 +22,7 @@ def _grants(block) -> dict:
     return dict(block or {})
 
 
-@pytest.mark.parametrize("name", ["build-electron-apps.yml", "test_electron.yml"])
+@pytest.mark.parametrize("name", ["test_electron.yml"])
 def test_workflow_token_is_read_only(name):
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
     assert _grants(workflow.get("permissions")) == {"contents": "read"}

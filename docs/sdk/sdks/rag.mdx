@@ -313,7 +313,7 @@ config = RAGConfig(
     max_chunks=5,              # How many chunks to retrieve per query
 
     # === Models ===
-    model="Qwen3.5-35B-A3B-GGUF",  # LLM for generation
+    model="Qwen3.6-35B-A3B-GGUF",  # LLM for generation
     embedding_model="user.embeddinggemma-300m-GGUF",  # Embedding model
 
     # === Storage ===
@@ -328,7 +328,7 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings. A PDF or PowerPoint indexed while the vision model was unavailable records how many pages had images it couldn't read, and the index result says so (`unread_image_pages`, `unread_images_note`). Once the vision model answers, the next index of that file re-extracts it, so those images are read without clearing the cache.
 </Note>
 
 ### Indexing JSON records
@@ -365,7 +365,7 @@ key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
-`max_chunks` controls how many chunks are sent to the LLM:
+`max_chunks` controls how many chunks are sent to the LLM. Identical chunks count once, so a document indexed under two names doesn't take two places; its chunk lists both files.
 
 | max_chunks | Effect | Best for |
 |------------|--------|----------|
@@ -416,7 +416,9 @@ print(response.source_files)
 
 # Per-chunk metadata
 for meta in response.chunk_metadata:
-    print(f"File: {meta['source']}, Page: {meta.get('page', 'N/A')}")
+    print(f"File: {meta['source_file']}, score: {meta['relevance_score']:.2f}")
+    # Every file holding this exact text, when the same document was indexed twice
+    print(meta["source_files"])
 
 # Stats (if available)
 if response.stats:
@@ -1060,7 +1062,7 @@ except PermissionError as e:
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+**Security Consideration:** Without `allowed_paths`, RAG reads only the working directory, and `index_document` refuses any other file with `file_unreadable`. A caller that names a file grants it first with `path_validator.add_allowed_path(path)`, as `quick_rag()` and the chat agent's `/index` do. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
 
 `allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write), and the agent's `index_document` / `index_directory` tools apply them too. Calling `RAGSDK.index_document` directly checks the scope only.
 </Warning>
