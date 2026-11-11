@@ -32,4 +32,3 @@ src/gaia/mcp/servers/agent_ui_mcp.py:swallowed_exception 2
 src/gaia/security.py:swallowed_exception 2
 src/gaia/skills/capture.py:swallowed_exception 1
 src/gaia/ui/build.py:subprocess_no_timeout 2
-src/gaia/ui/routers/mcp.py:swallowed_exception 1
