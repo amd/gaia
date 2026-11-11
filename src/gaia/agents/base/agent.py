@@ -10880,8 +10880,10 @@ Do NOT wrap conversational replies in JSON.
             return user_input
         note = (
             f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
-            f"text is saved at {path}. To count, search or process it, read that "
-            "file with a tool; never copy the message into a tool call.]"
+            f"text is saved at {path}, exactly as typed: the file holds the "
+            "request itself too, not only the text it is about. To count, search "
+            "or process it, read that file with a tool; never copy the message "
+            "into a tool call.]"
         )
         return f"{note}\n\n{user_input}"
 
