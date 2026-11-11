@@ -84,6 +84,27 @@ SAVE_CLAIMS = [
         "The report was saved from the template to `report.md`.",
         id="saved-from-template-to-path",
     ),
+    # A negation elsewhere in the sentence must not cancel a real save.
+    pytest.param(
+        "No problem, I saved the report to `out/report.md`.",
+        id="no-problem-then-a-save",
+    ),
+    pytest.param(
+        "I wrote no tests, but the summary was saved to `summary.md`.",
+        id="negated-non-file-object-then-a-save",
+    ),
+    pytest.param(
+        "No errors: the report has been saved to `out/report.md`.",
+        id="no-errors-then-a-save",
+    ),
+    pytest.param(
+        "Nothing failed and the results were written to results.csv.",
+        id="nothing-failed-then-a-save",
+    ),
+    pytest.param(
+        "No file was harmed; I saved the output to out.csv.",
+        id="negated-subject-elsewhere-then-a-save",
+    ),
 ]
 
 NON_CLAIMS = [
@@ -155,6 +176,21 @@ NON_CLAIMS = [
     pytest.param("Nothing saved to disk.", id="nothing-saved"),
     pytest.param("Not saved to out.md.", id="not-saved"),
     pytest.param("Never written to the file.", id="never-written"),
+    # rc18, DeepSeek: a read-only answer saying it saved nothing.
+    pytest.param(
+        "To be clear: I wrote no file this turn, and `blue-falcon-11` is "
+        "**not** the code.",
+        id="i-wrote-no-file",
+    ),
+    pytest.param("No file was written this turn.", id="no-file-was-written"),
+    pytest.param("No files were saved to disk.", id="no-files-were-saved"),
+    pytest.param(
+        "No output file was created in `reports/`.", id="no-output-file-was-created"
+    ),
+    pytest.param("Nothing was written to `notes.md`.", id="nothing-was-written"),
+    pytest.param("None of the files were written.", id="none-of-the-files"),
+    pytest.param("I have created no files.", id="i-have-created-no-files"),
+    pytest.param("I saved nothing to disk.", id="i-saved-nothing"),
     pytest.param("", id="empty"),
 ]
 

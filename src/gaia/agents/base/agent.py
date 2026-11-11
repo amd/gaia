@@ -1976,6 +1976,32 @@ _NON_FILE_SUFFIXES = frozenset(
 )
 
 
+_NEGATED_OUTPUT = (
+    r"(?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?"
+    r"|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)"
+    r"|backups?|documents?|reports?))"
+)
+# "No file was written": the write verb's subject says nothing was saved.
+_NEGATED_SUBJECT_PATTERN = re.compile(
+    rf"(?:^|[^\w'-]){_NEGATED_OUTPUT}\s+$", re.IGNORECASE
+)
+# "I wrote no file", "I saved nothing": so does its object.
+_NEGATED_OBJECT_PATTERN = re.compile(rf"\s+{_NEGATED_OUTPUT}\b", re.IGNORECASE)
+
+
+def _is_write_claim(sentence: str, denials: bool) -> bool:
+    """A write verb in *sentence*; with *denials* false, not one negated."""
+    return any(
+        denials
+        or (
+            not _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        )
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+        for match in pattern.finditer(sentence)
+    )
+
+
 def _names_a_file(sentence: str) -> bool:
     """True when the sentence names somewhere on disk."""
     if _FILE_TARGET_PATTERN.search(sentence):
@@ -2001,13 +2027,15 @@ def _is_plan_narration(sentence: str) -> bool:
     )
 
 
-def _claims_file_write(answer: str) -> bool:
+def _claims_file_write(answer: str, denials: bool = False) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
     A sentence must carry both a completed write verb and a file/path target,
     so "I saved the routine to notes/routine.md" fires while "I created a
     summary of the meeting" does not. Fenced code is ignored — a sample
     command is not a claim — and so is a sentence in a planning frame.
+    "No file was written" is not a claim unless *denials* is set, which a
+    turn that asked for a save uses: it still names the save that is owed.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
@@ -2016,7 +2044,7 @@ def _claims_file_write(answer: str) -> bool:
             continue
         if not _names_a_file(sentence):
             continue
-        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+        if _is_write_claim(sentence, denials):
             return True
     return False
 
