@@ -806,6 +806,36 @@ error. To run the chat model in the cloud instead, see
     ```
   </Accordion>
 
+  <Accordion title="GAIA can't start: this PC is missing something GAIA needs" icon="puzzle-piece">
+    **Cause:** a system library the desktop app needs is not installed. It
+    happens on minimal installs, containers and WSL; a full desktop install
+    already has them. The message names each missing file, for example
+    `libX11-xcb.so.1`, which GAIA needs whenever it runs on X11 rather than
+    Wayland. It appears as a dialog or a desktop notification, and in the
+    terminal when GAIA was started from one.
+
+    **Fix on Fedora:** install the desktop libraries, then open GAIA again:
+    ```bash
+    sudo dnf install gtk3 nss alsa-lib at-spi2-atk cups-libs mesa-libgbm libdrm \
+      libX11-xcb libxcb libXcomposite libXdamage libXrandr libXfixes libXtst \
+      libXScrnSaver libxkbcommon-x11 libxshmfence libnotify
+    ```
+
+    **Fix on Debian and Ubuntu:** `libX11-xcb.so.1` is in `libx11-xcb1`:
+    ```bash
+    sudo apt install libx11-xcb1
+    ```
+
+    For any other file the message names, ask your package manager which
+    package holds it, then install that package:
+    ```bash
+    dnf provides '*/libnss3.so'     # Fedora
+    apt-file search libnss3.so      # Debian, Ubuntu (sudo apt install apt-file)
+    ```
+
+    Builds before this check stop without a message in the same situation.
+  </Accordion>
+
   <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">
     Starting with **GAIA 0.17.5**, the Linux AppImage is packaged with
     `--no-sandbox` by default. This works around Ubuntu 24.04.1's
