@@ -183,18 +183,19 @@ def test_saved_default_model_still_applies_without_device(
     assert calls["init"]["model"] == SAVED_DEFAULT
 
 
-def test_answer_is_printed_once(gaia_home, monkeypatch, capsys):
+def _stub_streaming_client(monkeypatch, stats):
     class _StreamingClient:
         def __init__(self, **_):
             pass
 
         async def prompt(self, message):
             # The real client prints each chunk as it streams.
-            print("Hello there", end="", flush=True)
-            yield "Hello there"
+            for chunk in ("Hello ", "there"):
+                print(chunk, end="", flush=True)
+                yield chunk
 
         def get_stats(self):
-            return {"input_tokens": 3, "output_tokens": 2}
+            return stats
 
     monkeypatch.setattr(
         cli,
@@ -203,6 +204,28 @@ def test_answer_is_printed_once(gaia_home, monkeypatch, capsys):
     )
     monkeypatch.setattr(cli, "GaiaCliClient", _StreamingClient)
     monkeypatch.setattr(cli, "_gaia_cli_client_params", lambda kwargs: {})
+
+
+@pytest.mark.parametrize(
+    "argv, stats",
+    [
+        (["prompt", "hi"], {"input_tokens": 3}),
+        (["prompt", "hi", "--stats"], {}),
+        (["prompt", "hi", "--stats"], None),
+    ],
+    ids=["no-stats-flag", "empty-stats", "no-stats"],
+)
+def test_only_the_answer_is_printed(gaia_home, monkeypatch, capsys, argv, stats):
+    _stub_streaming_client(monkeypatch, stats)
+
+    code = _run_main(argv, monkeypatch, _devices())
+
+    assert code == 0
+    assert capsys.readouterr().out == "Hello there\n"
+
+
+def test_answer_is_printed_once(gaia_home, monkeypatch, capsys):
+    _stub_streaming_client(monkeypatch, {"input_tokens": 3, "output_tokens": 2})
 
     code = _run_main(["prompt", "hi", "--stats"], monkeypatch, _devices())
 
