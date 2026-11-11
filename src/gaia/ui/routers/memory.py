@@ -513,11 +513,18 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    remove = store.forget if is_about_user(item) else store.delete
+    about_user = is_about_user(item)
+    # Copies of the same fact go too, or the deleted fact is still recalled.
+    copies = store.copies_of(knowledge_id) if about_user else []
+    remove = store.forget if about_user else store.delete
     success = remove(knowledge_id, allow_privileged=True)
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "deleted", "knowledge_id": knowledge_id}
+    deleted = [knowledge_id] + [kid for kid in copies if store.forget(kid)]
+    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    if len(deleted) > 1:
+        result["knowledge_ids"] = deleted
+    return result
 
 
 @router.get("/api/memory/knowledge/{knowledge_id}")

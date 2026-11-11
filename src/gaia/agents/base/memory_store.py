@@ -256,7 +256,7 @@ MAX_EXTRACTION_TURN_LENGTH: int = 256000
 MAX_FTS_QUERY_LENGTH: int = 500
 
 #: Minimum word-overlap ratio (Szymkiewicz-Simpson) to treat two entries as
-#: duplicates in the same category+context+entity scope.
+#: duplicates in the same category+context+subject scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
 
 #: Categories the extractor files one statement under interchangeably, so the
@@ -475,15 +475,21 @@ def _merged_duplicate(new: str, existing: str) -> Optional[str]:
 def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
     """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
 
-    Only a ``person:`` tag names someone other than the user. Any other tag
-    ("user", "health") is a label on the user's own fact, so an untagged copy
-    of it is the same memory: the remember tool tags, extraction often doesn't.
+    No tag, a bare label ("user", "health") or a ``user:`` tag is the user,
+    so those are one subject: the remember tool tags, extraction often
+    doesn't. Any other ``type:name`` tag (``person:Sam``, ``app:slack``) is
+    its own subject and matches only itself.
     """
-    if entity is None:
-        return "(k.entity IS NULL OR lower(k.entity) NOT LIKE 'person:%')", ()
-    if entity.lower().startswith("person:"):
+    if entity is not None and ":" in entity and not _is_user_tag(entity):
         return "k.entity = ?", (entity,)
-    return "(k.entity = ? OR k.entity IS NULL)", (entity,)
+    return (
+        "(k.entity IS NULL OR instr(k.entity, ':') = 0 "
+        "OR lower(k.entity) LIKE 'user:%')"
+    ), ()
+
+
+def _is_user_tag(entity: str) -> bool:
+    return ":" not in entity or entity.lower().startswith("user:")
 
 
 # ============================================================================
@@ -1512,7 +1518,7 @@ class MemoryStore:
                     # Taught again on purpose, so it is no longer forgotten.
                     self._unforget_locked(content)
 
-                # Check for dedup match (scoped to category + context + entity)
+                # Check for dedup match (scoped to category + context + subject)
                 match = self._find_similar_locked(content, category, context, entity)
             except BaseException:
                 self._conn.rollback()

@@ -156,18 +156,29 @@ def test_forgetting_by_id_erases_a_copy_stored_apart(store):
     assert store.get_item(other) is not None
 
 
-def test_someone_elses_fact_is_not_merged_or_erased_as_the_users(store):
+@pytest.mark.parametrize(
+    "content, entity",
+    [("Is allergic to mango", "person:Sam"), ("Uses dark mode", "app:slack")],
+)
+@pytest.mark.parametrize("forget_first", [True, False])
+def test_a_typed_tag_is_its_own_subject(store, content, entity, forget_first):
+    """person:/app:/project: rows never merge with, or go with, the user's."""
     host = _Host(store)
-    sams = store.store(
-        category="fact", content="Is allergic to mango", entity="person:Sam"
-    )
-    mine = store.store(category="fact", content="Is allergic to mango")
+    tagged = store.store(category="fact", content=content, entity=entity)
+    mine = store.store(category="fact", content=content)
 
-    assert sams != mine
+    assert tagged != mine
 
     with _tools(host) as tools:
-        result = tools["forget"](knowledge_id=sams)
+        result = tools["forget"](knowledge_id=tagged if forget_first else mine)
 
     assert result["status"] == "removed"
     assert "knowledge_ids" not in result
-    assert store.get_item(mine) is not None
+    kept = mine if forget_first else tagged
+    assert store.get_item(kept) is not None
+
+
+def test_a_user_tag_is_the_user(store):
+    first = store.store(category="fact", content=MANGO, entity="user:self")
+    assert store.store(category="fact", content=MANGO, entity="health") == first
+    assert store.store(category="fact", content=MANGO) == first
