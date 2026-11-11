@@ -2924,7 +2924,8 @@ def _program_on_path(name: str, cwd: str) -> Optional[str]:
             continue
         if os.path.normcase(os.path.realpath(entry)) == here:
             continue
-        for suffix in _program_suffixes():
+        # cmd.exe never runs a PATH file that has no extension.
+        for suffix in _program_suffixes()[1:]:
             candidate = os.path.join(entry, name + suffix)
             if os.path.isfile(candidate):
                 return candidate
@@ -4033,6 +4034,9 @@ class ShellToolsMixin:
             return False
         bare = _DISCARDED_STDERR.sub("", command)
         if not _UNASKED_LINE.fullmatch(bare):
+            return False
+        if os.name != "nt" and "\\" in bare:
+            # Off Windows a backslash is an escape, not a folder separator.
             return False
         lowered = bare.lower()
         if "powershell" in lowered or "pwsh" in lowered:

@@ -426,6 +426,18 @@ def test_program_on_path_skips_the_working_folder_and_relative_entries(
     assert st._program_on_path("nothere", str(work)) is None
 
 
+def test_program_on_path_skips_a_file_with_no_extension(tmp_path, monkeypatch):
+    """cmd.exe passes over an npm-style ``grep`` shim to the ``grep.exe`` after it."""
+    shims, bin_ = tmp_path / "shims", tmp_path / "bin"
+    shims.mkdir()
+    bin_.mkdir()
+    (shims / "grep").write_text("#!/bin/sh\n")
+    (bin_ / "grep.exe").write_text("")
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shims), str(bin_)]))
+    assert st._program_on_path("grep", str(tmp_path)) == str(bin_ / "grep.exe")
+
+
 def test_listed_programs_are_pinned_to_their_path_location(tmp_path, monkeypatch):
     work, bin_ = tmp_path / "work", tmp_path / "bin"
     work.mkdir()
