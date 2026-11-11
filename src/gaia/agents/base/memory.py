@@ -618,6 +618,17 @@ def _own_words(text: str) -> List[str]:
 _SENTENCE_END = re.compile(r"[.?!\n]|$")
 
 
+def _is_material(part: str, start: int) -> bool:
+    """True when the words at *start* are text the user is handing over, not
+    saying: after a colon ("Explain this quote: Remember that…") or in quotes."""
+    before = part[:start]
+    return (
+        part[start] == ":"
+        or before.count('"') % 2 == 1
+        or before.count("“") > before.count("”")
+    )
+
+
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
     for part in _own_words(text or ""):
@@ -627,6 +638,7 @@ def asks_to_keep_in_memory(text: str) -> bool:
             if (
                 verb
                 and verb.start() < request.end()
+                and not _is_material(part, request.start())
                 and not _NOT_A_FACT.match(part, verb.end())
                 # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
                 and (

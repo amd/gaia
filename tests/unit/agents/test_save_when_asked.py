@@ -58,6 +58,11 @@ def test_requests_to_keep_something(text):
         "So, remember the Python script from before? Run it again.",
         "Translate this letter:\n\nDear Sam, please remember that rent is due.",
         "What does 'remember me' do? Remember me checkboxes confuse people.",
+        "My boss said: remember that the deadline is Friday. What should I do?",
+        'Reply to this email: "Please remember the meeting moved to 3pm."',
+        "Draft a reminder email: don't forget the potluck on Friday.",
+        "Explain this quote: Remember that time is money.",
+        "Translate “please remember that rent is due” into French.",
         "Summarize this log. " + "x " * 400 + "please remember this",
     ],
 )
