@@ -45,7 +45,6 @@ files:
   - "!**/.gaia/**"
   - "!gaia.log"
   - "!**/node_modules/.cache/**"
-  - "!forge.config.cjs"
   - "!vite.config.ts"
   - "!tsconfig.json"
   - "!index.html"
