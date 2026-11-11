@@ -20,8 +20,6 @@ import (
 // puts what was said into the composer at the cursor. Listening only — no
 // turn, no speech. See docs/plans/voice.mdx › Dictation.
 
-const dictateCommand = "/dictate"
-
 // dictationStopWait bounds the wait for the last transcript after stop: a
 // commit with nothing left to transcribe may produce no final at all.
 const dictationStopWait = 4 * time.Second
