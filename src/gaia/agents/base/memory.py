@@ -550,7 +550,7 @@ EXTRACTION_IDLE_S = 3.0
 
 #: The stable memory section, shared by every session of this process that
 #: reads the same store, context and model: (rendered_at, prompt, memory ids,
-#: lesson ids). A new chat would otherwise re-render it, and on Gemma-4 any
+#: lesson ids, rendered at). A new chat would otherwise re-render it, and on Gemma-4 any
 #: change there makes the server re-read the whole ~19K-token prompt (~45 s).
 #: Reused only while every line of it is still current.
 _SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
@@ -3656,7 +3656,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 and time.monotonic() - shared[0] < SHARED_STABLE_TTL_S
                 and self._shared_section_still_true(shared, fresh)
             ):
-                _, prompt, memory_ids, lesson_ids = shared
+                _, prompt, memory_ids, lesson_ids, _ = shared
                 self._stable_memory_ids = set(memory_ids)
                 self._stable_lesson_ids = set(lesson_ids)
                 self._stable_memory_prompt = prompt
@@ -3668,6 +3668,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         fresh,
                         frozenset(getattr(self, "_stable_memory_ids", set())),
                         frozenset(getattr(self, "_stable_lesson_ids", set())),
+                        datetime.now().astimezone(),
                     )
             self._stable_memory_model = model
         return self._stable_memory_prompt
@@ -3693,7 +3694,14 @@ class MemoryMixin(ProceduralMemoryMixin):
         kept = []
         for knowledge_id in (shared[2] | shared[3]) - shown_now:
             item = self._memory_store.get_item(knowledge_id)
-            if item is None or item.get("superseded_by"):
+            if (
+                item is None
+                or item.get("superseded_by")
+                or item.get("sensitive")
+                or item.get("context") not in ("global", self._memory_context)
+                # Any edit since (a category, a due date) may be why it dropped.
+                or datetime.fromisoformat(item["updated_at"]) > shared[4]
+            ):
                 return False
             kept.append(item["content"])
         return all(any(content in line for content in kept) for line in missing)

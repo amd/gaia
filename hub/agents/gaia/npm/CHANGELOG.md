@@ -6,20 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
 - **A new chat starts about 45 s sooner once memory has changed.** Each chat
   rendered the memory section of its system prompt afresh, and on Gemma-4 any
   change there made the model re-read the whole ~19K-token prompt, tool
   schemas included. New chats in the same agent process now reuse the section
   for up to an hour; what was learned since still reaches them through
-  per-turn recall, and a memory forgotten or edited anywhere (including the
-  Memory page) is never shown from the shared copy.
-- **Full access in the Agent UI grants the folders you name.** Turning it on
-  over `/sessions/{id}/bypass` refused every path outside the chat's scope with
-  nobody asked. On a run the caller can answer for, Full access now grants the
-  path without a prompt, as it does in-process; Ask mode asks. Unattended runs,
-  the home folder and drive roots are still refused.
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
-
+  per-turn recall, and a memory forgotten, edited, marked sensitive or moved
+  anywhere (including the Memory page) is never shown from the shared copy.
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

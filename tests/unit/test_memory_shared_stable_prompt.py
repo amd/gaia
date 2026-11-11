@@ -132,3 +132,21 @@ def test_an_edited_memory_is_not_shown_from_the_shared_copy(store):
     store.update(item, content="The user's office is in building 9.")
     later = _new_chat(store).get_memory_system_prompt()
     assert "building 9" in later and "building 7" not in later
+
+
+def test_a_memory_marked_sensitive_is_not_shown_to_a_new_chat(store):
+    """The Memory page can hide a memory without changing its text."""
+    secret = store.store("fact", "The user's door code is 4417.", source="user")
+    assert "4417" in _new_chat(store).get_memory_system_prompt()
+    store.update(secret, sensitive=True)
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+def test_a_memory_moved_to_another_context_is_not_shown(store):
+    """A "home" chat must stop showing a memory moved to "work"."""
+    moved = store.store(
+        "fact", "The user's bank is Northwind.", source="user", context="home"
+    )
+    assert "Northwind" in _new_chat(store, "home").get_memory_system_prompt()
+    store.update(moved, context="work")
+    assert "Northwind" not in _new_chat(store, "home").get_memory_system_prompt()
