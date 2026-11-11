@@ -399,24 +399,35 @@ const SUMMARY_KINDS = 3;
 
 /** The one line a folded run of steps shows: what it did, in order. */
 export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
-    const kinds: { label: MessageRef; id: string; count: number }[] = [];
+    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; id: string; count: number }[] = [];
     for (const row of rows) {
         let label: MessageRef;
-        if (row.type === 'tool') label = skillUsed(row) ?? getToolMeta(row.tool, row).label;
+        let failedLabel: MessageRef | undefined;
+        if (row.type === 'tool') {
+            const meta = getToolMeta(row.tool, row);
+            label = skillUsed(row) ?? meta.label;
+            failedLabel = ref('tool.failed', { label: meta.activeLabel });
+        }
         else if (row.type === 'policy_alert') label = ref('activity.blocked');
         else if (row.type === 'error') label = ref('activity.hitError');
         else if (row.type === 'plan') label = ref('activity.madePlan');
         else continue;
         const id = `${label.ref}:${JSON.stringify(label.params ?? {})}`;
+        const failed = row.type === 'tool' && row.success === false;
         const seen = kinds.find((k) => k.id === id);
-        if (seen) seen.count += row.count ?? 1;
-        else kinds.push({ label, id, count: row.count ?? 1 });
+        if (seen) {
+            seen.count += row.count ?? 1;
+            seen.allFailed &&= failed;
+        }
+        else kinds.push({ label, failedLabel, allFailed: failed, id, count: row.count ?? 1 });
     }
     // Written once per language, so a bracketed locale brackets the whole line, not each piece.
     return t.compose((sayIn) => {
         if (kinds.length === 0) return sayIn('activity.thoughtThrough');
         const parts = kinds.slice(0, SUMMARY_KINDS).map((k, i) => {
-            const label = sayIn(k.label.ref, k.label.params);
+            // "Saved to memory" over calls that all failed would claim they worked.
+            const shown = k.allFailed && k.failedLabel ? k.failedLabel : k.label;
+            const label = sayIn(shown.ref, shown.params);
             const text = i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
             return k.count > 1 ? `${text} ×${k.count}` : text;
         });

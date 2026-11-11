@@ -89,6 +89,16 @@ def test_a_lone_sentinel_lookalike_without_tools_stays_prose():
     assert [r.is_complete for r in responses] == [False, True]
 
 
+def test_an_envelope_without_tools_is_still_a_control_frame():
+    """A cloud model on the in-text tool format can still make a native call;
+    the provider's whole envelope must not reach the chat as answer text."""
+    sdk, _ = _sdk(["Saving that.", SENTINEL])
+    responses = list(sdk.send_messages_stream([{"role": "user", "content": "q"}]))
+
+    assert [r.text for r in responses] == ["Saving that.", SENTINEL]
+    assert [r.is_complete for r in responses] == [False, True]
+
+
 def test_tool_call_deltas_ignores_a_non_sequence():
     """A test double's auto-created attribute must not reach the accumulator."""
     assert _tool_call_deltas(MagicMock()) is None

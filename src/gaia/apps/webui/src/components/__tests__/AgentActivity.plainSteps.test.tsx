@@ -135,7 +135,8 @@ describe('identical calls', () => {
     it('merges three identical failed reads into one row marked ×3', () => {
         const steps = [failedRead(1), retryThought(2), failedRead(3), retryThought(4), failedRead(5)];
         render(<AgentActivity steps={steps} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: /^Read web page ×3$/ }));
+        // All three failed, so the heading must not read as if a page was read.
+        fireEvent.click(screen.getByRole('button', { name: /^Reading web page failed ×3$/ }));
 
         expect(screen.getAllByText('Reading web page: go.nps.gov/RainierWeather')).toHaveLength(1);
         expect(screen.getByLabelText('3 identical calls')).toHaveTextContent('×3');
