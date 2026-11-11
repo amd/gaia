@@ -452,6 +452,11 @@ FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 # agent turn to ship.
 NPU_DEFAULT_MODEL_NAME = "gemma4-it-e4b-FLM"
 
+# Meta's agent-tuned 30B: dense, so it decodes slower than Qwen3.6's 3B-active
+# MoE on Strix Halo, but needs ~24 GB where Qwen needs ~27. A Lemonade built-in
+# (pulled by name). Opt-in only — choose it with `gaia config set default_model`.
+MUSE_GLIMMER_MODEL_NAME = "Muse-Glimmer-30B-GGUF"
+
 # gpt-oss always reasons; its template grades how much. "medium" is the
 # template's own default.
 GPT_OSS_REASONING_EFFORT = "medium"
@@ -2048,6 +2053,26 @@ MODELS = {
         max_ctx_size=262144,
         kv_bytes_per_token=20480,
     ),
+    # --- Muse Glimmer 30B: opt-in, never a default ---
+    # Dense 30B with a vision encoder, a Lemonade built-in on llama.cpp
+    # (UD-Q4_K_XL + BF16 vision projector + DFlash draft), so it is
+    # pulled by name. Its template sets reasoning from ``reasoning_strength``
+    # (default "high"), not ``reasoning_effort``, so GAIA leaves it at the default.
+    "muse-glimmer-30b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=MUSE_GLIMMER_MODEL_NAME,
+        display_name="Muse Glimmer 30B (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        # Weights 15.88 + vision projector 3.85 + DFlash draft 1.63 GB: the
+        # 19.9 GiB Lemonade lists.
+        size_gb=21.36,
+        # Native window. 13 of its 52 layers are global attention; the rest
+        # slide over 2048 tokens: 2 KV heads x 128 dims x K+V x f16 =
+        # 13 KiB/token, 0.9 GB at 64K, 1.7 GB at 128K.
+        max_ctx_size=131072,
+        kv_bytes_per_token=13312,
+    ),
     # --- gpt-oss: Lemonade built-ins on llama.cpp, pulled by name ---
     # Alternate layers attend over a 128-token sliding window, so only the
     # full-attention half grows with context: 8 KV heads x 64 dims x K+V x f16
@@ -2340,6 +2365,12 @@ MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
             "min_p": 0.0,
             "presence_penalty": 1.5,
         },
+    ),
+    # https://huggingface.co/meta-models/Muse-Glimmer-30B generation_config.json:
+    # temperature 1.0, top_p 0.95, top_k 64. It always reasons.
+    MUSE_GLIMMER_MODEL_NAME: CardSampling(
+        thinks_by_default=True,
+        thinking={"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0},
     ),
 }
 

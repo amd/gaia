@@ -561,6 +561,16 @@ own PC, speed, tool calling and (with `--tasks core`) agent quality, run
 </Note>
 
 <Note>
+`Muse-Glimmer-30B-GGUF`, Meta's open-weight agent model (a 21 GB Lemonade built-in
+with vision, ~24 GB for models), is supported and never
+auto-selected. It fits a 32 GB GPU or a 64 GB+ Strix Halo, not a 24 GB card. It is a
+dense 30B, so on a Strix Halo it reads prompts and writes text more slowly than
+Qwen3.6's 3B-active MoE.
+Choose it with `gaia config set default_model Muse-Glimmer-30B-GGUF`, then run
+`gaia init` to download it.
+</Note>
+
+<Note>
 gpt-oss 20B (`user.ggml-gpt-oss-20b-MXFP4-GGUF`, a 12 GB download, ~15 GB for models)
 and gpt-oss 120B (`gpt-oss-120b-mxfp-GGUF`, 63 GB, ~70 GB for models, a 128 GB Strix
 Halo) are supported and never auto-selected. Choose one with

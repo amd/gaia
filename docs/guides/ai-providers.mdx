@@ -105,6 +105,19 @@ picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
 
+### Muse Glimmer 30B
+
+Meta's open-weight model built for local agents, a supported local model that is
+never picked for you. It reads images and calls tools natively, and always reasons
+before it answers, at the "high" strength Meta benchmarks it with. It needs ~24 GB
+for models at a 64K window (21 GB of weights, vision projector and draft model, plus
+a small context cache), so a 32 GB GPU or a 64 GB+ Strix Halo holds it at its full
+128K window; a 24 GB card does not. It is dense rather than a mixture of experts, so
+on a Strix Halo it reads prompts about 3x and writes about 2x more slowly than Qwen3.6.
+Choose it with
+`gaia config set default_model Muse-Glimmer-30B-GGUF`, then run `gaia init` to
+download it.
+
 ### gpt-oss 20B and 120B
 
 OpenAI's open-weight gpt-oss models are supported local models, never picked for
