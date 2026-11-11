@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -441,6 +443,43 @@ func TestTheFlagshipAt220IsToldTheTUIIsAsking(t *testing.T) {
 	sendOnce(t, f, "gaia")
 	if got := f.queries[0].Surface; got != "tui" {
 		t.Errorf("surface = %q, want \"tui\": %s", got, f.lastRawBody())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// working_directory (contract 2.24): without it the sidecar resolves a bare
+// file name against the daemon's own folder, not the one GAIA was started in.
+// ---------------------------------------------------------------------------
+
+func TestTheFlagshipAt224GetsTheLaunchFolder(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRelay(t)
+	f.contractVersion = "2.24"
+	sendOnce(t, f, "gaia")
+	got := f.queries[0].WorkingDirectory
+	if got != want || !filepath.IsAbs(got) {
+		t.Errorf("working_directory = %q, want the absolute launch folder %q: %s",
+			got, want, f.lastRawBody())
+	}
+}
+
+func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
+	for _, tc := range []struct{ agent, version string }{
+		{"gaia", "2.23"},
+		{"gaia", ""},
+		{"email", "2.24"},
+	} {
+		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = tc.version
+			sendOnce(t, f, tc.agent)
+			if raw := f.lastRawBody(); strings.Contains(raw, "working_directory") {
+				t.Errorf("working_directory was sent to a peer that rejects it: %s", raw)
+			}
+		})
 	}
 }
 
