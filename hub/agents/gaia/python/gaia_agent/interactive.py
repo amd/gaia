@@ -176,7 +176,15 @@ def interactive_mode(agent: ChatAgent):
                         if agent.load_session(arg):
                             session = agent.current_session
                             print("✅ Loaded session with:")
-                            print(f"   - {len(session.indexed_documents)} documents")
+                            # Count what is indexed now, not what the session recorded.
+                            loaded = sum(
+                                1
+                                for d in session.indexed_documents
+                                if d in agent.indexed_files
+                            )
+                            print(
+                                f"   - {loaded} of {len(session.indexed_documents)} documents"
+                            )
                             print(
                                 f"   - {len(session.watched_directories)} watched directories"
                             )
@@ -266,6 +274,25 @@ def interactive_mode(agent: ChatAgent):
                             print(f"  📄 Indexing: {doc_file.name}...")
                             # Directly call the RAG index method
                             try:
+                                # Granting follows links and bypasses the scope
+                                # check, so leave out a link (its target is not
+                                # in the folder) and a secret such as
+                                # credentials.json.
+                                if (
+                                    doc_file.is_symlink()
+                                    or agent.path_validator.is_read_blocked(
+                                        str(doc_file)
+                                    )[0]
+                                ):
+                                    print(
+                                        "    ⏭️  Skipped: symbolic link or protected file"
+                                    )
+                                    continue
+                                # Naming the folder is the grant to read its files.
+                                if doc_file.is_file():
+                                    agent.path_validator.add_allowed_path(
+                                        str(doc_file.absolute())
+                                    )
                                 result = agent.rag.index_document(
                                     str(doc_file.absolute())
                                 )
@@ -295,10 +322,22 @@ def interactive_mode(agent: ChatAgent):
                             print("   Please check the file path and try again")
                             continue
 
+                        blocked, reason = agent.path_validator.is_read_blocked(
+                            str(path)
+                        )
+                        if blocked:
+                            print(f"\n❌ {reason}")
+                            continue
+
                         print(f"\n📄 Indexing: {path.name}")
                         print("=" * 60)
 
                         try:
+                            # Naming a file to index is the grant to read it.
+                            if path.is_file():
+                                agent.path_validator.add_allowed_path(
+                                    str(path.absolute())
+                                )
                             # Directly call the RAG index method
                             result = agent.rag.index_document(str(path.absolute()))
 

@@ -89,6 +89,9 @@ class _NoServer:
 
         raise LemonadeClientError("the model server is not running yet")
 
+    def check_model_available(self, _model_id: str) -> bool:
+        return False
+
 
 def _registry_size(model_id: str) -> Optional[float]:
     from gaia.llm.lemonade_client import find_model_requirement
@@ -830,14 +833,14 @@ def _job_model(job: str) -> Optional[str]:
     """The model *job* would load now, or None when no local model is involved."""
     from gaia.llm.lemonade_client import (
         DEFAULT_EMBEDDING_MODEL,
-        cloud_model_provider,
+        is_cloud_model_with_catalog,
         resolve_chat_model,
         resolve_default_vision_model,
     )
 
     if job == model_choice.ROLE_CHAT:
         model = resolve_chat_model()
-        cloud = model.startswith("claude-") or cloud_model_provider(model)
+        cloud = model.startswith("claude-") or is_cloud_model_with_catalog(model)
         return None if cloud else model
     if job == model_choice.ROLE_VISION:
         return resolve_default_vision_model()
@@ -855,10 +858,11 @@ def model_need(job: str) -> Dict[str, Any]:
     job reports the server's own error.
     """
     from gaia.config import GaiaConfigError
+    from gaia.llm.lemonade_client import LemonadeClientError
 
     try:
         model_id = _job_model(job)
-    except GaiaConfigError as e:
+    except (GaiaConfigError, LemonadeClientError) as e:
         raise SetupPlanError(str(e)) from e
     if job == model_choice.ROLE_VISION and model_id is None:
         # Chat runs on the NPU, where reading images is off: say so, offer nothing.

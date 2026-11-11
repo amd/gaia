@@ -79,6 +79,12 @@ on:
         required: false
         type: boolean
         default: false
+      # A release candidate's pre-release does not exist while it builds.
+      flagship:
+        description: 'artifact: an RC core''s real-engine check installs the gaia-agent-<platform> builds this run froze (see build_core.yml). Empty reads the published pre-release.'
+        required: false
+        type: string
+        default: ''
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -121,6 +127,13 @@ on:
       - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
+      - 'src/gaia/frozen.py'
+      - '.github/workflows/build_core.yml'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'util/flagship_rc_assets.py'
       - 'src/gaia/llm/lemonade_embedded.py'
       - 'conftest.py'
       - 'tests/conftest.py'
@@ -156,8 +169,19 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The frozen `gaia` each installer ships, from the same commit and version.
+  core:
+    uses: ./.github/workflows/build_core.yml
+    with:
+      platforms: 'win32-x64 darwin-arm64 linux-x64'
+      tag: ${{ inputs.tag }}
+      ref: ${{ inputs.ref }}
+      artifact_prefix: ${{ inputs.artifact_prefix }}
+      flagship: ${{ inputs.flagship }}
+
   build:
     name: Build ${{ matrix.platform }} installer
+    needs: core
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     # Build job is strictly read-only — it produces workflow-run artifacts
@@ -176,6 +200,8 @@ jobs:
             runner: windows-latest
             npm_script: package:win
             lemonade_platform: win-x64
+            core: win32-x64
+            core_exe: gaia.exe
             artifacts: |
               src/gaia/apps/webui/dist-app/*.exe
               src/gaia/apps/webui/dist-app/*.exe.blockmap
@@ -184,6 +210,8 @@ jobs:
             runner: macos-latest  # Apple Silicon (arm64)
             npm_script: package:mac
             lemonade_platform: mac-arm64
+            core: darwin-arm64
+            core_exe: gaia
             artifacts: |
               src/gaia/apps/webui/dist-app/*.dmg
               src/gaia/apps/webui/dist-app/*.dmg.blockmap
@@ -194,6 +222,8 @@ jobs:
             runner: ubuntu-latest
             npm_script: package:linux
             lemonade_platform: linux-x64
+            core: linux-x64
+            core_exe: gaia
             artifacts: |
               src/gaia/apps/webui/dist-app/*.deb
               src/gaia/apps/webui/dist-app/*.AppImage
@@ -263,102 +293,25 @@ jobs:
         shell: bash
         run: npm ci
 
-      # ─── Fetch uv binary for Linux AppImage (issue #782) ────────────
-      # The AppImage bundles a pinned uv binary under build/vendor/uv so the
-      # after-pack hook and runtime can provision the Python env without
-      # requiring uv on the host. Pin + sha256 verify for supply-chain safety.
-      - name: Fetch uv binary (Linux)
-        if: matrix.platform == 'linux'
+      # ─── Bundle the frozen GAIA core ────────────────────────────────
+      # electron-builder.yml packs build/core as <resources>/core; the app runs
+      # that `gaia` and installs no Python package on the user's PC.
+      - name: Download the frozen core
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.core }}
+          path: gaia-core-download
+
+      # Relative paths: Git Bash's tar reads the `D:` of an absolute Windows path as a host.
+      - name: Unpack the frozen core
         shell: bash
         run: |
           set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_TARBALL="uv-x86_64-unknown-linux-gnu.tar.gz"
-          UV_SHA256="22034760075b92487b326da5aa1a2a3e1917e2e766c12c0fd466fccda77013c7"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/linux-x64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          curl -fsSL -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
-          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | sha256sum -c -
-          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
-          cp "${tmpdir}/uv-x86_64-unknown-linux-gnu/uv" "${DEST_DIR}/uv"
-          chmod 0755 "${DEST_DIR}/uv"
-          "${DEST_DIR}/uv" --version
-
-      - name: Fetch uv binary (Windows)
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
-          # This must be set to the official tarball SHA256 (archive digest).
-          # DO NOT merge this PR without replacing the placeholder below
-          # with the real value — the build intentionally fails if the
-          # checksum is not provided so we never ship an unverified uv.
-          UV_TARBALL_SHA256="ee2468e40320a0a2a36435e66bbd0d861228c4c06767f22d97876528138f4ba0"
-
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          echo "Downloading ${UV_URL}"
-          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"
-
-          if [ -z "${UV_TARBALL_SHA256}" ] || [ "${UV_TARBALL_SHA256}" = "REPLACE_ME_WIN_UV_TARBALL_SHA256" ]; then
-            echo "ERROR: UV_TARBALL_SHA256 is not set in the workflow. Set it to the upstream tarball SHA256 to proceed." >&2
-            exit 1
-          fi
-
-          echo "${UV_TARBALL_SHA256}  ${tmpdir}/${UV_ZIP}" | sha256sum -c -
-
-          unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}"
-          # Copy uv.exe from extracted tree — fail if not found.
-          FOUND=$(find "${tmpdir}" -type f -iname uv.exe | head -n1 || true)
-          if [ -z "${FOUND}" ]; then
-            echo "ERROR: uv.exe not found in the downloaded archive" >&2
-            exit 1
-          fi
-          cp "${FOUND}" "${DEST_DIR}/uv.exe"
-          chmod 0755 "${DEST_DIR}/uv.exe"
-          "${DEST_DIR}/uv.exe" --version || true
-
-          # Compute SHA256 of the extracted binary and inject into source
-          BIN_SHA=$(sha256sum "${DEST_DIR}/uv.exe" | cut -d' ' -f1)
-          echo "Computed uv.exe SHA256: ${BIN_SHA}"
-          # Replace placeholder in backend-installer.cjs so runtime can verify
-          sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
-
-      - name: Fetch uv binary (macOS)
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
-          # Upstream tarball SHA256 (archive digest)
-          UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          echo "Downloading ${UV_URL}"
-          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
-          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
-          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
-          cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
-          chmod 0755 "${DEST_DIR}/uv"
-          "${DEST_DIR}/uv" --version
-          # Echo the extracted-binary SHA (pre-codesign) for build logs only —
-          # there is no runtime pin to update for mac-arm64. Unlike
-          # linux-x64/win-x64, mac-arm64's BUNDLED_UV_SHA256 entry was removed:
-          # electron-builder re-signs this binary during packaging (ad-hoc
-          # identity=- on every CI build today), and ad-hoc codesign output is
-          # not deterministic across GitHub-hosted macos-latest runner image
-          # rollovers. ensureUv() and dmg-structural-smoke both verify this
-          # binary via `codesign --verify --strict` instead of a fixed digest.
-          shasum -a 256 "${DEST_DIR}/uv"
+          DEST=src/gaia/apps/webui/build/core
+          rm -rf "${DEST}" && mkdir -p "${DEST}"
+          tar -xzf "gaia-core-download/gaia-core-${{ matrix.core }}.tar.gz" -C "${DEST}"
+          rm -rf gaia-core-download
+          "${DEST}/${{ matrix.core_exe }}" --version
 
       # ─── Bundle the embeddable Lemonade archive ─────────────────────
       # electron-builder skips a missing extraResources source without failing,
@@ -455,6 +408,18 @@ jobs:
           else
             echo "(dist-app/ does not exist — build may have failed)"
           fi
+
+      - name: Verify the frozen core was packaged
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: |
+          set -euo pipefail
+          FOUND=$(find dist-app -ipath '*/resources/core/${{ matrix.core_exe }}' -type f)
+          if [ -z "${FOUND}" ]; then
+            echo "::error::No frozen core under resources/core in dist-app; check extraResources in electron-builder.yml." >&2
+            exit 1
+          fi
+          echo "${FOUND}"
 
       - name: Verify the Lemonade archive was packaged
         working-directory: src/gaia/apps/webui
@@ -760,7 +725,7 @@ jobs:
   #   AC1 — Ubuntu 24.04 minimal launches without curl / with libfuse2
   #   AC2 — Arch-equivalent launch (fedora row covers RPM-family SELinux)
   #   AC3 — pre-built dist/ ships (structural check)
-  #   AC4 — bundled uv present (structural check)
+  #   AC4 — the frozen gaia core ships and starts (structural check)
   #   AC5 — HTML fallback at / (tested separately by unit tests)
   #   AC6 — port-manager unit tests (tested separately)
   #   AC8 — Wayland visibility (DEFERRED — see wayland-visibility stub below)
@@ -791,21 +756,15 @@ jobs:
           chmod +x "${APPIMAGE}"
           echo "appimage=${APPIMAGE}" >> "$GITHUB_OUTPUT"
 
-      - name: Structural smoke (chrome-sandbox, uv, dist, app.asar)
+      - name: Structural smoke (chrome-sandbox, core, dist, app.asar)
         env:
           GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
         run: node --test tests/electron/appimage-smoke.test.mjs
 
   # ─── DMG structural smoke (issue #941) ──────────────────────────────
-  # Mirrors appimage-structural-smoke for the macOS DMG. Catches the
-  # failure mode that bit v0.17.5: a darwin-arm64 install that hard-fails
-  # in ensure-uv on first launch because the bundled uv either was never
-  # shipped or fails `codesign --verify --strict` in backend-installer.cjs.
-  # (Prior to the mac-arm64 pin removal, this compared against a fixed
-  # BUNDLED_UV_SHA256[mac-arm64] digest — retired because ad-hoc codesign
-  # output is not deterministic across GitHub-hosted macos-latest runner
-  # image rollovers; see the BUNDLED_UV_SHA256 comment in
-  # backend-installer.cjs.)
+  # Mirrors appimage-structural-smoke for the macOS DMG: the frozen gaia core
+  # must ship, keep its executable bit, pass `codesign --verify --strict` and
+  # start, or the app has no backend on first launch.
   #
   # MUST be present in build-complete `needs:` below — without that
   # wiring, a failing DMG smoke does not block release-readiness.
@@ -836,7 +795,7 @@ jobs:
           echo "Found DMG: ${DMG}"
           echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
 
-      - name: Structural smoke (uv binary, mode, codesign, --version)
+      - name: Structural smoke (core binary, mode, codesign, --version)
         env:
           GAIA_DMG: ${{ steps.locate.outputs.dmg }}
         run: node --test tests/electron/dmg-smoke.test.mjs
@@ -981,7 +940,7 @@ jobs:
                 PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
                 PORT=${PORT:-4200}
                 # Use bash /dev/tcp instead of curl — curl is purged in this
-                # container to prove the bundled-uv path eliminates that dep.
+                # container to prove the app needs no host tooling.
                 # Avoid single quotes inside the outer single-quoted bash -c block
                 # by using a subshell ( ) with double-quoted printf instead.
                 RESPONSE=$( (exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf "GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3 && timeout 5 cat <&3) 2>/dev/null || true)

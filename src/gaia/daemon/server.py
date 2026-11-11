@@ -19,6 +19,7 @@ import math
 import os
 import secrets
 import socket
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -91,7 +92,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+def _build_registry(
+    specs, forwarder, *, custody_auth=None, custody_base_url=None, keychain_auth=None
+):
     """The daemon's sidecar registry, wired to the crash-reap ledger and the
     OAuth forward-out on-spawn push (#2154).
 
@@ -128,6 +131,7 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
         on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
 
@@ -260,6 +264,19 @@ def _build_deregister(
     return _deregister
 
 
+def _keychain_auth():
+    """The /host/v1/keychain credential store, or ``None`` off macOS.
+
+    Only macOS ties keychain approval to the build asking; elsewhere the
+    sidecar keeps reading the OS store itself and the routes are not mounted.
+    """
+    if sys.platform != "darwin":
+        return None
+    from gaia.daemon.custody.auth import CustodyAuth
+
+    return CustodyAuth()
+
+
 def _build_phone():
     """The phone service over its own store in the host directory."""
     from gaia.daemon.paths import phone_db_path
@@ -290,6 +307,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.lifetime import (
         DaemonIdle,
         LifetimeWatch,
+        app_path_from_env,
         exit_with_pid_from_env,
         idle_exit_seconds_from_env,
     )
@@ -298,6 +316,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
+    app_path = app_path_from_env()
     idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
@@ -320,6 +339,7 @@ def run(host: str = HOST) -> None:
     custody_store = CustodyStore(custody_db_path())
     phone = _build_phone()
     custody_auth = CustodyAuth()
+    keychain_auth = _keychain_auth()
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
@@ -329,6 +349,7 @@ def run(host: str = HOST) -> None:
         forwarder,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
     from gaia.daemon.forward_refresh import ForwardRefresher
@@ -399,13 +420,15 @@ def run(host: str = HOST) -> None:
     )
 
     # Exit once nothing can find this daemon (its home or instance.json is
-    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, or, outside the
-    # default home, nothing has used it for the idle limit.
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, the app that
+    # started it was deleted, or, outside the default home, nothing has used it
+    # for the idle limit.
     lifetime = LifetimeWatch(
         _exit_on_own,
         exit_with_pid=exit_with_pid,
         idle=idle,
         idle_limit=idle_limit,
+        app_path=app_path,
     )
 
     _register = _build_register(
@@ -445,6 +468,7 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        keychain_auth=keychain_auth,
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,

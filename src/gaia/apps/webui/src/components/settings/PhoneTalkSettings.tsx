@@ -11,10 +11,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Square, Volume2 } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
+import * as speechApi from '../../services/speechApi';
 import { clearPhonePin, setPhonePin, type PhoneSettings, type PhoneSettingsPatch } from '../../services/phoneApi';
 import { log } from '../../utils/logger';
 
-const GROUPS: Array<{ accent: api.Voice['accent']; gender: api.Voice['gender'] }> = [
+const GROUPS: Array<{ accent: speechApi.Voice['accent']; gender: speechApi.Voice['gender'] }> = [
     { accent: 'american', gender: 'female' },
     { accent: 'american', gender: 'male' },
     { accent: 'british', gender: 'female' },
@@ -48,14 +49,14 @@ export function PhoneTalkSettings({ settings, disabled, busy, act, save }: Props
     const [editingPin, setEditingPin] = useState(false);
     const [pin, setPin] = useState('');
     const [pinError, setPinError] = useState<string | null>(null);
-    const [voices, setVoices] = useState<api.Voice[] | null>(null);
+    const [voices, setVoices] = useState<speechApi.Voice[] | null>(null);
     const [voicesError, setVoicesError] = useState<string | null>(null);
     const [previewing, setPreviewing] = useState<'loading' | 'playing' | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     useEffect(() => {
-        api.getSpeechSettings()
+        speechApi.getSpeechSettings()
             .then((s) => setVoices(s.voices))
             .catch((err) => setVoicesError(err instanceof api.ApiError ? err.detail || err.message : String(err)));
     }, []);
@@ -79,7 +80,7 @@ export function PhoneTalkSettings({ settings, disabled, busy, act, save }: Props
         setPreviewError(null);
         setPreviewing('loading');
         try {
-            const blob = await api.speak(PREVIEW_TEXT, { voice: settings.voice });
+            const blob = await speechApi.speak(PREVIEW_TEXT, { voice: settings.voice });
             const audio = new Audio(URL.createObjectURL(blob));
             audioRef.current = audio;
             audio.onended = stopPreview;

@@ -52,6 +52,7 @@ class ConfigField:
     help_md: str = ""
     options: tuple[str, ...] | None = None
     secret: bool = False
+    prefix: str = ""
 
     def __post_init__(self) -> None:
         if not self.key or not self.key.strip():
@@ -94,6 +95,9 @@ class ConnectorSpec:
     # or whatever else the connector needs. Falls back to ``product_url``
     # in the UI when ``None``, but every connector should set it.
     docs_url: str | None = None
+    # Opens the service's own page that creates whatever the user must paste
+    # back (e.g. a pre-filled Slack app). The UI shows it as a button.
+    setup_url: str | None = None
     # oauth_pkce only
     default_scopes: tuple[str, ...] = field(default_factory=tuple)
     available_scopes: tuple[str, ...] = field(default_factory=tuple)

@@ -106,6 +106,11 @@ const (
 	followUpContractMinor = 15
 )
 
+// followUpAgentID is the only agent that serves the follow-up route. The email
+// sidecar also reports schema 2.15 because it published its stateful routes,
+// but it does not accept mid-turn follow-ups.
+const followUpAgentID = "gaia"
+
 // surfaceContract is the contract version from which the flagship's `/query`
 // takes `surface` (schema 2.20). Without it the agent words provider errors for
 // a headless caller instead of pointing at the TUI's own settings. Gaia only:
@@ -266,7 +271,8 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	supportsFollowUp := contractAtLeast(payload.APIVersion, followUpContractMajor, followUpContractMinor)
+	supportsFollowUp := s.agentID == followUpAgentID &&
+		contractAtLeast(payload.APIVersion, followUpContractMajor, followUpContractMinor)
 	supportsDecision := s.agentID == toolDecisionAgentID &&
 		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
 	supportsSurface := s.agentID == surfaceAgentID &&

@@ -23,8 +23,22 @@ export function ReadAloudButton({ messageId, content }: { messageId: string; con
             aria-label={label}
             aria-pressed={active}
         >
-            {status === 'loading' ? <Loader2 size={12} className="spin" /> : active ? <Square size={12} /> : <Volume2 size={12} />}
+            {status === 'loading' || status === 'downloading' ? <Loader2 size={12} className="spin" /> : active ? <Square size={12} /> : <Volume2 size={12} />}
         </button>
+    );
+}
+
+/** While the first read downloads the voice model, says so under the reply. */
+export function ReadAloudNote({ messageId }: { messageId: string }) {
+    const t = useT();
+    const downloading = useReadAloudStore((s) => s.messageId === messageId && s.status === 'downloading');
+    const size = useReadAloudStore((s) => s.downloadGb);
+    if (!downloading) return null;
+    return (
+        <p className="msg-read-aloud-note" role="status">
+            {t('readAloud.downloading')}
+            {size != null && <> <bdi dir="ltr">(~{size} GB)</bdi></>}
+        </p>
     );
 }
 

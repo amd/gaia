@@ -14,7 +14,8 @@ turns the cloud choices off.
 
 1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
-   opens once Lemonade is installed. Otherwise press **p** during setup, or enter
+   opens once Lemonade is installed. Otherwise, with the flagship GAIA agent,
+   press **p** during setup (other agents' setup screens don't offer it), or enter
    **`/provider`** from the command palette in chat.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
@@ -99,7 +100,7 @@ with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
 `gaia init` to download it. On a PC that cannot hold it, `gaia init` refuses and
 says how much memory it needs. Like Qwen3.6 it runs with thinking on. To stay on Gemma on a
 large machine and skip the download, run `gaia config set default_model
-Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the setup screen and
+Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the flagship's setup screen and
 picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
@@ -267,7 +268,8 @@ still sends conversation history to Fireworks and incurs usage charges — see
 
 ## Keep every AI request off the cloud
 
-To guarantee that no AI request reaches a cloud model, turn on **Local only**:
+To guarantee that no AI request reaches a cloud model, turn on **Local only**. In the Agent UI,
+use **Settings → Privacy → Local only**. From the terminal:
 
 ```bash
 gaia config set network_policy local_ai_only
@@ -286,7 +288,11 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
   cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
-  a cloud chat is open. A key Fireworks AI or the gateway rejects is not kept.
+  a cloud chat is open. A restarted Lemonade has forgotten Fireworks AI itself
+  too, so GAIA registers it again first, using your saved key or
+  `FIREWORKS_API_KEY`. If a cloud reply still finds the provider gone, GAIA
+  reconnects it and sends the message once more; if that fails, the error says
+  GAIA's AI engine lost the connection, not that the model is missing. A key Fireworks AI or the gateway rejects is not kept.
   GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
 - If Fireworks AI's model list fails but your key was not rejected, the Agent UI
@@ -323,6 +329,9 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported
   explicitly.
+- In the Agent UI, a `FIREWORKS_API_KEY` set in GAIA's own environment connects
+  Fireworks without pasting it. First-run setup names it by its last four
+  characters, and a remembered Fireworks model is restored with it at launch.
 - **Ctrl+D** in provider setup clears that provider's key, both in Lemonade and
   the kept copy, so it does not come back next launch. Environment keys remain
   active. **Esc** cancels input or an in-progress connection.
@@ -341,8 +350,8 @@ Check credentials, account model access, the gateway URL, and Lemonade's server 
 
 ## Switching and validation
 
-Use `/provider` to reconnect or switch destinations, or `/model <id>` to select
-an already-discovered model. Successful switches preserve the current conversation
+Use `/provider` to reconnect or switch destinations, or `/model <id>` (flagship
+agent only) to select an already-discovered model. Successful switches preserve the current conversation
 and loaded skills. A failed switch keeps the previous model. If the agent restarts
 mid-session, the TUI reports any reversion to its launch model.
 

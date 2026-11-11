@@ -87,6 +87,16 @@ test("the chip restarts silently and reopens the app when nothing would be lost"
   expect(mockUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
 });
 
+test("the quit a restart starts is one that installs the update", async () => {
+  // main.cjs stops the daemon in that quit: the installer replaces the files it runs from.
+  mockUpdater.autoInstallOnAppQuit = false;
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  expect(m.installsOnQuit()).toBe(false);
+  await finishDownload();
+  await clickRestartChip();
+  expect(m.installsOnQuit()).toBe(true);
+});
+
 test("Keep running puts the restart off; the update installs on the next quit", async () => {
   saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
@@ -97,6 +107,7 @@ test("Keep running puts the restart off; the update installs on the next quit", 
   expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
   expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
   expect(m.getState().status).toBe("downloaded");
+  expect(m.installsOnQuit()).toBe(true);
 });
 
 test("a failing restart check reaches the chip's caller, and nothing installs", async () => {

@@ -14,8 +14,6 @@ Both models run inside Lemonade Server, the same server that runs the chat model
 
 The GAIA agent's `text_to_speech` tool uses the same Kokoro model but never downloads it during a chat. Run `gaia download --agent talk` (or `gaia talk` once) before asking the agent to read something aloud.
 
-The GAIA agent's `text_to_speech` tool uses the same Kokoro model but never downloads it during a chat. Run `gaia download --agent talk` (or `gaia talk` once) before asking the agent to read something aloud.
-
 <Info>
   **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
 </Info>
@@ -38,7 +36,7 @@ Talk mode needs a running Lemonade Server (`gaia init` installs it) and PortAudi
 </Tabs>
 
 <Note>
-  Transcribing an **existing** recording is no longer part of talk mode — point the GAIA agent at the file instead. See [Transcription & Meeting Notes](/guides/transcription).
+  Transcribing an **existing** recording is no longer part of talk mode — point the GAIA agent at the file instead. See [Transcription & Recording Analysis](/guides/transcription).
 </Note>
 
 <Steps>
@@ -178,6 +176,12 @@ Customize your voice interaction experience:
 
 ### Quick Start with Documents
 
+Install both the talk and RAG extras before indexing a document:
+
+```bash
+uv pip install "amd-gaia[talk,rag]"
+```
+
 <CodeGroup>
 ```bash Single Document
 # Voice chat with a document
@@ -227,7 +231,9 @@ gaia talk --index manual.pdf --no-tts
 
 <Steps>
   <Step title="Document Indexing">
-    PDFs are automatically indexed when you start talk with `--index`
+    PDFs are indexed before voice chat starts when you use `--index`. If a
+    document cannot be indexed, the command exits with an error instead of
+    starting a voice session without that document's context.
   </Step>
 
   <Step title="Voice Input">
@@ -249,7 +255,7 @@ gaia talk --index manual.pdf --no-tts
 
 ## Testing ASR Components
 
-Talk mode's ASR covers **live microphone input only**. To transcribe a file you already have, see [Transcription & Meeting Notes](/guides/transcription).
+Talk mode's ASR covers **live microphone input only**. To transcribe a file you already have, see [Transcription & Recording Analysis](/guides/transcription).
 
 ### List Audio Devices
 
@@ -355,8 +361,15 @@ gaia test --test-type tts-audio-file \
   <Accordion title="RAG Issues">
     **Missing RAG dependencies:**
     ```bash
-    uv pip install -e ".[rag]"
+    uv pip install "amd-gaia[talk,rag]"
     ```
+
+    If you are developing from a GAIA source checkout, run
+    `uv pip install -e ".[talk,rag]"` from the repository root instead.
+
+    **Indexing failed at startup:** Fix the reported RAG error and rerun
+    `gaia talk --index <document>`. Voice chat does not start until the requested
+    document is indexed.
 
     **Other issues:**
     - **PDF processing errors**: Ensure PDFs have extractable text (not scanned images)

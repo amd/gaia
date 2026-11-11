@@ -34,6 +34,15 @@ describe('Read aloud on a reply', () => {
         expect(read).toHaveBeenCalledWith('s1:7', 'The answer is **42**.');
     });
 
+    it('says the voice model is downloading under the reply, with its size', () => {
+        useReadAloudStore.setState({ messageId: 's1:7', status: 'downloading', downloadGb: 0.35 });
+        render(<MessageBubble message={base} />);
+        const note = screen.getByRole('status');
+        expect(note.textContent).toContain('Downloading the voice model');
+        expect(note.textContent).toContain('0.35 GB');
+        expect(screen.getByRole('button', { name: 'Stop reading' })).toBeTruthy();
+    });
+
     it('turns into Stop while that reply is being read', () => {
         useReadAloudStore.setState({ messageId: 's1:7', status: 'playing' });
         render(<MessageBubble message={base} />);

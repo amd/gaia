@@ -149,7 +149,7 @@ var macAppBundles = []string{
 // after it exits, and only launchctl can restart it.
 //
 // The label tracks the pinned Lemonade: upstream renamed it from
-// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.45.3.
+// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.44.1.
 const (
 	macDaemonLabel = "ai.lemonadeserver.server"
 	macDaemonPlist = "/Library/LaunchDaemons/ai.lemonadeserver.server.plist"

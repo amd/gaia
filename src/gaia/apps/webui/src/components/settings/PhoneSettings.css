@@ -462,3 +462,9 @@
     border-radius: var(--radius-lg);
     background: var(--bg-card);
 }
+
+/* Name and number get the full row on a phone; the badge and Remove sit under them. */
+@media (max-width: 480px) {
+    .phone-book li { flex-wrap: wrap; }
+    .phone-book-who { flex-basis: 100%; }
+}

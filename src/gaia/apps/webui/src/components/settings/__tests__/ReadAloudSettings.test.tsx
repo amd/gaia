@@ -5,16 +5,17 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReadAloudSettings } from '../ReadAloudSettings';
 import * as api from '../../../services/api';
+import * as speechApi from '../../../services/speechApi';
 import { useReadAloudStore } from '../../../stores/readAloudStore';
 
-vi.mock('../../../services/api', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../../services/api')>();
+vi.mock('../../../services/speechApi', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../../services/speechApi')>();
     return { ...actual, getSpeechSettings: vi.fn(), updateSpeechSettings: vi.fn(), speak: vi.fn() };
 });
 
-const mockedApi = vi.mocked(api);
+const mockedApi = vi.mocked(speechApi);
 
-const SETTINGS: api.SpeechSettings = {
+const SETTINGS: speechApi.SpeechSettings = {
     voice: 'af_bella',
     speed: 100,
     auto: false,
@@ -48,6 +49,18 @@ describe('ReadAloudSettings', () => {
         ]);
         expect(within(groups[3]).getByRole('option', { name: 'George' })).toBeTruthy();
         expect((voice as HTMLSelectElement).value).toBe('af_bella');
+    });
+
+    it('changing a setting stops a preview but not a reply being read in the chat', async () => {
+        const stop = vi.fn();
+        useReadAloudStore.setState({ messageId: 's1:7', status: 'playing', stop });
+        render(<ReadAloudSettings />);
+        fireEvent.change(await screen.findByLabelText('Speed'), { target: { value: '150' } });
+        await waitFor(() => expect(mockedApi.updateSpeechSettings).toHaveBeenCalledWith({ speed: 150 }));
+        expect(stop).not.toHaveBeenCalled();
+        useReadAloudStore.setState({ messageId: 'settings:preview' });
+        fireEvent.change(screen.getByLabelText('Speed'), { target: { value: '75' } });
+        expect(stop).toHaveBeenCalled();
     });
 
     it('saves a new voice, speed and auto-read to the server', async () => {

@@ -964,6 +964,40 @@ def test_an_unexpected_error_is_named_in_the_report_but_not_on_screen(monkeypatc
     assert "Setup failed: OSError: marker file is read-only" in every
 
 
+def test_a_report_asked_for_as_the_failure_record_starts_waits_for_it(monkeypatch):
+    # report() ran between the record thread being published and started, and
+    # joining an unstarted thread raises.
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    errors = []
+    real_thread = threading.Thread
+
+    def ask_for_report():
+        try:
+            runner.report()
+        except RuntimeError as e:
+            errors.append(e)
+
+    class ReportFirst(real_thread):
+        def start(self):
+            if getattr(self, "_target", None) == runner._record_failure:
+                asker = real_thread(target=ask_for_report)
+                asker.start()
+                asker.join(timeout=0.5)  # it gets in first, if nothing stops it
+            super().start()
+
+    monkeypatch.setattr(sr.threading, "Thread", ReportFirst)
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    runner.report()
+    assert errors == []
+
+
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)
@@ -2271,6 +2305,152 @@ def test_retry_on_a_fine_file_tests_it_again_without_downloading(monkeypatch):
     assert test_row["state"] == "passed"
 
 
+def test_a_second_timeout_on_model_retry_offers_a_redownload(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (False, "It timed out again", "stuck"),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "failed")
+    row = _models(runner)[VOICE]
+    assert runner._test_failures[VOICE] == 2
+    assert row["error_kind"] == "verify"
+    assert "would not load" in row["error"]
+
+
+def test_a_passing_model_retest_clears_its_timeout_count(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    assert VOICE not in runner._test_failures
+
+
+def _failed_run_waiting_on_one_model_retest(only_test_failure):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(
+        skip_chat_model=False,
+        state="failed",
+        error=(
+            "The final chat test failed"
+            if not only_test_failure
+            else "Model test failed"
+        ),
+        failed_by_tests=only_test_failure,
+        chat_model_for=lambda _run: VOICE,
+    )
+    runner._models[VOICE] = sr.ModelProgress(
+        id=VOICE,
+        state="failed",
+        error_kind="stuck",
+        test_job="voice",
+    )
+    runner._record_test(
+        runner._run,
+        {
+            "job": "voice",
+            "subject": VOICE,
+            "state": "failed",
+            "error": "It timed out",
+            "kind": "stuck",
+        },
+    )
+    return runner
+
+
+def test_the_last_model_retest_rechecks_setup_before_marking_ready(
+    monkeypatch, gaia_home
+):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+    checks, turns = [], []
+
+    def check(*_args, **_kwargs):
+        checks.append(1)
+        return {"ready": True, "models": [{"id": VOICE, "loaded": True}]}
+
+    monkeypatch.setattr(sr, "check", check)
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id: turns.append(model_id)
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "ready")
+    assert checks == [1] and turns == [VOICE]
+    assert runner.status()["error"] is None
+    assert (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_retest_keeps_setup_failed_when_final_verification_fails(
+    monkeypatch, gaia_home
+):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "models": [{"id": VOICE, "loaded": True}],
+        },
+    )
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda _model_id: "no answer")
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "failed")
+    assert "got no answer" in runner.status()["error"]
+    assert not (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_model_retest_does_not_hide_another_setup_failure(monkeypatch, gaia_home):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=False)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    view = runner.status()
+    assert view["state"] == "failed"
+    assert view["error"] == "The final chat test failed"
+    assert not (gaia_home / "chat" / "initialized").exists()
+
+
 def test_a_retest_that_finds_the_file_broken_then_offers_a_redownload(monkeypatch):
     from gaia.installer import init_command
 
@@ -2428,3 +2608,135 @@ def test_retry_on_a_plan_model_repeats_its_load_without_downloading(monkeypatch)
     assert not runner.busy_with(GEMMA)
     # The load check is no Test-step row; a retest of it must not add one.
     assert not any(t["subject"] == GEMMA for t in runner.status()["tests"])
+
+
+def test_report_waits_for_a_failed_runs_problem_report(monkeypatch):
+    """A report asked for the moment a run fails still names its problem report."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(False, state="failed")
+    runner._run = run
+    saving = threading.Event()
+
+    def slow_record(_run, _cause):
+        saving.set()
+        time.sleep(0.5)
+        return "GF-20261104-192233-3f2a"
+
+    monkeypatch.setattr(sr, "_record_setup_failure", slow_record)
+    with runner._lock:
+        runner._recording = threading.Thread(
+            target=runner._record_failure, args=(run, None), daemon=True
+        )
+    runner._recording.start()
+    assert saving.wait(5)
+
+    report = runner.report()
+
+    assert any(
+        "GF-20261104-192233-3f2a" in line
+        for line in report["log_tail"]
+        + [line for lines in report["logs"].values() for line in lines]
+    )
+    assert "problem_report" not in report
+
+
+def test_report_says_when_the_problem_report_is_still_saving(monkeypatch):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(False, state="failed")
+    release = threading.Event()
+    monkeypatch.setattr(sr, "_RECORD_WAIT_S", 0.1)
+    runner._recording = threading.Thread(target=release.wait, args=(5,), daemon=True)
+    runner._recording.start()
+    try:
+        assert "still being saved" in runner.report()["problem_report"]
+    finally:
+        release.set()
+
+
+def test_failed_model_test_from_init_sets_failed_by_tests(monkeypatch):
+    """The retry eligibility flag must come from real init progress, not fixtures."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert view["tests"][0]["state"] == "failed"
+    assert view["tests"][0]["subject"] == VOICE
+    row = _models(runner)[VOICE]
+    assert row["state"] == "failed"
+    assert row["error_kind"] == "stuck"
+    assert (
+        view["failed_by_tests"]
+        if "failed_by_tests" in view
+        else runner._run.failed_by_tests
+    )
+
+
+def test_failed_model_test_does_not_hide_a_failed_component(monkeypatch):
+    """A component failure keeps setup failed even when a model test also failed."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "component",
+                    "component": "server",
+                    "state": "failed",
+                    "kind": "other",
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert runner._run.failed_by_tests is False
+    assert view["components"] == {"server": "failed"}
+    assert _models(runner)[VOICE]["state"] == "failed"

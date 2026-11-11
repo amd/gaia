@@ -66,7 +66,8 @@ export function ModelSettings() {
 
     const provider = providers?.find((p) => p.id === chosen) ?? null;
     const offline = (p: ProviderInfo | null) => p?.network?.reachable === false;
-    const connected = !!provider && (!provider.remote || !!provider.models_discovered);
+    const blocked = (p: ProviderInfo | null) => !!p?.blocked;
+    const connected = !!provider && !blocked(provider) && (!provider.remote || !!provider.models_discovered);
 
     const loadProviders = useCallback(async () => {
         setLoadError(null);
@@ -89,10 +90,11 @@ export function ModelSettings() {
             rememberNames(r.models);
             setModels(r.models);
             setMemory(r.memory_gb ? `${r.memory_gb} GB (${r.memory_source})` : r.capacity_error ?? null);
+            if (r.blocked) setModelsError(t('settings.privacy.localOnlyBlocked'));
         } catch (err) {
             setModelsError(err instanceof Error ? err.message : String(err));
         }
-    }, [rememberNames]);
+    }, [rememberNames, t]);
 
     useEffect(() => { void loadProviders(); }, [loadProviders]);
     // Ask again while the OS keychain dialog is open, so answering it is enough.
@@ -301,10 +303,10 @@ export function ModelSettings() {
                         type="button"
                         role="radio"
                         aria-checked={chosen === p.id}
-                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) ? ' is-disabled' : ''}`}
+                        className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) || blocked(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
-                        disabled={offline(p) && chosen !== p.id}
-                        title={offline(p) ? p.network?.detail ?? undefined : undefined}
+                        disabled={(offline(p) || blocked(p)) && chosen !== p.id}
+                        title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{p.name}</span>
@@ -336,6 +338,12 @@ export function ModelSettings() {
                         </div>
                     )}
 
+                    {blocked(provider) && (
+                        <div className="settings-field">
+                            <p className="settings-error" role="alert">{t('settings.privacy.localOnlyBlocked')}</p>
+                        </div>
+                    )}
+
                     {offline(provider) && (
                         <div className="settings-field">
                             <p className="settings-error" role="alert">{provider.network?.detail}</p>
@@ -345,7 +353,7 @@ export function ModelSettings() {
                         </div>
                     )}
 
-                    {provider.remote && !offline(provider) && (
+                    {provider.remote && !offline(provider) && !blocked(provider) && (
                         <form
                             className="settings-field"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
@@ -397,7 +405,7 @@ export function ModelSettings() {
                                             {t('settings.key.reconnect')}
                                         </button>
                                     )}
-                                    {provider.key_source !== 'environment' && (confirmForget ? (
+                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (confirmForget ? (
                                         <>
                                             <span className="settings-hint">{t('settings.key.removeAsk')}</span>
                                             <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>{t('settings.models.remove')}</button>
@@ -406,16 +414,18 @@ export function ModelSettings() {
                                     ) : (
                                         <>
                                             <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>{t('settings.key.replace')}</button>
-                                            <button
-                                                type="button"
-                                                className="btn-secondary settings-key-remove"
-                                                onClick={() => setConfirmForget(true)}
-                                                disabled={busy !== null}
-                                                aria-label={t('settings.key.remove')}
-                                                title={t('settings.key.remove')}
-                                            >
-                                                <Trash2 size={14} aria-hidden="true" />
-                                            </button>
+                                            {provider.key_source !== 'environment' && (
+                                                <button
+                                                    type="button"
+                                                    className="btn-secondary settings-key-remove"
+                                                    onClick={() => setConfirmForget(true)}
+                                                    disabled={busy !== null}
+                                                    aria-label={t('settings.key.remove')}
+                                                    title={t('settings.key.remove')}
+                                                >
+                                                    <Trash2 size={14} aria-hidden="true" />
+                                                </button>
+                                            )}
                                         </>
                                     ))}
                                 </div>
@@ -442,6 +452,9 @@ export function ModelSettings() {
                                         </button>
                                     )}
                                 </div>
+                            )}
+                            {provider.key_source && !connected && !provider.error && !replacingKey && (
+                                <p className="settings-hint">{t('settings.key.notConnectedHint', { name: provider.name })}</p>
                             )}
                             {provider.error && <p className="settings-error" role="alert">{provider.error}</p>}
                         </form>

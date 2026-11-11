@@ -467,7 +467,7 @@ def _cost(
 def upload_display_names(message: str) -> Dict[str, str]:
     """Upload copy file name -> the name the user attached it as (#5183).
 
-    The composer links each attachment as ``[original.pdf](<uploads>/<uuid>.pdf)``,
+    The composer links each attachment as ``[original.pdf](<uploads>/<copy>.pdf)``,
     so the link label is the only place the original name survives.
     """
     from gaia.ui.utils import uploads_dir
