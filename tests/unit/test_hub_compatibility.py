@@ -124,6 +124,43 @@ def test_binary_below_ten_percent_headroom_is_blocked(monkeypatch):
     assert any("~11.0 GB" in b for b in report.blockers)
 
 
+def test_zero_min_disk_does_not_disable_size_check(monkeypatch):
+    # Published manifests carry min_disk_gb: 0; a 54 MB binary on 10 MB free
+    # must still be blocked, with the sizes in MB.
+    _free_disk(monkeypatch, 10 / 1024)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 0},
+        download_size_bytes=54.4 * 1024**2,
+        artifact_kind="binary",
+    )
+    assert report.disk_ok is False
+    assert any(
+        "needs ~60 MB but only 10 MB is free" in b for b in report.blockers
+    ), report.blockers
+
+
+def test_declared_min_disk_below_estimate_uses_estimate(monkeypatch):
+    _free_disk(monkeypatch, 10.5)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 1},
+        download_size_bytes=10 * _GB,
+        artifact_kind="binary",
+    )
+    assert report.disk_ok is False
+    assert any("~11.0 GB" in b for b in report.blockers)
+
+
+def test_declared_min_disk_above_estimate_wins(monkeypatch):
+    _free_disk(monkeypatch, 5.0)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 8},
+        download_size_bytes=1 * _GB,
+        artifact_kind="binary",
+    )
+    assert report.disk_ok is False
+    assert any("~8.0 GB" in b for b in report.blockers)
+
+
 def test_unknown_artifact_kind_is_refused():
     with pytest.raises(ValueError, match="Unknown artifact kind 'appimage'"):
         check_compatibility({"platforms": []}, artifact_kind="appimage")
