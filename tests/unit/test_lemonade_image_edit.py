@@ -190,6 +190,24 @@ def test_edit_and_upscale_are_not_registered_without_the_opt_in(monkeypatch, tmp
         _TOOL_REGISTRY.update(saved)
 
 
+def test_edit_and_upscale_are_off_by_default(monkeypatch, tmp_path):
+    saved = dict(_TOOL_REGISTRY)
+    backend = SimpleNamespace(base_url=BASE)
+    monkeypatch.setattr("gaia.sd.mixin.LemonadeClient", _ClientFactory(backend))
+    try:
+        _TOOL_REGISTRY.pop("edit_image", None)
+        _TOOL_REGISTRY.pop("upscale_image", None)
+        host = SDToolsMixin()
+        host.init_sd(output_dir=str(tmp_path))
+        assert host.sd_enable_edit_tools is False
+        assert "edit_image" not in _TOOL_REGISTRY
+        assert "upscale_image" not in _TOOL_REGISTRY
+        assert "generate_image" in _TOOL_REGISTRY
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
 def test_registered_edit_and_upscale_save_in_scope_results(edit_tools, tmp_path):
     host, backend, output = edit_tools
     allowed = tmp_path / "allowed"

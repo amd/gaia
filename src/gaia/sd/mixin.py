@@ -93,6 +93,8 @@ class SDToolsMixin:
     - get_generation_history: Get recent generations from this session
     - create_image_variation: Vary an existing PNG (opt-in,
       ``init_sd(enable_variation_tools=True)``)
+    - edit_image / upscale_image: Edit a PNG or JPEG, or upscale a PNG
+      (opt-in, ``init_sd(enable_edit_tools=True)``)
 
     Attributes:
         sd_client: LemonadeClient instance for API calls
@@ -134,7 +136,7 @@ class SDToolsMixin:
         default_cfg: Optional[float] = None,
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
-        enable_edit_tools: bool = True,
+        enable_edit_tools: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -153,8 +155,8 @@ class SDToolsMixin:
             enable_3d_tools: Register the opt-in image-to-3D tool.
             enable_variation_tools: Register the opt-in
                 ``create_image_variation`` tool.
-            enable_edit_tools: Register edit and upscale tools. Standalone
-                SD profiles default to enabled; flagship callers opt in separately.
+            enable_edit_tools: Register the opt-in ``edit_image`` and
+                ``upscale_image`` tools.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
