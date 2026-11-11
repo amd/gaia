@@ -900,7 +900,7 @@ class CompletionEvidence:
     def gaps(
         self,
         answer: str,
-        claims_file_write: Callable[..., bool],
+        claims_file_write: Callable[[str], bool],
         soft: list[str] | None = None,
         readback: bool = True,
     ) -> list[str]:
@@ -934,12 +934,7 @@ class CompletionEvidence:
             if _EARLIER.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
-            # Asked to save, "nothing was written" still names the save owed.
-            if not (
-                claims_file_write(sentence, denials=True)
-                if self.instructed
-                else claims_file_write(sentence)
-            ):
+            if not claims_file_write(sentence):
                 continue
             paths = destination_paths(sentence)
             if not checkable and not _FIRST_PERSON.search(sentence):

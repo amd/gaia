@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import functools
 import hashlib
 import inspect
 import json
@@ -2047,6 +2048,16 @@ def _claims_file_write(answer: str, denials: bool = False) -> bool:
         if _is_write_claim(sentence, denials):
             return True
     return False
+
+
+def _write_claims_for(evidence: CompletionEvidence) -> Callable[[str], bool]:
+    """The save-claim test for this turn's completion check.
+
+    Asked to save, "nothing was written" still names the save that is owed.
+    """
+    if evidence.instructed:
+        return functools.partial(_claims_file_write, denials=True)
+    return _claims_file_write
 
 
 _PLACEHOLDER_TOKEN = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
@@ -10527,7 +10538,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(
-            answer or "", _claims_file_write, readback=not model_failed
+            answer or "",
+            _write_claims_for(self._completion_evidence),
+            readback=not model_failed,
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
@@ -13600,7 +13613,9 @@ Do NOT wrap conversational replies in JSON.
                     if (
                         restored is not None
                         and not self._completion_evidence.gaps(
-                            restored, _claims_file_write, soft=restored_soft
+                            restored,
+                            _write_claims_for(self._completion_evidence),
+                            soft=restored_soft,
                         )
                         and not restored_soft
                     ):
@@ -13611,7 +13626,9 @@ Do NOT wrap conversational replies in JSON.
                 self._check_extraction_sources()
                 soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate, _claims_file_write, soft=soft_gaps
+                    answer_candidate,
+                    _write_claims_for(self._completion_evidence),
+                    soft=soft_gaps,
                 )
                 extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)

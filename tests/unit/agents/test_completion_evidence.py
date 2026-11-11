@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent, _claims_file_write, _with_replaced_answer
+from gaia.agents.base.agent import (
+    Agent,
+    _claims_file_write,
+    _with_replaced_answer,
+    _write_claims_for,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     incomplete_answer,
@@ -1515,7 +1520,7 @@ _VENDOR_ANSWER = (
 def test_an_answer_that_saved_nothing_has_no_gap(tmp_path):
     ledger = CompletionEvidence(_VENDOR_QUERY, str(tmp_path))
     soft = []
-    assert ledger.gaps(_VENDOR_ANSWER, _claims_file_write, soft=soft) == []
+    assert ledger.gaps(_VENDOR_ANSWER, _write_claims_for(ledger), soft=soft) == []
     assert soft == []
 
 
@@ -1526,7 +1531,7 @@ def test_an_answer_that_saved_nothing_has_no_gap(tmp_path):
 def test_asked_to_save_saying_nothing_was_written_still_has_a_gap(tmp_path, answer):
     ledger = CompletionEvidence("Extract the routine and save it", str(tmp_path))
     assert "no recorded successful write" in " ".join(
-        ledger.gaps(answer, _claims_file_write)
+        ledger.gaps(answer, _write_claims_for(ledger))
     )
 
 
