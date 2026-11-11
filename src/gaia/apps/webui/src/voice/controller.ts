@@ -251,11 +251,31 @@ function onEvent(event: ServerEvent): void {
             set({ phase: resting() });
             return;
         case 'speech_started':
-            if (get().phase === 'speaking' && !get().pushToTalk) {
-                bargeIn();
-                set({ phase: 'listening' });
-            }
+            // A sound is not yet an interruption: the server ducks, then decides.
             set({ heard: '', heardPartial: true });
+            return;
+        case 'duck':
+            live.player.duck(event.on);
+            return;
+        case 'barge_in':
+            live.player.flush();
+            live.speechSent = false;
+            stopTicker();
+            if (get().caption) set({ caption: { ...get().caption!, lit: Infinity } });
+            if (get().phase === 'speaking') set({ phase: 'listening' });
+            return;
+        case 'holding':
+            // Trailed off ("and…"): keep listening, show what was heard so far.
+            set({ heard: event.text, heardPartial: true });
+            if (!get().turnRunning && get().phase === 'thinking') set({ phase: resting() });
+            return;
+        case 'ignored':
+            // Typing or a cough: nothing was said.
+            set({ heard: '', heardPartial: false });
+            if (!get().turnRunning && get().phase === 'thinking') set({ phase: resting() });
+            return;
+        case 'timing':
+            log.ui.info(`voice timing: heard ${event.heard_ms} ms, think ${event.think_ms} ms, voice ${event.voice_ms} ms, total ${event.total_ms} ms`);
             return;
         case 'partial':
             set({ heard: event.text, heardPartial: true });

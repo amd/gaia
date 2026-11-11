@@ -622,6 +622,7 @@ async def serve_voice_socket(websocket: WebSocket) -> None:
                 silence_ms=config.voice_silence_ms,
                 hands_free=config.voice_turn_taking == "hands_free",
                 speak=language == "en",
+                english=language == "en",
             )
             session = DaemonVoiceSession(
                 target,

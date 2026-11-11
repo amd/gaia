@@ -233,6 +233,7 @@ export class MicCapture {
 export class SpeechPlayer {
     private node: AudioWorkletNode | null = null;
     private analyser: AnalyserNode;
+    private gain: GainNode;
     private buf: Float32Array<ArrayBuffer>;
     private ready: Promise<void>;
     /** Samples pushed so far, at 24 kHz; the timeline caption highlights read against. */
@@ -246,6 +247,8 @@ export class SpeechPlayer {
         this.analyser = ctx.createAnalyser();
         this.analyser.fftSize = 1024;
         this.buf = new Float32Array(this.analyser.fftSize);
+        this.gain = ctx.createGain();
+        this.gain.connect(ctx.destination);
         this.ready = loadWorklets(ctx).then(() => {
             this.node = new AudioWorkletNode(ctx, 'gaia-speech', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
             this.node.port.onmessage = (e: MessageEvent<{ type: string; played: number }>) => {
@@ -256,8 +259,13 @@ export class SpeechPlayer {
                     this.onIdle();
                 }
             };
-            this.node.connect(this.analyser).connect(ctx.destination);
+            this.node.connect(this.analyser).connect(this.gain);
         });
+    }
+
+    /** Lower the voice while a sound might be the user starting to talk. */
+    duck(on: boolean): void {
+        this.gain.gain.setTargetAtTime(on ? 0.25 : 1, this.ctx.currentTime, 0.03);
     }
 
     /** Whether speech is queued or playing. */
@@ -282,6 +290,7 @@ export class SpeechPlayer {
     flush(): void {
         this.pushed = this.played;
         this.busy = false;
+        this.duck(false);
         this.node?.port.postMessage({ type: 'flush' });
     }
 
