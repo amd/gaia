@@ -266,7 +266,11 @@ async def voice_session(websocket: WebSocket) -> None:
 
     async def send_json(event: dict) -> None:
         async with send_lock:
-            await websocket.send_json(event)
+            try:
+                await websocket.send_json(event)
+            except WebSocketDisconnect as e:
+                # The browser left; the socket loop ends on its next receive.
+                raise ConnectionError("the voice client disconnected") from e
 
     class _Sink:
         """Speech PCM to the browser, which plays and flushes it locally."""

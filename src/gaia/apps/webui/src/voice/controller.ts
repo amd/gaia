@@ -43,6 +43,8 @@ interface Live {
     speechSent: boolean;
     /** Utterances heard while a turn was still running, sent when it ends. */
     pending: string[];
+    /** The running turn is being stopped because the user said something new. */
+    replacing: boolean;
     /** Where each spoken piece starts on the playback timeline. */
     pieces: Array<{ kind: SpeakKind; words: number; start: number }>;
     spokenSoFar: string;
@@ -137,6 +139,17 @@ function bargeIn(): void {
     if (caption) set({ caption: { ...caption, lit: Infinity } });
 }
 
+const BACKCHANNELS = new Set(['yeah', 'yep', 'yes', 'ok', 'okay', 'right', 'sure', 'mhm', 'mm', 'hmm', 'uh', 'huh', 'i', 'see', 'got', 'it', 'cool', 'nice', 'great', 'wow', 'oh', 'ah']);
+const FLOOR_WORDS = new Set(['stop', 'wait', 'no', 'hold', 'cancel', 'pause', 'quiet', 'enough']);
+
+/** Whether `text` is only a listener's acknowledgment (mirrors gaia.voice.turns). */
+export function isBackchannel(text: string): boolean {
+    const tokens = text.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+    if (tokens.length === 0 || tokens.length > 3) return false;
+    if (tokens.some((t) => FLOOR_WORDS.has(t))) return false;
+    return tokens.every((t) => BACKCHANNELS.has(t));
+}
+
 function startTurn(text: string): void {
     if (!live) return;
     live.spokenSoFar = '';
@@ -211,7 +224,8 @@ function endTurn(outcome: TurnOutcome): void {
         note('voice.turnFailed');
         bargeIn();
     } else if (outcome.stopped) {
-        note('voice.stopped');
+        // Stopped by the user's own new words: that turn follows, so no notice.
+        if (!live.replacing) note('voice.stopped');
         bargeIn();
     } else if (!live.spokeThisTurn) {
         if (outcome.missing) log.ui.warn('voice_reply.missing_spoken: the answer had no <spoken> block');
@@ -224,6 +238,7 @@ function endTurn(outcome: TurnOutcome): void {
             set({ caption: { kind: 'spoken', text: line, lit: Infinity } });
         }
     }
+    live.replacing = false;
     if (get().phase !== 'speaking') set({ phase: resting() });
     const next = live.pending.splice(0).join(' ').trim();
     if (next) startTurn(next);
@@ -255,9 +270,21 @@ function onEvent(event: ServerEvent): void {
                 if (!get().turnRunning && get().phase === 'thinking') set({ phase: resting() });
                 return;
             }
+            if (get().turnRunning) {
+                // "mm-hm" while GAIA works is not a new request.
+                if (isBackchannel(text)) return;
+                addRow({ kind: 'user', text });
+                // New words while GAIA is still working replace what she was doing.
+                live.pending.push(text);
+                if (!live.replacing) {
+                    live.replacing = true;
+                    bargeIn();
+                    live.host.stopTurn();
+                }
+                return;
+            }
             addRow({ kind: 'user', text });
-            if (get().turnRunning) live.pending.push(text);
-            else startTurn(text);
+            startTurn(text);
             return;
         }
         case 'speaking':
@@ -384,7 +411,7 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
     const player = new SpeechPlayer(ctx);
     const mic = new MicCapture(ctx, (frame) => live?.socket?.sendAudio(frame));
     live = {
-        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [],
+        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false,
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
     player.onIdle = finishSpeakingIfDone;
