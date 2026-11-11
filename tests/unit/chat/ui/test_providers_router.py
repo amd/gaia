@@ -790,6 +790,14 @@ def test_restore_stops_waiting_for_a_key_that_never_lists_models(
     assert "Fireworks AI has no working key" in late["message"]
 
 
+def test_connecting_a_new_key_restarts_the_settle_window(
+    client, lemonade, keys, db, monkeypatch
+):
+    providers._key_settle_started["fireworks"] = 0.0
+    client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert "fireworks" not in providers._key_settle_started
+
+
 def test_a_failed_local_restore_is_not_checked_again(client, lemonade, keys, db):
     _write_config({"last_model": "Llama-3-8B-GGUF"})
     lemonade.models = _CATALOG

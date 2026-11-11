@@ -735,7 +735,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
             if not ensure_authenticated(provider, recall=lambda: _usable_key(provider)):
                 if _key_still_settling(provider):
                     raise _ServerNotReady(
-                        f"{_NAMES[provider]} is still listing its models"
+                        f"{_NAMES[provider]} hasn't listed its models yet; "
+                        "try again in a few seconds"
                     )
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
@@ -993,6 +994,8 @@ def connect_provider(
     provider: str, body: ConnectRequest, request: Request
 ) -> Dict[str, Any]:
     """Register the provider and hand Lemonade the key; keep a key that works."""
+    # A new key gets its own settle window.
+    _key_settle_started.pop(provider, None)
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated, remember_key
 
     _known(provider)
