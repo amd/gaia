@@ -321,3 +321,4 @@ def test_a_refusal_is_the_last_word_about_the_file(tmp_path):
 
 def test_the_agent_is_told_not_to_show_the_send_line():
     assert "never mention it or copy one from a file" in da.DISCORD_REPLY_NOTE
+    assert "paths of your own working files" in da.DISCORD_REPLY_NOTE
