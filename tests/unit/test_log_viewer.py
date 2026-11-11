@@ -77,6 +77,18 @@ class TestRedact:
         out = reader.redact(f"loaded with {SECRET} inline", [SECRET])
         assert SECRET not in out and reader.REDACTED in out
 
+    def test_a_placeholder_word_used_as_a_key_is_not_scrubbed_from_every_line(
+        self, monkeypatch
+    ):
+        # "lemonade" is the stock placeholder key; it is also in every path and module name.
+        monkeypatch.setenv("SOME_LOCAL_API_KEY", "lemonade")
+        monkeypatch.setenv("REAL_API_KEY", "fw_Abc123def456")
+        secrets = reader.env_secrets()
+        assert "lemonade" not in secrets and "fw_Abc123def456" in secrets
+        line = "gaia.daemon.lemonade_clients | C:/Users/a/.gaia/lemonade/lemond.log"
+        assert reader.redact(line, ["lemonade"]) == line
+        assert reader.redact_lines(line.encode(), ["lemonade"]) == line.encode()
+
     def test_ordinary_lines_and_schemas_stay_readable(self):
         line = "2026-11-04 10:06:05.218 [Info] (Server) Starting HTTP server on localhost:56150"
         assert reader.redact(line) == line
