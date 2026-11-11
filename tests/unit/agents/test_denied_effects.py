@@ -1013,6 +1013,70 @@ def test_a_shim_named_like_a_script_is_still_its_program(tmp_path):
     assert Effect(COMMAND, TEST_SUITE) in effects
 
 
+def test_a_shim_run_by_its_path_keeps_its_command(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "npm.cmd").write_text(
+        '@ECHO off\nSETLOCAL\nIF EXIST "%dp0%\\node.exe" (\n  SET "_prog=node"\n)\n'
+        "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC%\n"
+    )
+    shim = tools / "npm.cmd"
+    commands = {
+        e.target
+        for e in effects_of_shell_command(f"{shim} test", str(tmp_path))
+        if e.kind == COMMAND
+    }
+    # The suite it runs, and none of the batch file's own set/if/goto.
+    assert commands == {TEST_SUITE}
+
+
+def test_a_shell_switch_is_not_powershells_value_switch(tmp_path):
+    victim = tmp_path / "keep.txt"
+    victim.write_text("x")
+    script = tmp_path / "run.sh"
+    script.write_text(f"rm -f {victim}\n")
+    for command in ("bash -ex run.sh", "sh -ex run.sh arg", "bash -f -x run.sh"):
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(SCRIPT, _canonical_in(tmp_path, "run.sh")) in effects, command
+        assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
+def test_start_process_reads_every_way_of_passing_the_script(tmp_path):
+    spaced = tmp_path / "my scripts"
+    spaced.mkdir()
+    hosts, _ = _hosts_script(tmp_path)
+    script = spaced / "add hosts.ps1"
+    script.write_text(f"Add-Content -Path '{hosts}' -Value x\n")
+    changed = _canonical_in(tmp_path, str(hosts))
+    for command in [
+        f'Start-Process powershell -ArgumentList "-File", "{script}" -Verb RunAs',
+        f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -File `"{script}`""',
+        f"Start-Process powershell -Verb RunAs -WorkingDirectory '{spaced}' "
+        "-ArgumentList '-File \"add hosts.ps1\"'",
+        f"gsudo powershell -File '{script}'",
+        f"start \"\" powershell -File '{script}'",
+        f"start /wait powershell -File '{script}'",
+    ]:
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(PATH, changed) in effects, command
+
+
+def test_start_process_writes_where_it_redirects_output(tmp_path):
+    effects = effects_of_shell_command(
+        "Start-Process notepad -RedirectStandardOutput out.log", str(tmp_path)
+    )
+    assert Effect(PATH, _canonical_in(tmp_path, "out.log")) in effects
+
+
+@pytest.mark.parametrize(
+    "command", ["Start-Process", "Start-Process powershell -ArgumentList ,"]
+)
+def test_a_start_process_that_cannot_be_read_is_still_one(command, tmp_path):
+    assert effects_of_shell_command(command, str(tmp_path)) == {
+        Effect(COMMAND, "start-process")
+    }
+
+
 def test_a_content_value_is_not_a_path_the_command_changes(tmp_path):
     effects = effects_of_shell_command(
         "Add-Content -Path notes.txt -Value 'todo later' -Encoding utf8",

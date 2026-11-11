@@ -642,6 +642,8 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
     if depth > 3 or not isinstance(command, str):
         return set()
     effects: Set[Effect] = set()
+    # PowerShell's `" nests a quote in a quoted string; read it as the other quote.
+    command = command.replace('`"', "'")
     for segment in _split_segments(command):
         tokens = _tokens(segment)
         # ``cd repo && python run_tests.py`` runs repo/run_tests.py.
@@ -701,6 +703,7 @@ def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     """What ``Start-Process <program> -ArgumentList '...'`` would run."""
     program: Optional[str] = None
     arguments: List[str] = []
+    written: List[str] = []
     i = 0
     while i < len(rest):
         arg, value = rest[i].lower(), rest[i + 1] if i + 1 < len(rest) else None
@@ -710,8 +713,14 @@ def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
             program, i = value, i + 2
         elif switch and _abbreviates(arg, "-argumentlist", "-args") and value:
             end = _array_end(rest, i + 1)
-            arguments = _argument_list(" ".join(rest[i + 1 : end]))
+            arguments = _argument_list(rest[i + 1 : end])
             i = end
+        elif switch and _abbreviates(arg, "-workingdirectory") and value is not None:
+            cwd, i = _norm_path(value, cwd) or cwd, i + 2
+        elif switch and arg.startswith("-redirectstandard") and value is not None:
+            if not arg.endswith("input"):
+                written.append(value)
+            i += 2
         elif switch and arg in _START_PROCESS_VALUE_FLAGS:
             i += 2
         elif switch:
@@ -720,11 +729,14 @@ def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
             program, i = rest[i], i + 1
         else:
             end = _array_end(rest, i)
-            arguments = arguments or _argument_list(" ".join(rest[i:end]))
+            arguments = arguments or _argument_list(rest[i:end])
             i = end
+    redirected = {
+        Effect(PATH, path) for path in (_norm_path(w, cwd) for w in written) if path
+    }
     if program is None:
-        return set()
-    return _effects_of_argv([program, *arguments], cwd, depth + 1)
+        return redirected
+    return redirected | _effects_of_argv([program, *arguments], cwd, depth + 1)
 
 
 def _abbreviates(arg: str, *names: str) -> bool:
@@ -746,15 +758,34 @@ def _array_end(words: Sequence[str], start: int) -> int:
     return end
 
 
-def _argument_list(value: str) -> List[str]:
-    """``'-File',"x.ps1"``, ``@('-File','x.ps1')`` or ``'-File x.ps1'``: the
-    words Start-Process passes on."""
-    value = value.strip()
-    if value.startswith("@(") and value.endswith(")"):
-        value = value[2:-1]
-    spaced = re.sub(r"(['\"])\s*,\s*(['\"])", r"\1 \2", value)
-    words = (w.strip(",").strip("'\"") for w in _tokens(spaced))
-    return [w for w in words if w]
+def _argument_list(words: Sequence[str]) -> List[str]:
+    """The arguments Start-Process passes on. One string (``'-File x.ps1'``) is
+    split into words; an array's elements are each one argument, spaces and all."""
+    if len(words) == 1 and not words[0].startswith("@("):
+        return [w.strip("'\",") for w in _tokens(words[0]) if w.strip("'\",")]
+    elements = []
+    for word in words:
+        for piece in re.split(r"""(?<=['"]),|,(?=['"])""", word):
+            piece = piece.strip().removeprefix("@(").removesuffix(")")
+            piece = piece.strip(", ").strip("'\"")
+            if piece:
+                elements.append(piece)
+    return elements
+
+
+def _past_launcher(tokens: List[str]) -> List[str]:
+    """*tokens* without cmd's ``start ["title"] /switches`` or ``gsudo -flags``."""
+    head = _program(tokens[0]) if tokens else ""
+    if head == "start":
+        words = [w for w in tokens[1:] if not _SLASH_SWITCH_RE.match(w)]
+        # The title is the quoted first word: empty, or more than one word.
+        if words and (not words[0].strip("'\"") or " " in words[0]):
+            words = words[1:]
+        return words or tokens
+    if head == "gsudo":
+        words = [w for w in tokens[1:] if not w.startswith("-")]
+        return words or tokens
+    return tokens
 
 
 def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
@@ -762,17 +793,17 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     tokens = list(argv)
     while tokens and _ASSIGNMENT_RE.match(tokens[0]):
         tokens.pop(0)
-    tokens = unwrap_command_argv(tokens, ledger=True)
+    tokens = unwrap_command_argv(_past_launcher(tokens), ledger=True)
     if not tokens:
         return set()
     first = tokens[0].strip("'\"")
-    # ``.\fix.bat`` or a script here; ``npm.cmd test`` stays npm's own command.
+    program, rest = _program(tokens[0]), tokens[1:]
+    hosts: Set[Effect] = set()
+    # ``.\fix.bat`` or a script here: what it does, besides the command it is.
     if _SCRIPT_FILE_RE.search(first) and (
         re.search(r"[\\/]", first) or os.path.isfile(os.path.join(cwd, first))
     ):
-        return effects_of_script(first, cwd, depth + 1)
-    program, rest = _program(tokens[0]), tokens[1:]
-    hosts: Set[Effect] = set()
+        hosts = effects_of_script(first, cwd, depth + 1)
     subcommand = next((w.lower() for w in rest if not w.startswith("-")), "")
     if program in _NETWORK_PROGRAMS and (
         program != "git" or subcommand in _GIT_NETWORK_SUBCOMMANDS
@@ -792,10 +823,14 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
                     return effects_of_script(arg.split(":", 1)[1], cwd, depth + 1)
                 if flag in _SHELL_FILE_FLAGS and idx + 1 < len(rest):
                     return effects_of_script(rest[idx + 1], cwd, depth + 1)
-        scripts = _positionals(rest, _SHELL_VALUE_FLAGS)
+        if program in _POWERSHELLS:
+            scripts = _positionals(rest, _SHELL_VALUE_FLAGS)
+        else:
+            scripts = [a for a in rest if not a.startswith("-")]
         return effects_of_script(scripts[0], cwd, depth + 1) if scripts else set()
     if program in _START_PROCESS:
-        return hosts | _started_process(rest, cwd, depth)
+        started = _started_process(rest, cwd, depth)
+        return hosts | (started or {Effect(COMMAND, "start-process")})
     effects: Set[Effect] = set(hosts)
     family = _canonical_family(program, rest)
     if family:
@@ -1357,7 +1392,11 @@ def effects_of_script(script: str, cwd: str, depth: int = 0) -> Set[Effect]:
     here = os.path.dirname(path)
     if path.endswith((".py", ".pyw")):
         return effects | effects_of_python_code(source, here, depth)
-    return effects | effects_of_shell_command(source, here, depth)
+    inner = effects_of_shell_command(source, here, depth)
+    if path.endswith((".bat", ".cmd")):
+        # Batch syntax (set, if, goto) parses as commands; keep what it changes.
+        inner = {e for e in inner if e.kind != COMMAND or e.target == TEST_SUITE}
+    return effects | inner
 
 
 # ---------------------------------------------------------------------------- calls
