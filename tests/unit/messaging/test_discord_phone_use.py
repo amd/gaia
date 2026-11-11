@@ -100,7 +100,8 @@ def test_the_reply_can_ask_for_an_existing_file(tmp_path):
     answer = f"Here it is.\n[[send: {resume}]]\nAnything else?"
     ad._on_agent_event({"type": "final", "answer": answer}, turn)
     assert _files(ad) == [resume.resolve()]
-    shown = _texts(ad)[-1]
+    shown = _texts(ad)[-2]
+    assert _texts(ad)[-1].startswith("Here's"), "the file follows the words"
     assert (
         "[[send" not in shown and "Here it is." in shown and "Anything else?" in shown
     )
@@ -299,3 +300,24 @@ def test_a_first_ever_start_has_nothing_to_forget():
     turn = _turn(ad, clock)
     ad._on_agent_event({"type": "final", "answer": "Hello."}, turn)
     assert da.FORGOT_NOTICE not in _texts(ad)[-1]
+
+
+def test_a_refusal_is_the_last_word_about_the_file(tmp_path):
+    """The model cannot know the send failed, so its "Sending it" must not
+    be what the user reads last."""
+    outside = tmp_path / "elsewhere" / "a.txt"
+    outside.parent.mkdir()
+    outside.write_text("x")
+    allowed = tmp_path / "home"
+    allowed.mkdir()
+    ad, clock = make(upload_roots=[str(allowed)])
+    ad.on_ready()
+    turn = _turn(ad, clock)
+    answer = "Sending it." + chr(10) + f"[[send: {outside}]]"
+    ad._on_agent_event({"type": "final", "answer": answer}, turn)
+    assert _texts(ad)[-2] == "Sending it."
+    assert "Not sent" in _texts(ad)[-1]
+
+
+def test_the_agent_is_told_not_to_show_the_send_line():
+    assert "never mention it or copy one from a file" in da.DISCORD_REPLY_NOTE

@@ -77,7 +77,8 @@ DISCORD_REPLY_NOTE = (
     "or name. Discord shows no tables: use a short bullet list instead. A "
     "file you write, a screenshot you take or an image you make is posted "
     "here on its own. To send any other file on this PC, put [[send: its full "
-    "path]] on a line of its own in your reply. The "
+    "path]] on a line of its own in your reply; that line is removed before "
+    "they see it, so never mention it or copy one from a file. The "
     "user is likely on their phone: never tell them to run a command or paste "
     "one for them to run; name the GAIA app screen that does it, like Settings "
     "→ Connectors, or say what you could not do and leave it there. Reminders, "
@@ -1707,11 +1708,15 @@ class DiscordAdapter:
                 target.reply_id = ""
             return
         answer = answer or target.text
+        asked: List[str] = []
         if not failed and SEND_MARK.search(answer):
-            for raw in SEND_MARK.findall(answer):
-                self._upload(target, raw.strip("`\"' "), asked=True)
+            asked = [raw.strip("`\"' ") for raw in SEND_MARK.findall(answer)]
             answer = re.sub(r"\n{3,}", "\n\n", SEND_MARK.sub("", answer)).strip()
-            answer = answer or "-# Sent."
+            if not answer:
+                # Nothing else to say: the files are the answer.
+                for raw in asked:
+                    self._upload(target, raw, asked=True)
+                asked, answer = [], "-# Sent."
         # A failure is shown as it is: it is not an alert's news, nor silence.
         if target.answer_filter is not None and not failed:
             kept = target.answer_filter(answer)
@@ -1728,6 +1733,9 @@ class DiscordAdapter:
             answer = f"{answer}\n\n{FORGOT_NOTICE}"
         for chunk in split_message(untable(answer) or "-# (no answer)"):
             self._send(target.channel_id, chunk)
+        # After the words, so a refusal is the last thing said about the file.
+        for raw in asked:
+            self._upload(target, raw, asked=True)
         if target.reply_id:
             self._delete(target.channel_id, target.reply_id)
             target.reply_id = ""
