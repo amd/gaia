@@ -118,6 +118,25 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('button', { name: 'Start chatting' })).toBeNull();
     });
 
+    it('setup run again for a cloud user continues on that provider, not a local download', async () => {
+        useModelStore.setState({
+            active: { provider: 'amd', model: 'amd.some-model', label: 'some-model · AMD LLM Gateway', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
+        expect(amd).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByRole('button', { name: /Download and start/ })).toBeNull();
+    });
+
+    it('setup run again for a local user still recommends the local download', async () => {
+        useModelStore.setState({
+            active: { provider: 'local', model: QWEN.id, label: QWEN.id, remote: false, is_default: true },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        expect(await pastChecks()).toBeInTheDocument();
+    });
+
     it('a failed setup-again run (download step) still offers a way back', async () => {
         // Run again, start, run fails before any model: no Not now anywhere.
         mockedApi.startSetup.mockResolvedValue({ ...runStatus([], { state: 'failed', error: 'boom' }) });
