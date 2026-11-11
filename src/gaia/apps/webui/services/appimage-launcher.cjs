@@ -61,12 +61,15 @@ function execProgram(value) {
   return out.replace(/%%/g, "%");
 }
 
+/** Errors that mean a path can't be followed or read, not that GAIA can't write. */
+const UNREADABLE = new Set(["EACCES", "EPERM", "ELOOP"]);
+
 function samePath(a, b) {
   if (path.resolve(a) === path.resolve(b)) return true;
   try {
     return fs.realpathSync(a) === fs.realpathSync(b);
   } catch (err) {
-    if (err.code === "ENOENT" || err.code === "ENOTDIR") return false;
+    if (err.code === "ENOENT" || err.code === "ENOTDIR" || UNREADABLE.has(err.code)) return false;
     throw err;
   }
 }
@@ -80,8 +83,15 @@ function otherLauncherFor(dir, appImage) {
   for (const name of fs.readdirSync(dir).sort()) {
     if (!name.endsWith(".desktop") || name === DESKTOP_FILE) continue;
     const file = path.join(dir, name);
-    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
-    const lines = fs.readFileSync(file, "utf8").split("\n");
+    let lines;
+    try {
+      if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+      lines = fs.readFileSync(file, "utf8").split("\n");
+    } catch (err) {
+      // Another app's entry GAIA can't read can't be a launcher for this AppImage.
+      if (UNREADABLE.has(err.code)) continue;
+      throw err;
+    }
     if (lines.includes(OWNED)) continue;
     const targets = [];
     for (const line of lines) {

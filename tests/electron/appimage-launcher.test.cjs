@@ -162,6 +162,28 @@ test("entries for other apps, or another GAIA build, don't stop the launcher", (
   expect(installAppImageLauncher(deps).status).toBe("written");
 });
 
+test("another app's entry GAIA can't read or follow doesn't stop the launcher", () => {
+  const locked = writeOther("locked.desktop", "[Desktop Entry]\nExec=locked\n");
+  writeOther("looped.desktop", "[Desktop Entry]\nExec=/loop/bin/app\n");
+  const denied = (code) => Object.assign(new Error(code), { code });
+  const read = fs.readFileSync;
+  const realpath = fs.realpathSync;
+  const readSpy = jest.spyOn(fs, "readFileSync").mockImplementation((file, ...rest) => {
+    if (file === locked) throw denied("EACCES");
+    return read(file, ...rest);
+  });
+  const realpathSpy = jest.spyOn(fs, "realpathSync").mockImplementation((p, ...rest) => {
+    if (String(p).startsWith("/loop/")) throw denied("ELOOP");
+    return realpath(p, ...rest);
+  });
+  try {
+    expect(installAppImageLauncher(deps).status).toBe("written");
+  } finally {
+    readSpy.mockRestore();
+    realpathSpy.mockRestore();
+  }
+});
+
 test("with the .deb's launcher installed, the AppImage writes none over it", () => {
   const system = path.join(home, "sys", "applications");
   fs.mkdirSync(system, { recursive: true });
