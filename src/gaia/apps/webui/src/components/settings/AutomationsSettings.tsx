@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useT, dateLocale, type Translate } from '../../i18n/useT';
 import { isMessageKey, type MessageKey } from '../../i18n/registry';
@@ -117,26 +117,29 @@ export function AutomationsSettings() {
     const [list, setList] = useState<AutomationList | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
-    const [busy, setBusy] = useState<string | null>(null);
+    const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
     const [confirm, setConfirm] = useState<Automation | null>(null);
+    const latest = useRef(0);
 
     const load = useCallback(() => {
+        // Only the newest request may show: an older reply can arrive last.
+        const request = ++latest.current;
         listAutomations()
-            .then((l) => { setLoadError(null); setList(l); })
-            .catch((err) => setLoadError(errorText(err)));
+            .then((l) => { if (request === latest.current) { setLoadError(null); setList(l); } })
+            .catch((err) => { if (request === latest.current) setLoadError(errorText(err)); });
     }, []);
 
     useEffect(load, [load]);
 
     const act = async (id: string, call: () => Promise<unknown>) => {
-        setBusy(id);
+        setBusy((ids) => new Set(ids).add(id));
         setActionError(null);
         try {
             await call();
         } catch (err) {
             setActionError(errorText(err));
         } finally {
-            setBusy(null);
+            setBusy((ids) => { const next = new Set(ids); next.delete(id); return next; });
             load();
         }
     };
@@ -159,7 +162,10 @@ export function AutomationsSettings() {
             {!list && !loadError && (
                 <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>
             )}
-            {list && !list.delivers && list.automations.length > 0 && (
+            {list && list.delivers === null && list.automations.length > 0 && (
+                <p className="settings-hint automation-unchecked">{t('settings.automations.deliveryUnknown')}</p>
+            )}
+            {list && list.delivers === false && list.automations.length > 0 && (
                 <div className="settings-warning">
                     <p>{t('settings.automations.noDelivery')}</p>
                     <button type="button" className="btn-secondary automation-messaging" onClick={() => openSettings('messaging')}>
@@ -177,7 +183,7 @@ export function AutomationsSettings() {
                         <AutomationCard
                             key={item.id}
                             item={item}
-                            busy={busy === item.id}
+                            busy={busy.has(item.id)}
                             onToggle={() => void act(item.id, () => setAutomationPaused(item.id, !item.paused))}
                             onRemove={() => setConfirm(item)}
                         />

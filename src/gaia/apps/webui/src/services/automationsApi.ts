@@ -31,8 +31,8 @@ export interface Automation {
 
 export interface AutomationList {
     automations: Automation[];
-    /** False when no paired Discord DM would receive what they send. */
-    delivers: boolean;
+    /** False when no paired Discord DM would receive what they send; null when that couldn't be checked. */
+    delivers: boolean | null;
 }
 
 export function listAutomations(): Promise<AutomationList> {

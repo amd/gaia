@@ -25,7 +25,7 @@ const CI: Automation = {
 };
 
 type Reply = { status?: number; body: unknown };
-let routes: Record<string, () => Reply>;
+let routes: Record<string, () => Reply | Promise<Reply>>;
 let calls: Array<{ key: string; headers: Record<string, string> }>;
 
 beforeEach(() => {
@@ -36,7 +36,7 @@ beforeEach(() => {
         calls.push({ key, headers: (init?.headers ?? {}) as Record<string, string> });
         const handler = routes[key];
         if (!handler) throw new Error(`no route for ${key}`);
-        const reply = handler();
+        const reply = await handler();
         return new Response(JSON.stringify(reply.body), {
             status: reply.status ?? 200,
             headers: { 'content-type': 'application/json' },
@@ -139,6 +139,52 @@ describe('AutomationsSettings', () => {
         routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: true } }) };
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(await screen.findByText('Inbox digest')).toBeTruthy();
+    });
+});
+
+describe('AutomationsSettings under overlapping requests', () => {
+    it('keeps a row disabled until its own change finishes', async () => {
+        let finishDigest: (r: Reply) => void = () => {};
+        routes = {
+            'GET /automations': () => ({ body: { automations: [DIGEST, CI], delivers: true } }),
+            'POST /automations/a1b2c3d4/pause': () => new Promise<Reply>((resolve) => { finishDigest = resolve; }),
+            'POST /automations/c1c1c1c1/pause': () => ({ body: { ...CI, paused: true } }),
+        };
+        render(<AutomationsSettings />);
+        const digest = (await screen.findByText('Inbox digest')).closest('li')!;
+        const ci = screen.getByText('Main CI').closest('li')!;
+        fireEvent.click(within(digest).getByRole('button', { name: 'Pause' }));
+        fireEvent.click(within(ci).getByRole('button', { name: 'Pause' }));
+        await waitFor(() => expect(calls.filter((c) => c.key === 'GET /automations').length).toBe(2));
+        // The second row's change is done; the first is still in flight.
+        const still = screen.getByText('Inbox digest').closest('li')!;
+        expect((within(still).getByRole('button', { name: 'Pause' }) as HTMLButtonElement).disabled).toBe(true);
+        finishDigest({ body: { ...DIGEST, paused: true } });
+        await waitFor(() => expect(calls.filter((c) => c.key === 'GET /automations').length).toBe(3));
+    });
+
+    it('ignores a list reply that a newer request has overtaken', async () => {
+        const replies: Array<(r: Reply) => void> = [];
+        routes = { 'GET /automations': () => new Promise<Reply>((resolve) => { replies.push(resolve); }) };
+        render(<AutomationsSettings />);
+        await waitFor(() => expect(replies.length).toBe(1));
+        replies[0]({ status: 500, body: { detail: 'first try failed' } });
+        fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(replies.length).toBe(3));
+        replies[2]({ body: { automations: [DIGEST], delivers: true } });
+        expect(await screen.findByText('Inbox digest')).toBeTruthy();
+        replies[1]({ body: { automations: [], delivers: true } });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(screen.getByText('Inbox digest')).toBeTruthy();
+        expect(screen.queryByText(/No automations yet/)).toBeNull();
+    });
+
+    it('says it could not check Discord instead of claiming nothing delivers', async () => {
+        routes = { 'GET /automations': () => ({ body: { automations: [DIGEST], delivers: null } }) };
+        render(<AutomationsSettings />);
+        expect(await screen.findByText(/couldn’t check whether Discord is connected/)).toBeTruthy();
+        expect(screen.queryByText(/Nothing delivers these yet/)).toBeNull();
     });
 });
 

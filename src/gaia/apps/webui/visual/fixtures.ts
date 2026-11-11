@@ -509,7 +509,7 @@ export const AUTOMATIONS = [
     { ...AUTOMATION, id: 'b4b4b4b4', name: 'Mount Rainier weekend weather window for a two-day climb', kind: 'alert', paused: true, every_seconds: 21600, next_at: AT + 3600, prompt: 'Tell me when a two-day window opens with low wind and no storms.' },
 ];
 
-export async function withAutomations(page: Page, automations: unknown[], delivers = true): Promise<void> {
+export async function withAutomations(page: Page, automations: unknown[], delivers: boolean | null = true): Promise<void> {
     await page.route('**/api/automations', (route) => route.fulfill({ json: { automations, delivers } }));
 }
 

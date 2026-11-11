@@ -107,7 +107,7 @@ func TestSetPassesTheActionAndRef(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := read(t, args); got != "automation pause a1b2c3d4" {
+	if got := read(t, args); got != "automation pause -- a1b2c3d4" {
 		t.Errorf("argv = %q", got)
 	}
 	if said != "Paused: 'Inbox digest'." {
@@ -127,5 +127,13 @@ func TestSetRefusesAnUnknownAction(t *testing.T) {
 	stubGaia(t, "", 0)
 	if _, err := Set(context.Background(), "run", "x"); err == nil {
 		t.Fatal("run is not one of these commands' actions")
+	}
+}
+
+func TestListSkipsAStrayBracketBeforeTheJSON(t *testing.T) {
+	stubGaia(t, "[warn] slow start\n[\n  {\"id\": \"a1\", \"name\": \"X\", \"kind\": \"summary\", \"status\": \"active\"}\n]\n", 0)
+	items, err := List(context.Background())
+	if err != nil || len(items) != 1 || items[0].ID != "a1" {
+		t.Fatalf("items=%+v err=%v", items, err)
 	}
 }

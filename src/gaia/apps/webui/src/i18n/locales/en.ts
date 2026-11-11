@@ -1232,6 +1232,7 @@ export const enMessages = {
     'settings.automations.empty': 'No automations yet. Ask GAIA in chat, like “remind me at 5pm to call Sam” or “tell me when CI on main breaks”.',
     'settings.automations.noDelivery': 'Nothing delivers these yet: automations reach you through Discord. Connect it under Messaging.',
     'settings.automations.openMessaging': 'Open Messaging',
+    'settings.automations.deliveryUnknown': 'GAIA couldn’t check whether Discord is connected, so it can’t say whether these will reach you. Open Messaging to see its status.',
     'settings.automations.kind.reminder': 'Reminder',
     'settings.automations.kind.summary': 'Summary',
     'settings.automations.kind.alert': 'Alert',

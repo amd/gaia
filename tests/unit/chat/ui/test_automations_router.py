@@ -126,3 +126,25 @@ def test_a_write_without_the_ui_header_is_refused():
     client = make_client(headers={"X-Gaia-UI": ""})
     assert client.delete(f"/api/automations/{item.id}").status_code == 403
     assert len(store.load()) == 1
+
+
+def test_delivers_is_unknown_when_discord_state_is_unreadable(monkeypatch):
+    from gaia.automations import files
+    from gaia.messaging.discord import state
+
+    def broken():
+        raise files.CorruptStateFile("config.json is not usable")
+
+    monkeypatch.setattr(state, "load_config", broken)
+    assert make_client().get("/api/automations").json()["delivers"] is None
+
+
+def test_an_id_wins_over_an_earlier_automation_named_like_it():
+    target = _add("Inbox digest")
+    store.save(
+        [store.Automation("zzzz0000", target.id, store.KIND_SUMMARY)] + store.load()
+    )
+    make_client().post(f"/api/automations/{target.id}/pause")
+    by_id = {a.id: a for a in store.load()}
+    assert by_id[target.id].paused is True
+    assert by_id["zzzz0000"].paused is False

@@ -103,7 +103,7 @@ func TestANumberChangesTheOneThatWasListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Fields(strings.ReplaceAll(string(data), "\r", ""))
-	if strings.Join(lines, " ") != "automation pause e5f6a7b8 automation list" {
+	if strings.Join(lines, " ") != "automation pause -- e5f6a7b8 automation list" {
 		t.Errorf("argv = %q, want the pause of the 2nd listed id, then a fresh list", lines)
 	}
 }
@@ -113,7 +113,7 @@ func TestANameIsPassedThroughAsIs(t *testing.T) {
 	_, cmd := slackModel(t).handleAutomationsCommand("/automations remove Inbox digest")
 	cmd()
 	data, _ := os.ReadFile(args)
-	if !strings.HasPrefix(strings.ReplaceAll(string(data), `"`, ""), "automation remove Inbox digest") {
+	if !strings.HasPrefix(strings.ReplaceAll(string(data), `"`, ""), "automation remove -- Inbox digest") {
 		t.Errorf("argv = %q", data)
 	}
 }
@@ -180,5 +180,31 @@ func TestSubmitRoutesAutomationsInsteadOfAskingTheAgent(t *testing.T) {
 	}
 	if isAutomationsCommand("/automationsx") {
 		t.Error("/automationsx must not be routed")
+	}
+}
+
+func TestAListedNameWinsOverItsNumber(t *testing.T) {
+	args := stubAutomationCLI(t, "[]\n")
+	m := slackModel(t)
+	next, _ := m.handleAutomationsList(automationsListMsg{items: []gaiaautomation.Item{
+		{ID: "aaaa1111", Name: "Inbox digest", Kind: "summary", Status: "active"},
+		{ID: "bbbb2222", Name: "Heartbeat", Kind: "alert", Status: "active"},
+		{ID: "cccc3333", Name: "2", Kind: "reminder", Status: "active"},
+	}})
+	_, cmd := next.(ChatModel).handleAutomationsCommand("/automations pause 2")
+	cmd()
+	data, _ := os.ReadFile(args)
+	if !strings.HasPrefix(string(data), "automation pause -- cccc3333") {
+		t.Errorf("argv = %q, want the one named 2, not the second listed", data)
+	}
+}
+
+func TestATypedFlagIsANameNotRemoveAll(t *testing.T) {
+	args := stubAutomationCLI(t, "[]\n")
+	_, cmd := slackModel(t).handleAutomationsCommand("/automations remove --all")
+	cmd()
+	data, _ := os.ReadFile(args)
+	if !strings.HasPrefix(string(data), "automation remove -- --all") {
+		t.Errorf("argv = %q, want --all passed after --, as a name", data)
 	}
 }

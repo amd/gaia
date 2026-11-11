@@ -523,6 +523,8 @@ type ChatModel struct {
 	// automationRefs are the ids /automations last listed, so
 	// "/automations pause 2" changes the one the user saw as 2.
 	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc

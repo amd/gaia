@@ -1421,6 +1421,15 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
     });
 
+    test(`settings automations: delivery not checked (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 1), null));
+        await openAutomations(page);
+        await expect(page.locator('.automation-unchecked')).toBeVisible();
+        await shot(page, `automations-${locale}-unchecked`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
     test(`settings automations: empty (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => withAutomations(p, []));
         await openAutomations(page);

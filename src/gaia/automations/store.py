@@ -126,7 +126,10 @@ def find(items: List[Automation], ref: str) -> Optional[Automation]:
     if not ref:
         return None
     lowered = ref.lower()
-    return next((a for a in items if a.id == ref or a.name.lower() == lowered), None)
+    # An id wins over a name anywhere in the list: a name can look like an id.
+    return next((a for a in items if a.id == ref), None) or next(
+        (a for a in items if a.name.lower() == lowered), None
+    )
 
 
 def _missing(ref: str, items: List[Automation]) -> AutomationError:

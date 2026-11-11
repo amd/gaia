@@ -86,8 +86,11 @@ func List(ctx context.Context) ([]Item, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w (%w). GAIA said: %s", ErrUnanswered, err, said)
 	}
-	start := bytes.IndexByte(out, '[')
-	if start < 0 {
+	// The list is the last thing printed; a stray line before it may hold a "[".
+	start := bytes.LastIndex(out, []byte("\n["))
+	if start >= 0 {
+		start++
+	} else if start = bytes.IndexByte(out, '['); start < 0 {
 		return nil, fmt.Errorf("%w: the list was not JSON: %s", ErrUnanswered, said)
 	}
 	var all []Item
@@ -118,7 +121,9 @@ func Set(ctx context.Context, action, ref string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown automation action %q", action)
 	}
-	_, said, err := run(ctx, action, ref)
+	// "--" ends the flags: a ref like "--all" is a name to look up, never
+	// `remove --all`, which deletes every automation.
+	_, said, err := run(ctx, action, "--", ref)
 	if err != nil {
 		return "", errors.New(strings.TrimPrefix(said, "❌ "))
 	}

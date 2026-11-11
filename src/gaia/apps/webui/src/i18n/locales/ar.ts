@@ -1232,6 +1232,7 @@ const messages: Messages = {
     'settings.automations.empty': 'لا توجد مهام تلقائية بعد. اطلب من GAIA في المحادثة، مثل «ذكّرني الساعة 5 مساءً بالاتصال بسام» أو «أخبرني عندما يتعطل CI على main».',
     'settings.automations.noDelivery': 'لا شيء يوصل هذه بعد: تصلك المهام التلقائية عبر Discord. اربطه من قسم المراسلة.',
     'settings.automations.openMessaging': 'فتح المراسلة',
+    'settings.automations.deliveryUnknown': 'تعذّر على GAIA التحقق من اتصال Discord، لذا لا يمكنه تأكيد وصول هذه إليك. افتح قسم المراسلة لمعرفة حالته.',
     'settings.automations.kind.reminder': 'تذكير',
     'settings.automations.kind.summary': 'ملخص',
     'settings.automations.kind.alert': 'تنبيه',

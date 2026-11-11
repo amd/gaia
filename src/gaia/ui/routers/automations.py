@@ -12,7 +12,7 @@ that runs on this PC, and its prompts can carry private detail.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -54,15 +54,16 @@ def _row(item: store.Automation) -> Dict[str, Any]:
     }
 
 
-def _delivers() -> bool:
-    """Whether a paired Discord DM would receive what these send."""
+def _delivers() -> Optional[bool]:
+    """Whether a paired Discord DM would receive what these send; None when
+    the Discord state can't be read, so the app says it couldn't check."""
     from gaia.messaging.discord import state
 
     try:
         return state.load_config().paired
     except files.StateFileError as e:
         log.warning("Discord state unreadable, so delivery is unknown: %s", e)
-        return False
+        return None
 
 
 def _load():

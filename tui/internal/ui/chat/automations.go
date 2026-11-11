@@ -70,7 +70,10 @@ func (m ChatModel) handleAutomationsCommand(query string) (tea.Model, tea.Cmd) {
 			automationsCommand, verb, automationsCommand)), nil
 	}
 	typed := ref
-	if n, err := strconv.Atoi(ref); err == nil {
+	if id, ok := m.automationNames[strings.ToLower(ref)]; ok {
+		// A listed name wins, so one named "2" is reachable by its name.
+		ref = id
+	} else if n, err := strconv.Atoi(ref); err == nil {
 		if n < 1 || n > len(m.automationRefs) {
 			return m.statusNote(fmt.Sprintf("There is no automation %d in the last list. "+
 				"Type %s to see the numbers.", n, automationsCommand)), nil
@@ -87,9 +90,11 @@ func (m ChatModel) handleAutomationsList(msg automationsListMsg) (tea.Model, tea
 		}
 		return m.statusNote(fmt.Sprintf("Automation change failed: %v", msg.err)), nil
 	}
-	m.automationRefs = m.automationRefs[:0]
+	m.automationRefs = make([]string, 0, len(msg.items))
+	m.automationNames = make(map[string]string, len(msg.items))
 	for _, it := range msg.items {
 		m.automationRefs = append(m.automationRefs, it.ID)
+		m.automationNames[strings.ToLower(strings.TrimSpace(it.Name))] = it.ID
 	}
 	text := automationsListText(msg.items)
 	if msg.said != "" {
