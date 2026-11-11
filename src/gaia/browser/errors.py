@@ -10,6 +10,29 @@ next — the browser is the most failure-prone thing GAIA drives, and a bare
 
 from __future__ import annotations
 
+import sys
+
+
+def _frozen() -> bool:
+    """An installed GAIA binary, with no Python for pip or Playwright to run in."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _install_chromium_command() -> str:
+    from gaia.agents.install_hints import format_command
+
+    return format_command([sys.executable, "-m", "playwright", "install", "chromium"])
+
+
+def browser_install_hint() -> str:
+    """How to get browser automation, true for this kind of install."""
+    from gaia.agents.install_hints import missing_extra_hint
+
+    hint = missing_extra_hint("browser")
+    if _frozen():
+        return hint
+    return f"{hint}, then run: {_install_chromium_command()}"
+
 
 class BrowserError(Exception):
     """Base for every browser-use failure."""
@@ -21,8 +44,7 @@ class BrowserNotInstalled(BrowserError):
     def __init__(self, detail: str = "") -> None:
         super().__init__(
             "Browser automation is not installed.\n"
-            "  Install it with:  pip install 'amd-gaia[browser]' "
-            "&& python -m playwright install chromium\n"
+            f"  {browser_install_hint()}\n"
             "  Docs: https://amd-gaia.ai/docs/guides/browser-use"
             + (f"\n  Detail: {detail}" if detail else "")
         )
@@ -32,12 +54,15 @@ class BrowserLaunchFailed(BrowserError):
     """The browser process would not start."""
 
     def __init__(self, detail: str) -> None:
-        super().__init__(
-            f"Could not start the browser: {detail}\n"
-            "  Run `python -m playwright install chromium` to repair the "
-            "browser install, or set GAIA_BROWSER_HEADLESS=1 if no display "
-            "is available."
-        )
+        headless = "set GAIA_BROWSER_HEADLESS=1 if no display is available."
+        if _frozen():
+            remedy = headless[0].upper() + headless[1:]
+        else:
+            remedy = (
+                f"Run `{_install_chromium_command()}` to repair the browser "
+                f"install, or {headless}"
+            )
+        super().__init__(f"Could not start the browser: {detail}\n  {remedy}")
 
 
 class BrowserNotStarted(BrowserError):
