@@ -11091,7 +11091,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded = []
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
-            user_input,
+            self._request_text(user_input),
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
