@@ -638,6 +638,8 @@ class DiscordAdapter:
         self._in_flight: List[ReplyTarget] = []
         #: The last automations failure the user was told about.
         self._automation_error = ""
+        #: Queued deliveries whose turn failed to start.
+        self._stalled: Set[str] = set()
         #: The DM was searched for buttons a dead bridge left; done once.
         self._scanned = False
 
@@ -891,16 +893,19 @@ class DiscordAdapter:
                     sink.start_turn(
                         delivery.text,
                         delivery.heading + late,
-                        quiet=delivery.quiet,
+                        # A retry shows no placeholder: one dead message is enough.
+                        quiet=delivery.quiet or delivery.id in self._stalled,
                         answer_filter=outbox.answer_filter(delivery),
                     )
                 except Exception as e:  # noqa: BLE001 - kept queued, said once
+                    self._stalled.add(delivery.id)
                     log.exception("Queued automation %s did not start", delivery.name)
                     # The rest waits too: the agent that failed would fail them.
                     raise ValueError(
                         f"{delivery.name} could not start: {e}. It runs when the "
                         f"agent answers again. {RESTART_HINT}"
                     ) from e
+            self._stalled.discard(delivery.id)
             outbox.remove(delivery.id)
 
     def _always_keys(self) -> Set[str]:

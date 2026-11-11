@@ -8,6 +8,7 @@ case that matters most: with both up, nothing due runs or arrives twice.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from unittest import mock
@@ -331,7 +332,15 @@ def test_a_turn_that_cannot_start_stays_queued_and_is_reported_once(monkeypatch)
     assert polls.poll.call_count == 2, "the GitHub watches still run"
     placeholders = [m["id"] for m in ad.transport.sent if "Running…" in m["text"]]
     closed = {e[1] for e in ad.transport.edits if e[3]}
-    assert placeholders and set(placeholders) <= closed, "no placeholder left open"
+    assert len(placeholders) == 1, "a retry must not post another dead message"
+    assert set(placeholders) <= closed, "no placeholder left open"
+
+    # The agent answers again: both run, the retried one without a placeholder.
+    started = mock.Mock(return_value=0)
+    monkeypatch.setattr(ad._agent(), "submit", started)
+    ad.tick()
+    assert started.call_count == 2 and outbox.pending() == []
+    assert len([m for m in ad.transport.sent if "Running…" in m["text"]]) == 2
 
 
 def test_a_crash_mid_delivery_keeps_what_was_not_sent(monkeypatch):
@@ -396,3 +405,82 @@ def test_the_list_shows_what_waits_for_the_bridge():
     cli.run_list(as_json=False, emit=out.append)
     assert len(out) == 1 and "Stretch" in out[0]
     assert "reaches your Discord DM when the Discord bridge runs" in out[0]
+
+
+# ----------------------------------------------------------------------
+# Stopping an automation stops what already waits for it
+# ----------------------------------------------------------------------
+
+
+def _queued_summary(name="Digest"):
+    _paired()
+    now = time.time()
+    item = _summary(now - 1, name=name)
+    daemon_tick.AutomationsTick()(now)
+    assert [d.name for d in outbox.pending()] == [name]
+    return item
+
+
+def _run(action, ref):
+    out = []
+    code = cli.run_set(ref=ref, action=action, emit=out.append)
+    return code, out[-1]
+
+
+def test_removing_an_automation_drops_what_waited_for_it():
+    _queued_summary()
+    assert _run("remove", "Digest") == (0, "Removed 'Digest'.")
+    assert outbox.pending() == []
+    ad, clock = make()
+    ad.on_ready()
+    ad.tick()
+    assert ad._agent().turns == [], "a removed summary must not run on reconnect"
+
+
+def test_pausing_an_automation_drops_what_waited_for_it():
+    _queued_summary()
+    assert _run("pause", "Digest")[0] == 0
+    assert outbox.pending() == []
+    assert _run("resume", "Digest")[0] == 0
+    assert outbox.pending() == [], "resuming waits for the next slot"
+
+
+def test_removing_everything_drops_what_waited_but_keeps_gaias_own_notice():
+    _queued_summary()
+    outbox.enqueue(
+        outbox.Delivery("n1", "", "automations", outbox.KIND_POST, "file damaged")
+    )
+    assert cli.run_remove_all(emit=lambda _: None) == 0
+    assert [d.id for d in outbox.pending()] == ["n1"]
+
+
+def test_a_reminder_that_already_ran_can_still_be_stopped_by_name_or_list_id():
+    _paired()
+    now = time.time()
+    _reminder(now - 1, say="A", name="Call Sam")
+    _reminder(now - 1, say="B", name="Stretch")
+    daemon_tick.AutomationsTick()(now)
+    assert store.load() == [], "both ran; only their messages wait"
+
+    assert _run("remove", "call sam") == (
+        0,
+        "Dropped the waiting message from 'Call Sam'.",
+    )
+    listed = []
+    cli.run_list(as_json=True, emit=listed.append)
+    (row,) = [r for r in json.loads(listed[0]) if r["kind"] == "waiting"]
+    assert _run("remove", row["id"]) == (
+        0,
+        "Dropped the waiting message from 'Stretch'.",
+    )
+    assert outbox.pending() == []
+
+
+def test_removing_a_waiting_id_that_is_gone_says_so():
+    code, said = _run("remove", "waiting:nope")
+    assert code == 2 and "Nothing is waiting" in said and "List again" in said
+
+
+def test_an_unknown_name_is_still_refused():
+    code, said = _run("remove", "Nope")
+    assert code == 2 and "No automation is called" in said

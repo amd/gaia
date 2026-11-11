@@ -172,7 +172,19 @@ def update(ref: str, **changes: Any) -> Automation:
         for key, value in changes.items():
             setattr(item, key, value)
         save(items)
-        return item
+    if changes.get("paused"):
+        _drop_waiting(item.id)
+    return item
+
+
+def _drop_waiting(item_id: str = "") -> None:
+    """A stopped automation must not speak later from the daemon's queue."""
+    from gaia.automations import outbox
+
+    if item_id:
+        outbox.drop_for(item_id)
+    else:
+        outbox.drop_all()
 
 
 def remove(ref: str) -> Automation:
@@ -182,13 +194,15 @@ def remove(ref: str) -> Automation:
         if item is None:
             raise _missing(ref, items)
         save([a for a in items if a is not item])
-        return item
+    _drop_waiting(item.id)
+    return item
 
 
 def clear() -> int:
     with _locked():
         count = len(load())
         save([])
+    _drop_waiting()
     return count
 
 

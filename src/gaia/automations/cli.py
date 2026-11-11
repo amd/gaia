@@ -314,12 +314,33 @@ def run_edit(
     return 0
 
 
+def _remove(ref: str) -> str:
+    """Remove an automation, or a message that already ran and still waits."""
+    from gaia.automations import outbox
+
+    if ref.startswith("waiting:"):
+        dropped = outbox.remove(ref.split(":", 1)[1])
+        if dropped is None:
+            raise store.AutomationError(
+                f"Nothing is waiting as {ref!r}; it was delivered or removed. "
+                "List again to see what is left."
+            )
+        return f"Dropped the waiting message from {dropped.name!r}."
+    try:
+        return f"Removed {store.remove(ref).name!r}."
+    except store.AutomationError:
+        # A reminder that already ran is gone from the store; only its message waits.
+        waiting = outbox.drop_named(ref)
+        if not waiting:
+            raise
+        return f"Dropped the waiting message from {waiting[0].name!r}."
+
+
 def run_set(*, ref: str, action: str, emit: Emit = print) -> int:
     """pause, resume, run (now) or remove one automation."""
     try:
         if action == "remove":
-            item = store.remove(ref)
-            emit(f"Removed {item.name!r}.")
+            emit(_remove(ref))
             return 0
         changes: Any = {
             "pause": {"paused": True},

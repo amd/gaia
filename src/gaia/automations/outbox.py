@@ -6,8 +6,9 @@ The daemon owns the tick (see :mod:`.tick`) but has no Discord connection and
 no agent the user can answer Allow/Deny to. So it does the model-free part
 itself (timing, trigger checks) and queues the rest here: a message to post,
 or an agent turn to run. The bridge delivers the queue on every tick it is
-connected, removing each entry only once it is sent; with the bridge stopped, the queue waits and says so in
-``gaia automation list``.
+connected, removing each entry only once it is sent. With the bridge stopped
+the queue waits and says so in ``gaia automation list``. Removing or pausing
+an automation drops what waits for it.
 
 A repeating automation keeps one entry: a newer run replaces the one still
 waiting, so a bridge that was off for a day gets one summary, not 24.
@@ -104,13 +105,37 @@ def pending() -> List[Delivery]:
         return _load()
 
 
-def remove(delivery_id: str) -> None:
-    """Drop one delivery once it is sent, so a crash mid-drain loses nothing."""
+def _drop(gone: Callable[[Delivery], bool]) -> List[Delivery]:
     with _locked():
         items = _load()
-        kept = [d for d in items if d.id != delivery_id]
-        if len(kept) != len(items):
-            _save(kept)
+        dropped = [d for d in items if gone(d)]
+        if dropped:
+            _save([d for d in items if not gone(d)])
+        return dropped
+
+
+def remove(delivery_id: str) -> Optional[Delivery]:
+    """Drop one delivery: it was sent, or the user no longer wants it."""
+    dropped = _drop(lambda d: d.id == delivery_id)
+    return dropped[0] if dropped else None
+
+
+def drop_for(automation_id: str) -> int:
+    """Drop what waits for a removed or paused automation; returns how many."""
+    if not automation_id:
+        return 0
+    return len(_drop(lambda d: d.automation_id == automation_id))
+
+
+def drop_named(name: str) -> List[Delivery]:
+    """Drop what waits under *name*: a reminder that already ran has no other handle."""
+    lowered = name.strip().lower()
+    return _drop(lambda d: bool(d.automation_id) and d.name.lower() == lowered)
+
+
+def drop_all() -> int:
+    """Drop everything waiting for an automation (not GAIA's own notices)."""
+    return len(_drop(lambda d: bool(d.automation_id)))
 
 
 def late_note(delivery: Delivery, now: float) -> str:
