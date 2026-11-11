@@ -161,6 +161,63 @@ def test_declared_min_disk_above_estimate_wins(monkeypatch):
     assert any("~8.0 GB" in b for b in report.blockers)
 
 
+@pytest.mark.parametrize("declared", [0, 0.0, None])
+def test_zero_min_disk_with_room_to_spare_passes(monkeypatch, declared):
+    _free_disk(monkeypatch, 60 / 1024)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": declared},
+        download_size_bytes=54.4 * 1024**2,
+        artifact_kind="binary",
+    )
+    assert report.disk_ok is True
+    assert report.blockers == []
+
+
+def test_zero_min_disk_and_unknown_size_skips_disk_check(monkeypatch):
+    _free_disk(monkeypatch, 0.0)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 0}, download_size_bytes=0
+    )
+    assert report.disk_ok is True
+
+
+def test_zero_min_disk_unknown_free_space_warns_in_mb(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: None)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 0},
+        download_size_bytes=54.4 * 1024**2,
+        artifact_kind="binary",
+    )
+    assert report.disk_ok is True
+    assert any("about 60 MB" in w for w in report.warnings), report.warnings
+
+
+def test_blocker_mixes_gb_need_with_mb_free(monkeypatch):
+    _free_disk(monkeypatch, 0.5)
+    report = check_compatibility(
+        {"platforms": [], "min_disk_gb": 0},
+        download_size_bytes=10 * _GB,
+        artifact_kind="binary",
+    )
+    assert any(
+        "needs ~11.0 GB but only 512 MB is free" in b for b in report.blockers
+    ), report.blockers
+
+
+def test_installer_gate_blocks_zero_min_disk_manifest(monkeypatch, tmp_path):
+    from gaia.hub import installer
+
+    _free_disk(monkeypatch, 10 / 1024)
+    binary = {
+        "size_bytes": int(54.4 * 1024**2),
+        "artifact_kind": installer.ARTIFACT_KIND_BINARY,
+    }
+    with pytest.raises(installer.DiskSpaceError, match="60 MB"):
+        installer._machine_gate(
+            {"requirements": {"platforms": [], "min_disk_gb": 0}}, binary, tmp_path
+        )
+
+
 def test_unknown_artifact_kind_is_refused():
     with pytest.raises(ValueError, match="Unknown artifact kind 'appimage'"):
         check_compatibility({"platforms": []}, artifact_kind="appimage")
