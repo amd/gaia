@@ -1073,10 +1073,22 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
+    runs_lemonade = gaia_runs_lemonade(_base_url())
+    ca_problem = ca_store_problem() if runs_lemonade else None
+    if ca_problem:
+        raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
+    if check is not None and check.state is ModelListState.OK:
+        raise ProviderError(
+            f"{name} accepted that key, but GAIA's model server discovered no "
+            "models with it, so there is no need to replace the key. The model "
+            "server's log says why.",
+            502,
+        )
     if check is None or check.state is not ModelListState.FAILING:
         raise ProviderError(
             f"{name} did not accept that key (no models were discovered). "
@@ -1101,7 +1113,7 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
             else "It was not copied into GAIA's credential store."
         )
     )
-    if not gaia_runs_lemonade(_base_url()):
+    if not runs_lemonade:
         raise ProviderError(f"{outage} {kept} Connect again when {name} recovers.", 503)
     try:
         use_known_models(EmbeddedLemonade())
