@@ -172,6 +172,35 @@ def test_source_deploy_sends_multipart_with_string_form_fields(
     assert names == {"Dockerfile", "app.py"}
 
 
+def test_a_symlink_is_packed_as_the_file_it_points_at(
+    calls, cloudish, monkeypatch, tmp_path: Path
+):
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    try:
+        (tmp_path / "alias.py").symlink_to(tmp_path / "app.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available in this environment")
+
+    monkeypatch.setattr(cloudish, "check_read", lambda path: Path(path).resolve())
+    monkeypatch.setattr(
+        cloudish,
+        "list_readable",
+        lambda base: sorted(p for p in base.rglob("*") if p.is_file()),
+    )
+    monkeypatch.setattr(cloudish, "open_read", lambda path, mode="rb": open(path, mode))
+
+    cloudish.cloudish_deploy(api_key="k", name="my-app", context_dir=str(tmp_path))
+
+    parts = _multipart_parts(calls[0])
+    with tarfile.open(fileobj=io.BytesIO(parts["context"]), mode="r:gz") as tar:
+        packed = tar.getmember("alias.py")
+        assert packed.isfile()
+        assert not packed.issym()
+        assert packed.size == len(b"print('hi')\n")
+        assert tar.extractfile(packed).read() == b"print('hi')\n"
+
+
 def test_context_without_a_dockerfile_is_refused(
     calls, cloudish, monkeypatch, tmp_path
 ):

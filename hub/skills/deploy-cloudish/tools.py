@@ -51,14 +51,14 @@ def _multipart(fields: Dict[str, str], files: Dict[str, Any]) -> Tuple[bytes, st
     for name, value in fields.items():
         chunks.append(
             (
-                f'--{boundary}\r\nContent-Disposition: form-data; '
+                f"--{boundary}\r\nContent-Disposition: form-data; "
                 f'name="{name}"\r\n\r\n{value}\r\n'
             ).encode("utf-8")
         )
     for name, (filename, content, content_type) in files.items():
         chunks.append(
             (
-                f'--{boundary}\r\nContent-Disposition: form-data; '
+                f"--{boundary}\r\nContent-Disposition: form-data; "
                 f'name="{name}"; filename="{filename}"\r\n'
                 f"Content-Type: {content_type}\r\n\r\n"
             ).encode("utf-8")
@@ -178,8 +178,13 @@ def _context_archive(context_dir: str) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for relative, path in selected:
-            info = archive.gettarinfo(str(path), arcname=str(relative))
-            with open_read(path, "rb") as handle:
+            # ``open_read`` follows a link once, through the allowed-folder
+            # check. Describe that same resolved file here: ``gettarinfo`` on
+            # the link itself would upload a dangling entry pointing at this
+            # machine's absolute path instead of the file's content.
+            resolved = check_read(path)
+            info = archive.gettarinfo(str(resolved), arcname=str(relative))
+            with open_read(resolved, "rb") as handle:
                 archive.addfile(info, handle)
     return buffer.getvalue()
 
@@ -354,9 +359,7 @@ def cloudish_deploy(
     for key, value in fields.items():
         form[key] = str(value).lower() if isinstance(value, bool) else str(value)
     files = {"context": ("context.tar.gz", archive, "application/gzip")}
-    return _request(
-        "POST", "/api/v1/projects", api_key=api_key, data=form, files=files
-    )
+    return _request("POST", "/api/v1/projects", api_key=api_key, data=form, files=files)
 
 
 @tool
