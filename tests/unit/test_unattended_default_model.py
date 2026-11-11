@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Runs with no model named use the configured ``default_model``.
 
-`gaia schedule run` and the MCP bridge's /chat and /llm used to fall back to
-the local Gemma model, so a cloud-model install started a 4.7 GB download.
+`gaia schedule run`, Telegram sessions and the MCP bridge's /chat and /llm
+used to fall back to the local Gemma model, so a cloud-model install started a
+4.7 GB download.
 """
 
 import json
@@ -89,3 +90,27 @@ def test_bridge_llm_keeps_a_model_the_caller_named(configured_default):
 
     bridge._execute_query({"query": "hi", "model": "Gemma-4-E4B-it-GGUF"})
     assert bridge.llm_client.models == ["Gemma-4-E4B-it-GGUF"]
+
+
+def test_telegram_session_uses_the_configured_default_model(
+    configured_default, monkeypatch
+):
+    from gaia.messaging import telegram
+
+    seen = []
+    monkeypatch.setattr(telegram, "AgentSDK", lambda config: seen.append(config))
+    monkeypatch.setattr(telegram, "_USER_SESSIONS", {})
+
+    telegram.get_or_create_session(42)
+    assert seen[0].model == configured_default
+
+
+def test_unset_default_model_keeps_the_local_default(tmp_path, fake_sdk, monkeypatch):
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    monkeypatch.setattr(gaia.config, "GAIA_CONFIG_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(runner.sinks, "validate", lambda *a: None)
+    monkeypatch.setattr(runner.sinks, "dispatch", lambda *a: None)
+
+    runner.fire(Schedule(name="t", cron="0 7 1 1 *", prompt="hi"))
+    assert fake_sdk.configs[0].model == DEFAULT_MODEL_NAME
