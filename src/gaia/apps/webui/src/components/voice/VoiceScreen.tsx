@@ -7,12 +7,12 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Info, Keyboard, List, Mic, Pause, Square, Volume2, Wrench, X } from 'lucide-react';
+import { Check, Info, Keyboard, List, Mic, MicOff, Pause, Square, Volume2, Wrench, X } from 'lucide-react';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useT } from '../../i18n/useT';
 import { useVoiceStore, type VoiceLogRow, type VoicePhase } from '../../stores/voiceStore';
 import {
-    closeVoice, dismissPhoneNotice, holdEnd, holdStart, primaryAction, setCaptions, voiceLevels,
+    closeVoice, dismissPhoneNotice, holdEnd, holdStart, primaryAction, setCaptions, toggleMute, voiceLevels,
 } from '../../voice/controller';
 import { RenderedContent } from '../MessageBubble';
 import { VoiceErrorCard } from './VoiceErrorCard';
@@ -157,6 +157,7 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
     const failed = !!error;
     const shownPhase: VoicePhase = failed ? 'paused' : phase;
     const standby = useVoiceStore((s) => s.standby);
+    const muted = useVoiceStore((s) => s.muted);
     const stateKey = `voice.state.${standby && shownPhase === 'listening' ? 'standby' : shownPhase}` as const;
     const level = shownPhase === 'speaking' ? voiceLevels.speech : voiceLevels.mic;
     const englishOnly = !!status && !status.speaks;
@@ -205,6 +206,19 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
                 <div className="vs-top">
                     <span className="vs-pill"><i aria-hidden="true" />{t(phone ? 'voice.wherePhone' : 'voice.where')}</span>
                     <span className="vs-acts">
+                        {!pushToTalk && (
+                            <button
+                                type="button"
+                                className="vs-tbtn"
+                                aria-pressed={muted}
+                                aria-label={t(muted ? 'voice.unmute' : 'voice.mute')}
+                                title={t(muted ? 'voice.unmute' : 'voice.mute')}
+                                disabled={failed}
+                                onClick={toggleMute}
+                            >
+                                {muted ? <MicOff size={16} /> : <Mic size={16} />}
+                            </button>
+                        )}
                         {ccButton}
                         {!phone && (
                             <button type="button" className="vs-tbtn" onClick={closeVoice} aria-label={t('voice.close')} title={t.hint(t('voice.close'), 'Esc')}>

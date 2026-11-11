@@ -58,6 +58,7 @@ class VoiceStatus(BaseModel):
     silence_ms: int
     status_updates: bool
     captions: bool
+    wake_word: bool = True
 
 
 class DownloadRequest(BaseModel):
@@ -71,6 +72,7 @@ class VoiceSettings(BaseModel):
     silence_ms: int = 500
     status_updates: bool = True
     captions: bool = True
+    wake_word: bool = True
 
 
 class VoiceSettingsUpdate(BaseModel):
@@ -80,6 +82,7 @@ class VoiceSettingsUpdate(BaseModel):
     silence_ms: Optional[int] = None
     status_updates: Optional[bool] = None
     captions: Optional[bool] = None
+    wake_word: Optional[bool] = None
 
 
 _SETTING_KEYS = {
@@ -89,6 +92,7 @@ _SETTING_KEYS = {
     "silence_ms": "voice_silence_ms",
     "status_updates": "voice_status_updates",
     "captions": "voice_captions",
+    "wake_word": "voice_wake_word",
 }
 
 
@@ -163,6 +167,7 @@ async def voice_status(lang: str = "en") -> VoiceStatus:
         silence_ms=config.voice_silence_ms,
         status_updates=config.voice_status_updates,
         captions=config.voice_captions,
+        wake_word=config.voice_wake_word,
     )
     try:
         catalog = await asyncio.to_thread(_catalog)

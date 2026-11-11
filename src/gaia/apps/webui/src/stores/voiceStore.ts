@@ -46,6 +46,8 @@ export interface VoiceState {
     captions: boolean;
     /** Asked to stay quiet: nothing is sent until someone says "Hey GAIA". */
     standby: boolean;
+    /** The microphone is off until unmuted. */
+    muted: boolean;
     /** Your words, live while `heardPartial`. */
     heard: string;
     heardPartial: boolean;
@@ -71,6 +73,7 @@ export const VOICE_IDLE: VoiceState = {
     captions: true,
     heard: '',
     standby: false,
+    muted: false,
     heardPartial: false,
     caption: null,
     log: [],

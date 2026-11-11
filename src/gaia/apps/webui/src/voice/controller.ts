@@ -49,6 +49,8 @@ interface Live {
     replacing: boolean;
     /** GAIA asked for a yes or no and is waiting to hear it. */
     asking: boolean;
+    /** Runs out when the user's hold on GAIA's attention does. */
+    attention: ReturnType<typeof setTimeout> | null;
     /** Where each spoken piece starts on the playback timeline. */
     pieces: Array<{ kind: SpeakKind; words: number; start: number }>;
     spokenSoFar: string;
@@ -130,6 +132,7 @@ function finishSpeakingIfDone(): void {
     const caption = get().caption;
     if (caption) set({ caption: { ...caption, lit: Infinity } });
     if (get().phase === 'speaking') set({ phase: get().turnRunning ? 'thinking' : resting() });
+    attend();
 }
 
 /** Barge-in: silence GAIA here first, then tell the server. */
@@ -155,6 +158,53 @@ export function yesOrNo(text: string): boolean | null {
 
 const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk|speak|listen)(ing)?\b|\bnot talking to you\b|\b(be|stay|keep) quiet\b|\bignore (us|me|this|that)\b|\bgo to sleep\b|\bstand ?by\b|\bavoid speaking\b/i;
 const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:gaia|gaya|gaea|gaiya|kaia|guya)\b[\s,.!?:-]*/i;
+
+/** How long after GAIA speaks a reply needs no "Hey GAIA". */
+export const FOLLOW_UP_MS = 10_000;
+
+function wakeWord(): boolean {
+    return !!live?.status?.wake_word && !get().pushToTalk;
+}
+
+/** The user has GAIA's attention: now, and for a while after she is done. */
+function attend(): void {
+    if (!live) return;
+    if (live.attention) clearTimeout(live.attention);
+    live.attention = null;
+    if (get().standby) set({ standby: false });
+    if (!wakeWord()) return;
+    const mine = live;
+    live.attention = setTimeout(() => {
+        if (live !== mine) return;
+        mine.attention = null;
+        // She is still working or talking: the clock starts when she is done.
+        if (get().turnRunning || get().phase === 'speaking' || mine.asking) attend();
+        else set({ standby: true });
+    }, FOLLOW_UP_MS);
+}
+
+/** Nothing is sent until someone says her name. */
+function standBy(): void {
+    if (!live) return;
+    if (live.attention) clearTimeout(live.attention);
+    live.attention = null;
+    set({ standby: true });
+}
+
+/** Mute or unmute the microphone; GAIA keeps talking and working. */
+export function toggleMute(): void {
+    if (!live || get().error || get().pushToTalk) return;
+    live.userPaused = !live.userPaused;
+    set({ muted: live.userPaused });
+    if (live.userPaused) {
+        live.mic.pause();
+        if (get().phase === 'listening') set({ phase: 'paused', heardPartial: false });
+    } else {
+        live.mic.resume();
+        if (get().phase === 'paused') set({ phase: resting() });
+        attend();
+    }
+}
 
 /** Whether `text` asks GAIA to stay out of the conversation. */
 export function asksForQuiet(text: string): boolean {
@@ -304,6 +354,7 @@ function endTurn(outcome: TurnOutcome): void {
     }
     live.replacing = false;
     if (get().phase !== 'speaking') set({ phase: resting() });
+    attend();
     const next = live.pending.splice(0).join(' ').trim();
     if (next) startTurn(next);
 }
@@ -313,6 +364,7 @@ function onEvent(event: ServerEvent): void {
     switch (event.type) {
         case 'ready':
             set({ phase: resting() });
+            attend();
             return;
         case 'speech_started':
             // A sound is not yet an interruption: the server ducks, then decides.
@@ -401,7 +453,7 @@ function onEvent(event: ServerEvent): void {
                     set({ heard: '', heardPartial: false, phase: resting() });
                     return;
                 }
-                set({ standby: false });
+                attend();
                 if (!rest) {
                     addRow({ kind: 'user', text });
                     say('voice.standbyOff');
@@ -411,7 +463,8 @@ function onEvent(event: ServerEvent): void {
                 said = rest;
             } else if (asksForQuiet(text)) {
                 addRow({ kind: 'user', text });
-                set({ standby: true, phase: resting() });
+                standBy();
+                set({ phase: resting() });
                 note('voice.standbyOn');
                 say('voice.standbyOn');
                 return;
@@ -528,7 +581,7 @@ function onVisibility(): void {
     if (!live?.phone) return;
     if (document.visibilityState === 'hidden') {
         if (get().phase !== 'paused') {
-            live.userPaused = true;
+            live.userPaused = true; set({ muted: true });
             live.mic.pause();
             set({ phase: 'paused' });
         }
@@ -544,7 +597,7 @@ export function openVoice(sessionId: string, host: VoiceHost, { phone = false } 
     const player = new SpeechPlayer(ctx);
     const mic = new MicCapture(ctx, (frame) => live?.socket?.sendAudio(frame));
     live = {
-        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false, asking: false,
+        ctx, mic, player, socket: null, host, status: null, userPaused: false, speechSent: false, pending: [], replacing: false, asking: false, attention: null,
         pieces: [], spokenSoFar: '', spokeThisTurn: false, answerRow: null, ticker: null, wakeLock: null, phone,
     };
     player.onIdle = finishSpeakingIfDone;
@@ -580,6 +633,8 @@ export function closeVoice(): void {
 function stopTickerFor(me: Live): void {
     if (me.ticker) clearInterval(me.ticker);
     me.ticker = null;
+    if (me.attention) clearTimeout(me.attention);
+    me.attention = null;
 }
 
 /** The big button: pause, resume, interrupt or stop, by state. */
@@ -593,11 +648,11 @@ export function primaryAction(): void {
         if (get().turnRunning) live.host.stopTurn();
         bargeIn();
     } else if (phase === 'listening' && !get().pushToTalk) {
-        live.userPaused = true;
+        live.userPaused = true; set({ muted: true });
         live.mic.pause();
         set({ phase: 'paused', heardPartial: false });
     } else if (phase === 'paused') {
-        live.userPaused = false;
+        live.userPaused = false; set({ muted: false });
         if (get().error) {
             retryVoice();
             return;
@@ -611,7 +666,7 @@ export function primaryAction(): void {
 export function holdStart(): void {
     if (!live || !get().pushToTalk || get().holding || get().error) return;
     if (get().phase === 'speaking') bargeIn();
-    live.userPaused = false;
+    live.userPaused = false; set({ muted: false });
     live.mic.resume();
     set({ holding: true, phase: 'listening', heard: '', heardPartial: true });
 }
