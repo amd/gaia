@@ -369,6 +369,26 @@ def test_a_script_cut_off_by_the_reply_limit_fails_instead_of_recording_half(
     dictation.synthesize.assert_not_called()
 
 
+def test_a_script_with_a_figure_the_document_lacks_is_never_recorded(dictation):
+    wrong = SCRIPT.replace("3,480", "3,840")
+    dictation.chat.replies = [wrong, wrong]
+    result = dictation.tool(str(dictation.allowed / "report.md"))
+
+    assert result["status"] == "error"
+    assert "states 3,840, which the document does not" in result["error"]
+    assert len(dictation.chat.calls) == 2
+    dictation.synthesize.assert_not_called()
+
+
+def test_a_figure_the_script_dropped_is_reported_with_the_recording(dictation):
+    short = "This is the quarterly review.\n\n## Sales\n\nLoaves rose to 3,480."
+    dictation.chat.replies = [short, short]
+    result = dictation.tool(str(dictation.allowed / "report.md"))
+
+    assert result["status"] == "success"
+    assert "2,140" in result["figures_left_out"]
+
+
 def test_stop_ends_the_run_and_saves_nothing(dictation):
     dictation.agent._console_cancelled = lambda: True
     result = dictation.tool(str(dictation.allowed / "story.txt"))

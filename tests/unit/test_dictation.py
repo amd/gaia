@@ -373,6 +373,109 @@ def test_an_empty_reply_fails_the_rewrite_instead_of_leaving_a_gap():
         rewrite_for_listening(text, "report", lambda s, p: next(replies), limit=600)
 
 
+# ── Figures the script must keep ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Sold 13,100 loaves, up from 2,140.", [13100, 2140]),
+        ("thirteen thousand one hundred ten units", [13110]),
+        ("from eighteen to three hundred thirty", [18, 330]),
+        ("three hundred thirty, six and twelve", [330, 6, 12]),
+        ("one hundred and five; twenty-two", [105, 22]),
+        ("in two thousand twenty-six and fifteen minutes", [2026, 15]),
+        ("back in twenty twenty-six", [2026]),
+        ("forty two thousand people, 3 million more", [42000, 3]),
+        ("[Page 12]\nA second till and one extra shift.", [2, 1]),
+        ("$24,360 (+63%) on August twenty-second", [24360, 63, 22]),
+    ],
+)
+def test_figures_are_read_from_digits_and_from_words(text, expected):
+    assert dictation.figures(text) == expected
+
+
+SOURCE_TABLE = (
+    "Total\n11,340\n13,100\n+16%\n$74,885\n"
+    "Sales climb from 180 to a peak of 330. Reference QX-4471-B, page 14."
+)
+
+
+def test_a_faithful_script_has_no_figure_differences():
+    script = (
+        "In total, units rose from 11,340 to thirteen thousand one hundred, up 16 "
+        "percent, for 74,885 dollars. Sales climb from 180 to a peak of 330. "
+        "Reference Q X, 4 4 7 1, B, page 14."
+    )
+    assert dictation.figure_differences(SOURCE_TABLE, script) == ([], [])
+
+
+def test_a_wrong_figure_is_invented_and_the_right_one_is_missing():
+    """What Gemma 4 E4B wrote for this table: 13,110 for 13,100, eighteen for 180."""
+    script = (
+        "In total, units rose from 11,340 to thirteen thousand one hundred ten, "
+        "up 16 percent, for 74,885 dollars. Sales climb from eighteen to 330. "
+        "Reference Q X, 4 4 7 1, B, page 14."
+    )
+    assert dictation.figure_differences(SOURCE_TABLE, script) == (
+        [18, 13110],
+        [180, 13100],
+    )
+
+
+@pytest.mark.parametrize(
+    "source,script",
+    [
+        ("Budget of 10k in FY26.", "A budget of 10,000 in fiscal year 2026."),
+        ("See section 4.2.1 and note 3.", "See section 4 point 2 point 1."),
+        ("Page 7 of 9\nIt rained.", "It rained."),
+        ("[Page 12]\nIt rained for 40 days.\n12", "It rained for 40 days."),
+    ],
+)
+def test_expansions_and_small_marks_are_not_differences(source, script):
+    assert dictation.figure_differences(source, script) == ([], [])
+
+
+def _asks(replies):
+    replies = list(replies)
+    prompts = []
+
+    def ask(_system, prompt):
+        prompts.append(prompt)
+        return replies.pop(0)
+
+    return ask, prompts
+
+
+def test_a_part_with_a_wrong_figure_is_asked_for_once_more():
+    ask, prompts = _asks(["Units rose to 13,110.", "Units rose to 13,100."])
+    script = rewrite_for_listening("Total units: 13,100", "report", ask)
+
+    assert script == "Units rose to 13,100.\n"
+    assert len(prompts) == 2
+    assert "states 13,110, which the document does not" in prompts[1]
+    assert "leaves out 13,100" in prompts[1]
+
+
+def test_a_figure_still_invented_on_the_second_try_fails_the_rewrite():
+    ask, prompts = _asks(["Units rose to 13,110.", "Units rose to 13,110."])
+    with pytest.raises(DictationError, match=r"states 13,110, which the document"):
+        rewrite_for_listening("Total units: 13,100", "report", ask)
+    assert len(prompts) == 2
+
+
+def test_a_figure_dropped_twice_is_reported_not_fatal():
+    ask, prompts = _asks(["It rained in the spring.", "It rained in the spring."])
+    left_out = []
+    script = rewrite_for_listening(
+        "Annual report 2026\nIt rained in the spring.", "report", ask, left_out=left_out
+    )
+
+    assert script == "It rained in the spring.\n"
+    assert len(prompts) == 2
+    assert left_out == [2026]
+
+
 # ── Reading the document ─────────────────────────────────────────────────────
 
 

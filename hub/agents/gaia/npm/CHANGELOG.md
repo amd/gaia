@@ -21,7 +21,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the terminal app. It reads the document exactly as written, or rewrites tables,
   charts, footnotes, web addresses and reference codes into spoken sentences;
   `form="auto"` picks, and the result says which and why. A rewrite is saved next
-  to the audio as `<name>.script.md`. Long documents record piece by piece with
+  to the audio as `<name>.script.md`, and every number in it is checked against
+  the document first: a rewrite that states a figure the document does not is
+  asked for once more and then refused, never recorded. Long documents record piece by piece with
   progress shown, one dictation covers about two hours of audio (120,000
   characters), `pages="3-10"` picks PDF pages, and a longer document is refused
   with the page range that fits. A scanned PDF without a text layer is refused.

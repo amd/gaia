@@ -57,7 +57,9 @@ Read the result and tell the user, in two or three lines:
 - which form it is and why (`form_reason`), in plain words;
 - where their copy is (`saved_to`) when they named a place;
 - where the listening script is (`script_path`) when one was written, so they
-  can read or correct what was said.
+  can read or correct what was said;
+- what `figures_left_out` says, when it is there: figures from the document
+  the script does not say, for the user to check.
 
 The app shows a player for the audio on its own. `audio_path` is GAIA's own
 copy that the player uses: never show it, link it or explain how to open it.
@@ -97,6 +99,9 @@ raising. Pass the message on in plain words, with what the user can do:
   with the vision model first: `index_document` it, save its text to a `.txt`
   file with `dump_document`, then `dictate_document` that file.
 - **Not a document GAIA can dictate** — say which formats work.
+- **The script states a figure the document does not** — the rewrite got a
+  number wrong twice, so nothing was recorded. Say so, and offer to dictate it
+  as written, which keeps the document's own figures.
 
 Do not quietly switch to a different form, voice or a shorter text to get past
 an error. If a different choice would help, say so and let the user pick.

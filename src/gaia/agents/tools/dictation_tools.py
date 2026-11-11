@@ -328,6 +328,7 @@ class DictationToolsMixin:
 
             script: Optional[str] = None
             user_script: Optional[Path] = None
+            left_out: list = []
             if chosen == dictation.LISTENING:
                 if user_audio is not None:
                     # Asked for before the work, not after it: the script is a
@@ -349,6 +350,7 @@ class DictationToolsMixin:
                     stem,
                     lambda system, prompt: self._listening_reply(chat, system, prompt),
                     on_part,
+                    left_out=left_out,
                 )
                 blocks = dictation.markdown_blocks(script)
             elif is_markdown:
@@ -447,6 +449,13 @@ class DictationToolsMixin:
             result["saved_to"] = str(user_audio)
         if script_file is not None:
             result["script_path"] = str(user_script or script_file)
+        if left_out:
+            listed = ", ".join(f"{n:,}" for n in sorted(set(left_out))[:12])
+            result["figures_left_out"] = (
+                f"The listening script does not say these figures from the "
+                f"document: {listed}. They may be page or reference numbers "
+                "dropped on purpose; tell the user so they can check the script."
+            )
         return result
 
 

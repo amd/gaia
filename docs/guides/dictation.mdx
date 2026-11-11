@@ -65,6 +65,12 @@ codes. The reply says which form it used and why. To choose yourself, say so:
 A rewrite only knows what the document says about a chart (its title, caption
 and values), not what the picture shows.
 
+Every number in a rewrite is checked against the document before anything is
+recorded. If the script states a figure the document does not, GAIA asks the
+model once more, and if it is still wrong it records nothing and offers to read
+the document as written instead. Figures the script leaves out are listed in
+the reply so you can check them.
+
 When GAIA rewrites, it saves the script next to the audio as `<name>.script.md`
 and tells you where it is, so you can read or correct exactly what was said.
 

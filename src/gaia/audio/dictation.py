@@ -552,8 +552,10 @@ You turn part of a written document into a script that a text-to-speech voice \
 will read aloud. The listener cannot see the page.
 
 Keep every fact, figure, name and date. Add nothing that is not in the text. \
-Do not summarize, and leave prose that already reads well aloud as it is. \
-Rewrite only what does not work by ear:
+Copy every number digit for digit, as digits ("13,100", never "thirteen \
+thousand one hundred"): a number that differs from the page is the one \
+mistake that cannot be heard. Do not summarize, and leave prose that already \
+reads well aloud as it is. Rewrite only what does not work by ear:
 - Tables: say what the table shows, then go through it row by row in full \
 sentences, each number attached to what it measures.
 - Charts and figures: say what the figure shows from what the text gives \
@@ -634,17 +636,152 @@ def rewrite_prompt(part: str, index: int, total: int, title: str, tail: str) -> 
     return f"{where} {opening}\n\n--- document text ---\n{part}\n--- end of text ---"
 
 
+_UNITS = (
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
+).split()
+_TENS = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+_ORDINALS = {
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fifth": 5,
+    "eighth": 8,
+    "ninth": 9,
+    "twelfth": 12,
+}
+_SCALES = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}
+_WORD_VALUES: Dict[str, int] = {
+    **{word: value for value, word in enumerate(_UNITS)},
+    **{word: (index + 2) * 10 for index, word in enumerate(_TENS)},
+    **_ORDINALS,
+}
+# Punctuation is a token too, so "three hundred thirty, six" is two numbers.
+_FIGURE_WORD = re.compile(r"\d[\d,]{0,30}|[A-Za-z]+|[^\sA-Za-z\d-]")
+#: Figures below this are list markers, footnote marks and section numbers as
+#: often as they are facts, so they are not checked.
+_CHECKED_FROM = 10
+
+
+def figures(text: str) -> List[int]:
+    """Every whole number *text* states, in digits or in English words.
+
+    "13,100" and "thirteen thousand one hundred" are both 13100, so a script
+    can be checked against its source however each writes its numbers.
+    """
+    found: List[int] = []
+    total = current = 0
+    counting = False
+
+    def close() -> None:
+        nonlocal total, current, counting
+        if counting:
+            found.append(total + current)
+        total = current = 0
+        counting = False
+
+    for token in _FIGURE_WORD.findall(_PAGE_MARKER.sub("", text)):
+        word = token.lower()
+        if word[0].isdigit():
+            close()
+            found.append(int(word.replace(",", "")))
+        elif word in _WORD_VALUES:
+            value = _WORD_VALUES[word]
+            # A year said in pairs: "twenty twenty-six" is 2026.
+            if counting and not total and current in (19, 20) and value >= 10:
+                current = current * 100 + value
+                continue
+            # "twenty" then "two" is 22; "two" then "twenty" is two numbers.
+            if counting and (
+                value >= 10 and current % 100 or current % 10 and value < 10
+            ):
+                close()
+            current += value
+            counting = True
+        elif word == "hundred" and counting and current:
+            current *= 100
+        elif word in _SCALES and counting and current:
+            total += current * _SCALES[word]
+            current = 0
+        elif word != "and" or not counting:
+            close()
+    close()
+    return found
+
+
+def _same_figure(script_figure: int, source: frozenset) -> bool:
+    """A script figure the source supports: itself, or a plain expansion of one.
+
+    "10k" read as 10000 and "FY26" read as 2026 are the source's own numbers.
+    """
+    if script_figure in source:
+        return True
+    text = str(script_figure)
+    for figure in source:
+        digits = str(figure)
+        if text.startswith(digits) and not text[len(digits) :].strip("0"):
+            return True
+        if len(digits) == 2 and text in ("19" + digits, "20" + digits):
+            return True
+    return False
+
+
+def figure_differences(source: str, script: str) -> Tuple[List[int], List[int]]:
+    """``(invented, missing)``: figures the script states that the source does
+    not, and figures the source states that the script left out."""
+    source_figures = frozenset(n for n in figures(source) if n >= _CHECKED_FROM)
+    script_figures = frozenset(n for n in figures(script) if n >= _CHECKED_FROM)
+    invented = sorted(n for n in script_figures if not _same_figure(n, source_figures))
+    covered = "".join(str(n) for n in figures(script))
+    # A page's printed number is a footer, left out on purpose.
+    own_pages = {int(number) for number in _PAGE_MARKER.findall(source)}
+    missing = sorted(
+        n
+        for n in source_figures - script_figures - own_pages
+        # A code spelled out digit by digit ("4 4 7 1") still states it.
+        if str(n) not in covered
+    )
+    return invented, missing
+
+
+def _figure_feedback(invented: Sequence[int], missing: Sequence[int]) -> str:
+    said = []
+    if invented:
+        said.append(
+            "it states "
+            + ", ".join(f"{n:,}" for n in invented)
+            + ", which the document does not"
+        )
+    if missing:
+        said.append(
+            "it leaves out "
+            + ", ".join(f"{n:,}" for n in missing)
+            + " from the document"
+        )
+    return (
+        f"Your last script got numbers wrong: {'; and '.join(said)}. Write the "
+        "script for this part again, copying every number from the document "
+        "digit for digit."
+    )
+
+
 def rewrite_for_listening(
     text: str,
     title: str,
     ask: Callable[[str, str], str],
     on_part: Optional[Callable[[int, int], None]] = None,
     limit: int = REWRITE_PART_CHARS,
+    left_out: Optional[List[int]] = None,
 ) -> str:
     """The listening script for *text*, as Markdown.
 
-    *ask* is ``(system prompt, prompt) -> reply``. A part that comes back empty
-    fails the whole rewrite: a script with a silent gap looks complete and is not.
+    *ask* is ``(system prompt, prompt) -> reply``. Each part's figures are
+    checked against the page: a part that states a number the document does
+    not is asked for once more, and fails the rewrite if it still does. A
+    figure the script drops is asked for once more and then added to
+    *left_out*, since a page header or a footnote mark is dropped on purpose.
+    A part that comes back empty fails too: a script with a silent gap looks
+    complete and is not.
     """
     parts = rewrite_parts(text, limit)
     if not parts:
@@ -654,19 +791,29 @@ def rewrite_for_listening(
         if on_part:
             on_part(index, len(parts))
         tail = "\n".join("\n\n".join(script).splitlines()[-6:])
-        reply = (
-            ask(
-                LISTENING_SYSTEM_PROMPT,
-                rewrite_prompt(part, index, len(parts), title, tail),
-            )
-            or ""
-        ).strip()
+        prompt = rewrite_prompt(part, index, len(parts), title, tail)
+        reply = (ask(LISTENING_SYSTEM_PROMPT, prompt) or "").strip()
+        invented, missing = figure_differences(part, reply) if reply else ([], [])
+        if invented or missing:
+            again = f"{prompt}\n\n{_figure_feedback(invented, missing)}"
+            reply = (ask(LISTENING_SYSTEM_PROMPT, again) or "").strip()
+            invented, missing = figure_differences(part, reply) if reply else ([], [])
         if not reply:
             raise DictationError(
                 f"The model returned nothing for part {index} of {len(parts)} of "
                 f"{title}, so the listening script would have a gap. Try again, "
                 "or dictate it as written."
             )
+        if invented:
+            raise DictationError(
+                f"The listening script for part {index} of {len(parts)} of {title} "
+                f"states {', '.join(f'{n:,}' for n in invented)}, which the "
+                "document does not, and a second attempt did not fix it. Nothing "
+                "was recorded. Dictate it as written, which keeps the document's "
+                "own figures, or use a larger chat model for the rewrite."
+            )
+        if left_out is not None:
+            left_out.extend(missing)
         script.append(reply)
     return "\n\n".join(script) + "\n"
 
