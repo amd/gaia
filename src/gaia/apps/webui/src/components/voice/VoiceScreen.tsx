@@ -77,6 +77,7 @@ function LogRow({ row }: { row: VoiceLogRow }) {
                         {row.label && <span className="vs-call-args"><bdi>{row.label}</bdi></span>}
                         {row.result && <span className={`vs-call-res${row.ok === false ? ' is-failed' : ''}`}><bdi>{row.result}</bdi></span>}
                     </span>
+                    {row.image && <img className="vs-shot" src={`/api/files/image?path=${encodeURIComponent(row.image)}`} alt="" />}
                 </div>
             ) : (
                 <div className="vs-row-body"><bdi>{row.text}</bdi></div>

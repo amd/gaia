@@ -21,6 +21,8 @@ export interface VoiceLogRow {
     tool?: string;
     label?: string;
     result?: string;
+    /** A picture the tool made, shown under its row. */
+    image?: string;
     done?: boolean;
     ok?: boolean;
 }

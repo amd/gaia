@@ -153,6 +153,25 @@ export function yesOrNo(text: string): boolean | null {
     return null;
 }
 
+const STOP_LEAD = /^\W*(stop|wait|cancel|never ?mind|hold on|hang on|actually|no)\b[\s,.!-]*/i;
+
+/** What follows a leading "stop" or "wait" (maybe nothing); null when `text` is not telling GAIA to stop. */
+export function afterStopWord(text: string): string | null {
+    const lead = STOP_LEAD.exec(text);
+    if (!lead) return null;
+    let rest = text.slice(lead[0].length);
+    // "no, wait, stop" is still only a stop.
+    for (let more = STOP_LEAD.exec(rest); more; more = STOP_LEAD.exec(rest)) rest = rest.slice(more[0].length);
+    return rest.trim();
+}
+
+const IMAGE_PATH = /((?:[A-Za-z]:\\|\/)[^\n"<>|]*?\.(?:png|jpe?g|webp|gif))/i;
+
+/** The picture a tool result names, if any. */
+export function imageIn(result: string): string | undefined {
+    return IMAGE_PATH.exec(result)?.[1];
+}
+
 function setAsking(on: boolean): void {
     if (!live || live.asking === on) return;
     live.asking = on;
@@ -223,7 +242,8 @@ function startTurn(text: string): void {
         toolFinished: own((result, ok) => {
             setAsking(false);
             const row = [...get().log].reverse().find((r) => r.kind === 'tool' && !r.done);
-            if (row) patchRow(row.id, { done: true, ok, ...(result ? { result } : {}) });
+            const image = ok ? imageIn(result) : undefined;
+            if (row) patchRow(row.id, { done: true, ok, ...(result ? { result } : {}), ...(image ? { image } : {}) });
         }),
         detail: own((detail) => {
             if (!live) return;
@@ -344,8 +364,14 @@ function onEvent(event: ServerEvent): void {
                 // "mm-hm" while GAIA works is not a new request.
                 if (isBackchannel(text)) return;
                 addRow({ kind: 'user', text });
-                // New words while GAIA is still working replace what she was doing.
-                live.pending.push(text);
+                const rest = afterStopWord(text);
+                if (rest === null) {
+                    // Talk in the room while she works waits its turn; it never cancels the work.
+                    live.pending.push(text);
+                    return;
+                }
+                // "Stop", "wait, make it a cat": drop the work, then do what follows.
+                if (rest) live.pending.push(rest);
                 if (!live.replacing) {
                     live.replacing = true;
                     bargeIn();
