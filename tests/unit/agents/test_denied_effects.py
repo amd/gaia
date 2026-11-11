@@ -983,6 +983,36 @@ def test_running_a_script_elevated_is_what_the_script_does(tmp_path):
         assert ledger.conflict("run_shell_command", _shell(command)), command
 
 
+def test_every_spelling_of_running_the_script_is_what_it_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    bat = tmp_path / "fix.bat"
+    bat.write_text(f"echo 127.0.0.1 widgetworks.local >> {hosts}\n")
+    sh = tmp_path / "fix.sh"
+    sh.write_text(f"echo '127.0.0.1 widgetworks.local' >> {hosts}\n")
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in [
+        f"Start-Process -FilePath {bat} -Verb RunAs",
+        f"Start-Process powershell '-File {script}' -Verb RunAs",
+        f"Start-Process powershell -ArgumentList @('-File', '{script}')",
+        f"Start-Process -F powershell -A '-File {script}'",
+        f"powershell -NoProfile -File:{script}",
+        f"bash -f -x {sh}",
+        f"{bat}",
+    ]:
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_a_shim_named_like_a_script_is_still_its_program(tmp_path):
+    effects = effects_of_shell_command("npm.cmd test", str(tmp_path))
+    assert Effect(COMMAND, TEST_SUITE) in effects
+
+
 def test_a_content_value_is_not_a_path_the_command_changes(tmp_path):
     effects = effects_of_shell_command(
         "Add-Content -Path notes.txt -Value 'todo later' -Encoding utf8",

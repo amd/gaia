@@ -189,7 +189,11 @@ _NEUTRAL_PROGRAMS = frozenset(
 
 _SHELLS = frozenset({"bash", "sh", "zsh", "dash", "cmd", "powershell", "pwsh"})
 _SHELL_COMMAND_FLAGS = frozenset({"-c", "/c", "/k", "-command", "-commandwithargs"})
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
+#: PowerShell's script switch; bash and zsh use ``-f`` for something else.
 _SHELL_FILE_FLAGS = frozenset({"-file", "-f"})
+#: A script run by naming it: what it does is in its source.
+_SCRIPT_FILE_RE = re.compile(r"\.(?:ps1|bat|cmd|sh)$", re.IGNORECASE)
 #: PowerShell switches whose next word is their value, not the script to run.
 _SHELL_VALUE_FLAGS = frozenset(
     {
@@ -700,33 +704,54 @@ def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     i = 0
     while i < len(rest):
         arg, value = rest[i].lower(), rest[i + 1] if i + 1 < len(rest) else None
-        if arg in ("-filepath", "-path") and value is not None:
+        # A switch never holds a space: "-File x.ps1" is a quoted argument list.
+        switch = arg.startswith("-") and " " not in arg
+        if switch and _abbreviates(arg, "-filepath", "-path") and value is not None:
             program, i = value, i + 2
-        elif arg in ("-argumentlist", "-args") and value is not None:
-            # An array (``'-File', "x.ps1"``) arrives split after each comma.
-            end = i + 2
-            while end < len(rest) and (
-                rest[end - 1].endswith(",") or rest[end].startswith(",")
-            ):
-                end += 1
+        elif switch and _abbreviates(arg, "-argumentlist", "-args") and value:
+            end = _array_end(rest, i + 1)
             arguments = _argument_list(" ".join(rest[i + 1 : end]))
             i = end
-        elif arg in _START_PROCESS_VALUE_FLAGS:
+        elif switch and arg in _START_PROCESS_VALUE_FLAGS:
             i += 2
-        elif arg.startswith("-"):
+        elif switch:
             i += 1
         elif program is None:
             program, i = rest[i], i + 1
         else:
-            arguments = arguments or _argument_list(rest[i])
-            i += 1
+            end = _array_end(rest, i)
+            arguments = arguments or _argument_list(" ".join(rest[i:end]))
+            i = end
     if program is None:
         return set()
     return _effects_of_argv([program, *arguments], cwd, depth + 1)
 
 
+def _abbreviates(arg: str, *names: str) -> bool:
+    """PowerShell accepts any unambiguous prefix of a parameter (``-F``, ``-Arg``)."""
+    return len(arg) >= 2 and any(name.startswith(arg) for name in names)
+
+
+def _array_end(words: Sequence[str], start: int) -> int:
+    """One past an array value: ``'-File', "x.ps1"`` or ``@('-File', 'x.ps1')``
+    arrives split at each comma."""
+    end = start + 1
+    in_parens = words[start].startswith("@(") and not words[start].endswith(")")
+    while end < len(words) and (
+        in_parens or words[end - 1].endswith(",") or words[end].startswith(",")
+    ):
+        if words[end].endswith(")"):
+            in_parens = False
+        end += 1
+    return end
+
+
 def _argument_list(value: str) -> List[str]:
-    """``'-File',"x.ps1"`` or ``'-File x.ps1'``: the words Start-Process passes on."""
+    """``'-File',"x.ps1"``, ``@('-File','x.ps1')`` or ``'-File x.ps1'``: the
+    words Start-Process passes on."""
+    value = value.strip()
+    if value.startswith("@(") and value.endswith(")"):
+        value = value[2:-1]
     spaced = re.sub(r"(['\"])\s*,\s*(['\"])", r"\1 \2", value)
     words = (w.strip(",").strip("'\"") for w in _tokens(spaced))
     return [w for w in words if w]
@@ -740,6 +765,12 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     tokens = unwrap_command_argv(tokens, ledger=True)
     if not tokens:
         return set()
+    first = tokens[0].strip("'\"")
+    # ``.\fix.bat`` or a script here; ``npm.cmd test`` stays npm's own command.
+    if _SCRIPT_FILE_RE.search(first) and (
+        re.search(r"[\\/]", first) or os.path.isfile(os.path.join(cwd, first))
+    ):
+        return effects_of_script(first, cwd, depth + 1)
     program, rest = _program(tokens[0]), tokens[1:]
     hosts: Set[Effect] = set()
     subcommand = next((w.lower() for w in rest if not w.startswith("-")), "")
@@ -755,8 +786,12 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
                 return effects_of_shell_command(
                     " ".join(rest[idx + 1 :]), cwd, depth + 1
                 )
-            if arg.lower() in _SHELL_FILE_FLAGS and idx + 1 < len(rest):
-                return effects_of_script(rest[idx + 1], cwd, depth + 1)
+            if program in _POWERSHELLS:
+                flag, _, attached = arg.lower().partition(":")
+                if flag in _SHELL_FILE_FLAGS and attached:
+                    return effects_of_script(arg.split(":", 1)[1], cwd, depth + 1)
+                if flag in _SHELL_FILE_FLAGS and idx + 1 < len(rest):
+                    return effects_of_script(rest[idx + 1], cwd, depth + 1)
         scripts = _positionals(rest, _SHELL_VALUE_FLAGS)
         return effects_of_script(scripts[0], cwd, depth + 1) if scripts else set()
     if program in _START_PROCESS:
