@@ -58,9 +58,14 @@ const READY: VoiceStatus = {
     speaks: true, models: [], turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true,
 };
 const status = vi.hoisted(() => ({ value: null as unknown }));
+const saved = vi.hoisted(() => ({
+    value: { language: null, asr_model: 'auto', turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true, wake_word: false, volume: 100 },
+}));
 vi.mock('../../services/voiceApi', () => ({
     getVoiceStatus: vi.fn(async () => status.value),
     downloadVoiceModel: vi.fn(async (model: string) => ({ model, downloaded: true })),
+    getVoiceSettings: vi.fn(async () => saved.value),
+    updateVoiceSettings: vi.fn(async (change: object) => { saved.value = { ...saved.value, ...change }; return saved.value; }),
 }));
 
 import { afterName, afterStopWord, asksForQuiet, closeVoice, FOLLOW_UP_MS, imageIn, toggleMute, openVoice, primaryAction, type VoiceHost } from '../controller';
@@ -416,6 +421,19 @@ describe('voice mode turn loop', () => {
         toggleMute();
         expect(state().muted).toBe(false);
         expect(fx.mics[fx.mics.length - 1].resume).toHaveBeenCalled();
+    });
+
+    it('a setting GAIA changes during a turn takes effect before she answers', async () => {
+        await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'can you be quieter' });
+        tap!.agentEvent({ type: 'tool_start', tool: 'set_voice_setting' } as StreamEvent);
+        saved.value = { ...saved.value, volume: 40, captions: false };
+        tap!.agentEvent({ type: 'tool_result', summary: 'volume 40', success: true } as StreamEvent);
+        await flushAsync();
+        expect(player().setVolume).toHaveBeenLastCalledWith(0.4);
+        expect(state().captions).toBe(false);
+        saved.value = { ...saved.value, volume: 100, captions: true };
     });
 
     it('a bare "stop" only stops', async () => {

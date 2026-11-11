@@ -30,6 +30,8 @@ export interface VoiceStatus {
     captions: boolean;
     /** Hands-free only: answer when addressed by name, or just after GAIA spoke. */
     wake_word?: boolean;
+    /** How loud GAIA speaks, 0-100. */
+    volume?: number;
 }
 
 export interface VoiceSettings {
@@ -41,6 +43,7 @@ export interface VoiceSettings {
     status_updates: boolean;
     captions: boolean;
     wake_word: boolean;
+    volume: number;
 }
 
 /** `language: ''` goes back to following the app's language. */
