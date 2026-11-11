@@ -9204,6 +9204,30 @@ def _diag_log_files(gaia_dir):
     return files
 
 
+def _diag_lemonade_server_log():
+    """The user's own Lemonade's log, redacted, from its log stream.
+
+    None when GAIA runs its own Lemonade: its ``lemond.log`` is bundled as a file.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+    from gaia.llm.lemonade_logs import MAX_LINES, read_lemonade_log
+
+    try:
+        if choice.describe()["mode"] == choice.MODE_GAIA:
+            return None
+        result = asyncio.run(read_lemonade_log(limit=MAX_LINES))
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        return f"[could not tell which Lemonade GAIA uses: {e}]\n"
+    if not result.available:
+        detail = f" -- {result.detail}" if result.detail else ""
+        return (
+            f"[the log of the Lemonade at {result.base_url} could not be read: "
+            f"{result.reason}{detail}]\n"
+        )
+    return "".join(f"{line.text}\n" for line in result.lines)
+
+
 def _diag_os_info(system):
     """OS version sections, using the tools *system* (``sys.platform``) has."""
     import platform
@@ -9303,6 +9327,8 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
+    - when GAIA uses the user's own Lemonade, that server's recent log lines
+      (redacted), read from its log stream, as ``lemonade/server-log.txt``
     - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
     - the last few model-failure records (``failures/GF-*.json``), each
       written redacted at the moment a model call failed (omitted with
@@ -9402,28 +9428,40 @@ def handle_diagnostics_command(args):
             # Log files gated by --no-logs, and failure records with them since
             # each holds a log tail. Rotated backups (gaia.log.1, ...) ride
             # along; a log from before the size cap keeps only its tail.
+            # Every log is redacted: the bundle is made to be shared.
             if not args.no_logs:
+                from gaia.llm.lemonade_logs import known_secrets
+                from gaia.log_reader import redact_lines
+
+                secrets, _ = known_secrets()
                 for entry in failure_records:
-                    tar.add(str(entry), arcname=f"failures/{entry.name}")
+                    blob = redact_lines(entry.read_bytes(), secrets)
+                    info = tarfile.TarInfo(name=f"failures/{entry.name}")
+                    info.size = len(blob)
+                    info.mtime = int(entry.stat().st_mtime)
+                    tar.addfile(info, io.BytesIO(blob))
                 family = (
                     (arcdir, f) for base, arcdir in log_files for f in log_family(base)
                 )
                 for arcdir, entry in family:
                     size = entry.stat().st_size
-                    if size <= _DIAG_MAX_LOG_BYTES:
-                        tar.add(
-                            str(entry),
-                            arcname=arcdir + entry.name,
-                            filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
-                        )
-                        continue
+                    name = entry.name
                     with open(entry, "rb") as fh:
-                        fh.seek(size - _DIAG_MAX_LOG_BYTES)
-                        tail = fh.read(_DIAG_MAX_LOG_BYTES)
-                    info = tarfile.TarInfo(name=f"{arcdir}{entry.name}.tail")
-                    info.size = len(tail)
+                        if size > _DIAG_MAX_LOG_BYTES:
+                            fh.seek(size - _DIAG_MAX_LOG_BYTES)
+                            name += ".tail"
+                        blob = redact_lines(fh.read(_DIAG_MAX_LOG_BYTES), secrets)
+                    info = tarfile.TarInfo(name=f"{arcdir}{name}")
+                    info.size = len(blob)
                     info.mtime = int(entry.stat().st_mtime)
-                    tar.addfile(info, io.BytesIO(tail))
+                    tar.addfile(info, io.BytesIO(blob))
+                server_log = _diag_lemonade_server_log()
+                if server_log is not None:
+                    blob = server_log.encode("utf-8")
+                    info = tarfile.TarInfo(name="lemonade/server-log.txt")
+                    info.size = len(blob)
+                    info.mtime = int(datetime.datetime.now().timestamp())
+                    tar.addfile(info, io.BytesIO(blob))
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
