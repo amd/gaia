@@ -121,6 +121,37 @@ def test_reranking_sorts_results_by_score_and_normalizes_to_retrieval_range():
     )
 
 
+def test_reranking_moves_duplicate_provenance_with_the_chunk():
+    """Reranking must keep duplicate_indices aligned with each chunk."""
+    client = MagicMock()
+    client.is_users_server.return_value = False
+    client.list_models.return_value = {
+        "data": [{"id": "r", "downloaded": True, "labels": ["reranking"]}]
+    }
+    client.rerank.return_value = {
+        "results": [
+            {"index": 0, "relevance_score": 5.0},
+            {"index": 1, "relevance_score": 10.0},
+            {"index": 2, "relevance_score": 0.0},
+        ]
+    }
+    rag, _ = _search_rag(
+        client,
+        ["duplicate", "other", "duplicate", "third"],
+        [0.0, 1.0, 2.0, 3.0],
+        max_chunks=2,
+    )
+
+    snapshot = rag._search_chunks("needle")
+
+    assert snapshot["retrieved_chunks"] == ["other", "duplicate"]
+    assert snapshot["duplicate_indices"] == [[], [2]]
+
+    # The reranker sees distinct candidates in FAISS order: duplicate, other,
+    # third. The duplicate's copy must move with it before the final slice.
+    assert client.rerank.call_args.args[1] == ["duplicate", "other", "third"]
+
+
 def test_rerank_failure_is_visible_and_does_not_disable_future_attempts():
     client = MagicMock()
     client.rerank.side_effect = RuntimeError("model is unavailable")
