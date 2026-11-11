@@ -168,7 +168,7 @@ Phase 6, for every confirmed finding, unless the user said report-only.
    finding never gets a public issue: use the private advisory path in CLAUDE.md.
 4. **Start one fix session per issue, in parallel**, each in its own worktree
    (`start_session`, `use_worktree: true`). An issue filed with the `bug` label also
-   starts the repo's auto-fix workflow (`gh pr list -R amd/gaia --search "autofix/issue-<N> in:head"`):
+   starts the repo's auto-fix workflow (`gh pr list -R amd/gaia --head autofix/issue-<N>`):
    leave that issue to its draft, or fix it here and say so on the draft, never both
    silently. The brief names the issue, the repro, the
    evidence path on this machine, and what done looks like. Done means: a test that fails
