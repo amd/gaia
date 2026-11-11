@@ -69,7 +69,7 @@ def test_gmail_profile_without_an_address_fails_loudly():
 @pytest.mark.parametrize(
     "status,reason,needle",
     [
-        (401, "authError", "gaia connectors"),
+        (401, "authError", "needs reconnecting"),
         (403, "insufficientPermissions", "gmail"),
     ],
 )
@@ -78,6 +78,8 @@ def test_auth_failures_name_what_to_do(status, reason, needle):
     with pytest.raises(MailboxAuthError) as err:
         backend.get_user_email()
     assert needle in str(err.value).lower()
+    # The tool adds how to reconnect, worded for the front-end asking.
+    assert err.value.connect == ("google",)
 
 
 def test_access_not_configured_surfaces_the_enable_url():
@@ -714,7 +716,8 @@ def test_non_envelope_error_body_is_dropped_not_a_crash(body):
     with pytest.raises(MailboxAuthError) as err:
         backend.list_inbox()
     msg = str(err.value)
-    assert "gaia connectors" in msg
+    assert "needs reconnecting" in msg
+    assert err.value.connect == ("google",)
     assert "object has no attribute" not in msg
 
 
