@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"io"
 	"net/http"
 	"os"
@@ -200,6 +201,19 @@ const (
 		"reconnect with `gaia connectors connect google --scopes <scopes>` (or Settings -> " +
 		`Connections in the Agent UI)."}`
 
+	// Another GAIA operation held the connection mid-save. VERBATIM from
+	// gaia.connectors.errors.ConnectionBusyError via api_routes' 502 branch.
+	searchConnectionBusy = `{"detail":"The google connection is being saved by another GAIA ` +
+		"operation (in this process or another) right now, so it was left as is. Retry in a moment; if this keeps " +
+		"happening, look for a stuck `gaia daemon` or Agent UI process.\"}"
+
+	// The connector list while another GAIA operation is saving the connection:
+	// scopes and can_send are unknown, not missing.
+	connectorsBusy = `{"agent_id":"installed:email","providers":[` +
+		`{"provider":"google","connected":true,"account_email":"you@gmail.com",` +
+		`"scopes":[],"can_send":false,"busy":true},` +
+		`{"provider":"microsoft","connected":false,"account_email":null,"scopes":[],"can_send":false,"busy":false}]}`
+
 	// The RELAY's own 502: the sidecar died between the agents listing and this
 	// call. Says nothing about the mailbox, so it must not fail the row.
 	// VERBATIM from relay.py's httpx.HTTPError handler — the "sidecar for agent"
@@ -371,13 +385,14 @@ func realCommands() []string {
 		"gaia connectors connect ",
 		"gaia connectors grants grant ",
 		"gaia connectors list",
-		// A host-API skew is fixed by upgrading the installed core, not by a
-		// restart — the version comes from the core, so a restart is a loop.
-		"pip install --upgrade amd-gaia",
 		// Reached only when the machine cannot name Lemonade's launcher
 		// (lemonadeRestartRemedy, !l.Found) — so it fires on a runner with no
 		// Lemonade installed and never on a developer box that has one.
 		"gaia kill",
+		// The published one-line installers, which install GAIA's binaries
+		// (no Python): the remedy for a core older than this app.
+		gaiainit.InstallCommand,
+		gaiainit.InstallPowerShellCommand,
 	}
 	l := resolveLemonade()
 	for _, cmd := range []string{l.Start, l.Restart} {
@@ -558,7 +573,7 @@ func TestCheck(t *testing.T) {
 			wantBlocker: KeyDaemon,
 			// Both halves of the skew, and a remedy that can actually clear it:
 			// the version comes from the installed core, so a restart loops.
-			wantIn: []string{"host API v1.0", "v1.1", "pip install --upgrade amd-gaia"},
+			wantIn: []string{"host API v1.0", "v1.1", "https://amd-gaia.ai/#install"},
 			// Restarting a machine-wide daemon other clients share is not ours to do.
 			wantFix: FixNone,
 		},
@@ -2238,6 +2253,46 @@ func TestALapsedForwardedTokenIsNotReportedAsADeadSignIn(t *testing.T) {
 	}
 }
 
+// A connection another GAIA operation is mid-save on refuses with a 502 that says
+// so. It clears in a moment, so it must not cost the user a browser sign-in.
+func TestAConnectionBeingSavedElsewhereIsNotReportedAsADeadSignIn(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 502, searchConnectionBusy), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if rep.Blocked() {
+		t.Error("a connection being saved elsewhere blocked the launch")
+	}
+	if row.Fix == FixConnectMailbox || strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a busy connection is answered with a sign-in: %q", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Detail, "saving the mailbox connection") {
+		t.Errorf("the row does not say the connection was being saved: %q", row.Detail)
+	}
+}
+
+// A busy connector entry has empty scopes and can_send false because they are
+// unknown mid-save. Reading that as "send not allowed" sends the user to
+// reconnect for nothing.
+func TestABusyConnectorIsNotReportedAsSendNotAllowed(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("GET /v1/email/connectors", 200, connectorsBusy), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if row.Fix == FixConnectMailbox || strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a busy connector is answered with a sign-in: %q", row.Remedy.Command)
+	}
+	if strings.Contains(row.Line, "send not allowed") {
+		t.Errorf("a busy connector is reported as unable to send: %q", row.Line)
+	}
+}
+
 // FastAPI's validation errors put an ARRAY in `detail`. Only the `msg` fields are
 // language a person can read; the array itself must never reach a row.
 func TestAValidationErrorNeverPutsRawJSONOnTheScreen(t *testing.T) {
@@ -2340,10 +2395,10 @@ func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
 	}
 	assertRealCommand(t, row)
 	assertRunnable(t, row.Remedy.Command)
-	// The window in the command is the DERIVED one, never a literal.
-	if strings.Contains(row.Remedy.Command, ctxSizeEnv) &&
-		!strings.Contains(row.Remedy.Command, fmt.Sprint(profileCtxTarget())) {
-		t.Errorf("the remedy names a window other than the profile's: %q", row.Remedy.Command)
+	// Modern Lemonade reads no context-size variable (#3320), so naming one
+	// would promise a fix the restart cannot deliver.
+	if strings.Contains(row.Remedy.Command, "LEMONADE_CTX_SIZE") {
+		t.Errorf("the remedy names a variable Lemonade never reads: %q", row.Remedy.Command)
 	}
 	// It must not promise a cure it cannot deliver — the window is set at load
 	// time, so a restart is a good bet and not a guarantee.

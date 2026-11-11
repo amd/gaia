@@ -9,7 +9,7 @@ from unittest.mock import patch
 from gaia.agents.registry import AgentRegistry
 
 
-def test_issue_841_custom_python_agent_model_id_respected(tmp_path):
+def test_issue_841_custom_python_agent_model_id_respected(tmp_path, monkeypatch):
     """A custom Python agent using kwargs.setdefault in __init__ must be
     instantiated with its own model_id when the UI omits the kwarg.
 
@@ -21,6 +21,8 @@ def test_issue_841_custom_python_agent_model_id_respected(tmp_path):
     This test simulates the fixed UI call pattern: calling create_agent without
     model_id, and asserting the agent's declared default is respected.
     """
+    # Set, not inherited: a GAIA_HOME from the environment outranks HOME.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     agents_dir = tmp_path / ".gaia" / "agents" / "foo"
     agents_dir.mkdir(parents=True)
     (agents_dir / "agent.py").write_text(textwrap.dedent("""

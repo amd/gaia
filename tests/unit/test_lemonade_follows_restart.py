@@ -20,6 +20,7 @@ from gaia.llm import lemonade_client as lc
 from gaia.llm.lemonade_embedded import EmbeddedLemonade
 from gaia.llm.lemonade_manager import LemonadeManager
 from gaia.llm.providers.lemonade import LemonadeProvider
+from gaia.version import LEMONADE_VERSION
 
 OLD_PORT, OLD_KEY = 41001, "key-before-restart"
 NEW_PORT, NEW_KEY = 41002, "key-after-restart"
@@ -171,6 +172,7 @@ def _serve_status(monkeypatch):
         lc.LemonadeClient,
         "get_status",
         lambda self: lc.LemonadeStatus(
+            version=LEMONADE_VERSION,
             url=self.base_url,
             running=self.base_url == lc.running_embedded_lemonade_url(),
             context_size=65536,
@@ -263,10 +265,10 @@ def test_a_client_built_while_the_server_was_down_finds_it(server):
 
 def test_a_new_chat_agent_waits_for_the_port_the_server_starts_on(server, monkeypatch):
     """The chat agent used to pin the URL it resolved while the server was down."""
-    pytest.importorskip("gaia_agent_chat")
+    pytest.importorskip("gaia_agent")
     from unittest.mock import patch
 
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     _install_embedded(server)
     server.live_pids = set()

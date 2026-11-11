@@ -15,7 +15,7 @@ title: "FileIOToolsMixin"
 
 ## Overview
 
-FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown with structure extraction, and generic text files with appropriate encoding.
+FileIOToolsMixin provides comprehensive file I/O operations with intelligent file type detection, syntax validation, and security controls. It handles Python files with full AST analysis, markdown, and generic text files with appropriate encoding.
 
 **Key Features:**
 - Read files with automatic type detection and analysis
@@ -43,8 +43,8 @@ refusal shape, and how the rule interacts with confirmation prompts.
 
 Every tool that modifies an existing file backs it up first. If that backup
 cannot be made — a full disk, an unwritable cache directory — `write_file`,
-`write_python_file`, `write_markdown_file`, `replace_function`, `edit_file`, and
-`edit_python_file` refuse the change and leave the file untouched. The error
+`write_python_file`, `write_markdown_file`, `update_gaia_md`, `replace_function`,
+`edit_file`, and `edit_python_file` refuse the change and leave the file untouched. The error
 names the cause and the directory to free or make writable.
 
 The refusal carries `executed: False`, because nothing ran. A tool result
@@ -65,7 +65,7 @@ runs.
 |---|---|---|
 | `self.path_validator` | `PathValidator` | Enforces the allowlist/blocklist/size limits every write and read tool checks. |
 
-`ChatAgent` ([`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py))
+`ChatAgent` ([`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py))
 sets it before calling `super().__init__()`, because `_register_tools()` runs
 inside that call.
 
@@ -73,19 +73,15 @@ A host that forgets is told what's missing instead of the tool silently
 skipping its own check, or crashing with a bare, unhelpful `AttributeError`:
 
 - **Write-capable tools** (`write_python_file`, `edit_python_file`,
-  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`)
-  report the missing setup and don't touch the target file, instead of
-  writing without running the check that would otherwise have applied.
-- **The remaining tools** (`read_file`, `search_code`, `generate_diff`,
-  `update_gaia_md`) raise a `MissingHostAttributeError` naming the host
-  class, the missing attribute, and this section.
-
-<Warning>
-  `update_gaia_md` writes `GAIA.md` despite sitting in the second group. It
-  checks the allowlist and nothing else — no blocked-directory check, size
-  limit, backup, or audit entry, all of which the six write-capable tools
-  apply. Tracked in [#4006](https://github.com/amd/gaia/issues/4006).
-</Warning>
+  `write_markdown_file`, `write_file`, `edit_file`, `replace_function`,
+  `update_gaia_md`) report the missing setup and don't touch the target file,
+  instead of writing without running the check that would otherwise have
+  applied. Each runs the allowlist, blocked-directory and size checks, backs up
+  an existing file before overwriting it, and records an audit entry for every
+  allowed, denied or failed write.
+- **The remaining tools** (`read_file`, `search_code`, `generate_diff`) raise a
+  `MissingHostAttributeError` naming the host class, the missing attribute, and
+  this section.
 
 `self.path_validator` has no legitimate `None` value — unlike `RAGToolsMixin`'s
 `self.rag`, there is no "intentionally disabled" state here.
@@ -121,11 +117,6 @@ see [Read before edit](#read-before-edit).
     "errors": List[str],
     "symbols": [{"name": str, "type": str, "line": int}],
 
-    # Markdown files only
-    "headers": List[str],
-    "code_blocks": [{"language": str, "code": str}],
-    "links": [{"text": str, "url": str}],
-
     # Binary files only
     "is_binary": bool
 }
@@ -155,8 +146,9 @@ model's tool-result budget (`limit` can shrink it) and ends on a line break:
 `start_line`/`end_line` work on the extracted text too. Extraction is cached
 per file while it is unchanged, so paging does not re-parse it. A scanned PDF
 with no text layer, an encrypted one, or a corrupt file is an error naming the
-file; `.doc`, `.pptx`, `.xls` and the OpenDocument formats are an error pointing
-at `index_document`.
+file; `.pptx` and `.epub` are an error pointing at `index_document`, and `.doc`,
+`.ppt`, `.xls` and the OpenDocument formats are an error saying to re-save the
+file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 When the agent also has `index_document`, the mixin adds a short
 `READING DOCUMENTS` prompt fragment: to review, compare, reconcile, audit or
@@ -191,7 +183,8 @@ Edit a Python file by replacing content with validation.
 - `file_path` (str, required): Path to the file
 - `old_content` (str, required): Content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
-- `new_content` (str, required): New content to insert
+- `new_content` (str, required): Text that replaces `old_content` only, not
+  the whole file
 - `backup` (bool, optional): Create backup (default: True). The copy goes to
   `~/.gaia/cache/backups/<original absolute path>/<name>.<timestamp>.bak`, never
   beside the file, with or without a `PathValidator`. The backups directory is
@@ -291,7 +284,8 @@ Edit any file by replacing content without validation.
 - `file_path` (str, required): Path to file
 - `old_content` (str, required): Exact content to find and replace. Must match
   exactly one location — see [Edit semantics](#edit-semantics).
-- `new_content` (str, required): New content to replace with
+- `new_content` (str, required): Text that replaces `old_content` only, not
+  the whole file. To rewrite the whole file, use `write_file`.
 - `project_dir` (str, optional): Project root for resolving paths
 
 **Returns:**
@@ -302,6 +296,9 @@ Edit any file by replacing content without validation.
     "old_size": int,
     "new_size": int,
     "file_type": str,
+    "after": str,           # the edited lines as they now read, 2 lines of context
+    "after_start_line": int,
+    "after_end_line": int,
     "diff": str
 }
 ```
@@ -326,6 +323,12 @@ blind; this makes the agent look at what it is about to change.
 - **Creating a file needs no read.**
 - **The record belongs to one agent instance** and lasts as long as it does.
   Another agent's reads unlock nothing.
+- **An edit already applied this turn is refused.** The same `old_content` and
+  `new_content` on the same file a second time in one turn never runs: when
+  `old_content` sits inside `new_content`, the repeat still matches, and
+  "milk" → "oat milk" twice leaves "oat oat milk". The error says what the
+  repeat would have done. A different edit, another file, or the next turn runs
+  as usual.
 
 The refusal happens before anything is written, and before the confirmation
 prompt, so nobody is asked to approve an edit that is already going to be
@@ -339,7 +342,7 @@ there.
 {
     "status": "error",
     "error": str,           # names the file and says to read it
-    "error_type": "not_read" | "changed_since_read",
+    "error_type": "not_read" | "changed_since_read" | "already_applied",
     "file_path": str,
     "executed": False       # stopped before it ran
 }
@@ -349,12 +352,22 @@ there.
 
 `edit_file` and `edit_python_file` share one match-and-replace implementation,
 [`gaia.agents.tools.file_edit`](https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_edit.py),
-so the two cannot drift apart. Two rules:
+so the two cannot drift apart. Three rules:
 
 **`old_content` must match exactly one location.** Matching several is an
 error, not a first-match replacement — picking one edits a region the caller
 never named while reporting success, and the resulting diff looks plausible.
 Extend `old_content` with surrounding lines until it is unique.
+
+**`new_content` must not repeat the lines around `old_content`.** When it
+contains two or more of the lines just outside the matched text — a run above,
+a run below, or the line above as its first line and the line below as its
+last — the caller has put the whole intended file into one span, and splicing
+it in would leave those lines twice.
+The edit is refused and the repeats are listed in `repeated_lines`. Pass only
+the replacement text; if those lines belong in `new_content`, include them in
+`old_content` too; to rewrite the whole file, use `write_file`. A single echoed
+line and lines of punctuation such as closing braces may repeat freely.
 
 **A rejection carries the file's current content**, so the retry does not need
 a separate read.
@@ -367,6 +380,7 @@ a separate read.
     "match_count": int,     # 0 = not found, >1 = ambiguous
     "match_lines": [int],   # ambiguous only
     "matches": [dict],      # ambiguous only: line + surrounding context
+    "repeated_lines": [str], # repeated-context only
     "current_content": str, # excerpt around the target region
     "current_content_start_line": int,
     "current_content_end_line": int,
@@ -374,7 +388,7 @@ a separate read.
 }
 ```
 
-The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows both rules and
+The C++ `file_edit` tool (`cpp/src/file_tools.cpp`) follows the first and last rules and
 rejects a stale write, but still lets an agent edit a file it never read.
 
 ### 8. replace_function
@@ -415,7 +429,7 @@ module level, and the tool never renames or moves a definition.
 ### 9. write_markdown_file
 
 Write (or overwrite) a Markdown file, optionally creating parent directories.
-Used by the code agent when generating READMEs, spec documents, or reports.
+Used by agents that generate READMEs, spec documents, or reports.
 
 **Parameters:**
 - `file_path` (str, required): Destination path
@@ -434,8 +448,8 @@ Used by the code agent when generating READMEs, spec documents, or reports.
 ### 10. update_gaia_md
 
 Refresh the project's `GAIA.md` (or another project-level index file) with
-generated metadata — used by the code agent to keep project docs in sync with
-what it's building.
+generated metadata — used by agents to keep project docs in sync with
+what they are building.
 
 **Parameters:**
 - `project_root` (str, optional): Project root directory (default: `"."`)
@@ -444,12 +458,22 @@ what it's building.
 - `structure` (str or dict, optional): Formatted directory structure
 - `instructions` (str, optional): Agent-facing instructions section
 
+Runs the same write guardrails as `write_file`: allowlist, blocked
+directories and sensitive files, the size limit, read-before-overwrite, a backup
+of an existing `GAIA.md`, and an audit entry for every outcome.
+
+As with `write_file`, overwriting an existing `GAIA.md` in `gaia chat` on a real
+terminal now asks "Overwrite this file?" first; the Agent UI and TUI
+auto-approve it.
+
 **Returns:**
 ```python
 {
     "status": "success",
     "file_path": str,
-    "updated_sections": List[str],
+    "created": bool,          # False when an existing GAIA.md was replaced
+    "message": str,
+    "backup_path": str,       # present only when an existing file was backed up
 }
 ```
 
@@ -613,11 +637,10 @@ computed at import time in `gaia.security`; they are not a constructor argument.
 - Symbol extraction (functions, classes)
 - Error reporting with line numbers
 
-### Markdown Files (.md)
+### Markdown Files (.md, .mdx)
 
-- Header extraction (# patterns)
-- Code block extraction with language tags
-- Link extraction ([text](url) patterns)
+- Returned as content with `file_type: "markdown"`; no extracted headers,
+  code blocks or links, which would repeat the content
 
 ### Binary Files
 

@@ -21,14 +21,6 @@ export function ctxLabel(tokens: number | null | undefined): string {
     return tokens ? `${Math.round(tokens / 1024)}K` : 'unknown';
 }
 
-/** "GPU · Vulkan · 5.6 GB · 38 tok/s on this PC". */
-export function modelMetaLine(m: ProviderModel): string {
-    const parts = [placementText(m.placement)];
-    if (m.size_gb) parts.push(`${m.size_gb} GB`);
-    if (m.tokens_per_second) parts.push(`${Math.round(m.tokens_per_second)} tok/s on this PC`);
-    return parts.filter(Boolean).join(' · ');
-}
-
 /** The model's state, derived from `downloaded` when the backend sent none. */
 export function modelState(m: ProviderModel): LocalModelState {
     return m.state ?? (m.downloaded ? 'downloaded' : 'not_downloaded');

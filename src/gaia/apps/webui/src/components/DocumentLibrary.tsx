@@ -1,16 +1,60 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
-import { UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
-import type { Document } from '../types';
+import { examplePath } from '../utils/platform';
+import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
+import type { Document, IndexFolderResponse } from '../types';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
+
+/** Split a stored indexing error into a one-line summary and the rest. */
+function splitFailureReason(lastError: string): { summary: string; more: string } {
+    const text = lastError.replace(/^RAG indexing failed for [^:]+:\s*/, '').trim();
+    const [first, ...rest] = text.split('\n');
+    return { summary: first.trim(), more: rest.join('\n').trim() };
+}
+
+/** One sentence on what folder indexing added, skipped and couldn't read. */
+function describeFolderResult(folderName: string, result: IndexFolderResponse): string {
+    const skipped = result.skipped ?? 0;
+    const parts: string[] = [];
+    if (result.indexed > 0) {
+        parts.push(`Indexed ${result.indexed} file${result.indexed !== 1 ? 's' : ''} from "${folderName}".`);
+    } else if (result.failed === 0) {
+        parts.push(`"${folderName}" has no documents GAIA can index.`);
+    }
+    if (skipped > 0) {
+        parts.push(`Skipped ${skipped} file${skipped !== 1 ? 's' : ''} of a type GAIA doesn't index.`);
+    }
+    if (result.failed > 0) {
+        const first = result.errors[0] ? ` ${result.errors[0].split('\n')[0]}` : '';
+        parts.push(`${result.failed} file${result.failed !== 1 ? 's' : ''} couldn't be indexed.${first}`);
+    }
+    parts.push('Subfolders aren\'t included.');
+    return parts.join(' ');
+}
+
+/** How often an indexing document's status (and progress) is asked for. */
+export const INDEX_POLL_MS = 1000;
+
+/** The progress map with `id` set to `progress`, or dropped once there is none. */
+function withProgress(map: Record<string, api.IndexProgress>, id: string, progress: api.IndexProgress | null | undefined) {
+    if (progress) return { ...map, [id]: progress };
+    if (!(id in map)) return map;
+    const { [id]: _gone, ...rest } = map;
+    return rest;
+}
 
 /** Compute elapsed time as human-readable string. */
 function elapsed(startMs: number): string {
@@ -22,7 +66,7 @@ function elapsed(startMs: number): string {
 }
 
 /** Format an ISO timestamp as a relative or absolute local time string. */
-function formatTimestamp(isoString: string): string {
+function formatTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
@@ -33,14 +77,14 @@ function formatTimestamp(isoString: string): string {
         const diffHour = Math.floor(diffMin / 60);
         const diffDay = Math.floor(diffHour / 24);
 
-        if (diffSec < 60) return 'just now';
-        if (diffMin < 60) return `${diffMin}m ago`;
-        if (diffHour < 24) return `${diffHour}h ago`;
-        if (diffDay === 1) return 'yesterday';
-        if (diffDay < 7) return `${diffDay}d ago`;
+        if (diffSec < 60) return t('time.justNow');
+        if (diffMin < 60) return t('time.minutesAgo', { n: diffMin });
+        if (diffHour < 24) return t('time.hoursAgo', { n: diffHour });
+        if (diffDay === 1) return t('time.yesterday');
+        if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
 
         // Older than a week: show date + time
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString(dateLocale(t), {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -52,11 +96,11 @@ function formatTimestamp(isoString: string): string {
 }
 
 /** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string): string {
+function formatFullTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(undefined, {
+        return date.toLocaleString(dateLocale(t), {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -70,20 +114,33 @@ function formatFullTimestamp(isoString: string): string {
 }
 
 export function DocumentLibrary() {
+    const t = useT();
     const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
             currentSessionId, sessions, updateSessionInList,
             draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
+    // A chat searches only its own attachments, so the user picks where new documents go.
+    const [target, setTarget] = useState<'chat' | 'next'>(currentSessionId ? 'chat' : 'next');
+    const targetSessionId = target === 'chat' ? currentSessionId : null;
+    const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
+    const [notice, setNotice] = useState('');
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
     const [folderPath, setFolderPath] = useState('');
     // Upload error state for rich error toasts
-    const [uploadError, setUploadError] = useState<{ filename: string; error: string } | null>(null);
+    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
+    // Outcome of indexing a folder typed into the path box
+    const [folderNotice, setFolderNotice] = useState<string | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+    // Pages read / chunks embedded, per document being indexed right now
+    const [progressById, setProgressById] = useState<Record<string, api.IndexProgress>>({});
     // Track indexing start times for elapsed display
     const indexingStartTimes = useRef<Map<string, number>>(new Map());
     // Force re-render for elapsed time updates
@@ -92,12 +149,12 @@ export function DocumentLibrary() {
     // Load documents on mount
     useEffect(() => {
         log.doc.info('Loading document library...');
-        const t = log.doc.time();
+        const timer = log.doc.time();
         api.listDocuments()
             .then((data) => {
                 const docs = data.documents || [];
                 setDocuments(docs);
-                log.doc.timed(`Loaded ${docs.length} document(s), ${data.total_chunks || 0} chunks, ${data.total_size_bytes || 0} bytes total`, t);
+                log.doc.timed(`Loaded ${docs.length} document(s), ${data.total_chunks || 0} chunks, ${data.total_size_bytes || 0} bytes total`, timer);
             })
             .catch((err) => {
                 log.doc.error('Failed to load documents', err);
@@ -140,20 +197,22 @@ export function DocumentLibrary() {
                 for (const doc of indexingDocs) {
                     try {
                         const status = await api.getDocumentStatus(doc.id);
+                        setProgressById((m) => withProgress(m, doc.id, status.progress));
                         if (status.indexing_status !== 'indexing' && status.indexing_status !== 'pending') {
                             indexingStartTimes.current.delete(doc.id);
                             const data = await api.listDocuments();
                             setDocuments(data.documents || []);
                             break;
                         }
-                    } catch {
-                        // ignore poll errors
+                    } catch (err) {
+                        // The next tick asks again; the row keeps its last known progress meanwhile.
+                        log.doc.warn(`Indexing status for ${doc.filename} unavailable`, err);
                     }
                 }
             } finally {
                 isPolling = false;
             }
-        }, 2000);
+        }, INDEX_POLL_MS);
 
         return () => clearInterval(interval);
     }, [hasIndexingDocs, setDocuments]);
@@ -170,6 +229,7 @@ export function DocumentLibrary() {
                 indexingStartTimes.current.delete(id);
             }
         }
+        setProgressById((m) => Object.keys(m).reduce((acc, id) => (activeIds.has(id) ? acc : withProgress(acc, id, null)), m));
     }, [documents]);
 
     // Periodic refresh to pick up server-side re-indexing and update timestamps
@@ -203,73 +263,146 @@ export function DocumentLibrary() {
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
     const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
+    /** Attach a document where the user chose, and say where it went. */
+    const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        if (!targetSessionId) {
+            addDraftDocuments([docId]);
+            setNotice(t('docs.willAttach', { name: filename }));
+            log.doc.info(`"${filename}" will be attached to the next new chat`);
+            return;
+        }
+        await api.attachDocument(targetSessionId, docId);
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        if (!existing.includes(docId)) {
+            updateSessionInList(targetSessionId, {
+                document_ids: [...existing, docId],
+            });
+        }
+        setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
+        log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
+    }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments, t]);
+
+    /** Attach a folder's newly indexed documents where the user chose. */
+    const attachIndexed = useCallback(async (docIds: string[], label: string) => {
+        if (docIds.length === 0) return;
+        if (!targetSessionId) {
+            addDraftDocuments(docIds);
+            log.doc.info(`"${label}" will be attached to the next new chat`);
+            return;
+        }
+        const attached: string[] = [];
+        for (const id of docIds) {
+            try {
+                await api.attachDocument(targetSessionId, id);
+                attached.push(id);
+            } catch (attachErr) {
+                log.doc.warn(`Could not attach document to session: ${attachErr}`);
+            }
+        }
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        const added = attached.filter((id) => !existing.includes(id));
+        if (added.length > 0) {
+            updateSessionInList(targetSessionId, { document_ids: [...existing, ...added] });
+        }
+        log.doc.info(`Attached "${label}" to session ${targetSessionId}`);
+    }, [targetSessionId, updateSessionInList, addDraftDocuments]);
+
     // Shared upload state-machine: preflight extension check, set UI state,
-    // run the caller-provided uploader, auto-attach the result to the current
-    // session, and refresh the document list. Used by both path-based and
+    // run the caller-provided uploader, attach the result where the user
+    // chose, and refresh the document list. Used by both path-based and
     // blob-based upload flows.
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
+        onFolder?: () => Promise<void>,
     ) => {
-        // Pre-check: warn about unsupported file types before sending to server
+        if (!(await ensureModel('embedding'))) return;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-        if (ext && !isExtensionSupported(ext)) {
-            const category = getUnsupportedCategory(ext);
-            const errMsg = category
-                ? category.message
-                : `The file type "${ext}" is not supported for indexing.`;
+        const unsupportedMessage = ext && !isExtensionSupported(ext)
+            ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
+            : null;
+        // A typed path may be a dotted folder name (notes.v2), so only the server can rule it out.
+        if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
-            setUploadError({ filename, error: errMsg });
+            setUploadError({ filename, error: unsupportedMessage });
             return;
         }
 
         log.doc.info(`Indexing document: ${filename}`);
-        const t = log.doc.time();
+        const timer = log.doc.time();
         setIsUploading(true);
-        setUploadStatus(`Indexing ${filename}...`);
+        setUploadStatus(t('docs.indexingFile', { name: filename }));
         setUploadError(null);
+        setFolderNotice(null);
+        setNotice('');
         try {
             const doc = await uploader();
-            log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
-            // Auto-attach to the active session so the agent can immediately use it
-            if (currentSessionId && doc?.id) {
+            log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, timer);
+            if (doc?.id) {
                 try {
-                    await api.attachDocument(currentSessionId, doc.id);
-                    const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-                    const existing = freshSession?.document_ids ?? [];
-                    if (!existing.includes(doc.id)) {
-                        updateSessionInList(currentSessionId, {
-                            document_ids: [...existing, doc.id],
-                        });
-                    }
-                    log.doc.info(`Auto-attached "${filename}" to session ${currentSessionId}`);
+                    await attachToTarget(doc.id, doc.filename || filename);
                 } catch (attachErr) {
-                    log.doc.warn(`Could not attach document to session: ${attachErr}`);
+                    log.doc.error(`Could not attach "${filename}" to ${targetChatName}`, attachErr);
+                    setUploadError({
+                        filename,
+                        error: `Indexed, but not attached to ${targetChatName}: ${
+                            attachErr instanceof Error ? attachErr.message : attachErr}`,
+                    });
                 }
-            } else if (doc?.id) {
-                // No chat is open: the agent only sees attached documents, so hold it for the next one.
-                addDraftDocuments([doc.id]);
-                log.doc.info(`"${filename}" will be attached to the next new chat`);
             }
             // Refresh document list
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
         } catch (err) {
+            // ApiError's fields, read by shape: the class itself is mocked in tests.
+            const { httpStatus, reason } = (err ?? {}) as { httpStatus?: number; reason?: string | null };
+            if (reason === 'is_folder' && onFolder) {
+                await onFolder();
+                return;
+            }
             log.doc.error(`Failed to index "${filename}"`, err);
-            // Extract error message from API response
-            const errMsg = err instanceof Error ? err.message : 'Upload failed';
-            setUploadError({ filename, error: errMsg });
+            const errMsg = httpStatus === 400 && unsupportedMessage
+                ? unsupportedMessage
+                : err instanceof Error ? err.message : 'Upload failed';
+            setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
         } finally {
             setIsUploading(false);
         }
-    }, [currentSessionId, updateSessionInList, setDocuments, addDraftDocuments]);
+    }, [attachToTarget, targetChatName, setDocuments, t]);
+
+    /** Index the documents directly inside a folder typed into the path box. */
+    const indexFolderPath = useCallback(async (folder: string, folderName: string) => {
+        log.doc.info(`"${folder}" is a folder; indexing its documents`);
+        setUploadStatus(t('docs.indexingFolder', { name: folderName }));
+        try {
+            // Top level only: a typed path like a home folder would otherwise index everything below it.
+            const result = await api.indexFolder(folder, false);
+            await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
+            setFolderNotice(describeFolderResult(folderName, result));
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+        } catch (err) {
+            log.doc.error(`Failed to index folder "${folder}"`, err);
+            const errMsg = err instanceof Error ? err.message : 'Folder indexing failed';
+            const { httpStatus } = (err ?? {}) as { httpStatus?: number };
+            setUploadError({ filename: folderName, error: errMsg, status: httpStatus });
+        } finally {
+            setUploadStatus('');
+        }
+    }, [attachIndexed, setDocuments, t]);
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
-        await runUpload(filename, () => api.uploadDocumentByPath(filepath));
-    }, [runUpload]);
+        await runUpload(
+            filename,
+            () => api.uploadDocumentByPath(filepath),
+            () => indexFolderPath(filepath, filename),
+        );
+    }, [runUpload, indexFolderPath]);
 
     /**
      * Index a document by uploading its bytes directly (used by drag-and-drop).
@@ -361,107 +494,120 @@ export function DocumentLibrary() {
     }, [documents, setDocuments, reindexingIds]);
 
     const handleAttachDoc = useCallback(async (docId: string) => {
-        const doc = documents.find((d) => d.id === docId);
-        if (!currentSessionId) {
-            addDraftDocuments([docId]);
-            log.doc.info(`"${doc?.filename || docId}" will be attached to the next new chat`);
-            return;
-        }
-        log.doc.info(`Attaching document to session: ${doc?.filename || docId}`);
+        const name = documents.find((d) => d.id === docId)?.filename || docId;
+        setNotice('');
         try {
-            await api.attachDocument(currentSessionId, docId);
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-            const existing = freshSession?.document_ids ?? [];
-            if (!existing.includes(docId)) {
-                updateSessionInList(currentSessionId, {
-                    document_ids: [...existing, docId],
-                });
-            }
-            log.doc.info(`Attached "${doc?.filename || docId}" to session ${currentSessionId}`);
+            await attachToTarget(docId, name);
         } catch (err) {
-            log.doc.error(`Failed to attach document to session: ${doc?.filename || docId}`, err);
+            log.doc.error(`Failed to attach ${name} to ${targetChatName}`, err);
+            setUploadError({
+                filename: name,
+                error: `Not attached to ${targetChatName}: ${err instanceof Error ? err.message : err}`,
+            });
         }
-    }, [currentSessionId, documents, updateSessionInList, addDraftDocuments]);
+    }, [documents, attachToTarget, targetChatName]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
         if (!folderPath.trim()) return;
-        log.doc.info(`Indexing from path input: ${folderPath.trim()}`);
-        await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
+        const typed = folderPath.trim();
+        log.doc.info(`Indexing from path input: ${typed}`);
+        await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
         setFolderPath('');
     }, [folderPath, uploadFile]);
 
     const renderDocStatus = (doc: Document) => {
         const status = doc.indexing_status || 'complete';
         const startTime = indexingStartTimes.current.get(doc.id);
-        const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at) : '';
-        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at) : '';
+        const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at, t) : '';
+        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at, t) : '';
 
         switch (status) {
             case 'indexing':
-            case 'pending':
+            case 'pending': {
+                const progress = progressById[doc.id];
                 return (
                     <div className="doc-indexing-status">
+                        {progress ? <IndexingProgress progress={progress} /> : (
                         <div className="doc-indexing-bar">
                             <div className="doc-indexing-bar-track">
                                 <div className="doc-indexing-bar-fill" />
                             </div>
                             <span className="doc-indexing-label">
                                 <Loader size={12} className="doc-spin" />
-                                Indexing{startTime ? ` (${elapsed(startTime)})` : '...'}
+                                {startTime ? t.hint(t('docs.indexingLabel'), elapsed(startTime)) : t('docs.indexing')}
                             </span>
                         </div>
+                        )}
                         <button
                             className="btn-cancel"
                             onClick={(e) => { e.stopPropagation(); handleCancelIndexing(doc.id); }}
-                            title="Cancel indexing"
-                            aria-label={`Cancel indexing ${doc.filename}`}
+                            title={t('docs.cancelIndexing')}
+                            aria-label={t('docs.cancelIndexingAria', { name: doc.filename })}
                         >
                             <StopCircle size={14} />
-                            Cancel
+                            {t('docs.cancel')}
                         </button>
                     </div>
                 );
-            case 'failed':
+            }
+            case 'failed': {
+                const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
+                const reason = doc.last_error ? splitFailureReason(doc.last_error) : null;
                 return (
-                    <div className="doc-indexing-status">
-                        <span
-                            className="doc-status-badge doc-status-failed"
-                            title={doc.last_error || undefined}
-                            aria-label={doc.last_error ? `Failed: ${doc.last_error}` : 'Indexing failed'}
-                        >
-                            <AlertCircle size={12} /> Failed
-                        </span>
-                        <button
-                            className="btn-retry"
-                            onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
-                            title="Retry indexing"
-                            aria-label={`Retry indexing ${doc.filename}`}
-                            disabled={reindexingIds.has(doc.id)}
-                        >
-                            <RefreshCcw size={14} />
-                            {reindexingIds.has(doc.id) ? 'Retrying…' : 'Retry'}
-                        </button>
+                    <div className="doc-failure">
+                        <div className="doc-indexing-status">
+                            <span
+                                className="doc-status-badge doc-status-failed"
+                                title={doc.last_error || undefined}
+                                aria-label={doc.last_error ? t('docs.failedAria', { error: doc.last_error }) : t('docs.indexingFailed')}
+                            >
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
+                            </span>
+                            <button
+                                className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
+                                onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
+                                title={hint ? t('docs.retryTitleFix') : t('docs.retryTitle')}
+                                aria-label={t('docs.retryAria', { name: doc.filename })}
+                                disabled={reindexingIds.has(doc.id)}
+                            >
+                                <RefreshCcw size={hint ? 12 : 14} />
+                                {reindexingIds.has(doc.id) ? t('docs.retrying') : t('docs.retry')}
+                            </button>
+                        </div>
+                        {hint && <p className="doc-failure-hint">{hint}</p>}
+                        {reason && (reason.more ? (
+                            <details className="doc-failure-reason">
+                                <summary>{reason.summary}</summary>
+                                <p>{reason.more}</p>
+                            </details>
+                        ) : (
+                            <p className="doc-failure-reason">{reason.summary}</p>
+                        ))}
+                        {!reason && !hint && (
+                            <p className="doc-failure-reason">{t('docs.noReason')}</p>
+                        )}
                     </div>
                 );
+            }
             case 'cancelled':
                 return (
                     <span className="doc-status-badge doc-status-cancelled">
-                        <StopCircle size={12} /> Cancelled
+                        <StopCircle size={12} /> {t('docs.cancelled')}
                     </span>
                 );
             case 'missing':
                 return (
                     <span className="doc-status-badge doc-status-missing">
-                        <AlertCircle size={12} /> File missing
+                        <AlertCircle size={12} /> {t('docs.missing')}
                     </span>
                 );
             default:
                 return (
                     <span className="doc-meta">
-                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunk{doc.chunk_count !== 1 ? 's' : ''}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
                         {indexedTime && (
-                            <span className="doc-timestamp" title={`Indexed: ${indexedTimeFull}`}>
+                            <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
                                 {indexedTime}
                             </span>
@@ -472,16 +618,34 @@ export function DocumentLibrary() {
     };
 
     return (
-        <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document library">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label={t('docs.title')}>
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Document library</h3>
-                    <button className="btn-icon" onClick={() => setShowDocLibrary(false)} aria-label="Close document library">
+                    <h3>{t('docs.title')}</h3>
+                    <button className="btn-icon" onClick={() => setShowDocLibrary(false)} aria-label={t('docs.close')}>
                         <X size={18} />
                     </button>
                 </div>
 
                 <div className="modal-body">
+                    <div className="doc-target">
+                        {currentSessionId ? (
+                            <label className="doc-target-choice">
+                                {t('docs.addTo')}
+                                <select
+                                    value={target}
+                                    onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
+                                >
+                                    <option value="chat">{t.bare('docs.thisChat', { chat: targetChatName })}</option>
+                                    <option value="next">{t.bare('docs.nextChat')}</option>
+                                </select>
+                            </label>
+                        ) : (
+                            <span>{t('docs.nextChatOnly')}</span>
+                        )}
+                        <span className="doc-target-hint">{t('docs.hint')}</span>
+                    </div>
+
                     {/* Drop zone */}
                     <div
                         className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''}`}
@@ -497,8 +661,8 @@ export function DocumentLibrary() {
                         ) : (
                             <>
                                 <Upload size={32} strokeWidth={1.5} />
-                                <p>Drop files here to index</p>
-                                <span className="drop-hint">PDF, TXT, MD, code files, and 50+ formats</span>
+                                <p>{t('docs.drop')}</p>
+                                <span className="drop-hint">{t('docs.dropHint')}</span>
                             </>
                         )}
                     </div>
@@ -511,40 +675,55 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder="Or enter file path: C:\docs\manual.pdf"
-                            aria-label="File path to index"
+                            placeholder={t('docs.pathPlaceholder', { example: examplePath() })}
+                            aria-label={t('docs.pathAria')}
+                            dir="auto"
                         />
                         <button type="submit" className="btn-secondary" disabled={!folderPath.trim() || isUploading}>
-                            Index
+                            {t('docs.index')}
                         </button>
                         <button
                             type="button"
                             className="btn-secondary"
                             onClick={() => { setShowDocLibrary(false); setShowFileBrowser(true); }}
-                            title="Browse files on this computer"
+                            title={t('docs.browseTitle')}
                         >
                             <Search size={14} />
-                            Browse files
+                            {t('docs.browse')}
                         </button>
                     </form>
+
+                    {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
                     {/* Upload error toast */}
                     {uploadError && (
                         <UploadErrorToast
                             filename={uploadError.filename}
                             error={uploadError.error}
+                            status={uploadError.status}
+                            kind={uploadError.kind}
                             onDismiss={() => setUploadError(null)}
                         />
+                    )}
+
+                    {folderNotice && (
+                        <div className="doc-folder-notice" role="status">
+                            <CheckCircle size={14} />
+                            <span>{folderNotice}</span>
+                            <button className="btn-icon-sm" onClick={() => setFolderNotice(null)} aria-label={t('docs.dismissFolder')}>
+                                <X size={12} />
+                            </button>
+                        </div>
                     )}
 
                     {/* Stats */}
                     {documents.length > 0 && (
                         <div className="doc-stats">
-                            <span>{documents.length} document{documents.length !== 1 ? 's' : ''}</span>
+                            <span>{t.plural('docs.count', documents.length)}</span>
                             <span>&middot;</span>
-                            <span>{totalChunks} chunk{totalChunks !== 1 ? 's' : ''}</span>
+                            <span>{t.plural('docs.chunks', totalChunks)}</span>
                             <span>&middot;</span>
-                            <span>{formatSize(totalSize)}</span>
+                            <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
                     )}
 
@@ -553,14 +732,14 @@ export function DocumentLibrary() {
                         {documents.length === 0 && !isUploading && (
                             <div className="empty-docs">
                                 <FileText size={32} strokeWidth={1} />
-                                <p>No documents indexed yet</p>
-                                <span>Drop files above or enter a file path</span>
+                                <p>{t('docs.empty')}</p>
+                                <span>{t('docs.emptyHint')}</span>
                             </div>
                         )}
                         {documents.map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name">{doc.filename}</span>
+                                    <span className="doc-name" dir="auto">{doc.filename}</span>
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">
@@ -568,23 +747,23 @@ export function DocumentLibrary() {
                                         <button
                                             className="btn-icon-sm doc-open-folder"
                                             onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
-                                            title={`Open folder: ${doc.filepath}`}
-                                            aria-label={`Open containing folder for ${doc.filename}`}
+                                            title={t('docs.openFolder', { path: doc.filepath })}
+                                            aria-label={t('docs.openFolderAria', { name: doc.filename })}
                                         >
                                             <FolderOpen size={14} />
                                         </button>
                                     )}
                                     {doc.indexing_status === 'complete' &&
-                                     !(currentSessionId
+                                     !(targetSessionId
                                         ? currentSession?.document_ids?.includes(doc.id)
                                         : draftDocumentIds.includes(doc.id)) && (
                                         <button
                                             className="btn-icon-sm doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
-                                            title={currentSessionId ? 'Use in current session' : 'Use in your next chat'}
-                                            aria-label={currentSessionId
-                                                ? `Attach ${doc.filename} to current session`
-                                                : `Attach ${doc.filename} to your next chat`}
+                                            title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
+                                            aria-label={targetSessionId
+                                                ? t('docs.attachAria', { name: doc.filename, chat: targetChatName })
+                                                : t('docs.attachNextAria', { name: doc.filename })}
                                         >
                                             <Link2 size={14} />
                                         </button>
@@ -593,8 +772,8 @@ export function DocumentLibrary() {
                                         <button
                                             className="btn-icon-sm doc-delete"
                                             onClick={() => handleDeleteDoc(doc.id)}
-                                            title="Remove"
-                                            aria-label={`Remove ${doc.filename}`}
+                                            title={t('docs.remove')}
+                                            aria-label={t('docs.removeAria', { name: doc.filename })}
                                         >
                                             <Trash2 size={14} />
                                         </button>

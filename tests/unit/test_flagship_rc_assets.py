@@ -120,9 +120,11 @@ def test_an_rc_cannot_be_approved_or_released_without_its_flagship():
 
 
 def test_the_rc_windows_setup_bundles_this_runs_flagship():
-    setup = _jobs("publish.yml")["rc-windows-setup"]
+    setup = _jobs("publish.yml")["windows-setup"]
     assert "rc-flagship" in setup["needs"]
-    assert setup["with"]["sidecar"] == "artifact"
+    assert setup["with"]["sidecar"].startswith(
+        "${{ needs.validate.outputs.is_rc == 'true' && 'artifact'"
+    )
 
 
 def test_the_rc_release_attaches_the_flagship():
@@ -131,6 +133,41 @@ def test_the_rc_release_attaches_the_flagship():
         s for s in steps if s.get("name", "").startswith("Attach the flagship")
     )
     assert "flagship_rc_assets.py release" in attach["run"]
+
+
+def test_the_rc_real_engine_check_installs_this_runs_flagship():
+    # rc14: every real-engine row 404'd on the pre-release its own run publishes.
+    from gaia.hub import prerelease
+
+    core = _jobs("build_core.yml")
+    pack = "\n".join(s.get("run", "") for s in core["rc-flagship"]["steps"])
+    assert "flagship_rc_assets.py release" in pack
+    assert "inputs.flagship == 'artifact'" in core["rc-flagship"]["if"]
+
+    real = core["real-engine"]
+    assert "rc-flagship" in real["needs"]
+    assert "needs.rc-flagship.result == 'success'" in real["if"]
+    check = next(s for s in real["steps"] if "real_engine_check.sh" in s.get("run", ""))
+    assert f"export {prerelease.ASSETS_URL_ENV}=" in check["run"]
+
+
+def test_every_rc_core_build_waits_for_and_gets_the_flagship():
+    desktop = _jobs("publish.yml")["build-desktop-installers"]
+    assert "rc-flagship" in desktop["needs"]
+    assert "needs.rc-flagship.result == 'success'" in desktop["if"]
+    assert desktop["with"]["flagship"].startswith(
+        "${{ needs.validate.outputs.is_rc == 'true' && 'artifact'"
+    )
+    assert _jobs("build-installers.yml")["core"]["with"]["flagship"] == (
+        "${{ inputs.flagship }}"
+    )
+    for name in ("tui_installers.yml", "windows_setup.yml"):
+        assert _jobs(name)["core"]["with"]["flagship"] == (
+            "${{ inputs.sidecar == 'artifact' && 'artifact' || '' }}"
+        )
+    ui_rc = _jobs("release_train_dryrun.yml")["ui-rc"]
+    assert "sidecar" in ui_rc["needs"]
+    assert ui_rc["with"]["flagship"] == "artifact"
 
 
 def test_flagship_releases_freeze_through_the_same_workflow():

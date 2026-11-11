@@ -5,6 +5,7 @@
 
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.skills
+import gaia.skills.listing
 from gaia.skills.errors import SkillError
 from gaia.ui.routers import skills as skills_router
 
@@ -52,18 +54,22 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
 
         def reload(self):
             return {
-                "zeta": _skill("zeta", root="/bundled/a/zeta", tools=("t1",)),
+                "zeta": _skill("zeta", root="claude-import", tools=("t1",)),
                 "alpha": _skill(
                     "alpha", description="A", version="1.0", tier="verified"
                 ),
             }
 
     monkeypatch.setattr(gaia.skills, "SkillManager", FakeManager)
+    project = Path("/work/repo")
+    monkeypatch.setattr(gaia.skills.listing, "default_project_dir", lambda: project)
     resp = client.get("/api/skills")
     assert resp.status_code == 200
+    # The project root, as the agent maps it, so its .claude/skills list alike.
     assert seen == {
         "agent_skill_dirs": ["/bundled/a", "/bundled/b"],
         "excluded_names": ("gaia-harness-engineering",),
+        "project_dir": project,
     }
     body = resp.json()
     assert body["invalid"] == {"/bad/SKILL.md": "missing name"}
@@ -75,6 +81,8 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "tier": "verified",
             "tools": [],
             "path": "",
+            "always_on": False,
+            "source": None,
         },
         {
             "name": "zeta",
@@ -82,9 +90,42 @@ def test_lists_with_the_agents_roots_and_excludes_engineering(client, monkeypatc
             "version": None,
             "tier": "experimental",
             "tools": ["t1"],
-            "path": "/bundled/a/zeta",
+            "path": "claude-import",
+            "always_on": False,
+            "source": "claude-import",
         },
     ]
+
+
+def test_a_manifest_marks_always_on_skills_without_changing_discovery(
+    client, monkeypatch, tmp_path
+):
+    """The manifest, not the skill name or description, determines the badge."""
+    manifest = tmp_path / "gaia-agent.yaml"
+    manifest.write_text("skills:\n  - gaia-voice\n", encoding="utf-8")
+    _fake_agent_module(monkeypatch, [str(tmp_path)])
+    from gaia_agent.agent import GaiaAgent
+
+    GaiaAgent.SKILL_MANIFEST = str(manifest)
+
+    class FakeManager:
+        discovery_errors = {}
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def reload(self):
+            return {
+                "gaia-voice": _skill("gaia-voice"),
+                "normal-skill": _skill("normal-skill"),
+            }
+
+    monkeypatch.setattr(gaia.skills, "SkillManager", FakeManager)
+    resp = client.get("/api/skills")
+    assert resp.status_code == 200, resp.text
+    by_name = {s["name"]: s for s in resp.json()["skills"]}
+    assert by_name["gaia-voice"]["always_on"] is True
+    assert by_name["normal-skill"]["always_on"] is False
 
 
 class _FakeHandle:
@@ -156,12 +197,13 @@ def test_an_agent_too_old_to_list_skills_says_to_update_it(client, monkeypatch):
 
     assert resp.status_code == 503
     detail = resp.json()["detail"]
-    assert "2.17" in detail and "Update the GAIA agent" in detail
+    assert "Update GAIA" in detail
+    assert "2.17" not in detail and "contract" not in detail
     assert "gaia init" not in detail
 
 
 def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch, acquire_error=SidecarError("daemon not reachable at :59171")
@@ -174,7 +216,7 @@ def test_an_agent_that_cannot_start_is_reported_not_hidden(client, monkeypatch):
 
 
 def test_an_agent_that_fails_to_list_is_a_502_with_its_reason(client, monkeypatch):
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     _no_agent_package(
         monkeypatch,

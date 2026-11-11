@@ -5,9 +5,10 @@
  * The session panel (#5279). Structure lives in the components; colours,
  * radii and shadows are the app's role tokens, and the panel's own sizes are
  * the layout tokens below, so the redesign (#1001) restyles it by changing
- * tokens, not markup.
+ * tokens, not markup. The folder picker also opens from the new-chat page.
  */
-.task-view {
+.task-view,
+.sp-picker {
     --sp-top: 48px;
     --sp-fs-title: 12px;
     --sp-fs: 12.5px;
@@ -28,19 +29,20 @@
    reading column re-centres in the space left rather than sliding under it. */
 .task-view:has(> .session-panel.is-docked) > .messages-scroll,
 .task-view:has(> .session-panel.is-docked) > .input-area,
-.task-view:has(> .session-panel.is-docked) > .doc-context-bar {
-    margin-right: var(--session-panel-w);
+.task-view:has(> .session-panel.is-docked) > .doc-context-bar,
+.task-view:has(> .session-panel.is-docked) > .resource-strip {
+    margin-inline-end: var(--session-panel-w);
 }
 
 .session-panel {
     position: absolute;
     top: var(--sp-top);
-    right: 0;
+    inset-inline-end: 0;
     bottom: 0;
     display: flex;
     flex-direction: column;
     background: var(--bg-primary);
-    border-left: 1px solid var(--border-light);
+    border-inline-start: 1px solid var(--border-light);
     font-family: var(--font-sans);
     font-size: var(--sp-fs);
     color: var(--text-primary);
@@ -51,8 +53,10 @@
     width: var(--sp-overlay-w);
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-right: none;
-    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+    border-inline-end: none;
+    border-radius: var(--radius-lg);
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
     box-shadow: var(--shadow-lg);
     z-index: 20;
 }
@@ -68,7 +72,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: calc(var(--sp-handle) / -2);
+    inset-inline-start: calc(var(--sp-handle) / -2);
     width: var(--sp-handle);
     cursor: col-resize;
     touch-action: none;
@@ -80,7 +84,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: calc(var(--sp-handle) / 2 - 1px);
+    inset-inline-start: calc(var(--sp-handle) / 2 - 1px);
     width: 2px;
     background: var(--accent);
     opacity: 0;
@@ -127,14 +131,14 @@
     font: inherit;
     font-weight: 600;
     color: var(--text-primary);
-    text-align: left;
+    text-align: start;
     border-radius: var(--radius-sm);
 }
 
 .sp-section-head:hover { background: var(--bg-hover); }
 
 .sp-section-summary {
-    margin-left: auto;
+    margin-inline-start: auto;
     font-weight: 400;
     font-size: var(--sp-fs-sm);
     color: var(--text-muted);
@@ -251,7 +255,44 @@
     white-space: nowrap;
 }
 
+/* One box, so a long path drops to its own line instead of wrapping around an rtl label. */
+.sp-item-path {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
 .sp-item-remove { flex-shrink: 0; }
+
+.sp-tools {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-space-3);
+}
+
+.sp-tool-group-title {
+    margin: 0 0 var(--sp-space-1);
+    font-size: var(--sp-fs-sm);
+    font-weight: 600;
+}
+
+.sp-tool {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sp-tool code.sp-item-name { font-family: var(--font-mono); }
+
+.sp-skill-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.sp-skill-name svg { flex-shrink: 0; color: var(--accent); }
 
 .sp-output.is-inactive .sp-item-name {
     color: var(--text-muted);
@@ -335,7 +376,7 @@
 .sp-switch-knob {
     position: absolute;
     top: 2px;
-    left: 2px;
+    inset-inline-start: 2px;
     width: calc(var(--sp-switch-h) - 4px);
     height: calc(var(--sp-switch-h) - 4px);
     border-radius: 50%;
@@ -345,6 +386,9 @@
 
 .sp-switch.is-on .sp-switch-knob {
     transform: translateX(calc(var(--sp-switch-w) - var(--sp-switch-h)));
+}
+.sp-switch.is-on:dir(rtl) .sp-switch-knob {
+    transform: translateX(calc(var(--sp-switch-h) - var(--sp-switch-w)));
 }
 
 .sp-state-text { font-size: var(--sp-fs-sm); color: var(--text-secondary); }
@@ -411,7 +455,17 @@
     color: var(--text-secondary);
 }
 
-.sp-picker-quick { display: flex; flex-wrap: wrap; gap: var(--sp-space-1); }
+.sp-picker-quick { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-space-1); }
+
+.sp-picker-hidden {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-space-1);
+    margin-inline-start: auto;
+    font-size: var(--sp-fs-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+}
 
 .sp-picker-list {
     list-style: none;
@@ -432,7 +486,7 @@
     font: inherit;
     font-size: var(--sp-fs);
     color: var(--text-primary);
-    text-align: left;
+    text-align: start;
 }
 
 .sp-picker-list li > button:hover { background: var(--bg-hover); }

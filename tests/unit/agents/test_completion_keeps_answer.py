@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """A finished answer that names its output folder and a script-written file
 reaches the user as written. On rc13 the completion check replaced it with
-"I can't confirm this is done" plus a raw dump (agent UI test, kw-13)."""
+"I can't confirm this is done" plus a raw dump in the Agent UI."""
 
 import json
 import subprocess

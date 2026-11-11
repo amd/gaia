@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from gaia.logger import get_logger
+from gaia.mcp.protocol import MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 
 from .transports.base import MCPTransport
 from .transports.stdio import StdioTransport
@@ -352,6 +353,8 @@ class MCPTool:
             # mcp_servers.json key so routing back to a client still
             # works after sanitisation changes the prefix.
             "_mcp_server": raw_server_name,
+            # The server's own tool name, so the UI never splits the prefixed one.
+            "_mcp_tool": self.name,
         }
 
 
@@ -403,6 +406,7 @@ class MCPClient:
         self.transport = transport
         self.debug = debug
         self.server_info: Dict[str, Any] = {}
+        self.protocol_version: Optional[str] = None
         self._tools: Optional[List[MCPTool]] = None
         self.last_error: Optional[str] = None
 
@@ -507,7 +511,7 @@ class MCPClient:
             response = self.transport.send_request(
                 "initialize",
                 {
-                    "protocolVersion": "1.0.0",
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
                     "clientInfo": {
                         "name": "GAIA MCP Client",
                         "version": "0.15.2",
@@ -528,7 +532,23 @@ class MCPClient:
                 return False
 
             result = response.get("result", {})
+            version = result.get("protocolVersion")
+            if (
+                not isinstance(version, str)
+                or version not in SUPPORTED_PROTOCOL_VERSIONS
+            ):
+                self.last_error = (
+                    f"MCP server '{self.name}' answered initialize with protocol "
+                    f"version {self._redact(version)!r}, which GAIA does not speak "
+                    f"(it supports {', '.join(sorted(SUPPORTED_PROTOCOL_VERSIONS))}). "
+                    "Update the server, or pin a release that speaks one of these."
+                )
+                logger.debug(f"MCP server '{self.name}': {self.last_error}")
+                self.disconnect()
+                return False
+            self.protocol_version = version
             self.server_info = result.get("serverInfo", {})
+            self.transport.send_notification("notifications/initialized")
 
             logger.debug(
                 f"Connected to '{self.name}' - "

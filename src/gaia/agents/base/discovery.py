@@ -24,8 +24,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+from xml.parsers import expat
 
 from gaia.logger import get_logger
+from gaia.utils.user_folders import documents_dir
 
 try:
     import winreg  # Windows only
@@ -404,6 +406,55 @@ def _make_profile_fact(
     }
 
 
+class _UnsafeXmlError(ValueError):
+    """An XML file declared entities or referenced an external DTD."""
+
+
+def _read_xbel_hrefs(path: Path) -> List[str]:
+    """Return the ``href`` of every top-level ``<bookmark>`` in an XBEL file.
+
+    A DOCTYPE with an internal subset or an external id is refused before
+    its body is read, so entity declarations (billion laughs, quadratic
+    blowup, external entities) never get expanded, whatever expat version
+    the interpreter links. A bare ``<!DOCTYPE xbel>`` declares nothing and
+    is allowed.
+
+    Raises:
+        _UnsafeXmlError: the DOCTYPE declares entities or names an external DTD.
+        expat.ExpatError: the file is not well-formed XML.
+        ValueError: the file declares a multi-byte encoding expat cannot read.
+        LookupError: the file declares an unknown encoding.
+        OSError: the file cannot be read.
+    """
+    hrefs: List[str] = []
+    depth = 0
+
+    def start_doctype(_name, sysid, pubid, has_internal_subset):
+        if sysid or pubid or has_internal_subset:
+            raise _UnsafeXmlError(
+                f"{path} has a DOCTYPE with declarations or an external DTD; "
+                "refusing to parse it"
+            )
+
+    def start_element(name, attrs):
+        nonlocal depth
+        depth += 1
+        if depth == 2 and name == "bookmark":
+            hrefs.append(attrs.get("href", ""))
+
+    def end_element(_name):
+        nonlocal depth
+        depth -= 1
+
+    parser = expat.ParserCreate()
+    parser.StartDoctypeDeclHandler = start_doctype
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    with open(path, "rb") as f:
+        parser.ParseFile(f)
+    return hrefs
+
+
 # ============================================================================
 # File type categories — shared by recent-file scanners across all platforms
 # ============================================================================
@@ -509,7 +560,8 @@ def _classify_remote(remote_url: str) -> str:
     # Personal GitHub indicators — parse the hostname to avoid substring spoofing
     try:
         hostname = urlparse(remote_url).hostname or ""
-    except Exception:
+    except ValueError as e:
+        logger.debug("Could not parse git remote %r: %s", remote_url, e)
         hostname = ""
     if hostname == "github.com" or hostname.endswith(".github.com"):
         return "unclassified"
@@ -1075,7 +1127,7 @@ class SystemDiscovery:
         if paths is None:
             paths = [
                 self._home / "Work",
-                self._home / "Documents",
+                documents_dir(self._home),
                 self._home / "Projects",
             ]
 
@@ -1176,7 +1228,7 @@ class SystemDiscovery:
         if paths is None:
             paths = [
                 self._home / "Work",
-                self._home / "Documents",
+                documents_dir(self._home),
                 self._home / "Projects",
             ]
 
@@ -2603,7 +2655,8 @@ class SystemDiscovery:
                 for pattern, tool_name in tool_patterns.items():
                     if pattern in content_lower and tool_name not in found_tools:
                         found_tools.add(tool_name)
-            except Exception:
+            except Exception as e:
+                logger.debug("Could not read shell config %s: %s", shell_file, e)
                 continue
 
         if found_tools:
@@ -2649,7 +2702,7 @@ class SystemDiscovery:
             if p.is_dir():
                 search_roots.append(p)
         # Also check Documents
-        docs = home / "Documents"
+        docs = documents_dir(home)
         if docs.is_dir():
             search_roots.append(docs)
 
@@ -2715,8 +2768,12 @@ class SystemDiscovery:
                                             if pname and pname not in project_names:
                                                 project_names.append(pname)
                                             break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(
+                                        "Could not read project manifest %s: %s",
+                                        fpath,
+                                        e,
+                                    )
                             elif fname == "Cargo.toml":
                                 try:
                                     content = fpath.read_text(
@@ -2730,8 +2787,12 @@ class SystemDiscovery:
                                             if pname and pname not in project_names:
                                                 project_names.append(pname)
                                             break
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug(
+                                        "Could not read project manifest %s: %s",
+                                        fpath,
+                                        e,
+                                    )
                     if len(manifests_found) >= 30:  # cap to avoid huge scans
                         break
             except (PermissionError, OSError):
@@ -2892,7 +2953,7 @@ class SystemDiscovery:
             r"(resume|cv|curriculum[_\s-]?vitae|cover[_\s-]?letter)",
             re.IGNORECASE,
         )
-        docs_dir = home / "Documents"
+        docs_dir = documents_dir(home)
         if not docs_dir.exists() or not docs_dir.is_dir():
             return
 
@@ -2993,7 +3054,7 @@ class SystemDiscovery:
         }
 
         scan_dirs = [
-            home / "Documents",
+            documents_dir(home),
             home / "Desktop",
             home / "Downloads",
             home / "Projects",
@@ -3053,17 +3114,17 @@ class SystemDiscovery:
         """Detect note-taking / writing directories (Obsidian, Notion, markdown)."""
         # Check for known note-taking app vaults/exports
         writing_indicators = [
-            (home / "Documents" / "Obsidian", "Obsidian vault"),
+            (documents_dir(home) / "Obsidian", "Obsidian vault"),
             (home / "Obsidian", "Obsidian vault"),
-            (home / "Documents" / "Notion", "Notion export"),
+            (documents_dir(home) / "Notion", "Notion export"),
             (home / "Notion", "Notion export"),
-            (home / "Documents" / "Notes", "notes directory"),
+            (documents_dir(home) / "Notes", "notes directory"),
             (home / "Notes", "notes directory"),
-            (home / "Documents" / "Journal", "journal directory"),
+            (documents_dir(home) / "Journal", "journal directory"),
             (home / "Journal", "journal directory"),
-            (home / "Documents" / "Writing", "writing directory"),
+            (documents_dir(home) / "Writing", "writing directory"),
             (home / "Writing", "writing directory"),
-            (home / "Documents" / "Blog", "blog directory"),
+            (documents_dir(home) / "Blog", "blog directory"),
             (home / "Blog", "blog directory"),
         ]
 
@@ -3094,7 +3155,7 @@ class SystemDiscovery:
                     found_writing.append(description)
 
         # Also scan for .obsidian directories (indicates vault root)
-        for candidate in [home / "Documents", home]:
+        for candidate in [documents_dir(home), home]:
             if not candidate.exists():
                 continue
             try:
@@ -3137,7 +3198,7 @@ class SystemDiscovery:
         }
 
         scan_dirs = [
-            home / "Documents",
+            documents_dir(home),
             home / "Desktop",
             home / "Downloads",
             home / "Projects",
@@ -3325,7 +3386,8 @@ class SystemDiscovery:
                         # Decode ROT13-encoded path
                         try:
                             decoded = codecs.decode(name, "rot_13")
-                        except Exception:
+                        except Exception as e:
+                            logger.debug("Skipping UserAssist entry %r: %s", name, e)
                             continue
 
                         # Extract exe filename from the decoded path
@@ -3341,7 +3403,10 @@ class SystemDiscovery:
                                 run_count = int.from_bytes(
                                     data[4:8], byteorder="little"
                                 )
-                            except Exception:
+                            except Exception as e:
+                                logger.debug(
+                                    "Skipping UserAssist entry %s: %s", basename, e
+                                )
                                 continue
                         else:
                             continue
@@ -3492,7 +3557,7 @@ class SystemDiscovery:
 
         for scan_dir in [
             self._home / "Downloads",
-            self._home / "Documents",
+            documents_dir(self._home),
             self._home / "Desktop",
         ]:
             if not scan_dir.exists():
@@ -3541,7 +3606,6 @@ class SystemDiscovery:
         Returns:
             List of profile fact dicts for file-type usage patterns.
         """
-        import xml.etree.ElementTree as ET
         from urllib.parse import unquote
 
         xbel_path = self._home / ".local" / "share" / "recently-used.xbel"
@@ -3551,27 +3615,27 @@ class SystemDiscovery:
         facts: List[Dict] = []
         category_counts: Dict[str, tuple] = {}
 
+        # ValueError covers _UnsafeXmlError and expat's unsupported encodings.
         try:
-            tree = ET.parse(str(xbel_path))
-            root = tree.getroot()
-            for bookmark in root.findall("bookmark"):
-                href = bookmark.get("href", "")
-                if not href.startswith("file://"):
-                    continue
-                path = unquote(href[7:])  # strip "file://"
-                ext = os.path.splitext(path)[1].lower()
-                cat_info = _FILE_TYPE_CATEGORIES.get(ext)
-                if cat_info is None:
-                    continue
-                category, description = cat_info
-                if category in category_counts:
-                    count, desc = category_counts[category]
-                    category_counts[category] = (count + 1, desc)
-                else:
-                    category_counts[category] = (1, description)
-        except Exception as e:
-            logger.debug("_scan_linux_recent_files failed: %s", e)
+            hrefs = _read_xbel_hrefs(xbel_path)
+        except (expat.ExpatError, LookupError, OSError, ValueError) as e:
+            logger.warning("Skipping recent files in %s: %s", xbel_path, e)
             return facts
+
+        for href in hrefs:
+            if not href.startswith("file://"):
+                continue
+            path = unquote(href[7:])  # strip "file://"
+            ext = os.path.splitext(path)[1].lower()
+            cat_info = _FILE_TYPE_CATEGORIES.get(ext)
+            if cat_info is None:
+                continue
+            category, description = cat_info
+            if category in category_counts:
+                count, desc = category_counts[category]
+                category_counts[category] = (count + 1, desc)
+            else:
+                category_counts[category] = (1, description)
 
         for category, (count, description) in sorted(
             category_counts.items(), key=lambda x: x[1][0], reverse=True

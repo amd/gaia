@@ -34,11 +34,11 @@ if str(_REPO_ROOT) not in sys.path:
 pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.context_budget import (  # noqa: E402
+    _AGENT_LOOP_FIXED_TOKENS,
+    _RESPONSE_RESERVE_TOKENS,
     CONTEXT_TARGET_TOKENS,
     envelope_budget_tokens,
     estimate_tokens_json,
-    _AGENT_LOOP_FIXED_TOKENS,
-    _RESPONSE_RESERVE_TOKENS,
 )
 from gaia_agent_email.tools.triage_condense import (  # noqa: E402
     _estimate_envelope_tokens,
@@ -117,7 +117,10 @@ class TestSkillBodyAllowance:
     """
 
     def test_extra_fixed_tokens_shrink_the_envelope_one_for_one(self):
-        assert envelope_budget_tokens(extra_fixed_tokens=700) == envelope_budget_tokens() - 700
+        assert (
+            envelope_budget_tokens(extra_fixed_tokens=700)
+            == envelope_budget_tokens() - 700
+        )
 
     def test_zero_extra_is_byte_identical_to_the_pre_skills_budget(self):
         assert envelope_budget_tokens(extra_fixed_tokens=0) == 6144
@@ -130,7 +133,9 @@ class TestSkillBodyAllowance:
         result = _make_result(20)
         tight = condense_triage_result(result, extra_fixed_tokens=4000)
         loose = condense_triage_result(result, extra_fixed_tokens=0)
-        assert _estimate_envelope_tokens(tight) <= envelope_budget_tokens(extra_fixed_tokens=4000)
+        assert _estimate_envelope_tokens(tight) <= envelope_budget_tokens(
+            extra_fixed_tokens=4000
+        )
         assert len(tight.get("results", [])) <= len(loose.get("results", []))
 
     def test_skill_prompt_tokens_measures_the_rendered_fragment(self):

@@ -146,8 +146,12 @@ def search_web(
 ) -> str:
     """Search the web and return results with titles, URLs, and snippets.
 
-    Uses a search API to find relevant web pages. Returns titles, URLs, and
-    brief descriptions. Use fetch_page to read the full content of any result.
+    Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
+    brief descriptions. Use fetch_page to read the full content of any
+    result. For a version or release question, the project's own site,
+    repository or package page is listed first and marked [primary
+    source]: fetch its releases or changelog page and answer from it,
+    since snippets and news articles go stale.
 
     Args:
         query: Search query string
@@ -175,6 +179,30 @@ Web search results for: "python sqlite fts5 tutorial"
    Learn how to implement full-text search in Python using SQLite's FTS5...
 
 3. ...
+```
+
+**Version and release questions.** When the query asks about a version, release or
+changelog, results from the subject's own pages move to the top and get a
+`[primary source]` tag on the title line. A page is the subject's own when a
+distinctive query word is a whole part of its domain (`lemonade-server.ai`, not
+`realpython.com` for "python"), names the owner or is the exact name of a
+repository on a code host, or names a package on a registry. A closing note tells
+the model to fetch that page before answering. When no result is primary, the note
+says so and asks the model to search for the releases page first. Other searches
+keep the search engine's order with no tags or notes. The Agent UI removes the tag
+from the source titles it shows.
+
+```
+Web search results for: "lemonade server latest version"
+
+1. Releases · lemonade-sdk/lemonade [primary source]
+   https://github.com/lemonade-sdk/lemonade/releases
+
+2. AMD Lemonade 11.5 Released
+   https://www.phoronix.com/news/AMD-Lemonade-11.5
+
+This is a version or release question. Open the project's own releases, ...
+Use fetch_page(url) to read the full content of any result.
 ```
 
 ### 4.3 `download_file(url, save_to, filename)`
@@ -573,7 +601,7 @@ Single phase — this is a focused, self-contained feature.
   - `WebClient` utility class (rate limiting, timeouts, extraction)
   - `BrowserToolsMixin` with `register_browser_tools()` containing 4 tools
 - [ ] Update `src/gaia/agents/tools/__init__.py` to export `BrowserToolsMixin`
-- [ ] Update `hub/agents/chat/python/gaia_agent_chat/agent.py`:
+- [ ] Update `hub/agents/gaia/python/gaia_agent/chat_agent.py`:
   - Add `BrowserToolsMixin` to class MRO
   - Add `enable_browser` + config fields to `ChatAgentConfig`
   - Initialize `WebClient` in `__init__`
@@ -622,7 +650,16 @@ def _search_duckduckgo(self, query: str, num_results: int = 5) -> list[dict]:
     return results
 ```
 
-**Fallback:** If DuckDuckGo blocks or changes their HTML structure, the tool returns a clear error message suggesting the user try a direct URL instead.
+**When DuckDuckGo turns searches away:** DDG answers bursts of automated searches with HTTP 202 (or 403/429/503, or a 200 bot-check page). `search_duckduckgo` then:
+
+1. Tries the lite endpoint (`lite.duckduckgo.com/lite/`) after the HTML one refuses.
+2. Retries up to `max_attempts` rounds (default 3) with jittered exponential backoff from 2 s, honouring `Retry-After`. A wait over 20 s is not slept; it is returned to the caller.
+3. Paces every search in the process through one gate (at least 1.5 s apart), so parallel searches do not burst, and holds all of them back after a block. The gate is process-wide on purpose: DuckDuckGo throttles the IP, so in the Agent UI server one session's block also delays the others. Do not make it per-client.
+4. Stops waiting when the user presses Stop: `search_web` passes a stop check, and a pacing or backoff wait ends within 0.25 s of it.
+
+Each switch is logged: a refused endpoint, an endpoint that answered after a refusal, and a search answered by Tavily all log a warning.
+
+If every round is refused it raises `SearchUnavailableError`. `search_web` then uses the `mcp-tavily` connector when the user configured one, and labels those results as Tavily's. If Tavily is not configured it is never called. Otherwise it returns a `rate_limited` result: the agent loop waits it out instead of counting it as a repeated call or a tool failure, and the model is told to search again shortly, narrow the query, or fetch a known URL. After 3 refusals in a row the result drops `rate_limited` and says to stop searching, so the failure breaker can end a search loop that will not recover. When no Tavily connector is set up, that result also tells the model to let the user know `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...` adds a backup provider. A rate limit is never stored in memory as a known error. Other non-200 answers raise at once and are not retried.
 
 ---
 

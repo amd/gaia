@@ -10,9 +10,12 @@ import {
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { ref, type MessageKey } from '../i18n/registry';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
@@ -99,6 +102,7 @@ interface ToolStat {
     total_calls: number;
     success_count: number;
     failure_count: number;
+    denied_count?: number;
     success_rate: number;
     avg_duration_ms: number;
     last_used: string | null;
@@ -159,30 +163,30 @@ interface ToastMessage {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null, locale: string | undefined): string {
     if (!iso) return '\u2014';
     try {
         const d = new Date(iso);
         if (isNaN(d.getTime())) return '\u2014';
         const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
         if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
-        return d.toLocaleDateString(undefined, opts);
+        return d.toLocaleDateString(locale, opts);
     } catch { return '\u2014'; }
 }
 
-function formatDateFull(iso: string | null): string {
+function formatDateFull(iso: string | null, locale: string | undefined): string {
     if (!iso) return '';
     try {
         const d = new Date(iso);
         if (isNaN(d.getTime())) return '';
-        return d.toLocaleString(undefined, {
+        return d.toLocaleString(locale, {
             year: 'numeric', month: 'short', day: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit',
         });
     } catch { return ''; }
 }
 
-function formatRelativeDate(iso: string | null): string {
+function formatRelativeDate(iso: string | null, t: Translate): string {
     if (!iso) return '\u2014';
     try {
         const d = new Date(iso);
@@ -197,22 +201,22 @@ function formatRelativeDate(iso: string | null): string {
 
         if (diff < 0) {
             // Past
-            if (secs < 5) return 'just now';
-            if (secs < 60) return `${secs}s ago`;
-            if (hours === 0) return `${mins}m ago`;
-            if (days === 0) return `${hours}h ago`;
-            if (days === 1) return 'yesterday';
-            if (days < 30) return `${days}d ago`;
-            return formatDateFull(iso);
+            if (secs < 5) return t('time.justNow');
+            if (secs < 60) return t('mem.rel.secondsAgo', { n: secs });
+            if (hours === 0) return t('time.minutesAgo', { n: mins });
+            if (days === 0) return t('time.hoursAgo', { n: hours });
+            if (days === 1) return t('time.yesterday');
+            if (days < 30) return t('time.daysAgo', { n: days });
+            return formatDateFull(iso, dateLocale(t));
         } else {
             // Future
-            if (secs < 5) return 'now';
-            if (secs < 60) return `in ${secs}s`;
-            if (hours === 0) return `in ${mins}m`;
-            if (days === 0) return `in ${hours}h`;
-            if (days === 1) return 'tomorrow';
-            if (days < 30) return `in ${days}d`;
-            return formatDateFull(iso);
+            if (secs < 5) return t('mem.rel.now');
+            if (secs < 60) return t('mem.rel.inSeconds', { n: secs });
+            if (hours === 0) return t('mem.rel.inMinutes', { n: mins });
+            if (days === 0) return t('mem.rel.inHours', { n: hours });
+            if (days === 1) return t('mem.rel.tomorrow');
+            if (days < 30) return t('mem.rel.inDays', { n: days });
+            return formatDateFull(iso, dateLocale(t));
         }
     } catch { return '\u2014'; }
 }
@@ -240,9 +244,9 @@ function successRateClass(rate: number): string {
     return 'low';
 }
 
-function formatDateRange(start: string | null, end: string | null): string {
-    const s = formatDate(start);
-    const e = formatDate(end);
+function formatDateRange(start: string | null, end: string | null, locale: string | undefined): string {
+    const s = formatDate(start, locale);
+    const e = formatDate(end, locale);
     if (s === '\u2014' && e === '\u2014') return '';
     if (s === e) return s;
     return `${s} \u2013 ${e}`;
@@ -259,9 +263,50 @@ function todayCount(activity: ActivityDay[]): number {
 
 const ALL_CATEGORIES = ['fact', 'preference', 'error', 'skill', 'note', 'reminder'] as const;
 
+const CATEGORY_KEYS: Record<string, MessageKey> = {
+    fact: 'mem.cat.fact', preference: 'mem.cat.preference', error: 'mem.cat.error',
+    skill: 'mem.cat.skill', note: 'mem.cat.note', reminder: 'mem.cat.reminder',
+};
+
+const STATUS_KEYS: Record<string, MessageKey> = {
+    pending_approval: 'mem.status.pending_approval', queued: 'mem.status.queued',
+    in_progress: 'mem.status.in_progress', completed: 'mem.status.completed', failed: 'mem.status.failed',
+    rejected: 'mem.status.rejected', cancelled: 'mem.status.cancelled', blocked: 'mem.status.blocked',
+};
+
+const PRIORITY_KEYS: Record<string, MessageKey> = { low: 'mem.priority.low', medium: 'mem.priority.medium', high: 'mem.priority.high' };
+
+const GOAL_SOURCE_KEYS: Record<string, MessageKey> = {
+    agent_inferred: 'mem.goals.source.agent_inferred', agent_scheduled: 'mem.goals.source.agent_scheduled',
+};
+
+const ROLE_KEYS: Record<string, MessageKey> = { user: 'mem.role.user', assistant: 'mem.role.assistant' };
+
+const DOMAIN_KEYS: Record<string, MessageKey> = {
+    work: 'mem.domain.work', technical: 'mem.domain.technical', personal: 'mem.domain.personal', general: 'mem.domain.general',
+};
+
+/** A server-side code in the user's language; one the UI has no words for stays as sent. */
+function Code({ value, keys }: { value: string; keys: Record<string, MessageKey> }) {
+    const t = useT();
+    const key = keys[value];
+    return key ? <>{t(key)}</> : <bdi>{value}</bdi>;
+}
+
+function errorText(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+}
+
 type ProfilePhase = 'idle' | 'running' | 'review' | 'saving' | 'done';
 
 type DashboardTab = 'about' | 'goals' | 'profile' | 'advanced';
+
+/** A profile-setup log line; `server` lines are the backend's own words, shown as sent. */
+interface LogLine {
+    text: string;
+    kind: 'log' | 'finding' | 'error';
+    server?: boolean;
+}
 
 interface CheckedDiscoveryFinding extends memoryApi.DiscoveryFinding {
     _checked: boolean;
@@ -281,6 +326,7 @@ const DOMAIN_COLORS: Record<string, string> = {
 // ── Main Component ──────────────────────────────────────────────────────
 
 export function MemoryDashboard() {
+    const t = useT();
     const { setShowMemoryDashboard, sessions, setCurrentSession } = useChatStore();
     const sessionTitles = useMemo(() => new Map(sessions.map(s => [s.id, s.title])), [sessions]);
     // Chats deleted from the sidebar keep their memory turns but have no title.
@@ -298,7 +344,7 @@ export function MemoryDashboard() {
 
     // UI state
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [loadFailed, setLoadFailed] = useState(false);
     const [hoveredBar, setHoveredBar] = useState<number | null>(null);
     const [showMaintenanceMenu, setShowMaintenanceMenu] = useState(false);
     const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
@@ -358,7 +404,7 @@ export function MemoryDashboard() {
 
     // Profile Setup — Discovery
     const [discPhase, setDiscPhase] = useState<ProfilePhase>('idle');
-    const [discLogs, setDiscLogs] = useState<{ text: string; kind: 'log' | 'finding' | 'error' }[]>([]);
+    const [discLogs, setDiscLogs] = useState<LogLine[]>([]);
     const [discItems, setDiscItems] = useState<CheckedDiscoveryFinding[]>([]);
     const [discSavedCount, setDiscSavedCount] = useState<number | null>(null);
     const discLogRef = useRef<HTMLDivElement>(null);
@@ -366,7 +412,7 @@ export function MemoryDashboard() {
 
     // Profile Setup — Inference
     const [infPhase, setInfPhase] = useState<ProfilePhase>('idle');
-    const [infLogs, setInfLogs] = useState<{ text: string; kind: 'log' | 'finding' | 'error' }[]>([]);
+    const [infLogs, setInfLogs] = useState<LogLine[]>([]);
     const [infItems, setInfItems] = useState<CheckedInferenceInsight[]>([]);
     const [infSavedCount, setInfSavedCount] = useState<number | null>(null);
     const [infIncludeBrowser, setInfIncludeBrowser] = useState(false);
@@ -394,7 +440,7 @@ export function MemoryDashboard() {
         const id = ++toastIdRef.current;
         setToasts(prev => [...prev, { id, text, type }]);
         setTimeout(() => {
-            setToasts(prev => prev.filter(t => t.id !== id));
+            setToasts(prev => prev.filter(toast => toast.id !== id));
         }, 4000);
     }, []);
 
@@ -434,38 +480,14 @@ export function MemoryDashboard() {
 
     // Modal focus handling for the beta-confirm dialog: move focus in, keep Tab
     // inside it, and hand focus back to the toggle that opened it.
+    useFocusTrap(betaConfirmRef, !!betaConfirm);
     useEffect(() => {
         if (!betaConfirm) return;
         const panel = betaConfirmRef.current;
         if (!panel) return;
         const opener = document.activeElement as HTMLElement | null;
         panel.focus();
-
-        const focusable = () => Array.from(
-            panel.querySelectorAll<HTMLElement>(
-                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-            )
-        );
-        const handler = (e: KeyboardEvent) => {
-            if (e.key !== 'Tab') return;
-            const items = focusable();
-            if (items.length === 0) {
-                e.preventDefault();
-                return;
-            }
-            const active = document.activeElement;
-            const inside = !!active && panel.contains(active) && active !== panel;
-            if (e.shiftKey && (!inside || active === items[0])) {
-                e.preventDefault();
-                items[items.length - 1].focus();
-            } else if (!e.shiftKey && (!inside || active === items[items.length - 1])) {
-                e.preventDefault();
-                items[0].focus();
-            }
-        };
-        document.addEventListener('keydown', handler);
         return () => {
-            document.removeEventListener('keydown', handler);
             opener?.focus();
         };
     }, [betaConfirm]);
@@ -583,16 +605,16 @@ export function MemoryDashboard() {
     }, []);
 
     /** Run a goal action, reload, and say so when it fails instead of leaving the form as-is. */
-    const runGoalAction = useCallback(async (action: () => Promise<unknown>, failure: string) => {
+    const runGoalAction = useCallback(async (action: () => Promise<unknown>, failure: MessageKey) => {
         try {
             await action();
         } catch (err) {
-            log.system.error(failure, err);
-            showToast(`${failure}: ${err instanceof Error ? err.message : err}`, 'error');
+            log.system.error(`Goal action failed (${failure})`, err);
+            showToast(t('mem.goals.failed', { what: ref(failure), error: errorText(err) }), 'error');
             return;
         }
         loadGoals();
-    }, [loadGoals, showToast]);
+    }, [loadGoals, showToast, t]);
 
     useEffect(() => {
         if (!confirmGoalDeleteId) return;
@@ -602,7 +624,7 @@ export function MemoryDashboard() {
 
     const loadAll = useCallback(async () => {
         setLoading(true);
-        setError(null);
+        setLoadFailed(false);
         try {
             await Promise.all([
                 loadStats(),
@@ -618,7 +640,7 @@ export function MemoryDashboard() {
             ]);
             setAboutReloadKey(k => k + 1);
         } catch (err) {
-            setError('Failed to load memory data. Is the backend running?');
+            setLoadFailed(true);
             log.system.error('Memory dashboard load failed', err);
         } finally {
             setLoading(false);
@@ -685,13 +707,13 @@ export function MemoryDashboard() {
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
             refreshKnowledgeViews();
             log.ui.info('Created new knowledge entry');
-            if (created?.embedded === false) showToast(created.embed_error ?? 'Saved, but not embedded', 'error');
-            else showToast('Memory created successfully', 'success');
+            if (created?.embedded === false) showToast(created.embed_error ? t('mem.toast.server', { message: created.embed_error }) : t('mem.toast.notEmbedded'), 'error');
+            else showToast(t('mem.toast.created'), 'success');
         } catch (err) {
             log.system.error('Failed to create knowledge', err);
-            showToast('Failed to create memory', 'error');
+            showToast(t('mem.toast.createFailed', { error: errorText(err) }), 'error');
         }
-    }, [formData, refreshKnowledgeViews, showToast]);
+    }, [formData, refreshKnowledgeViews, showToast, t]);
 
     const handleEditKnowledge = useCallback(async () => {
         if (!editingId || !formData.content.trim()) return;
@@ -709,13 +731,13 @@ export function MemoryDashboard() {
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
             refreshKnowledgeViews();
             log.ui.info(`Updated knowledge ${editingId}`);
-            if (updated?.embedded === false) showToast(updated.embed_error ?? 'Saved, but not embedded', 'error');
-            else showToast('Memory updated', 'success');
+            if (updated?.embedded === false) showToast(updated.embed_error ? t('mem.toast.server', { message: updated.embed_error }) : t('mem.toast.notEmbedded'), 'error');
+            else showToast(t('mem.toast.updated'), 'success');
         } catch (err) {
             log.system.error('Failed to update knowledge', err);
-            showToast('Failed to update memory', 'error');
+            showToast(t('mem.toast.updateFailed', { error: errorText(err) }), 'error');
         }
-    }, [editingId, formData, refreshKnowledgeViews, showToast]);
+    }, [editingId, formData, refreshKnowledgeViews, showToast, t]);
 
     const handleDeleteKnowledge = useCallback(async (id: string) => {
         if (confirmDeleteId !== id) {
@@ -727,12 +749,12 @@ export function MemoryDashboard() {
             await memoryApi.deleteKnowledge(id);
             refreshKnowledgeViews();
             log.ui.info(`Deleted knowledge ${id}`);
-            showToast('Memory deleted', 'info');
+            showToast(t('mem.toast.deleted'), 'info');
         } catch (err) {
             log.system.error('Failed to delete knowledge', err);
-            showToast('Failed to delete memory', 'error');
+            showToast(t('mem.toast.deleteFailed', { error: errorText(err) }), 'error');
         }
-    }, [confirmDeleteId, refreshKnowledgeViews, showToast]);
+    }, [confirmDeleteId, refreshKnowledgeViews, showToast, t]);
 
     useEffect(() => {
         if (!confirmDeleteId) return;
@@ -745,12 +767,12 @@ export function MemoryDashboard() {
             await memoryApi.editKnowledge(entry.id, { sensitive: !entry.sensitive });
             loadKnowledge();
             log.ui.info(`Toggled sensitive for ${entry.id}: ${!entry.sensitive}`);
-            showToast(entry.sensitive ? 'Unmarked as sensitive' : 'Marked as sensitive', 'info');
+            showToast(t(entry.sensitive ? 'mem.toast.unmarkedSensitive' : 'mem.toast.markedSensitive'), 'info');
         } catch (err) {
             log.system.error('Failed to toggle sensitive', err);
-            showToast('Failed to toggle sensitive flag', 'error');
+            showToast(t('mem.toast.sensitiveFailed', { error: errorText(err) }), 'error');
         }
-    }, [loadKnowledge, showToast]);
+    }, [loadKnowledge, showToast, t]);
 
     const startEdit = useCallback((entry: KnowledgeEntry) => {
         setEditingId(entry.id);
@@ -767,10 +789,14 @@ export function MemoryDashboard() {
     }, []);
 
     const copyId = useCallback((id: string) => {
-        navigator.clipboard.writeText(id).catch(() => {});
-        log.ui.info(`Copied knowledge ID: ${id}`);
-        showToast('ID copied to clipboard', 'info');
-    }, [showToast]);
+        navigator.clipboard.writeText(id).then(
+            () => showToast(t('mem.toast.idCopied'), 'info'),
+            (err) => {
+                log.ui.warn(`Couldn't copy knowledge ID ${id}`, err);
+                showToast(t('mem.toast.copyFailed', { error: errorText(err) }), 'error');
+            },
+        );
+    }, [showToast, t]);
 
     // ── Conversation search (server-side FTS) ───────────────────────────
 
@@ -832,16 +858,16 @@ export function MemoryDashboard() {
             const result = await memoryApi.consolidateSessions();
             await loadAll();
             showToast(
-                `Consolidated ${result.consolidated ?? 0} sessions, extracted ${result.extracted_items ?? 0} items`,
+                t('mem.toast.consolidated', { sessions: result.consolidated ?? 0, items: result.extracted_items ?? 0 }),
                 'success',
             );
         } catch (err) {
             log.system.error('Failed to consolidate sessions', err);
-            showToast('Failed to consolidate sessions', 'error');
+            showToast(t('mem.toast.consolidateFailed', { error: errorText(err) }), 'error');
         } finally {
             setConsolidating(false);
         }
-    }, [loadAll, showToast]);
+    }, [loadAll, showToast, t]);
 
     const handleRebuildEmbeddings = useCallback(async () => {
         setRebuildingEmbeddings(true);
@@ -850,16 +876,18 @@ export function MemoryDashboard() {
             const result = await memoryApi.rebuildEmbeddings();
             await loadEmbeddingCoverage();
             showToast(
-                `Backfilled ${result.backfilled ?? 0} embeddings${result.total_without ? ` (${result.total_without} were missing)` : ''}`,
+                result.total_without
+                    ? t('mem.toast.backfilledMissing', { n: result.backfilled ?? 0, missing: result.total_without })
+                    : t('mem.toast.backfilled', { n: result.backfilled ?? 0 }),
                 'success',
             );
         } catch (err) {
             log.system.error('Failed to rebuild embeddings', err);
-            showToast('Failed to rebuild embeddings', 'error');
+            showToast(t('mem.toast.rebuildFailed', { error: errorText(err) }), 'error');
         } finally {
             setRebuildingEmbeddings(false);
         }
-    }, [loadEmbeddingCoverage, showToast]);
+    }, [loadEmbeddingCoverage, showToast, t]);
 
     const handleReconcile = useCallback(async () => {
         setReconciling(true);
@@ -868,16 +896,18 @@ export function MemoryDashboard() {
             const result = await memoryApi.reconcileMemory();
             await loadAll();
             showToast(
-                `Checked ${result.pairs_checked ?? 0} pairs: ${result.reinforced ?? 0} reinforced, ${result.contradicted ?? 0} contradicted`,
+                t('mem.toast.reconciled', {
+                    pairs: result.pairs_checked ?? 0, reinforced: result.reinforced ?? 0, contradicted: result.contradicted ?? 0,
+                }),
                 'success',
             );
         } catch (err) {
             log.system.error('Failed to reconcile memory', err);
-            showToast('Failed to reconcile memory', 'error');
+            showToast(t('mem.toast.reconcileFailed', { error: errorText(err) }), 'error');
         } finally {
             setReconciling(false);
         }
-    }, [loadAll, showToast]);
+    }, [loadAll, showToast, t]);
 
     const handleRebuildFts = useCallback(async () => {
         setRebuildingFts(true);
@@ -885,14 +915,14 @@ export function MemoryDashboard() {
         try {
             await memoryApi.rebuildFts();
             await loadAll();
-            showToast('FTS indexes rebuilt successfully', 'success');
+            showToast(t('mem.toast.ftsRebuilt'), 'success');
         } catch (err) {
             log.system.error('Failed to rebuild FTS index', err);
-            showToast('Failed to rebuild FTS indexes', 'error');
+            showToast(t('mem.toast.ftsFailed', { error: errorText(err) }), 'error');
         } finally {
             setRebuildingFts(false);
         }
-    }, [loadAll, showToast]);
+    }, [loadAll, showToast, t]);
 
     const handleRefreshSystemContext = useCallback(async () => {
         setRefreshingSystem(true);
@@ -901,17 +931,17 @@ export function MemoryDashboard() {
             const result = await memoryApi.refreshSystemContext();
             await loadAll();
             if (result.skipped) {
-                showToast('System context collection is disabled — enable it in settings', 'error');
+                showToast(t('mem.toast.systemDisabled'), 'error');
             } else {
-                showToast(`System context refreshed: ${result.stored} facts updated`, 'success');
+                showToast(t('mem.toast.systemRefreshed', { n: result.stored }), 'success');
             }
         } catch (err) {
             log.system.error('Failed to refresh system context', err);
-            showToast('Failed to refresh system context', 'error');
+            showToast(t('mem.toast.systemFailed', { error: errorText(err) }), 'error');
         } finally {
             setRefreshingSystem(false);
         }
-    }, [loadAll, showToast]);
+    }, [loadAll, showToast, t]);
 
     const isMaintenanceRunning = consolidating || rebuildingEmbeddings || reconciling || rebuildingFts || refreshingSystem;
 
@@ -930,35 +960,37 @@ export function MemoryDashboard() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
-                    setDiscLogs(prev => [...prev, { text: data.message, kind: 'log' }]);
+                    setDiscLogs(prev => [...prev, { text: data.message, kind: 'log', server: true }]);
                 } else if (data.type === 'finding') {
                     const item = data.item as memoryApi.DiscoveryFinding;
-                    setDiscLogs(prev => [...prev, { text: `  Found: ${item.content}`, kind: 'finding' }]);
+                    // Bare: a bracketed English copy would repeat the whole item on every log line.
+                    setDiscLogs(prev => [...prev, { text: t.bare('mem.log.found', { content: item.content }), kind: 'finding' }]);
                     setDiscItems(prev => [...prev, { ...item, _checked: true }]);
                 } else if (data.type === 'error') {
-                    setDiscLogs(prev => [...prev, { text: `  Error: ${data.message}`, kind: 'error' }]);
+                    setDiscLogs(prev => [...prev, { text: t.bare('mem.log.error', { message: data.message }), kind: 'error' }]);
                 } else if (data.type === 'done') {
                     es.close();
                     discEsRef.current = null;
-                    setDiscLogs(prev => [...prev, { text: `Done. ${data.total ?? 0} items discovered.`, kind: 'log' }]);
+                    setDiscLogs(prev => [...prev, { text: t('mem.log.discoveryDone', { n: data.total ?? 0 }), kind: 'log' }]);
                     setDiscPhase('review');
                 }
-            } catch {
-                setDiscLogs(prev => [...prev, { text: 'Failed to parse event data.', kind: 'error' }]);
+            } catch (err) {
+                log.system.warn('Unreadable discovery event', err);
+                setDiscLogs(prev => [...prev, { text: t('mem.log.parseFailed'), kind: 'error' }]);
             }
         };
 
         es.onerror = () => {
             es.close();
             discEsRef.current = null;
-            setDiscLogs(prev => [...prev, { text: 'Connection error. Is the GAIA server running?', kind: 'error' }]);
+            setDiscLogs(prev => [...prev, { text: t('mem.log.discoveryConnection'), kind: 'error' }]);
             // Only go to review if items were found; otherwise stay idle so user can retry
             setDiscItems(prev => {
                 setDiscPhase(prev.length > 0 ? 'review' : 'idle');
                 return prev;
             });
         };
-    }, []);
+    }, [t]);
 
     const saveDiscoveryItems = useCallback(async () => {
         const selected = discItems.filter(i => i._checked);
@@ -971,13 +1003,13 @@ export function MemoryDashboard() {
             setDiscSavedCount(result.stored);
             setDiscPhase('done');
             refreshKnowledgeViews();
-            showToast(`Saved ${result.stored} items to memory`, 'success');
+            showToast(t('mem.disc.saved', { n: result.stored }), 'success');
         } catch (err) {
             log.system.error('Failed to commit discovery items', err);
-            showToast('Failed to save discovery items', 'error');
+            showToast(t('mem.disc.saveFailed', { error: errorText(err) }), 'error');
             setDiscPhase('review');
         }
-    }, [discItems, refreshKnowledgeViews, showToast]);
+    }, [discItems, refreshKnowledgeViews, showToast, t]);
 
     // ── Profile Setup: Inference ───────────────────────────────────────
 
@@ -994,34 +1026,35 @@ export function MemoryDashboard() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'log') {
-                    setInfLogs(prev => [...prev, { text: data.message, kind: 'log' }]);
+                    setInfLogs(prev => [...prev, { text: data.message, kind: 'log', server: true }]);
                 } else if (data.type === 'insight') {
                     const item = data.item as memoryApi.InferenceInsight;
-                    setInfLogs(prev => [...prev, { text: `  Insight: ${item.content}`, kind: 'finding' }]);
+                    setInfLogs(prev => [...prev, { text: t.bare('mem.log.insight', { content: item.content }), kind: 'finding' }]);
                     setInfItems(prev => [...prev, { ...item, _checked: true }]);
                 } else if (data.type === 'error') {
-                    setInfLogs(prev => [...prev, { text: `  Error: ${data.message}`, kind: 'error' }]);
+                    setInfLogs(prev => [...prev, { text: t.bare('mem.log.error', { message: data.message }), kind: 'error' }]);
                 } else if (data.type === 'done') {
                     es.close();
                     infEsRef.current = null;
-                    setInfLogs(prev => [...prev, { text: `Done. ${data.total ?? 0} insights generated.`, kind: 'log' }]);
+                    setInfLogs(prev => [...prev, { text: t('mem.log.inferenceDone', { n: data.total ?? 0 }), kind: 'log' }]);
                     setInfPhase('review');
                 }
-            } catch {
-                setInfLogs(prev => [...prev, { text: 'Failed to parse event data.', kind: 'error' }]);
+            } catch (err) {
+                log.system.warn('Unreadable inference event', err);
+                setInfLogs(prev => [...prev, { text: t('mem.log.parseFailed'), kind: 'error' }]);
             }
         };
 
         es.onerror = () => {
             es.close();
             infEsRef.current = null;
-            setInfLogs(prev => [...prev, { text: 'Connection error. Is Lemonade Server running?', kind: 'error' }]);
+            setInfLogs(prev => [...prev, { text: t('mem.log.inferenceConnection'), kind: 'error' }]);
             setInfItems(prev => {
                 setInfPhase(prev.length > 0 ? 'review' : 'idle');
                 return prev;
             });
         };
-    }, [infIncludeBrowser]);
+    }, [infIncludeBrowser, t]);
 
     const saveInferenceItems = useCallback(async () => {
         const selected = infItems.filter(i => i._checked);
@@ -1033,13 +1066,13 @@ export function MemoryDashboard() {
             setInfSavedCount(result.stored);
             setInfPhase('done');
             refreshKnowledgeViews();
-            showToast(`Saved ${result.stored} insights to memory`, 'success');
+            showToast(t('mem.inf.saved', { n: result.stored }), 'success');
         } catch (err) {
             log.system.error('Failed to commit inference insights', err);
-            showToast('Failed to save inference insights', 'error');
+            showToast(t('mem.inf.saveFailed', { error: errorText(err) }), 'error');
             setInfPhase('review');
         }
-    }, [infItems, refreshKnowledgeViews, showToast]);
+    }, [infItems, refreshKnowledgeViews, showToast, t]);
 
     // Auto-scroll log containers
     useEffect(() => {
@@ -1087,17 +1120,17 @@ export function MemoryDashboard() {
                         <button
                             className="btn-icon settings-back-btn"
                             onClick={() => setShowMemoryDashboard(false)}
-                            aria-label="Back"
+                            aria-label={t('mem.back')}
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>Memory <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span></h1>
+                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {activeTab === 'advanced' && <>
                         {/* Embedding coverage indicator */}
                         {embeddingCoverage && embeddingCoverage.total_items > 0 && (
-                            <div className="mem-embedding-coverage" title={`${embeddingCoverage.with_embedding} of ${embeddingCoverage.total_items} entries embedded`}>
+                            <div className="mem-embedding-coverage" title={t('mem.coverage.title', { n: embeddingCoverage.with_embedding, total: embeddingCoverage.total_items })}>
                                 <div className="mem-embedding-bar">
                                     <div
                                         className="mem-embedding-fill"
@@ -1105,7 +1138,7 @@ export function MemoryDashboard() {
                                     />
                                 </div>
                                 <span className="mem-embedding-label">
-                                    {Math.round(embeddingCoverage.coverage_pct)}% embedded
+                                    {t('mem.coverage.label', { pct: `${Math.round(embeddingCoverage.coverage_pct)}%` })}
                                 </span>
                             </div>
                         )}
@@ -1115,8 +1148,8 @@ export function MemoryDashboard() {
                             <button
                                 className={`btn-icon ${isMaintenanceRunning ? 'mem-spinning' : ''}`}
                                 onClick={() => setShowMaintenanceMenu(prev => !prev)}
-                                title="Maintenance actions"
-                                aria-label="Maintenance actions"
+                                title={t('mem.maint.label')}
+                                aria-label={t('mem.maint.label')}
                                 aria-expanded={showMaintenanceMenu}
                             >
                                 {isMaintenanceRunning ? (
@@ -1124,7 +1157,7 @@ export function MemoryDashboard() {
                                 ) : (
                                     <Database size={16} />
                                 )}
-                                <ChevronDown size={10} style={{ marginLeft: 2 }} />
+                                <ChevronDown size={10} style={{ marginInlineStart: 2 }} />
                             </button>
                             {showMaintenanceMenu && (
                                 <div className="mem-maintenance-menu" role="menu">
@@ -1135,7 +1168,7 @@ export function MemoryDashboard() {
                                         role="menuitem"
                                     >
                                         <GitMerge size={14} />
-                                        {consolidating ? 'Consolidating...' : 'Consolidate Sessions'}
+                                        {t(consolidating ? 'mem.maint.consolidating' : 'mem.maint.consolidate')}
                                     </button>
                                     <button
                                         className="mem-maintenance-item"
@@ -1144,7 +1177,7 @@ export function MemoryDashboard() {
                                         role="menuitem"
                                     >
                                         <Zap size={14} />
-                                        {rebuildingEmbeddings ? 'Rebuilding...' : 'Rebuild Embeddings'}
+                                        {t(rebuildingEmbeddings ? 'mem.maint.rebuilding' : 'mem.maint.rebuildEmbeddings')}
                                     </button>
                                     <button
                                         className="mem-maintenance-item"
@@ -1153,7 +1186,7 @@ export function MemoryDashboard() {
                                         role="menuitem"
                                     >
                                         <CheckCircle size={14} />
-                                        {reconciling ? 'Reconciling...' : 'Reconcile Memory'}
+                                        {t(reconciling ? 'mem.maint.reconciling' : 'mem.maint.reconcile')}
                                     </button>
                                     <div className="mem-maintenance-divider" />
                                     <button
@@ -1163,7 +1196,7 @@ export function MemoryDashboard() {
                                         role="menuitem"
                                     >
                                         <RefreshCw size={14} />
-                                        {refreshingSystem ? 'Refreshing...' : 'Refresh System Context'}
+                                        {t(refreshingSystem ? 'mem.maint.refreshing' : 'mem.maint.refreshSystem')}
                                     </button>
                                     <div className="mem-maintenance-divider" />
                                     <button
@@ -1173,14 +1206,14 @@ export function MemoryDashboard() {
                                         role="menuitem"
                                     >
                                         <Search size={14} />
-                                        {rebuildingFts ? 'Rebuilding...' : 'Rebuild FTS Indexes'}
+                                        {t(rebuildingFts ? 'mem.maint.rebuilding' : 'mem.maint.rebuildFts')}
                                     </button>
                                 </div>
                             )}
                         </div>
                         </>}
 
-                        <button className="btn-icon" onClick={loadAll} title="Refresh" aria-label="Refresh dashboard">
+                        <button className="btn-icon" onClick={loadAll} title={t('mem.refresh')} aria-label={t('mem.refreshAria')}>
                             <RefreshCw size={16} />
                         </button>
                     </div>
@@ -1194,7 +1227,7 @@ export function MemoryDashboard() {
                         role="tab"
                         aria-selected={activeTab === 'about'}
                     >
-                        <User size={14} /> About you
+                        <User size={14} /> {t('mem.tab.about')}
                     </button>
                     <button
                         className={`mem-tab-btn${activeTab === 'goals' ? ' mem-tab-active' : ''}`}
@@ -1202,7 +1235,7 @@ export function MemoryDashboard() {
                         role="tab"
                         aria-selected={activeTab === 'goals'}
                     >
-                        <Target size={14} /> Goals
+                        <Target size={14} /> {t('mem.tab.goals')}
                         {goalStats && (goalStats.goals['pending_approval'] ?? 0) > 0 && (
                             <span className="mem-tab-badge">{goalStats.goals['pending_approval']}</span>
                         )}
@@ -1213,7 +1246,7 @@ export function MemoryDashboard() {
                         role="tab"
                         aria-selected={activeTab === 'profile'}
                     >
-                        <Sparkles size={14} /> Profile setup
+                        <Sparkles size={14} /> {t('mem.tab.profile')}
                     </button>
                     <button
                         className={`mem-tab-btn${activeTab === 'advanced' ? ' mem-tab-active' : ''}`}
@@ -1221,7 +1254,7 @@ export function MemoryDashboard() {
                         role="tab"
                         aria-selected={activeTab === 'advanced'}
                     >
-                        <Brain size={14} /> Advanced
+                        <Brain size={14} /> {t('mem.tab.advanced')}
                     </button>
                 </div>
 
@@ -1240,14 +1273,14 @@ export function MemoryDashboard() {
                     {loading && !stats ? (
                         <div className="mem-loading">
                             <div className="mem-spinner" />
-                            Loading memory data...
+                            {t('mem.loadingData')}
                         </div>
-                    ) : error ? (
+                    ) : loadFailed ? (
                         <div className="mem-empty">
                             <div className="mem-empty-icon"><AlertTriangle size={32} /></div>
-                            <p>{error}</p>
+                            <p>{t('mem.loadFailed')}</p>
                             <button className="btn-secondary" onClick={loadAll} style={{ marginTop: 12 }}>
-                                <RefreshCw size={14} /> Retry
+                                <RefreshCw size={14} /> {t('mem.retry')}
                             </button>
                         </div>
                     ) : (
@@ -1257,59 +1290,62 @@ export function MemoryDashboard() {
                                     <div className="mem-empty-icon" style={{ opacity: 0.5 }}>
                                         <Shield size={32} />
                                     </div>
-                                    <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Memory is off. Turn it on in Settings below to let GAIA remember what you tell it.</p>
+                                    <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>{t('mem.offAdvanced')}</p>
                                 </div>
                             )}
 
                             {memoryEnabled && <>
                             {stats?.embedding_error && (
                                 <div className="mem-advanced-error" role="alert">
-                                    <AlertTriangle size={14} /> {stats.embedding_error}
+                                    <AlertTriangle size={14} /> <bdi>{stats.embedding_error}</bdi>
                                 </div>
                             )}
                             {/* ── 1. Header Stat Cards ─────────────── */}
                             <div className="mem-stat-cards">
                                 <div className="mem-stat-card" data-accent="purple">
                                     <div className="mem-stat-value">{stats?.knowledge?.total ?? 0}</div>
-                                    <div className="mem-stat-label">Stored</div>
+                                    <div className="mem-stat-label">{t('mem.stat.stored')}</div>
                                     <div className="mem-stat-sub">
                                         {(() => {
                                             const addedToday = todayCount(activity);
-                                            return addedToday > 0 ? `+${addedToday} today` : (
+                                            return addedToday > 0 ? t('mem.stat.addedToday', { n: addedToday }) : (
                                                 stats?.knowledge?.by_category
-                                                    ? Object.entries(stats.knowledge.by_category)
+                                                    ? t.compose(say => Object.entries(stats.knowledge.by_category)
                                                         .slice(0, 3)
-                                                        .map(([k, v]) => `${v} ${k}s`)
-                                                        .join(', ')
-                                                    : 'No entries'
+                                                        .map(([k, v]) => say('mem.stat.categoryCount', {
+                                                            category: CATEGORY_KEYS[k] ? ref(CATEGORY_KEYS[k]) : k, n: v,
+                                                        }))
+                                                        .join(say('mem.listSeparator')))
+                                                    : t('mem.stat.noEntries')
                                             );
                                         })()}
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="gold">
                                     <div className="mem-stat-value">{stats?.knowledge?.total_retrievals ?? 0}</div>
-                                    <div className="mem-stat-label">Retrieved</div>
+                                    <div className="mem-stat-label">{t('mem.stat.retrieved')}</div>
                                     <div className="mem-stat-sub">
                                         {stats?.knowledge?.total && stats?.knowledge?.total_retrievals
-                                            ? `avg ${(stats.knowledge.total_retrievals / stats.knowledge.total).toFixed(1)}x per memory`
-                                            : 'No recalls yet'}
+                                            ? t('mem.stat.avgRecall', { n: (stats.knowledge.total_retrievals / stats.knowledge.total).toFixed(1) })
+                                            : t('mem.stat.noRecalls')}
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="blue">
                                     <div className="mem-stat-value">{stats?.conversations?.total_sessions ?? 0}</div>
-                                    <div className="mem-stat-label">Sessions</div>
+                                    <div className="mem-stat-label">{t('mem.stat.sessions')}</div>
                                     <div className="mem-stat-sub">
                                         {formatDateRange(
                                             stats?.conversations?.first_session ?? null,
                                             stats?.conversations?.last_session ?? null,
-                                        ) || `${stats?.conversations?.total_turns ?? 0} total turns`}
+                                            dateLocale(t),
+                                        ) || t('mem.stat.totalTurns', { n: stats?.conversations?.total_turns ?? 0 })}
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="green">
                                     <div className="mem-stat-value">{stats?.tools?.total_calls ?? 0}</div>
-                                    <div className="mem-stat-label">Tool Calls</div>
-                                    <div className="mem-stat-sub" title="Memory tools (remember, recall, ...) are not logged">
-                                        {stats?.tools?.unique_tools ?? 0} tools, excl. memory
+                                    <div className="mem-stat-label">{t('mem.stat.toolCalls')}</div>
+                                    <div className="mem-stat-sub" title={t('mem.stat.toolsNotLogged')}>
+                                        {t('mem.stat.toolsExclMemory', { n: stats?.tools?.unique_tools ?? 0 })}
                                     </div>
                                 </div>
                                 <div className="mem-stat-card" data-accent="red">
@@ -1318,11 +1354,11 @@ export function MemoryDashboard() {
                                             ? `${Math.round(stats.tools.overall_success_rate * 100)}%`
                                             : '\u2014'}
                                     </div>
-                                    <div className="mem-stat-label">Success Rate</div>
+                                    <div className="mem-stat-label">{t('mem.stat.successRate')}</div>
                                     <div className="mem-stat-sub">
                                         {(stats?.tools?.total_calls ?? 0) > 0
-                                            ? `${stats?.tools?.total_errors ?? 0} errors`
-                                            : 'No tool calls yet'}
+                                            ? t('mem.stat.errors', { n: stats?.tools?.total_errors ?? 0 })
+                                            : t('mem.stat.noToolCalls')}
                                     </div>
                                 </div>
                             </div>
@@ -1331,16 +1367,16 @@ export function MemoryDashboard() {
                             <div className="mem-section">
                                 <div className="mem-section-title mem-section-title-row">
                                     <span className="mem-section-title-left">
-                                        <TrendingUp size={14} /> Activity
+                                        <TrendingUp size={14} /> {t('mem.activity.title')}
                                     </span>
-                                    <div className="mem-range-tabs" role="group" aria-label="Activity range">
+                                    <div className="mem-range-tabs" role="group" aria-label={t('mem.activity.range')}>
                                         {([1, 7, 30] as const).map(d => (
                                             <button
                                                 key={d}
                                                 className={`mem-range-tab${activityDays === d ? ' active' : ''}`}
                                                 onClick={() => setActivityDays(d)}
                                             >
-                                                {d === 1 ? '1D' : d === 7 ? '7D' : '30D'}
+                                                {t(d === 1 ? 'mem.activity.day1' : d === 7 ? 'mem.activity.days7' : 'mem.activity.days30')}
                                             </button>
                                         ))}
                                     </div>
@@ -1351,7 +1387,7 @@ export function MemoryDashboard() {
                                             {activity.map((day, i) => {
                                                 const total = day.conversations + day.tool_calls + day.knowledge_added + day.errors;
                                                 const showLabel = i === 0 || i === activity.length - 1 || i % 7 === 0;
-                                                const dateStr = new Date(day.date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                                                const dateStr = new Date(day.date + 'T00:00:00').toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric' });
                                                 return (
                                                     <div key={day.date} className="mem-activity-bar-group"
                                                         onMouseEnter={() => setHoveredBar(i)}
@@ -1378,10 +1414,10 @@ export function MemoryDashboard() {
                                                         {hoveredBar === i && total > 0 && (
                                                             <div className="mem-activity-tooltip">
                                                                 <strong>{dateStr}</strong><br />
-                                                                {day.conversations > 0 && <>{day.conversations} conversations<br /></>}
-                                                                {day.tool_calls > 0 && <>{day.tool_calls} tool calls<br /></>}
-                                                                {day.knowledge_added > 0 && <>{day.knowledge_added} learned<br /></>}
-                                                                {day.errors > 0 && <>{day.errors} errors</>}
+                                                                {day.conversations > 0 && <>{t('mem.activity.conversations', { n: day.conversations })}<br /></>}
+                                                                {day.tool_calls > 0 && <>{t('mem.activity.toolCalls', { n: day.tool_calls })}<br /></>}
+                                                                {day.knowledge_added > 0 && <>{t('mem.activity.learned', { n: day.knowledge_added })}<br /></>}
+                                                                {day.errors > 0 && <>{t('mem.stat.errors', { n: day.errors })}</>}
                                                             </div>
                                                         )}
                                                     </div>
@@ -1390,23 +1426,23 @@ export function MemoryDashboard() {
                                         </div>
                                         <div className="mem-activity-legend">
                                             <span className="mem-activity-legend-item">
-                                                <span className="mem-activity-legend-dot conversations" /> Conversations
+                                                <span className="mem-activity-legend-dot conversations" /> {t('mem.legend.conversations')}
                                             </span>
                                             <span className="mem-activity-legend-item">
-                                                <span className="mem-activity-legend-dot tool_calls" /> Tool Calls
+                                                <span className="mem-activity-legend-dot tool_calls" /> {t('mem.stat.toolCalls')}
                                             </span>
                                             <span className="mem-activity-legend-item">
-                                                <span className="mem-activity-legend-dot knowledge" /> Knowledge
+                                                <span className="mem-activity-legend-dot knowledge" /> {t('mem.legend.knowledge')}
                                             </span>
                                             <span className="mem-activity-legend-item">
-                                                <span className="mem-activity-legend-dot errors" /> Errors
+                                                <span className="mem-activity-legend-dot errors" /> {t('mem.legend.errors')}
                                             </span>
                                         </div>
                                     </>
                                 ) : (
                                     <div className="mem-empty">
                                         <div className="mem-empty-icon"><TrendingUp size={28} /></div>
-                                        <p>No activity data yet</p>
+                                        <p>{t('mem.activity.empty')}</p>
                                     </div>
                                 )}
                             </div>
@@ -1415,7 +1451,7 @@ export function MemoryDashboard() {
                             <div className="mem-section">
                                 <div className="mem-section-title mem-section-title-row">
                                     <span className="mem-section-title-left">
-                                        <Brain size={14} /> Knowledge Browser
+                                        <Brain size={14} /> {t('mem.knowledge.title')}
                                         {knowledge && knowledge.total > 0 && (
                                             <span className="mem-section-count">{knowledge.total}</span>
                                         )}
@@ -1424,16 +1460,16 @@ export function MemoryDashboard() {
                                         <button
                                             className="mem-section-add-btn"
                                             onClick={() => setShowAddForm(true)}
-                                            title="Add a memory entry"
+                                            title={t('mem.knowledge.addTitle')}
                                         >
-                                            <Plus size={13} /> Add
+                                            <Plus size={13} /> {t('mem.knowledge.add')}
                                         </button>
                                     )}
                                 </div>
 
                                 {/* Filters */}
                                 <div className="mem-filters">
-                                    <div className="mem-category-pills" role="group" aria-label="Filter by category">
+                                    <div className="mem-category-pills" role="group" aria-label={t('mem.knowledge.filterCategory')}>
                                         {ALL_CATEGORIES.map(c => (
                                             <button
                                                 key={c}
@@ -1441,31 +1477,31 @@ export function MemoryDashboard() {
                                                 onClick={() => toggleCategory(c)}
                                                 aria-pressed={kCategories.includes(c)}
                                             >
-                                                {c}
+                                                {t(CATEGORY_KEYS[c])}
                                             </button>
                                         ))}
                                         {kCategories.length > 0 && (
                                             <button
                                                 className="mem-category-pill clear"
                                                 onClick={() => { setKCategories([]); setKOffset(0); }}
-                                                aria-label="Clear category filters"
+                                                aria-label={t('mem.knowledge.clearAria')}
                                             >
-                                                ✕ Clear
+                                                ✕ {t('mem.knowledge.clear')}
                                             </button>
                                         )}
                                     </div>
                                     <select className="mem-filter-select" value={kContext}
                                         onChange={e => { setKContext(e.target.value); setKOffset(0); }}
-                                        aria-label="Filter by context">
-                                        <option value="">All Contexts</option>
+                                        aria-label={t('mem.knowledge.filterContext')}>
+                                        <option value="">{t.bare('mem.knowledge.allContexts')}</option>
                                         {contexts.map(c => (
                                             <option key={c} value={c}>{c}</option>
                                         ))}
                                     </select>
                                     <select className="mem-filter-select" value={kEntity}
                                         onChange={e => { setKEntity(e.target.value); setKOffset(0); }}
-                                        aria-label="Filter by entity">
-                                        <option value="">All Entities</option>
+                                        aria-label={t('mem.knowledge.filterEntity')}>
+                                        <option value="">{t.bare('mem.knowledge.allEntities')}</option>
                                         {entities.map(e => (
                                             <option key={e.entity} value={e.entity}>{e.entity} ({e.count})</option>
                                         ))}
@@ -1478,19 +1514,19 @@ export function MemoryDashboard() {
                                         )}
                                         <input className="mem-filter-search"
                                             type="text"
-                                            placeholder="Search memories..."
+                                            placeholder={t('mem.knowledge.searchPlaceholder')}
                                             value={kSearch}
                                             onChange={e => handleSearchChange(e.target.value)}
-                                            aria-label="Search memories"
+                                            aria-label={t('mem.knowledge.search')}
                                         />
                                     </div>
-                                    <label className="mem-filter-toggle" title="Show entries that have been superseded by newer versions">
+                                    <label className="mem-filter-toggle" title={t('mem.knowledge.supersededTitle')}>
                                         <input
                                             type="checkbox"
                                             checked={includeSuperseded}
                                             onChange={e => setIncludeSuperseded(e.target.checked)}
                                         />
-                                        <span>Superseded</span>
+                                        <span>{t('mem.knowledge.superseded')}</span>
                                     </label>
                                 </div>
 
@@ -1498,61 +1534,61 @@ export function MemoryDashboard() {
                                 {(showAddForm || editingId) && (
                                     <div className="mem-inline-form">
                                         <div className="mem-inline-form-row">
-                                            <label>Content</label>
+                                            <label>{t('mem.col.content')}</label>
                                             <textarea value={formData.content}
                                                 onChange={e => setFormData(prev => ({ ...prev, content: e.target.value }))}
-                                                placeholder="What should the agent remember?" />
+                                                placeholder={t('mem.form.contentPlaceholder')} />
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Category</label>
+                                            <label>{t('mem.col.category')}</label>
                                             <select value={formData.category}
                                                 onChange={e => setFormData(prev => ({ ...prev, category: e.target.value }))}>
                                                 {ALL_CATEGORIES.map(c => (
-                                                    <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+                                                    <option key={c} value={c}>{t.bare(CATEGORY_KEYS[c])}</option>
                                                 ))}
                                             </select>
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Context</label>
+                                            <label>{t('mem.col.context')}</label>
                                             <input type="text" value={formData.context}
                                                 onChange={e => setFormData(prev => ({ ...prev, context: e.target.value }))}
                                                 placeholder="global" />
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Domain</label>
+                                            <label>{t('mem.detail.domain')}</label>
                                             <input type="text" value={formData.domain}
                                                 onChange={e => setFormData(prev => ({ ...prev, domain: e.target.value }))}
-                                                placeholder="e.g., python, frontend" />
+                                                placeholder={t('mem.form.domainPlaceholder')} />
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Entity</label>
+                                            <label>{t('mem.col.entity')}</label>
                                             <input type="text" value={formData.entity}
                                                 onChange={e => setFormData(prev => ({ ...prev, entity: e.target.value }))}
-                                                placeholder="e.g., person:sarah_chen" />
+                                                placeholder={t('mem.form.entityPlaceholder')} />
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Due At</label>
+                                            <label>{t('mem.form.dueAt')}</label>
                                             <input type="text" value={formData.due_at}
                                                 onChange={e => setFormData(prev => ({ ...prev, due_at: e.target.value }))}
-                                                placeholder="ISO 8601 (e.g., 2026-03-25T09:00:00-07:00)" />
+                                                placeholder={t('mem.form.dueAtPlaceholder')} />
                                         </div>
                                         <div className="mem-inline-form-row">
-                                            <label>Sensitive</label>
+                                            <label>{t('mem.form.sensitive')}</label>
                                             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12 }}>
                                                 <input type="checkbox" checked={formData.sensitive}
                                                     onChange={e => setFormData(prev => ({ ...prev, sensitive: e.target.checked }))} />
-                                                Mark as sensitive (excluded from system prompt)
+                                                {t('mem.form.sensitiveHint')}
                                             </label>
                                         </div>
                                         <div className="mem-inline-form-actions">
                                             <button className="btn-secondary"
                                                 onClick={() => { setShowAddForm(false); setEditingId(null); }}>
-                                                Cancel
+                                                {t('mem.cancel')}
                                             </button>
                                             <button className="btn-primary"
                                                 onClick={editingId ? handleEditKnowledge : handleCreateKnowledge}
                                                 style={{ padding: '8px 20px', fontSize: 13 }}>
-                                                {editingId ? 'Update' : 'Save'}
+                                                {t(editingId ? 'mem.form.update' : 'mem.form.save')}
                                             </button>
                                         </div>
                                     </div>
@@ -1566,24 +1602,24 @@ export function MemoryDashboard() {
                                                 <thead>
                                                     <tr>
                                                         <th onClick={() => handleSort('category')} className={kSort === 'category' ? 'sorted' : ''}>
-                                                            Category{renderSortArrow('category')}
+                                                            {t('mem.col.category')}{renderSortArrow('category')}
                                                         </th>
-                                                        <th>Content</th>
+                                                        <th>{t('mem.col.content')}</th>
                                                         <th onClick={() => handleSort('context')} className={kSort === 'context' ? 'sorted' : ''}>
-                                                            Context{renderSortArrow('context')}
+                                                            {t('mem.col.context')}{renderSortArrow('context')}
                                                         </th>
-                                                        <th>Entity</th>
+                                                        <th>{t('mem.col.entity')}</th>
                                                         <th onClick={() => handleSort('confidence')} className={kSort === 'confidence' ? 'sorted' : ''}>
-                                                            Confidence{renderSortArrow('confidence')}
+                                                            {t('mem.col.confidence')}{renderSortArrow('confidence')}
                                                         </th>
-                                                        <th>Source</th>
+                                                        <th>{t('mem.col.source')}</th>
                                                         <th onClick={() => handleSort('updated_at')} className={kSort === 'updated_at' ? 'sorted' : ''}>
-                                                            Updated{renderSortArrow('updated_at')}
+                                                            {t('mem.col.updated')}{renderSortArrow('updated_at')}
                                                         </th>
                                                         <th onClick={() => handleSort('created_at')} className={kSort === 'created_at' ? 'sorted' : ''}>
-                                                            Created{renderSortArrow('created_at')}
+                                                            {t('mem.col.created')}{renderSortArrow('created_at')}
                                                         </th>
-                                                        <th>Due</th>
+                                                        <th>{t('mem.col.due')}</th>
                                                         <th className="mem-actions-cell"></th>
                                                     </tr>
                                                 </thead>
@@ -1604,7 +1640,9 @@ export function MemoryDashboard() {
                                                         >
                                                             <td>
                                                                 <span className={`mem-cat-badge ${entry.category}`}>
-                                                                    {entry.category}
+                                                                    {entry.category === 'error' && entry.source === 'error_auto'
+                                                                        ? t('mem.cat.errorLearned')
+                                                                        : <Code value={entry.category} keys={CATEGORY_KEYS} />}
                                                                 </span>
                                                             </td>
                                                             <td>
@@ -1613,13 +1651,13 @@ export function MemoryDashboard() {
                                                                     {hasEmbed !== undefined && (
                                                                         <span
                                                                             className={`mem-embed-dot ${hasEmbed ? 'embedded' : 'missing'}`}
-                                                                            title={hasEmbed ? 'Embedded' : 'Embedding missing'}
+                                                                            title={t(hasEmbed ? 'mem.knowledge.embedded' : 'mem.knowledge.embedMissing')}
                                                                         >
                                                                             <Circle size={6} fill="currentColor" />
                                                                         </span>
                                                                     )}
                                                                     {entry.sensitive && (
-                                                                        <span className="mem-sensitive-badge" title="Sensitive">
+                                                                        <span className="mem-sensitive-badge" title={t('mem.form.sensitive')}>
                                                                             <Shield size={11} />
                                                                         </span>
                                                                     )}
@@ -1639,19 +1677,19 @@ export function MemoryDashboard() {
                                                                             });
                                                                         }
                                                                     }}>
-                                                                        {entry.content}
+                                                                        <bdi>{entry.content}</bdi>
                                                                     </span>
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <span className="mem-date-cell">{entry.context}</span>
+                                                                <bdi className="mem-date-cell">{entry.context}</bdi>
                                                             </td>
                                                             <td>
                                                                 {entry.entity ? (
                                                                     <span className="mem-entity-link"
                                                                         onClick={(e) => { e.stopPropagation(); setKEntity(entry.entity!); setKOffset(0); }}
-                                                                        title={`Filter by ${entry.entity}`}>
-                                                                        {entry.entity}
+                                                                        title={t('mem.knowledge.filterBy', { entity: entry.entity })}>
+                                                                        <bdi>{entry.entity}</bdi>
                                                                     </span>
                                                                 ) : (
                                                                     <span className="mem-date-cell">{'\u2014'}</span>
@@ -1667,23 +1705,23 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <span className="mem-date-cell">{entry.source || '\u2014'}</span>
+                                                                <bdi className="mem-date-cell">{entry.source || '\u2014'}</bdi>
                                                             </td>
                                                             <td>
-                                                                <span className="mem-date-cell" title={formatDateFull(entry.updated_at)}>
-                                                                    {formatRelativeDate(entry.updated_at)}
+                                                                <span className="mem-date-cell" title={formatDateFull(entry.updated_at, dateLocale(t))}>
+                                                                    {formatRelativeDate(entry.updated_at, t)}
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <span className="mem-date-cell" title={formatDateFull(entry.created_at)}>
-                                                                    {formatRelativeDate(entry.created_at)}
+                                                                <span className="mem-date-cell" title={formatDateFull(entry.created_at, dateLocale(t))}>
+                                                                    {formatRelativeDate(entry.created_at, t)}
                                                                 </span>
                                                             </td>
                                                             <td>
                                                                 {entry.due_at ? (
                                                                     <span className={`mem-due-badge ${isOverdue(entry.due_at) ? 'overdue' : 'upcoming'}`}
-                                                                        title={formatDateFull(entry.due_at)}>
-                                                                        {formatRelativeDate(entry.due_at)}
+                                                                        title={formatDateFull(entry.due_at, dateLocale(t))}>
+                                                                        {formatRelativeDate(entry.due_at, t)}
                                                                     </span>
                                                                 ) : (
                                                                     <span className="mem-due-badge none">{'\u2014'}</span>
@@ -1691,23 +1729,23 @@ export function MemoryDashboard() {
                                                             </td>
                                                             <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
-                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title="Edit">
+                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title={t('mem.row.edit')}>
                                                                         <Pencil size={13} />
                                                                     </button>
                                                                     <button className="mem-row-action-btn" onClick={() => handleToggleSensitive(entry)}
-                                                                        title={entry.sensitive ? 'Unmark sensitive' : 'Mark sensitive'}>
+                                                                        title={t(entry.sensitive ? 'mem.row.unmarkSensitive' : 'mem.row.markSensitive')}>
                                                                         {entry.sensitive ? <ShieldOff size={13} /> : <Shield size={13} />}
                                                                     </button>
-                                                                    <button className="mem-row-action-btn" onClick={() => copyId(entry.id)} title="Copy ID">
+                                                                    <button className="mem-row-action-btn" onClick={() => copyId(entry.id)} title={t('mem.row.copyId')}>
                                                                         <Copy size={13} />
                                                                     </button>
                                                                     <button
                                                                         className={`mem-row-action-btn delete${confirmDeleteId === entry.id ? ' is-confirm' : ''}`}
                                                                         onClick={() => handleDeleteKnowledge(entry.id)}
-                                                                        title={confirmDeleteId === entry.id ? 'Click again to delete' : 'Delete'}
-                                                                        aria-label={confirmDeleteId === entry.id ? 'Confirm delete memory' : 'Delete memory'}
+                                                                        title={t(confirmDeleteId === entry.id ? 'mem.row.clickAgain' : 'mem.row.delete')}
+                                                                        aria-label={t(confirmDeleteId === entry.id ? 'mem.row.confirmDeleteAria' : 'mem.row.deleteAria')}
                                                                     >
-                                                                        {confirmDeleteId === entry.id ? <span className="mem-row-delete-label">Delete?</span> : <Trash2 size={13} />}
+                                                                        {confirmDeleteId === entry.id ? <span className="mem-row-delete-label">{t('mem.row.deleteConfirm')}</span> : <Trash2 size={13} />}
                                                                     </button>
                                                                 </div>
                                                             </td>
@@ -1719,57 +1757,59 @@ export function MemoryDashboard() {
                                                                     <div className="mem-detail-panel">
                                                                         <div className="mem-detail-grid">
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">ID</span>
+                                                                                <span className="mem-detail-label">{t('mem.detail.id')}</span>
                                                                                 <span className="mem-detail-value">{entry.id}</span>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Domain</span>
-                                                                                <span className="mem-detail-value">{entry.domain || '\u2014'}</span>
+                                                                                <span className="mem-detail-label">{t('mem.detail.domain')}</span>
+                                                                                <bdi className="mem-detail-value">{entry.domain || '\u2014'}</bdi>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Source</span>
-                                                                                <span className="mem-detail-value">{entry.source || '\u2014'}</span>
+                                                                                <span className="mem-detail-label">{t('mem.col.source')}</span>
+                                                                                <bdi className="mem-detail-value">{entry.source || '\u2014'}</bdi>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Use Count</span>
+                                                                                <span className="mem-detail-label">{t('mem.detail.useCount')}</span>
                                                                                 <span className="mem-detail-value">{entry.use_count ?? 0}</span>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Created</span>
-                                                                                <span className="mem-detail-value">{formatDateFull(entry.created_at)}</span>
+                                                                                <span className="mem-detail-label">{t('mem.col.created')}</span>
+                                                                                <span className="mem-detail-value">{formatDateFull(entry.created_at, dateLocale(t))}</span>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Updated</span>
-                                                                                <span className="mem-detail-value">{formatDateFull(entry.updated_at)}</span>
+                                                                                <span className="mem-detail-label">{t('mem.col.updated')}</span>
+                                                                                <span className="mem-detail-value">{formatDateFull(entry.updated_at, dateLocale(t))}</span>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Last Used</span>
-                                                                                <span className="mem-detail-value">{formatDateFull(entry.last_used)}</span>
+                                                                                <span className="mem-detail-label">{t('mem.detail.lastUsed')}</span>
+                                                                                <span className="mem-detail-value">{formatDateFull(entry.last_used, dateLocale(t))}</span>
                                                                             </div>
                                                                             <div className="mem-detail-field">
-                                                                                <span className="mem-detail-label">Reminded At</span>
-                                                                                <span className="mem-detail-value">{formatDateFull(entry.reminded_at)}</span>
+                                                                                <span className="mem-detail-label">{t('mem.detail.remindedAt')}</span>
+                                                                                <span className="mem-detail-value">{formatDateFull(entry.reminded_at, dateLocale(t))}</span>
                                                                             </div>
                                                                             {entry.superseded_by && (
                                                                                 <div className="mem-detail-field">
-                                                                                    <span className="mem-detail-label">Superseded By</span>
+                                                                                    <span className="mem-detail-label">{t('mem.detail.supersededBy')}</span>
                                                                                     <span className="mem-detail-value mem-detail-chain">{entry.superseded_by}</span>
                                                                                 </div>
                                                                             )}
                                                                             {entry.metadata && (
                                                                                 <div className="mem-detail-field mem-detail-full">
-                                                                                    <span className="mem-detail-label">Metadata</span>
+                                                                                    <span className="mem-detail-label">{t('mem.detail.metadata')}</span>
                                                                                     <span className="mem-detail-value">
-                                                                                        {typeof entry.metadata === 'object'
-                                                                                            ? JSON.stringify(entry.metadata, null, 2)
-                                                                                            : entry.metadata}
+                                                                                        <bdi dir="ltr">
+                                                                                            {typeof entry.metadata === 'object'
+                                                                                                ? JSON.stringify(entry.metadata, null, 2)
+                                                                                                : entry.metadata}
+                                                                                        </bdi>
                                                                                     </span>
                                                                                 </div>
                                                                             )}
                                                                         </div>
                                                                         <div className="mem-detail-content-full">
-                                                                            <span className="mem-detail-label">Full Content</span>
-                                                                            <div className="mem-detail-content-text">{entry.content}</div>
+                                                                            <span className="mem-detail-label">{t('mem.detail.fullContent')}</span>
+                                                                            <div className="mem-detail-content-text"><bdi>{entry.content}</bdi></div>
                                                                         </div>
                                                                     </div>
                                                                 </td>
@@ -1785,15 +1825,15 @@ export function MemoryDashboard() {
                                         {/* Pagination */}
                                         <div className="mem-pagination">
                                             <span>
-                                                {kOffset + 1}{'\u2013'}{Math.min(kOffset + kLimit, knowledge.total)} of {knowledge.total}
+                                                {t('mem.page.range', { from: kOffset + 1, to: Math.min(kOffset + kLimit, knowledge.total), total: knowledge.total })}
                                             </span>
                                             <div className="mem-pagination-btns">
-                                                <button type="button" className="mem-page-btn" aria-label="Previous page"
+                                                <button type="button" className="mem-page-btn" aria-label={t('mem.page.previous')}
                                                     disabled={kOffset === 0}
                                                     onClick={() => setKOffset(Math.max(0, kOffset - kLimit))}>
                                                     <ChevronLeft size={14} />
                                                 </button>
-                                                <button type="button" className="mem-page-btn" aria-label="Next page"
+                                                <button type="button" className="mem-page-btn" aria-label={t('mem.page.next')}
                                                     disabled={kOffset + kLimit >= knowledge.total}
                                                     onClick={() => setKOffset(kOffset + kLimit)}>
                                                     <ChevronRight size={14} />
@@ -1804,7 +1844,7 @@ export function MemoryDashboard() {
                                 ) : (
                                     <div className="mem-empty">
                                         <div className="mem-empty-icon"><Brain size={28} /></div>
-                                        <p>{kSearch || kCategories.length > 0 || kContext || kEntity ? 'No matching memories' : 'No memories stored yet'}</p>
+                                        <p>{t(kSearch || kCategories.length > 0 || kContext || kEntity ? 'mem.knowledge.noMatch' : 'mem.knowledge.empty')}</p>
                                     </div>
                                 )}
 
@@ -1815,48 +1855,50 @@ export function MemoryDashboard() {
                                 {/* ── 4. Tool Performance ─────────── */}
                                 <div className="mem-section">
                                     <div className="mem-section-title">
-                                        <Wrench size={14} /> Tool Performance
-                                        <span className="mem-section-note" title="remember, recall, update_memory, forget and search_past_conversations are not logged">excludes memory tools</span>
+                                        <Wrench size={14} /> {t('mem.tools.title')}
+                                        <span className="mem-section-note" title={t('mem.tools.noteTitle')}>{t('mem.tools.note')}</span>
                                     </div>
                                     {tools.length > 0 ? (
                                         <div style={{ overflowX: 'auto' }}>
                                             <table className="mem-tool-table">
                                                 <thead>
                                                     <tr>
-                                                        <th>Tool</th>
-                                                        <th>Calls</th>
-                                                        <th>Success</th>
-                                                        <th>Avg Time</th>
-                                                        <th>Last Used</th>
-                                                        <th>Last Error</th>
+                                                        <th>{t('mem.tools.tool')}</th>
+                                                        <th>{t('mem.tools.calls')}</th>
+                                                        <th>{t('mem.tools.success')}</th>
+                                                        <th>{t('mem.tools.denied')}</th>
+                                                        <th>{t('mem.tools.avgTime')}</th>
+                                                        <th>{t('mem.detail.lastUsed')}</th>
+                                                        <th>{t('mem.tools.lastError')}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {tools.map(t => (
-                                                        <tr key={t.tool_name}>
-                                                            <td><span className="mem-tool-name">{t.tool_name}</span></td>
-                                                            <td>{t.total_calls}</td>
+                                                    {tools.map(tool => (
+                                                        <tr key={tool.tool_name}>
+                                                            <td><bdi className="mem-tool-name">{tool.tool_name}</bdi></td>
+                                                            <td>{tool.total_calls}</td>
                                                             <td>
                                                                 <div className="mem-confidence">
                                                                     <div className="mem-confidence-bar" style={{ width: 40 }}>
-                                                                        <div className={`mem-confidence-fill ${successRateClass(t.success_rate)}`}
-                                                                            style={{ width: `${t.success_rate * 100}%` }} />
+                                                                        <div className={`mem-confidence-fill ${successRateClass(tool.success_rate)}`}
+                                                                            style={{ width: `${tool.success_rate * 100}%` }} />
                                                                     </div>
-                                                                    <span className={`mem-success-rate ${successRateClass(t.success_rate)}`}>
-                                                                        {Math.round(t.success_rate * 100)}%
+                                                                    <span className={`mem-success-rate ${successRateClass(tool.success_rate)}`}>
+                                                                        {Math.round(tool.success_rate * 100)}%
                                                                     </span>
                                                                 </div>
                                                             </td>
-                                                            <td>{formatDuration(t.avg_duration_ms)}</td>
+                                                            <td>{tool.denied_count ?? 0}</td>
+                                                            <td><bdi dir="ltr">{formatDuration(tool.avg_duration_ms)}</bdi></td>
                                                             <td>
-                                                                <span className="mem-date-cell" title={formatDateFull(t.last_used)}>
-                                                                    {formatRelativeDate(t.last_used)}
+                                                                <span className="mem-date-cell" title={formatDateFull(tool.last_used, dateLocale(t))}>
+                                                                    {formatRelativeDate(tool.last_used, t)}
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <span className="mem-tool-error" title={t.last_error || ''}>
-                                                                    {t.last_error || '\u2014'}
-                                                                </span>
+                                                                <bdi className="mem-tool-error" title={tool.last_error || ''}>
+                                                                    {tool.last_error || '\u2014'}
+                                                                </bdi>
                                                             </td>
                                                         </tr>
                                                     ))}
@@ -1866,7 +1908,7 @@ export function MemoryDashboard() {
                                     ) : (
                                         <div className="mem-empty">
                                             <div className="mem-empty-icon"><Wrench size={28} /></div>
-                                            <p>No tool calls recorded yet</p>
+                                            <p>{t('mem.tools.empty')}</p>
                                         </div>
                                     )}
                                 </div>
@@ -1874,7 +1916,7 @@ export function MemoryDashboard() {
                                 {/* ── 6. Upcoming & Overdue ───────── */}
                                 <div className="mem-section">
                                     <div className="mem-section-title">
-                                        <Clock size={14} /> Upcoming & Overdue
+                                        <Clock size={14} /> {t('mem.upcoming.title')}
                                     </div>
                                     {upcoming.length > 0 ? (
                                         <div className="mem-temporal-list">
@@ -1886,10 +1928,10 @@ export function MemoryDashboard() {
                                                             {overdue ? <AlertTriangle size={16} /> : <Clock size={16} />}
                                                         </span>
                                                         <div className="mem-temporal-content">
-                                                            <div className="mem-temporal-text">{item.content}</div>
+                                                            <div className="mem-temporal-text"><bdi>{item.content}</bdi></div>
                                                             <div className="mem-temporal-date">
-                                                                {overdue ? 'OVERDUE' : 'Due'}: {formatRelativeDate(item.due_at)}
-                                                                {item.context !== 'global' && ` \u00B7 ${item.context}`}
+                                                                {t(overdue ? 'mem.upcoming.overdue' : 'mem.upcoming.due', { when: formatRelativeDate(item.due_at, t) })}
+                                                                {item.context !== 'global' && <> {'\u00B7'} <bdi>{item.context}</bdi></>}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1899,7 +1941,7 @@ export function MemoryDashboard() {
                                     ) : (
                                         <div className="mem-empty">
                                             <div className="mem-empty-icon"><CheckCircle size={28} /></div>
-                                            <p>Nothing upcoming or overdue</p>
+                                            <p>{t('mem.upcoming.empty')}</p>
                                         </div>
                                     )}
                                 </div>
@@ -1908,22 +1950,22 @@ export function MemoryDashboard() {
                             {/* ── 5. Conversation History ─────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <MessageSquare size={14} /> Conversation History
+                                    <MessageSquare size={14} /> {t('mem.conv.title')}
                                 </div>
                                 <div className="mem-conv-search">
                                     <Search size={13} className="search-icon" />
                                     <input
                                         type="text"
-                                        placeholder="Search conversations..."
+                                        placeholder={t('mem.conv.searchPlaceholder')}
                                         value={convSearch}
                                         onChange={e => handleConvSearchChange(e.target.value)}
-                                        aria-label="Search conversations"
+                                        aria-label={t('mem.conv.search')}
                                     />
                                     {convSearch && (
                                         <button
                                             className="mem-search-clear"
                                             onClick={() => { setConvSearch(''); setConvSearchResults(null); }}
-                                            aria-label="Clear search"
+                                            aria-label={t('mem.conv.clearSearch')}
                                         >
                                             <X size={12} />
                                         </button>
@@ -1938,20 +1980,20 @@ export function MemoryDashboard() {
                                                     onClick={() => viewConversation(turn.session_id)}>
                                                     <div className="mem-conv-info">
                                                         <div className="mem-conv-session-id">
-                                                            <span className={`mem-conv-turn-role ${turn.role}`}>{turn.role}</span>
-                                                            {' '}{convLabel(turn.session_id)}
+                                                            <span className={`mem-conv-turn-role ${turn.role}`}><Code value={turn.role} keys={ROLE_KEYS} /></span>
+                                                            {' '}<bdi>{convLabel(turn.session_id)}</bdi>
                                                         </div>
-                                                        <div className="mem-conv-preview">{turn.content}</div>
+                                                        <div className="mem-conv-preview"><bdi>{turn.content}</bdi></div>
                                                     </div>
                                                     <div className="mem-conv-meta">
-                                                        <span>{formatRelativeDate(turn.timestamp)}</span>
+                                                        <span>{formatRelativeDate(turn.timestamp, t)}</span>
                                                     </div>
                                                 </div>
                                             ))}
                                         </div>
                                     ) : (
                                         <div className="mem-empty">
-                                            <p>No conversations match &ldquo;{convSearch}&rdquo;</p>
+                                            <p>{t('mem.conv.noMatch', { query: convSearch })}</p>
                                         </div>
                                     )
                                 ) : conversations.length > 0 ? (
@@ -1962,20 +2004,20 @@ export function MemoryDashboard() {
                                                 onClick={() => viewConversation(c.session_id)}>
                                                 <div className="mem-conv-info">
                                                     <div className="mem-conv-session-id">
-                                                        {convLabel(c.session_id)}
+                                                        <bdi>{convLabel(c.session_id)}</bdi>
                                                         {c.consolidated && (
-                                                            <span className="mem-consolidated-badge" title="Consolidated">
+                                                            <span className="mem-consolidated-badge" title={t('mem.conv.consolidated')}>
                                                                 <GitMerge size={11} />
                                                             </span>
                                                         )}
                                                     </div>
                                                     {c.first_message && (
-                                                        <div className="mem-conv-preview">{c.first_message}</div>
+                                                        <div className="mem-conv-preview"><bdi>{c.first_message}</bdi></div>
                                                     )}
                                                 </div>
                                                 <div className="mem-conv-meta">
-                                                    <span>{c.turn_count} turns</span>
-                                                    <span>{formatRelativeDate(c.last_activity)}</span>
+                                                    <span>{t.plural('mem.conv.turns', c.turn_count)}</span>
+                                                    <span>{formatRelativeDate(c.last_activity, t)}</span>
                                                 </div>
                                             </div>
                                         ))}
@@ -1983,7 +2025,7 @@ export function MemoryDashboard() {
                                 ) : (
                                     <div className="mem-empty">
                                         <div className="mem-empty-icon"><MessageSquare size={28} /></div>
-                                        <p>No conversation history in memory</p>
+                                        <p>{t('mem.conv.empty')}</p>
                                     </div>
                                 )}
                             </div>
@@ -1992,15 +2034,15 @@ export function MemoryDashboard() {
                             {convDetail && (
                                 <div className="mem-conv-detail-overlay">
                                     <div className="mem-conv-detail-header">
-                                        <h2>{convLabel(convDetail.sessionId)}</h2>
+                                        <h2><bdi>{convLabel(convDetail.sessionId)}</bdi></h2>
                                         <div className="mem-conv-detail-actions">
                                             {sessionTitles.has(convDetail.sessionId) && (
                                                 <button className="btn-secondary"
                                                     onClick={() => setCurrentSession(convDetail.sessionId)}>
-                                                    Open chat
+                                                    {t('mem.conv.openChat')}
                                                 </button>
                                             )}
-                                            <button className="btn-icon" onClick={() => setConvDetail(null)} aria-label="Close conversation">
+                                            <button className="btn-icon" onClick={() => setConvDetail(null)} aria-label={t('mem.conv.close')}>
                                                 <X size={16} />
                                             </button>
                                         </div>
@@ -2010,19 +2052,19 @@ export function MemoryDashboard() {
                                             <div key={turn.id} className="mem-conv-turn">
                                                 <div className="mem-conv-turn-header">
                                                     <div className={`mem-conv-turn-role ${turn.role}`}>
-                                                        {turn.role}
+                                                        <Code value={turn.role} keys={ROLE_KEYS} />
                                                     </div>
-                                                    <span className="mem-conv-turn-time" title={formatDateFull(turn.timestamp)}>
-                                                        {formatRelativeDate(turn.timestamp)}
+                                                    <span className="mem-conv-turn-time" title={formatDateFull(turn.timestamp, dateLocale(t))}>
+                                                        {formatRelativeDate(turn.timestamp, t)}
                                                     </span>
                                                 </div>
                                                 <div className="mem-conv-turn-content">
-                                                    {turn.content}
+                                                    <bdi>{turn.content}</bdi>
                                                 </div>
                                             </div>
                                         ))}
                                         {convDetail.turns.length === 0 && (
-                                            <div className="mem-empty">No turns found</div>
+                                            <div className="mem-empty">{t('mem.conv.noTurns')}</div>
                                         )}
                                     </div>
                                 </div>
@@ -2033,14 +2075,12 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> Settings <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginLeft: 6, verticalAlign: 'middle', letterSpacing: '0.5px' }}>BETA</span>
+                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
-                                        <span className="mem-setting-label">Memory enabled</span>
-                                        <span className="mem-setting-desc">
-                                            When disabled, no knowledge or conversation data is stored during any session (global incognito).
-                                        </span>
+                                        <span className="mem-setting-label">{t('mem.settings.memory')}</span>
+                                        <span className="mem-setting-desc">{t('mem.settings.memoryDesc')}</span>
                                     </div>
                                     <button
                                         className={`mem-toggle${memoryEnabled ? ' mem-toggle-on' : ''}`}
@@ -2056,66 +2096,58 @@ export function MemoryDashboard() {
                                                 setMemoryEnabled(updated.memory_enabled);
                                             } catch (err) {
                                                 log.system.warn('Failed to disable memory', err);
+                                                showToast(t('mem.toast.settingFailed', { error: errorText(err) }), 'error');
                                             } finally {
                                                 setSettingsLoading(false);
                                             }
                                         }}
                                         aria-pressed={memoryEnabled}
-                                        aria-label={`Memory is ${memoryEnabled ? 'enabled' : 'disabled'}`}
+                                        aria-label={t(memoryEnabled ? 'mem.settings.memoryOn' : 'mem.settings.memoryOff')}
                                     >
-                                        {memoryEnabled ? 'On' : 'Off'}
+                                        {t.bare(memoryEnabled ? 'mem.on' : 'mem.off')}
                                     </button>
                                 </div>
                                 {/* Floating beta confirmation modal */}
                                 {betaConfirm && (() => {
-                                    const configs = {
+                                    const configs: Record<'memory' | 'mcp' | 'discovery', {
+                                        title: MessageKey; description: MessageKey; bullets: MessageKey[]; buttonLabel: MessageKey;
+                                        onConfirm: () => Promise<void>;
+                                    }> = {
                                         memory: {
-                                            title: 'Enable Agent Memory?',
-                                            description: 'Agent memory is a work-in-progress. By enabling it:',
-                                            bullets: [
-                                                ['Conversations and facts are stored ', 'locally on this machine'],
-                                                ['Stored data ', 'may be lost', ' during updates'],
-                                                ['You can disable it at any time from this settings panel'],
-                                            ],
-                                            buttonLabel: 'Enable Memory',
+                                            title: 'mem.beta.memory.title',
+                                            description: 'mem.beta.memory.desc',
+                                            bullets: ['mem.beta.memory.local', 'mem.beta.memory.lost', 'mem.beta.memory.disable'],
+                                            buttonLabel: 'mem.beta.memory.confirm',
                                             onConfirm: async () => {
                                                 const updated = await memoryApi.updateMemorySettings({ memory_enabled: true });
                                                 setMemoryEnabled(updated.memory_enabled);
-                                                showToast('Memory enabled', 'info');
+                                                showToast(t('mem.toast.memoryEnabled'), 'info');
                                             },
                                         },
                                         mcp: {
-                                            title: 'Enable MCP Memory Access?',
-                                            description: 'This exposes memory data to external MCP clients:',
-                                            bullets: [
-                                                ['MCP clients can ', 'read your stored memories', ' (read-only)'],
-                                                ['Requires an ', 'MCP server restart', ' to take effect'],
-                                                ['Intended for debugging and troubleshooting only'],
-                                            ],
-                                            buttonLabel: 'Enable MCP Access',
+                                            title: 'mem.beta.mcp.title',
+                                            description: 'mem.beta.mcp.desc',
+                                            bullets: ['mem.beta.mcp.read', 'mem.beta.mcp.restart', 'mem.beta.mcp.debug'],
+                                            buttonLabel: 'mem.beta.mcp.confirm',
                                             onConfirm: async () => {
                                                 const updated = await memoryApi.updateMemorySettings({ mcp_memory_enabled: true });
                                                 setMcpMemoryEnabled(updated.mcp_memory_enabled);
-                                                showToast('MCP memory access enabled', 'info');
+                                                showToast(t('mem.toast.mcpEnabled'), 'info');
                                             },
                                         },
                                         discovery: {
-                                            title: 'Enable System Discovery?',
-                                            description: 'This scans your system to personalize responses:',
-                                            bullets: [
-                                                ['Collects ', 'hardware, software, and environment', ' information'],
-                                                ['Scans files, git repos, browser history, and SSH config'],
-                                                ['All data stays ', 'local on this machine'],
-                                            ],
-                                            buttonLabel: 'Enable Discovery',
+                                            title: 'mem.beta.discovery.title',
+                                            description: 'mem.beta.discovery.desc',
+                                            bullets: ['mem.beta.discovery.collects', 'mem.beta.discovery.scans', 'mem.beta.discovery.local'],
+                                            buttonLabel: 'mem.beta.discovery.confirm',
                                             onConfirm: async () => {
                                                 const updated = await memoryApi.updateMemorySettings({ system_discovery_consent: true });
                                                 setSystemDiscoveryConsent(updated.system_discovery_consent);
                                                 if (updated.system_context_error) {
-                                                    showToast(`System discovery enabled but scan failed: ${updated.system_context_error}`, 'error');
+                                                    showToast(t('mem.toast.discoveryScanFailed', { error: updated.system_context_error }), 'error');
                                                 } else {
                                                     const stored = updated.system_context_refresh?.stored ?? 0;
-                                                    showToast(`System discovery enabled — ${stored} system facts collected`, 'info');
+                                                    showToast(t('mem.toast.discoveryEnabled', { n: stored }), 'info');
                                                 }
                                                 loadAll();
                                             },
@@ -2148,28 +2180,20 @@ export function MemoryDashboard() {
                                             }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                                                <span style={{
+                                                <span className="mem-beta" style={{
                                                     fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
                                                     background: 'var(--accent-yellow-dim)', padding: '3px 10px',
-                                                    borderRadius: 4, letterSpacing: '0.5px',
-                                                }}>BETA</span>
+                                                    borderRadius: 4,
+                                                }}>{t('mem.beta')}</span>
                                                 <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
-                                                    {cfg.title}
+                                                    {t(cfg.title)}
                                                 </h2>
                                             </div>
                                             <p id="mem-beta-confirm-desc" style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-                                                {cfg.description}
+                                                {t(cfg.description)}
                                             </p>
-                                            <ul style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary)', margin: '0 0 24px', paddingLeft: 20 }}>
-                                                {cfg.bullets.map((parts, i) => (
-                                                    <li key={i}>
-                                                        {parts.map((part, j) =>
-                                                            j % 2 === 1
-                                                                ? <strong key={j} style={{ color: 'var(--text-primary)' }}>{part}</strong>
-                                                                : <span key={j}>{part}</span>
-                                                        )}
-                                                    </li>
-                                                ))}
+                                            <ul style={{ fontSize: 13, lineHeight: 1.7, color: 'var(--text-secondary)', margin: '0 0 24px', paddingInlineStart: 20 }}>
+                                                {cfg.bullets.map((key) => <li key={key}>{t(key)}</li>)}
                                             </ul>
                                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                                                 <button
@@ -2177,7 +2201,7 @@ export function MemoryDashboard() {
                                                     onClick={() => setBetaConfirm(null)}
                                                     style={{ padding: '8px 20px', fontSize: 13, borderRadius: 6 }}
                                                 >
-                                                    Cancel
+                                                    {t('mem.cancel')}
                                                 </button>
                                                 <button
                                                     disabled={settingsLoading}
@@ -2187,7 +2211,7 @@ export function MemoryDashboard() {
                                                             await cfg.onConfirm();
                                                         } catch (err) {
                                                             log.system.warn('Failed to update setting', err);
-                                                            showToast('Failed to update setting. Please try again.', 'error');
+                                                            showToast(t('mem.toast.settingFailed', { error: errorText(err) }), 'error');
                                                         } finally {
                                                             setSettingsLoading(false);
                                                             setBetaConfirm(null);
@@ -2200,7 +2224,7 @@ export function MemoryDashboard() {
                                                         color: 'var(--accent-fill-text)',
                                                     }}
                                                 >
-                                                    {cfg.buttonLabel}
+                                                    {t(cfg.buttonLabel)}
                                                 </button>
                                             </div>
                                         </div>
@@ -2209,11 +2233,8 @@ export function MemoryDashboard() {
                                 })()}
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
-                                        <span className="mem-setting-label">MCP memory access</span>
-                                        <span className="mem-setting-desc">
-                                            Expose read-only memory tools to MCP clients
-                                            (for debug/troubleshooting). Requires MCP server restart.
-                                        </span>
+                                        <span className="mem-setting-label">{t('mem.settings.mcp')}</span>
+                                        <span className="mem-setting-desc">{t('mem.settings.mcpDesc')}</span>
                                     </div>
                                     <button
                                         className={`mem-toggle${mcpMemoryEnabled ? ' mem-toggle-on' : ''}`}
@@ -2229,22 +2250,21 @@ export function MemoryDashboard() {
                                                 setMcpMemoryEnabled(updated.mcp_memory_enabled);
                                             } catch (err) {
                                                 log.system.warn('Failed to update memory settings', err);
+                                                showToast(t('mem.toast.settingFailed', { error: errorText(err) }), 'error');
                                             } finally {
                                                 setSettingsLoading(false);
                                             }
                                         }}
-                                        aria-label="Toggle MCP memory access"
+                                        aria-label={t('mem.settings.mcpToggle')}
                                         aria-pressed={mcpMemoryEnabled}
                                     >
-                                        {mcpMemoryEnabled ? 'On' : 'Off'}
+                                        {t.bare(mcpMemoryEnabled ? 'mem.on' : 'mem.off')}
                                     </button>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
-                                        <span className="mem-setting-label">System discovery</span>
-                                        <span className="mem-setting-desc">
-                                            Allow GAIA to scan your system for hardware, software, and environment information to personalize responses.
-                                        </span>
+                                        <span className="mem-setting-label">{t('mem.settings.discovery')}</span>
+                                        <span className="mem-setting-desc">{t('mem.settings.discoveryDesc')}</span>
                                     </div>
                                     <button
                                         className={`mem-toggle${systemDiscoveryConsent ? ' mem-toggle-on' : ''}`}
@@ -2262,26 +2282,25 @@ export function MemoryDashboard() {
                                                 setSystemDiscoveryConsent(updated.system_discovery_consent);
                                             } catch (err) {
                                                 log.system.warn('Failed to update system discovery setting', err);
+                                                showToast(t('mem.toast.settingFailed', { error: errorText(err) }), 'error');
                                             } finally {
                                                 setSettingsLoading(false);
                                             }
                                         }}
-                                        aria-label="Toggle system discovery"
+                                        aria-label={t('mem.settings.discoveryToggle')}
                                         aria-pressed={systemDiscoveryConsent}
                                     >
-                                        {systemDiscoveryConsent ? 'On' : 'Off'}
+                                        {t.bare(systemDiscoveryConsent ? 'mem.on' : 'mem.off')}
                                     </button>
                                 </div>
                                 <div className="mem-setting-row mem-setting-row-danger">
                                     <div className="mem-setting-info">
-                                        <span className="mem-setting-label">Re-initialize memory</span>
-                                        <span className="mem-setting-desc">
-                                            Wipe all memories, conversations, and tool logs, then re-collect system information. This cannot be undone.
-                                        </span>
+                                        <span className="mem-setting-label">{t('mem.settings.reinit')}</span>
+                                        <span className="mem-setting-desc">{t('mem.settings.reinitDesc')}</span>
                                     </div>
                                     {reinitConfirm ? (
                                         <div className="mem-delete-confirm">
-                                            <span className="mem-delete-confirm-label">Are you sure?</span>
+                                            <span className="mem-delete-confirm-label">{t('mem.settings.sure')}</span>
                                             <button
                                                 className="mem-btn-danger"
                                                 disabled={settingsLoading}
@@ -2290,31 +2309,31 @@ export function MemoryDashboard() {
                                                     try {
                                                         const result = await memoryApi.reinitializeMemory();
                                                         if (result.system_context.error) {
-                                                            showToast(result.system_context.error, 'error');
+                                                            showToast(t('mem.toast.server', { message: result.system_context.error }), 'error');
                                                         } else {
                                                             showToast(
-                                                                `Re-initialized: cleared ${result.cleared.knowledge} entries, restored ${result.system_context.stored} system facts`,
+                                                                t('mem.toast.reinitialized', { cleared: result.cleared.knowledge, stored: result.system_context.stored }),
                                                                 'info'
                                                             );
                                                         }
                                                         loadAll();
                                                     } catch (err) {
                                                         log.system.warn('Failed to reinitialize memory', err);
-                                                        showToast('Failed to re-initialize memory', 'error');
+                                                        showToast(t('mem.toast.reinitFailed', { error: errorText(err) }), 'error');
                                                     } finally {
                                                         setSettingsLoading(false);
                                                         setReinitConfirm(false);
                                                     }
                                                 }}
                                             >
-                                                Yes, re-initialize
+                                                {t('mem.settings.reinitConfirm')}
                                             </button>
                                             <button
                                                 className="btn-secondary"
                                                 onClick={() => setReinitConfirm(false)}
                                                 style={{ padding: '6px 14px', fontSize: 12 }}
                                             >
-                                                Cancel
+                                                {t('mem.cancel')}
                                             </button>
                                         </div>
                                     ) : (
@@ -2323,20 +2342,18 @@ export function MemoryDashboard() {
                                             disabled={settingsLoading}
                                             onClick={() => setReinitConfirm(true)}
                                         >
-                                            Re-initialize
+                                            {t('mem.settings.reinitButton')}
                                         </button>
                                     )}
                                 </div>
                                 <div className="mem-setting-row mem-setting-row-danger">
                                     <div className="mem-setting-info">
-                                        <span className="mem-setting-label">Delete all memories</span>
-                                        <span className="mem-setting-desc">
-                                            Permanently wipe all knowledge entries, conversation history, and tool logs. This cannot be undone.
-                                        </span>
+                                        <span className="mem-setting-label">{t('mem.settings.deleteAll')}</span>
+                                        <span className="mem-setting-desc">{t('mem.settings.deleteAllDesc')}</span>
                                     </div>
                                     {deleteConfirm ? (
                                         <div className="mem-delete-confirm">
-                                            <span className="mem-delete-confirm-label">Are you sure?</span>
+                                            <span className="mem-delete-confirm-label">{t('mem.settings.sure')}</span>
                                             <button
                                                 className="mem-btn-danger"
                                                 disabled={settingsLoading}
@@ -2344,25 +2361,25 @@ export function MemoryDashboard() {
                                                     setSettingsLoading(true);
                                                     try {
                                                         const result = await memoryApi.clearAllMemory();
-                                                        showToast(`Deleted ${result.knowledge} knowledge entries, ${result.conversations} conversations`, 'info');
+                                                        showToast(t('mem.toast.cleared', { knowledge: result.knowledge, conversations: result.conversations }), 'info');
                                                         loadAll();
                                                     } catch (err) {
                                                         log.system.warn('Failed to clear memory', err);
-                                                        showToast('Failed to clear memory', 'error');
+                                                        showToast(t('mem.toast.clearFailed', { error: errorText(err) }), 'error');
                                                     } finally {
                                                         setSettingsLoading(false);
                                                         setDeleteConfirm(false);
                                                     }
                                                 }}
                                             >
-                                                Yes, delete all
+                                                {t('mem.settings.deleteConfirm')}
                                             </button>
                                             <button
                                                 className="btn-secondary"
                                                 onClick={() => setDeleteConfirm(false)}
                                                 style={{ padding: '6px 14px', fontSize: 12 }}
                                             >
-                                                Cancel
+                                                {t('mem.cancel')}
                                             </button>
                                         </div>
                                     ) : (
@@ -2371,7 +2388,7 @@ export function MemoryDashboard() {
                                             disabled={settingsLoading}
                                             onClick={() => setDeleteConfirm(true)}
                                         >
-                                            Delete All
+                                            {t('mem.settings.deleteButton')}
                                         </button>
                                     )}
                                 </div>
@@ -2381,16 +2398,17 @@ export function MemoryDashboard() {
                             {stats && (
                                 <div className="mem-db-footer">
                                     <span>
-                                        Database: {formatSize(stats.db_size_bytes)}
-                                        {stats.knowledge?.avg_confidence != null &&
-                                            ` \u00B7 Avg confidence: ${stats.knowledge.avg_confidence.toFixed(2)}`}
+                                        {t('mem.footer.database')}: <bdi dir="ltr">{formatSize(stats.db_size_bytes)}</bdi>
+                                        {stats.knowledge?.avg_confidence != null && <>
+                                            {' \u00B7 '}{t('mem.footer.avgConfidence', { n: stats.knowledge.avg_confidence.toFixed(2) })}
+                                        </>}
                                     </span>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                         {stats.knowledge?.entity_count != null && stats.knowledge.entity_count > 0 && (
-                                            <span>{stats.knowledge.entity_count} entities</span>
+                                            <span>{t('mem.footer.entities', { n: stats.knowledge.entity_count })}</span>
                                         )}
                                         {stats.knowledge?.sensitive_count != null && stats.knowledge.sensitive_count > 0 && (
-                                            <span><Shield size={10} /> {stats.knowledge.sensitive_count} sensitive</span>
+                                            <span><Shield size={10} /> {t('mem.footer.sensitive', { n: stats.knowledge.sensitive_count })}</span>
                                         )}
                                     </div>
                                 </div>
@@ -2405,20 +2423,18 @@ export function MemoryDashboard() {
                             {/* Card A: System Discovery */}
                             <div className="mem-profile-card">
                                 <div className="mem-profile-card-title">
-                                    <Cpu size={16} /> System Discovery
+                                    <Cpu size={16} /> {t('mem.disc.title')}
                                 </div>
-                                <p className="mem-profile-desc">
-                                    Scan your system to discover apps, projects, and usage patterns.
-                                </p>
+                                <p className="mem-profile-desc">{t('mem.disc.desc')}</p>
                                 <button
                                     className="btn-primary mem-profile-run-btn"
                                     disabled={discPhase === 'running' || discPhase === 'saving'}
                                     onClick={runDiscovery}
                                 >
                                     {discPhase === 'running' ? (
-                                        <><div className="mem-spinner-sm" /> Running...</>
+                                        <><div className="mem-spinner-sm" /> {t('mem.running')}</>
                                     ) : (
-                                        'Run Discovery'
+                                        t('mem.disc.run')
                                     )}
                                 </button>
 
@@ -2426,7 +2442,7 @@ export function MemoryDashboard() {
                                     <div className="mem-log" ref={discLogRef}>
                                         {discLogs.map((line, i) => (
                                             <div key={i} className={`mem-log-line ${line.kind}`}>
-                                                {line.text}
+                                                {line.server ? <bdi>{line.text}</bdi> : line.text}
                                             </div>
                                         ))}
                                     </div>
@@ -2434,7 +2450,7 @@ export function MemoryDashboard() {
 
                                 {(discPhase === 'review' || discPhase === 'saving' || discPhase === 'done') && discItems.length > 0 && (
                                     <div className="mem-review-section">
-                                        <div className="mem-review-header">Review & Save</div>
+                                        <div className="mem-review-header">{t('mem.review.title')}</div>
                                         <div className="mem-review-list">
                                             {discItems.map((item, i) => (
                                                 <label key={i} className="mem-review-item">
@@ -2448,8 +2464,10 @@ export function MemoryDashboard() {
                                                             ));
                                                         }}
                                                     />
-                                                    <span className="mem-review-content">{item.content}</span>
-                                                    <span className="mem-source-badge">{item._source_name || item.category}</span>
+                                                    <bdi className="mem-review-content">{item.content}</bdi>
+                                                    <span className="mem-source-badge">
+                                                        {item._source_name ? <bdi>{item._source_name}</bdi> : <Code value={item.category} keys={CATEGORY_KEYS} />}
+                                                    </span>
                                                     <span className="mem-conf-badge">{Math.round(item.confidence * 100)}%</span>
                                                 </label>
                                             ))}
@@ -2461,18 +2479,18 @@ export function MemoryDashboard() {
                                                 onClick={saveDiscoveryItems}
                                             >
                                                 {discPhase === 'saving' ? (
-                                                    <><div className="mem-spinner-sm" /> Saving...</>
+                                                    <><div className="mem-spinner-sm" /> {t('mem.saving')}</>
                                                 ) : (
-                                                    `Save Selected (${discItems.filter(i => i._checked).length})`
+                                                    t('mem.review.saveSelected', { n: discItems.filter(i => i._checked).length })
                                                 )}
                                             </button>
                                             <span className="mem-review-select-links">
                                                 <button type="button" className="mem-link-btn" onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
-                                                    Select All
+                                                    {t('mem.review.selectAll')}
                                                 </button>
                                                 {' / '}
                                                 <button type="button" className="mem-link-btn" onClick={() => setDiscItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
-                                                    None
+                                                    {t('mem.review.none')}
                                                 </button>
                                             </span>
                                         </div>
@@ -2481,26 +2499,22 @@ export function MemoryDashboard() {
 
                                 {discPhase === 'done' && discSavedCount !== null && (
                                     <div className="mem-profile-success">
-                                        <CheckCircle size={14} /> Saved {discSavedCount} items to memory
+                                        <CheckCircle size={14} /> {t('mem.disc.saved', { n: discSavedCount })}
                                     </div>
                                 )}
 
                                 {discPhase === 'review' && discItems.length === 0 && (
-                                    <div className="mem-profile-empty">No items discovered.</div>
+                                    <div className="mem-profile-empty">{t('mem.disc.empty')}</div>
                                 )}
                             </div>
 
                             {/* Card B: AI Profile Inference */}
                             <div className="mem-profile-card">
                                 <div className="mem-profile-card-title">
-                                    <Sparkles size={16} /> AI Profile Inference
+                                    <Sparkles size={16} /> {t('mem.inf.title')}
                                 </div>
-                                <p className="mem-profile-desc">
-                                    Use the local LLM to generate profile insights from your data.
-                                </p>
-                                <p className="mem-profile-note">
-                                    Requires Lemonade Server running.
-                                </p>
+                                <p className="mem-profile-desc">{t('mem.inf.desc')}</p>
+                                <p className="mem-profile-note">{t('mem.inf.note')}</p>
                                 <label className="mem-profile-checkbox">
                                     <input
                                         type="checkbox"
@@ -2508,7 +2522,7 @@ export function MemoryDashboard() {
                                         onChange={e => setInfIncludeBrowser(e.target.checked)}
                                         disabled={infPhase === 'running' || infPhase === 'saving'}
                                     />
-                                    Include browser history
+                                    {t('mem.inf.browser')}
                                 </label>
                                 <button
                                     className="btn-primary mem-profile-run-btn"
@@ -2516,9 +2530,9 @@ export function MemoryDashboard() {
                                     onClick={runInference}
                                 >
                                     {infPhase === 'running' ? (
-                                        <><div className="mem-spinner-sm" /> Running...</>
+                                        <><div className="mem-spinner-sm" /> {t('mem.running')}</>
                                     ) : (
-                                        'Run Inference'
+                                        t('mem.inf.run')
                                     )}
                                 </button>
 
@@ -2526,7 +2540,7 @@ export function MemoryDashboard() {
                                     <div className="mem-log" ref={infLogRef}>
                                         {infLogs.map((line, i) => (
                                             <div key={i} className={`mem-log-line ${line.kind}`}>
-                                                {line.text}
+                                                {line.server ? <bdi>{line.text}</bdi> : line.text}
                                             </div>
                                         ))}
                                     </div>
@@ -2534,7 +2548,7 @@ export function MemoryDashboard() {
 
                                 {(infPhase === 'review' || infPhase === 'saving' || infPhase === 'done') && infItems.length > 0 && (
                                     <div className="mem-review-section">
-                                        <div className="mem-review-header">Review & Save</div>
+                                        <div className="mem-review-header">{t('mem.review.title')}</div>
                                         <div className="mem-review-list">
                                             {infItems.map((item, i) => (
                                                 <label key={i} className="mem-review-item">
@@ -2548,9 +2562,9 @@ export function MemoryDashboard() {
                                                             ));
                                                         }}
                                                     />
-                                                    <span className="mem-review-content">{item.content}</span>
+                                                    <bdi className="mem-review-content">{item.content}</bdi>
                                                     <span className={`mem-domain-badge ${DOMAIN_COLORS[item.domain] || 'gray'}`}>
-                                                        {item.domain}
+                                                        <Code value={item.domain} keys={DOMAIN_KEYS} />
                                                     </span>
                                                     <span className="mem-conf-badge">{Math.round(item.confidence * 100)}%</span>
                                                 </label>
@@ -2563,18 +2577,18 @@ export function MemoryDashboard() {
                                                 onClick={saveInferenceItems}
                                             >
                                                 {infPhase === 'saving' ? (
-                                                    <><div className="mem-spinner-sm" /> Saving...</>
+                                                    <><div className="mem-spinner-sm" /> {t('mem.saving')}</>
                                                 ) : (
-                                                    `Save Selected (${infItems.filter(i => i._checked).length})`
+                                                    t('mem.review.saveSelected', { n: infItems.filter(i => i._checked).length })
                                                 )}
                                             </button>
                                             <span className="mem-review-select-links">
                                                 <button type="button" className="mem-link-btn" onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: true })))}>
-                                                    Select All
+                                                    {t('mem.review.selectAll')}
                                                 </button>
                                                 {' / '}
                                                 <button type="button" className="mem-link-btn" onClick={() => setInfItems(prev => prev.map(i => ({ ...i, _checked: false })))}>
-                                                    None
+                                                    {t('mem.review.none')}
                                                 </button>
                                             </span>
                                         </div>
@@ -2583,12 +2597,12 @@ export function MemoryDashboard() {
 
                                 {infPhase === 'done' && infSavedCount !== null && (
                                     <div className="mem-profile-success">
-                                        <CheckCircle size={14} /> Saved {infSavedCount} insights to memory
+                                        <CheckCircle size={14} /> {t('mem.inf.saved', { n: infSavedCount })}
                                     </div>
                                 )}
 
                                 {infPhase === 'review' && infItems.length === 0 && (
-                                    <div className="mem-profile-empty">No insights generated.</div>
+                                    <div className="mem-profile-empty">{t('mem.inf.empty')}</div>
                                 )}
                             </div>
                         </div>
@@ -2602,7 +2616,7 @@ export function MemoryDashboard() {
                                 {(['queued','in_progress','completed','failed'] as const).map(s => (
                                     <div key={s} className={`mem-goals-stat-pill mem-goal-status-${s.replace('_','-')}`}>
                                         <span className="mem-goals-stat-n">{goalStats?.goals[s] ?? 0}</span>
-                                        <span className="mem-goals-stat-label">{s.replace('_', ' ')}</span>
+                                        <span className="mem-goals-stat-label">{t(STATUS_KEYS[s])}</span>
                                     </div>
                                 ))}
                             </div>
@@ -2611,21 +2625,21 @@ export function MemoryDashboard() {
                             {goals.filter(g => g.status === 'pending_approval').length > 0 && (
                                 <div className="mem-goals-approval-banner">
                                     <div className="mem-goals-approval-title">
-                                        <Zap size={14} /> Agent suggested {goals.filter(g => g.status === 'pending_approval').length} goal(s) — review before execution
+                                        <Zap size={14} /> {t('mem.goals.suggested', { n: goals.filter(g => g.status === 'pending_approval').length })}
                                     </div>
                                     {goals.filter(g => g.status === 'pending_approval').map(goal => (
                                         <div key={goal.id} className="mem-goals-approval-item">
                                             <div className="mem-goals-approval-text">
-                                                <strong>{goal.title}</strong>
-                                                <span>{goal.description}</span>
+                                                <strong><bdi>{goal.title}</bdi></strong>
+                                                <bdi>{goal.description}</bdi>
                                             </div>
                                             <div className="mem-goals-approval-actions">
                                                 <button className="btn-danger-sm" onClick={() => runGoalAction(
-                                                    () => memoryApi.rejectGoal(goal.id), "Couldn't reject the goal",
-                                                )}>Reject</button>
+                                                    () => memoryApi.rejectGoal(goal.id), 'mem.goals.rejectFailed',
+                                                )}>{t('mem.goals.reject')}</button>
                                                 <button className="btn-secondary" onClick={() => runGoalAction(
-                                                    () => memoryApi.approveGoal(goal.id), "Couldn't accept the goal",
-                                                )}>Accept</button>
+                                                    () => memoryApi.approveGoal(goal.id), 'mem.goals.acceptFailed',
+                                                )}>{t('mem.goals.accept')}</button>
                                             </div>
                                         </div>
                                     ))}
@@ -2635,7 +2649,7 @@ export function MemoryDashboard() {
                             {/* Add goal button */}
                             <div className="mem-goals-toolbar">
                                 <button className="btn-primary" onClick={() => setShowAddGoalForm(v => !v)}>
-                                    <Plus size={14} /> New Goal
+                                    <Plus size={14} /> {t('mem.goals.new')}
                                 </button>
                             </div>
 
@@ -2644,13 +2658,13 @@ export function MemoryDashboard() {
                                 <div className="mem-goals-add-form">
                                     <input
                                         className="mem-input"
-                                        placeholder="Goal title"
+                                        placeholder={t('mem.goals.titlePlaceholder')}
                                         value={goalForm.title}
                                         onChange={e => setGoalForm(f => ({ ...f, title: e.target.value }))}
                                     />
                                     <textarea
                                         className="mem-input"
-                                        placeholder="Description — what should the agent work toward?"
+                                        placeholder={t('mem.goals.descPlaceholder')}
                                         rows={2}
                                         value={goalForm.description}
                                         onChange={e => setGoalForm(f => ({ ...f, description: e.target.value }))}
@@ -2661,9 +2675,9 @@ export function MemoryDashboard() {
                                             value={goalForm.priority}
                                             onChange={e => setGoalForm(f => ({ ...f, priority: e.target.value as memoryApi.Priority }))}
                                         >
-                                            <option value="low">Low priority</option>
-                                            <option value="medium">Medium priority</option>
-                                            <option value="high">High priority</option>
+                                            <option value="low">{t.bare('mem.goals.priorityLow')}</option>
+                                            <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
+                                            <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
                                         <button className="btn-primary" onClick={() => {
                                             if (!goalForm.title.trim()) return;
@@ -2671,20 +2685,20 @@ export function MemoryDashboard() {
                                                 await memoryApi.createGoal(goalForm);
                                                 setGoalForm({ title: '', description: '', priority: 'medium' });
                                                 setShowAddGoalForm(false);
-                                            }, "Couldn't create the goal");
-                                        }}>Create</button>
-                                        <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>Cancel</button>
+                                            }, 'mem.goals.createFailed');
+                                        }}>{t('mem.goals.create')}</button>
+                                        <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>{t('mem.cancel')}</button>
                                     </div>
                                 </div>
                             )}
 
                             {/* Goal list */}
                             {goalsLoading ? (
-                                <div className="mem-loading"><div className="mem-spinner" /> Loading goals...</div>
+                                <div className="mem-loading"><div className="mem-spinner" /> {t('mem.goals.loading')}</div>
                             ) : goals.filter(g => g.status !== 'pending_approval' && g.status !== 'rejected').length === 0 ? (
                                 <div className="mem-empty">
                                     <div className="mem-empty-icon"><Target size={32} /></div>
-                                    <p>No goals yet. Create one or let the agent suggest goals in autonomous mode.</p>
+                                    <p>{t('mem.goals.empty')}</p>
                                 </div>
                             ) : (
                                 <div className="mem-goals-list">
@@ -2708,26 +2722,26 @@ export function MemoryDashboard() {
                                             >
                                                 <div className="mem-goal-header-left">
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
-                                                    <span className="mem-goal-title">{goal.title}</span>
-                                                    <span className={`mem-goal-priority mem-priority-${goal.priority}`}>{goal.priority}</span>
+                                                    <bdi className="mem-goal-title">{goal.title}</bdi>
+                                                    <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
-                                                            <Zap size={10} /> {goal.source.replace('_', ' ')}
+                                                            <Zap size={10} /> <Code value={goal.source} keys={GOAL_SOURCE_KEYS} />
                                                         </span>
                                                     )}
                                                 </div>
                                                 <div className="mem-goal-header-right">
                                                     <span className="mem-goal-task-count">
                                                         <ListChecks size={12} />
-                                                        {goal.tasks.filter(t => t.status === 'completed').length}/{goal.tasks.length}
+                                                        <bdi dir="ltr">{goal.tasks.filter(task => task.status === 'completed').length}/{goal.tasks.length}</bdi>
                                                     </span>
                                                     {goal.status === 'queued' && (
                                                         <button className="mem-goal-action-btn mem-goal-cancel-btn"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
-                                                                runGoalAction(() => memoryApi.cancelGoal(goal.id), "Couldn't cancel the goal");
+                                                                runGoalAction(() => memoryApi.cancelGoal(goal.id), 'mem.goals.cancelFailed');
                                                             }}>
-                                                            Cancel
+                                                            {t('mem.cancel')}
                                                         </button>
                                                     )}
                                                     {confirmGoalDeleteId === goal.id ? (
@@ -2735,13 +2749,13 @@ export function MemoryDashboard() {
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 setConfirmGoalDeleteId(null);
-                                                                runGoalAction(() => memoryApi.deleteGoal(goal.id), "Couldn't delete the goal");
+                                                                runGoalAction(() => memoryApi.deleteGoal(goal.id), 'mem.goals.deleteFailed');
                                                             }}>
-                                                            Delete?
+                                                            {t('mem.row.deleteConfirm')}
                                                         </button>
                                                     ) : (
                                                         <button className="mem-goal-action-btn mem-goal-delete-btn"
-                                                            aria-label={`Delete goal ${goal.title}`}
+                                                            aria-label={t('mem.goals.deleteAria', { title: goal.title })}
                                                             onClick={(e) => { e.stopPropagation(); setConfirmGoalDeleteId(goal.id); }}>
                                                             <Trash2 size={12} />
                                                         </button>
@@ -2753,26 +2767,26 @@ export function MemoryDashboard() {
                                             {expandedGoalId === goal.id && (
                                                 <div className="mem-goal-body">
                                                     {goal.description && (
-                                                        <p className="mem-goal-desc">{goal.description}</p>
+                                                        <p className="mem-goal-desc"><bdi>{goal.description}</bdi></p>
                                                     )}
                                                     {goal.progress_notes && (
-                                                        <p className="mem-goal-progress">{goal.progress_notes}</p>
+                                                        <p className="mem-goal-progress"><bdi>{goal.progress_notes}</bdi></p>
                                                     )}
                                                     {goal.tasks.length > 0 ? (
                                                         <div className="mem-task-list">
                                                             {goal.tasks.map(task => (
                                                                 <div key={task.id} className={`mem-task-row mem-task-status-${task.status}`}>
                                                                     <span className={`mem-task-dot status-${task.status}`} />
-                                                                    <span className="mem-task-desc">{task.description}</span>
-                                                                    <span className="mem-task-status-label">{task.status}</span>
+                                                                    <bdi className="mem-task-desc">{task.description}</bdi>
+                                                                    <span className="mem-task-status-label"><Code value={task.status} keys={STATUS_KEYS} /></span>
                                                                     {task.result && (
-                                                                        <span className="mem-task-result">{task.result}</span>
+                                                                        <bdi className="mem-task-result">{task.result}</bdi>
                                                                     )}
                                                                 </div>
                                                             ))}
                                                         </div>
                                                     ) : (
-                                                        <p className="mem-goal-no-tasks">No tasks yet — the agent will break this down when it starts.</p>
+                                                        <p className="mem-goal-no-tasks">{t('mem.goals.noTasks')}</p>
                                                     )}
                                                 </div>
                                             )}
@@ -2787,12 +2801,12 @@ export function MemoryDashboard() {
             {/* Toast container */}
             {toasts.length > 0 && (
                 <div className="mem-toast-container" aria-live="polite">
-                    {toasts.map(t => (
-                        <div key={t.id} className={`mem-toast mem-toast-${t.type}`} role="status">
-                            {t.type === 'success' && <CheckCircle size={14} />}
-                            {t.type === 'error' && <AlertTriangle size={14} />}
-                            {t.type === 'info' && <Brain size={14} />}
-                            <span>{t.text}</span>
+                    {toasts.map(toast => (
+                        <div key={toast.id} className={`mem-toast mem-toast-${toast.type}`} role="status">
+                            {toast.type === 'success' && <CheckCircle size={14} />}
+                            {toast.type === 'error' && <AlertTriangle size={14} />}
+                            {toast.type === 'info' && <Brain size={14} />}
+                            <span>{toast.text}</span>
                         </div>
                     ))}
                 </div>

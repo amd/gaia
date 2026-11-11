@@ -39,6 +39,22 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      - '.github/workflows/build_core.yml'
+      - 'installer/core/**'
+      # build_core.yml builds the Agent UI into the core.
+      - 'src/gaia/apps/webui/**'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      # The installer jobs it calls read the flagship's pins and version.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
+      - 'util/flagship_rc_assets.py'
+      - 'util/release_tag.py'
+      - 'src/gaia/version.py'
+      - 'LICENSE.md'
   pull_request:
     # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
     # silences every stacked PR — one opened against another feature branch
@@ -69,6 +85,22 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
+      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      - '.github/workflows/build_core.yml'
+      - 'installer/core/**'
+      # build_core.yml builds the Agent UI into the core.
+      - 'src/gaia/apps/webui/**'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      # The installer jobs it calls read the flagship's pins and version.
+      - 'hub/agents/gaia/npm/binaries.lock.json'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'hub/agents/gaia/python/packaging/gen_binaries_lock.py'
+      - 'util/flagship_rc_assets.py'
+      - 'util/release_tag.py'
+      - 'src/gaia/version.py'
+      - 'LICENSE.md'
   merge_group:
   workflow_dispatch:
 
@@ -364,7 +396,7 @@ jobs:
   # The one Windows setup, on a clean runner, the same workflow the release
   # calls. The desktop app it embeds comes from a named, published release --
   # pinned here, never "latest" -- because this PR's own desktop app build is
-  # build-installers.yml's to test. Bump it after each release.
+  # build-installers.yml's to test. Bump it, and its SHA-256, after each release.
   windows-setup:
     name: Windows setup
     needs: [installers, installer-version]
@@ -377,3 +409,4 @@ jobs:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
       agent_ui_release: v0.24.1
+      agent_ui_release_sha256: 9aa26f8622a22a0df771e201d754823586d52b6a4dca8b754fb6fc6bb7973428

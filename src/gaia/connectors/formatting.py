@@ -26,6 +26,7 @@ from typing import Dict
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectorsError,
 )
 
@@ -56,7 +57,7 @@ def format_connector_error(e: BaseException) -> str:
     """Translate a connectors exception into a one-line user-facing string.
 
     The two states the user can fix by clicking something in
-    Settings → Connections (``AGENT_NOT_GRANTED`` and ``NOT_CONNECTED``)
+    Settings → Connectors (``AGENT_NOT_GRANTED`` and ``NOT_CONNECTED``)
     are surfaced explicitly so agents can tell the user where to go.
 
     For ``(agent_id, provider)`` pairs registered in
@@ -89,7 +90,7 @@ def format_connector_error(e: BaseException) -> str:
             scopes = ", ".join(e.missing_scopes) or "(none reported)"
             return (
                 f"AGENT_NOT_GRANTED: this agent isn't granted these scopes "
-                f"on {e.provider}: {scopes}. Open Settings → Connections → "
+                f"on {e.provider}: {scopes}. Open Settings → Connectors → "
                 f"{e.provider} → Per-agent grants and grant them."
             )
         if e.reason in (
@@ -98,9 +99,11 @@ def format_connector_error(e: BaseException) -> str:
         ):
             return (
                 f"NOT_CONNECTED: {e.provider} is not currently connected. "
-                f"Open Settings → Connections → {e.provider} and click Connect."
+                f"Open Settings → Connectors → {e.provider} and click Connect."
             )
         return f"AUTH_REQUIRED: {e}"
+    if isinstance(e, ConnectionBusyError):
+        return f"CONNECTION_BUSY: {e}"
     if isinstance(e, ConfigurationError):
         return f"CONFIG_ERROR: {e}"
     if isinstance(e, ConnectorsError):

@@ -15,9 +15,7 @@ Endpoints covered:
   DELETE /api/memory/knowledge/{id}
   GET  /api/memory/entities
   GET  /api/memory/entities/{entity}
-  GET  /api/memory/contexts
   GET  /api/memory/tools
-  GET  /api/memory/errors
   GET  /api/memory/conversations
   GET  /api/memory/conversations/search
   GET  /api/memory/conversations/{session_id}
@@ -34,6 +32,7 @@ Endpoints covered:
 """
 
 import contextlib
+import json
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -287,17 +286,9 @@ class TestEntitiesAndContexts:
         assert isinstance(items, list)
         assert any("Bob" in item["content"] for item in items)
 
-    def test_contexts_returns_list(self, client):
-        _create_knowledge(client, "Work fact", context="work")
-        resp = client.get("/api/memory/contexts")
-        assert resp.status_code == 200
-        data = resp.json()
-        contexts = [c["context"] for c in data]
-        assert "work" in contexts
-
 
 # ===========================================================================
-# Tool Performance & Errors
+# Tool Performance
 # ===========================================================================
 
 
@@ -321,25 +312,6 @@ class TestToolPerformance:
         data = resp.json()
         names = [t["tool_name"] for t in data]
         assert "my_tool" in names
-
-    def test_tool_history(self, client, test_store):
-        test_store.log_tool_call(
-            session_id="s1",
-            tool_name="hist_tool",
-            args={"x": 1},
-            result_summary="done",
-            success=True,
-        )
-        resp = client.get("/api/memory/tools/hist_tool/history")
-        assert resp.status_code == 200
-        items = resp.json()
-        assert len(items) >= 1
-        assert items[0]["tool_name"] == "hist_tool"
-
-    def test_errors_returns_list(self, client):
-        resp = client.get("/api/memory/errors")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
 
 
 # ===========================================================================
@@ -801,25 +773,6 @@ class TestConsolidateEndpoint:
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
-    def test_rebuild_embeddings_returns_500_when_backfill_not_implemented(
-        self, client, test_store
-    ):
-        """POST /api/memory/rebuild-embeddings returns 500 when store lacks backfill_embeddings.
-
-        Unlike consolidate/reconcile which return 503 (no agent) or 501 (not
-        implemented), rebuild-embeddings always tries the LemonadeProvider path
-        and returns 500 for any error — including a missing store method.
-        """
-        if hasattr(test_store, "backfill_embeddings"):
-            pytest.skip("MemoryStore now implements backfill_embeddings")
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1] * 768]
-        with patch(
-            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
-        ):
-            resp = client.post("/api/memory/rebuild-embeddings")
-        assert resp.status_code == 500
-
     def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
         test_store.backfill_embeddings = lambda *args, **kwargs: {
@@ -1053,6 +1006,35 @@ class TestReconcileEndpoint:
         assert resp.status_code == 200
         assert resp.json()["pairs_checked"] == 0
 
+    @pytest.mark.parametrize(
+        "reply, checked",
+        [
+            ('<think>Same claim.</think>{"relationship": "reinforce"}', 1),
+            ("<think>Same claim, so", 0),
+            ('Same claim.</think>{"relationship": "reinforce"}', 1),
+            ('{"relationship": "reinforce"}', 1),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_standalone_reconcile_reads_past_the_reasoning(
+        self, client, test_store, reply, checked
+    ):
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = reply
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        assert resp.json()["reinforced"] == checked
+
     def test_a_memory_contradicting_two_others_is_penalised_once(
         self, client, test_store
     ):
@@ -1164,14 +1146,19 @@ class TestReconcileEndpoint:
 class TestEmbeddingCoverageEndpoint:
     """Test GET /api/memory/embedding-coverage endpoint."""
 
-    def test_embedding_coverage_returns_501_when_not_implemented(
-        self, client, test_store
-    ):
-        """GET /api/memory/embedding-coverage returns 501 without store method."""
-        if hasattr(test_store, "get_embedding_coverage"):
-            pytest.skip("MemoryStore now implements get_embedding_coverage")
+    def test_embedding_coverage_counts_real_store_items(self, client, test_store):
+        """GET /api/memory/embedding-coverage reports the store's own counts."""
+        _create_knowledge(client, "Embedded on create")
+        test_store.store(category="fact", content="Stored without a vector")
+
         resp = client.get("/api/memory/embedding-coverage")
-        assert resp.status_code == 501
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "total_items": 2,
+            "with_embedding": 1,
+            "without_embedding": 1,
+            "coverage_pct": 50.0,
+        }
 
     def test_embedding_coverage_returns_200_when_implemented(self, client, test_store):
         """GET /api/memory/embedding-coverage returns 200 with mock method."""
@@ -1650,6 +1637,121 @@ class TestMemorySettings:
         assert data["memory_enabled"] is False
         assert data["mcp_memory_enabled"] is True
 
+    def test_put_system_discovery_consent_keeps_db_unchanged_when_json_save_fails(
+        self, client
+    ):
+        """The dashboard must not claim consent changed when its source of truth failed."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("disk full"),
+        ):
+            resp = client.put(
+                "/api/memory/settings", json={"system_discovery_consent": True}
+            )
+
+        assert resp.status_code == 500
+        assert "Could not save system discovery setting" in resp.json()["detail"]
+        assert (
+            client.get("/api/memory/settings").json()["system_discovery_consent"]
+            is False
+        )
+
+
+class TestMemorySettingsFile:
+    def test_save_refuses_to_overwrite_malformed_settings(self, tmp_path, monkeypatch):
+        """A parse failure must preserve unrelated settings instead of replacing the file."""
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        malformed = "{not valid json"
+        settings_path.write_text(malformed, encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="Could not read memory settings"):
+            memory_module._save_memory_settings({"system_context_enabled": False})
+
+        assert settings_path.read_text(encoding="utf-8") == malformed
+
+    def test_save_refuses_to_overwrite_non_object_root(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text("[1, 2]", encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="must be an object"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert settings_path.read_text(encoding="utf-8") == "[1, 2]"
+        assert memory_module._load_memory_settings() == {}
+
+    def test_save_raises_when_the_file_cannot_be_written(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            memory_module, "_MEMORY_SETTINGS_PATH", blocker / "memory_settings.json"
+        )
+
+        with pytest.raises(RuntimeError, match="Could not"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+    def test_save_merges_and_keeps_unrelated_keys(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "sub" / "memory_settings.json"
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        memory_module._save_memory_settings({"onboarding_completed_at": "t0"})
+        memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "onboarding_completed_at": "t0",
+            "system_context_enabled": True,
+        }
+
+    def test_failed_consent_save_applies_no_other_key(self, client):
+        """A 500 must not leave half the request applied."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("read-only"),
+        ):
+            resp = client.put(
+                "/api/memory/settings",
+                json={
+                    "memory_enabled": False,
+                    "mcp_memory_enabled": True,
+                    "system_discovery_consent": True,
+                },
+            )
+
+        assert resp.status_code == 500
+        data = client.get("/api/memory/settings").json()
+        assert data["memory_enabled"] is True
+        assert data["mcp_memory_enabled"] is False
+        assert data["system_discovery_consent"] is False
+
+    def test_consent_withdrawal_writes_file_then_db(
+        self, client, tmp_path, monkeypatch
+    ):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text('{"keep": 1}', encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        resp = client.put(
+            "/api/memory/settings", json={"system_discovery_consent": False}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["system_discovery_consent"] is False
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "keep": 1,
+            "system_context_enabled": False,
+        }
+
 
 # ===========================================================================
 # Clear All Memory Endpoint
@@ -1671,6 +1773,21 @@ class TestClearAllMemory:
         assert "knowledge" in data
         assert "tool_history" in data
         assert "conversations" in data
+
+    def test_clear_all_says_why_a_scrub_failed(self, client, test_store, mocker):
+        """A blocked scrub reaches the UI with its remedy, not just an error type."""
+        from gaia.agents.base.memory_store import MemoryScrubError
+
+        mocker.patch.object(
+            test_store,
+            "clear_all",
+            side_effect=MemoryScrubError(
+                "was erased, but ... Close other GAIA windows"
+            ),
+        )
+        resp = client.delete("/api/memory/all")
+        assert resp.status_code == 500
+        assert "Close other GAIA windows" in resp.json()["detail"]
 
     def test_clear_all_wipes_knowledge(self, client, test_store):
         """After DELETE /api/memory/all, knowledge list is empty."""
@@ -2100,10 +2217,10 @@ class TestPrivilegedAdminWriters:
 class TestStreamInferenceModel:
     """Profile inference runs on the machine's default local chat model."""
 
-    def _stream(self, client, tmp_path, default_model, custom_model=None):
+    def _stream(self, client, tmp_path, default_model, custom_model=None, reply="[]"):
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
-        fake_llm.chat.return_value = "[]"
+        fake_llm.chat.return_value = reply
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch("sys.platform", "darwin"))
             stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
@@ -2157,7 +2274,158 @@ class TestStreamInferenceModel:
         assert resp.status_code == 200
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "gaia config set default_model" in resp.text
+        assert "choose a local chat model" in resp.text
+
+    def test_a_discovered_cloud_default_model_is_refused_not_called(
+        self, client, tmp_path
+    ):
+        # A gateway GAIA only learns about at runtime has no known prefix.
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "choose a local chat model" in resp.text
+
+    def test_a_discovered_cloud_default_is_refused_on_a_cold_catalog(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+
+        def read(self, show_all=False, timeout=None):
+            lc.record_cloud_models(payload)
+            return payload
+
+        lc.record_cloud_models({"data": []})
+        try:
+            with patch.object(
+                lc.LemonadeClient, "list_models", autospec=True, side_effect=read
+            ):
+                resp, create = self._stream(
+                    client, tmp_path, default_model="opencode.big-model"
+                )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_an_unreadable_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't confirm" in resp.text
+        assert "connection refused" not in resp.text
+
+    def test_a_router_default_model_is_refused_not_called(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "smart-router", "recipe": "collection.router"}]}
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_malformed_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=[]):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't confirm" in resp.text
+
+    @pytest.mark.parametrize("default_model", ["", "   "])
+    def test_an_empty_default_model_fails_closed(self, client, tmp_path, default_model):
+        resp, create = self._stream(client, tmp_path, default_model=default_model)
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_local_lemonade_default_still_runs(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=AssertionError("catalog read for a known local model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME
+            )
+
+        create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
+        assert '"type": "error"' not in resp.text
+
+    def test_a_cut_off_reply_still_streams_its_complete_insights(
+        self, client, tmp_path
+    ):
+        # #3835: local models stop part-way through the array.
+        reply = (
+            '[{"content": "Uses Blender for 3D work", "confidence": 0.9, '
+            '"domain": "personal"}, {"content": "Renders anim'
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert '"type": "error"' not in resp.text
+        assert resp.text.count('"type": "insight"') == 1
+        assert "Uses Blender for 3D work" in resp.text
+        assert "incomplete or malformed" in resp.text
+        assert '"total": 1' in resp.text
+
+    def test_word_confidences_are_mapped_and_unusable_ones_skipped(
+        self, client, tmp_path
+    ):
+        # #6637: models sometimes answer "high" instead of a number.
+        reply = json.dumps(
+            [
+                {"content": "Uses Blender for 3D work", "confidence": "HIGH "},
+                {"content": "Likes jazz", "confidence": "very sure"},
+                {"content": "Edits video", "confidence": 0.5},
+            ]
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert resp.text.count('"type": "insight"') == 2
+        assert '"confidence": 0.9' in resp.text
+        assert "Skipped insight 'Likes jazz'" in resp.text
+        assert '"total": 2' in resp.text
 
 
 # ===========================================================================

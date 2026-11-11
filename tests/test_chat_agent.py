@@ -10,11 +10,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 
 class TestChatAgent:
@@ -623,23 +623,12 @@ class TestChatAgentHostAttributeContract:
         finally:
             agent.stop_watching()
 
-    def test_chat_agent_lite_constructs_and_tools_run(self):
-        """AC4: ChatAgentLite (no rag/file_io mixins — a collateral-damage
-        check, not a direct target of this fix) constructs and registers
-        its tools without raising. It hardcodes skip_lemonade=True itself."""
-        from gaia_agent_chat.lite_agent import ChatAgentLite, ChatAgentLiteConfig
-
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-
-        ChatAgentLite(ChatAgentLiteConfig())
-        assert "take_screenshot" in _TOOL_REGISTRY
-
     def test_chat_agent_rag_stays_lazily_unset_at_construction(self, tmp_path):
         """AC5: constructing ChatAgent must not trigger the lazy self.rag
         property — the read-time check added by #3316 must not probe
         speculatively (hasattr/getattr-with-default) at any point outside an
         actual tool call."""
-        from gaia_agent_chat.agent import _UNSET
+        from gaia_agent.chat_agent import _UNSET
 
         config = ChatAgentConfig(
             silent_mode=True, max_steps=1, allowed_paths=[str(tmp_path)]

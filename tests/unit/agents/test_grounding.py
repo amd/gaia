@@ -27,6 +27,7 @@ from gaia.agents.base.claims import (
     claims_success,
     passing_test_claim,
 )
+from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
@@ -170,10 +171,26 @@ def _locate(path):
         ("You are working in C:\\work\\toybox. Tidy it up.", []),
         ("Build a Node.js app that prints hello.", []),
         ("What does os.path.join() do? And print()?", []),
+        ("ما الذي يفعله toybox/dates.py؟", ["toybox/dates.py"]),
+        ("请检查 toybox/dates.py。", ["toybox/dates.py"]),
+        ("هل toybox/dates.py، يعمل؟", ["toybox/dates.py"]),
+        ("toybox/dates.py？", ["toybox/dates.py"]),
     ],
 )
 def test_named_targets_are_files_and_project_symbols(query, expected):
     assert named_targets(query) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        *(f"toybox/dates.py{mark}" for mark in ["؟", "。", "،", "；", "？", "！"]),
+        "请看 《toybox/dates.py》",
+        "请看 【toybox/dates.py】",
+    ],
+)
+def test_mentioned_paths_strip_unicode_sentence_punctuation(text):
+    assert mentioned_paths(text) == ["toybox/dates.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -747,6 +764,23 @@ def test_still_reports_rather_than_negates():
     assert not claims_success("Two tests still fail, so it is not done.")
 
 
+@pytest.mark.parametrize(
+    "answer",
+    (
+        "The task isn't done.",
+        "The task wasn't done.",
+        "I haven't done it.",
+        "The task isn’t done.",
+        "The task wasn’t done.",
+        "I haven’t done it.",
+    ),
+)
+def test_contracted_negation_does_not_claim_success(answer):
+    # Each sentence includes a success claim that the old detector matched, so
+    # this regression test proves the contraction is recognized as negation.
+    assert not claims_success(answer)
+
+
 # ---------------------------------------------------------------------------
 # Precision: a coding agent's honest answers about handed-over material
 # ---------------------------------------------------------------------------
@@ -1025,3 +1059,58 @@ def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
 
     assert [f.gate for f in findings] == [LOOK]
     assert "`resize/lanczos.c`" in findings[0].correction
+
+
+#: A reply to the check, not the user, once reached an Arabic speaker in English.
+_TO_THE_USER = (
+    "Write it for the user, in the language of their question, and don't mention "
+    "this check."
+)
+
+
+def test_every_gap_mix_ends_on_the_user_addressed_ask_once():
+    """The ask must be the last thing the model reads, however many gates fired."""
+    look = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    content = content_findings(
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |",
+        [_run_python(MS_BENCH)],
+    )
+    assert look and content
+
+    for findings in (look, content, look + content):
+        correction = grounding_correction(findings)
+        assert correction.endswith(_TO_THE_USER)
+        assert correction.count("language of their question") == 1
+
+
+def test_the_ask_names_no_language_of_its_own():
+    """Naming one would pull every reply into it, the leak this guards against."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    for language in ("English", "Arabic", "Chinese", "Spanish"):
+        assert language not in ask
+
+
+def test_the_correction_the_model_gets_ends_on_the_user_addressed_ask(agent):
+    sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
+
+    result = agent.process_query("ماذا يفعل toybox/dates.py ؟", max_steps=10)
+
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert correction.endswith(_TO_THE_USER)
+    assert _final_text(result) == GROUNDED
+
+
+def test_the_ask_leaves_room_to_admit_what_was_not_done():
+    """The gaps offer "say plainly that you didn't" as a way out; the ask must not close it."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    assert "what changed" not in ask
+    assert "didn't" in correction[: correction.index(ask)]

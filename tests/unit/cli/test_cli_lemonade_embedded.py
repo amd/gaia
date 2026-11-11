@@ -112,6 +112,19 @@ class TestDispatch:
         assert exc.value.code == 1
         assert "❌" in capsys.readouterr().out
 
+    def test_unknown_subaction_exits_non_zero(self, monkeypatch, capsys, tmp_path):
+        # argparse rejects unknown verbs itself; this guards the handler's own branch.
+        from types import SimpleNamespace
+
+        from gaia.cli import handle_lemonade_embedded_command
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+
+        with pytest.raises(SystemExit) as exc:
+            handle_lemonade_embedded_command(SimpleNamespace(embedded_action="bogus"))
+        assert exc.value.code == 1
+        assert "❌ Unknown embedded action: bogus" in capsys.readouterr().out
+
     def test_manager_errors_exit_non_zero_with_the_message(
         self, monkeypatch, capsys, tmp_path
     ):

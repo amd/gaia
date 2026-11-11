@@ -2,26 +2,28 @@
 # SPDX-License-Identifier: MIT
 
 """
-Lemonade Server Installer
+System-wide Lemonade Server detection and removal.
 
-Handles detection, download, and installation of Lemonade Server
-from GitHub releases for Windows, Linux, and macOS.
+GAIA runs its own private Lemonade (``gaia.llm.lemonade_embedded``) and never
+installs a system one. This module finds a system Lemonade that an older GAIA
+installer or the user put on the machine, and removes it for
+``gaia uninstall --purge-lemonade``.
 """
 
+import copy
 import hashlib
 import logging
 import ntpath
 import os
 import platform
 import re
-import shlex
-import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
 from gaia.version import LEMONADE_VERSION, parse_version
@@ -41,27 +43,27 @@ except ImportError:
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
 GITHUB_RELEASE_TAG_BASE = "https://github.com/lemonade-sdk/lemonade/releases/tag"
 
-# Upstream .deb assets carry a distro infix: lemonade-server_<ver>-debian13_<arch>.deb
-LINUX_DEB_DISTRO_TAG = "debian13"
-
-# SHA-256 of every installer asset GAIA downloads for LEMONADE_VERSION, keyed by
-# its path under GITHUB_RELEASE_BASE, as the GitHub release API publishes them.
+# SHA-256 of the two Windows installers for LEMONADE_VERSION, keyed by their
+# path under GITHUB_RELEASE_BASE, as the GitHub release API publishes them.
+# Uninstalling a Lemonade whose ProductCode is gone downloads its MSI.
 # The MSI names carry no version, so the key does. Bumping LEMONADE_VERSION
 # without refreshing these makes download_installer() fail loudly;
 # tests/integration/test_lemonade_embeddable_assets.py checks them against the
 # live release.
 INSTALLER_SHA256 = {
-    "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
-    "v2026.42.1/lemonade-server-minimal.msi": "463e76b01de44d3ffac87bfc29405a933246e149ea435f5eac6aea4b944476f3",
-    "v2026.42.1/lemonade-server_2026.42.1-debian13_amd64.deb": "872729cb257962e3c7746f6ba76301247bd85de98b1f6bca936bc35a7a3af1eb",
-    "v2026.42.1/lemonade-server_2026.42.1-debian13_arm64.deb": "78373174403df63f87bbca9bc5d1a44417b4a104e2446b5f93589d012ae49de9",
-    "v2026.42.1/Lemonade-2026.42.1-Darwin.pkg": "c2d99fb22860e8288f46ce4cb32c3853c287c668b63f2a1e0cf8ebab355e7291",
+    "v2026.44.1/lemonade.msi": "85c97cf2ae3f7f7c1857c01d718e7c59c2784e4a10c14795f107ba44a6f921ec",
+    "v2026.44.1/lemonade-server-minimal.msi": "cfa3f96a452e608ab98275e981824f06d5074373217e52278e0423afae9a5243",
 }
 
-# The Windows installers of every older release GAIA supports (back to
-# LEMONADE_MIN_VERSION). Uninstalling an older Lemonade can fall back to
+#: The oldest Lemonade release GAIA can remove when it upgrades a PC. Older
+#: than LEMONADE_MIN_VERSION on purpose: these are the versions it moves off.
+OLDEST_REMOVABLE_LEMONADE = "10.2.0"
+
+# The Windows installers of every older release GAIA can remove (back to
+# OLDEST_REMOVABLE_LEMONADE). Uninstalling an older Lemonade can fall back to
 # downloading its MSI, which is verified like any other download. Append-only:
-# a version bump moves the outgoing version's two MSI pins here.
+# a version bump moves the outgoing version's two MSI pins here, and pins any
+# release it skips. tests/fixtures/lemonade/release_tags.txt lists them all.
 LEGACY_MSI_SHA256 = {
     "v10.2.0/lemonade-server-minimal.msi": "d4c368d02c124df406c25c4e477cf6c4da7d5d635b8e5e7ba1a9acf80eba3899",
     "v10.2.0/lemonade.msi": "333d8b11efd3c023fe7c526c41f07bcf2100a94f89078e95f24ed710a9bcb5c7",
@@ -107,16 +109,15 @@ LEGACY_MSI_SHA256 = {
     "v2026.39.1/lemonade.msi": "8e778d01b6e5fe10dbee6bc017e58b1b9b35758b7507c1b188d99ba77906d838",
     "v2026.40.0/lemonade-server-minimal.msi": "95ad5b18eba1c1b42228ebceefcdd2eb949d2dde6bb5405141e2cbc169260d66",
     "v2026.40.0/lemonade.msi": "e10bc07d69e668338bf01e1a599b4f6e684bf7d217f14cb3744668291bd8bbf0",
+    "v2026.41.1/lemonade-server-minimal.msi": "b545bb3fe0dcffc91f9635bbdbac7dff049c9bbeae1616da6321382a486782f4",
+    "v2026.41.1/lemonade.msi": "cb8753fef41937baedd24dc949ab332d914f537dd597cb62efe54f5448825314",
+    "v2026.42.1/lemonade-server-minimal.msi": "463e76b01de44d3ffac87bfc29405a933246e149ea435f5eac6aea4b944476f3",
+    "v2026.42.1/lemonade.msi": "94ec399d71fe0d3fa4386aca440374f167c27d2dd0479055c8d8b3da869058d4",
+    "v2026.43.3/lemonade-server-minimal.msi": "ae82d13d6f7dc057c57425c959d5746184fb834c569de871c573606ea5a8980a",
+    "v2026.43.3/lemonade.msi": "95227ef9013678ec3f4d0a26c10bfde261373a4fd14cf6ec5fad6a81ed9dd71d",
 }
 
 # platform.machine() varies by OS/libc for the same hardware.
-DEB_ARCH_BY_MACHINE = {
-    "x86_64": "amd64",
-    "amd64": "amd64",
-    "aarch64": "arm64",
-    "arm64": "arm64",
-}
-
 # Lemonade's only supported Linux channel (lemonade-sdk was removed from PyPI).
 LEMONADE_PPA = "ppa:lemonade-team/stable"
 
@@ -186,6 +187,9 @@ class LemonadeInfo:
     version: Optional[str] = None
     path: Optional[str] = None
     error: Optional[str] = None
+    #: True when the probe itself raised, so ``installed=False`` is a guess
+    #: rather than a reading; a caller must not report "not installed" for it.
+    check_failed: bool = False
 
     @property
     def version_tuple(self) -> Optional[tuple]:
@@ -201,17 +205,12 @@ class LemonadeInfo:
 
 @dataclass
 class InstallResult:
-    """Result of an installation attempt."""
+    """Result of an uninstall attempt."""
 
     success: bool
     version: Optional[str] = None
     message: str = ""
     error: Optional[str] = None
-    restart_required: bool = False
-
-
-# msiexec exit codes for a successful install that still needs a reboot.
-_MSI_SUCCESS_REBOOT_REQUIRED = (3010, 1641)
 
 
 class InstallerIntegrityError(RuntimeError):
@@ -222,6 +221,14 @@ class UnpinnedInstallerError(RuntimeError):
     """No SHA-256 is pinned for this installer, so GAIA will not fetch it."""
 
 
+class _SaveFailed(Exception):
+    """Carries an OSError from writing a download past the network handlers."""
+
+    def __init__(self, error: OSError):
+        super().__init__(str(error))
+        self.error = error
+
+
 def discard_download(path: Path) -> None:
     """Delete an installer :meth:`LemonadeInstaller.download_installer` returned."""
     try:
@@ -230,13 +237,26 @@ def discard_download(path: Path) -> None:
         log.warning("Could not delete the downloaded installer %s: %s", path, e)
 
 
+def _remove_by_hand(version: Optional[str]) -> str:
+    """How to remove a Windows Lemonade Server when GAIA cannot."""
+    page = (
+        f"{GITHUB_RELEASE_TAG_BASE}/v{version}"
+        if version
+        else GITHUB_RELEASE_TAG_BASE.rsplit("/", 1)[0]
+    )
+    named = f"Lemonade v{version}" if version else "Lemonade"
+    return (
+        "Remove Lemonade Server from Windows Settings > Apps, or remove it "
+        f"with the {named} installer from {page}."
+    )
+
+
 class LemonadeInstaller:
-    """Handles Lemonade Server installation and management."""
+    """Detects and uninstalls a system-wide Lemonade Server."""
 
     def __init__(
         self,
         target_version: str = LEMONADE_VERSION,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
         minimal: bool = False,
         console: Optional[Any] = None,
     ):
@@ -244,13 +264,11 @@ class LemonadeInstaller:
         Initialize the installer.
 
         Args:
-            target_version: Target Lemonade version to install
-            progress_callback: Optional callback for download progress (bytes_downloaded, total_bytes)
+            target_version: Lemonade version whose MSI an uninstall downloads
             minimal: Use minimal installer (smaller download, fewer features)
             console: Optional Rich Console for user-facing output (suppresses log messages)
         """
         self.target_version = target_version.lstrip("v")
-        self.progress_callback = progress_callback
         self.minimal = minimal
         self.system = platform.system().lower()
         self.machine = platform.machine().lower()
@@ -272,7 +290,7 @@ class LemonadeInstaller:
             print(f"   {message}")
 
     def refresh_path_from_registry(self) -> None:
-        """Add the PATH entries an MSI install just wrote to the registry.
+        """Add the registry's PATH entries this process does not have yet.
 
         The process keeps its own PATH first — the active venv and whatever
         the launching shell added — and gains only the registry entries it
@@ -321,7 +339,7 @@ class LemonadeInstaller:
             LemonadeInfo with installation status
         """
         try:
-            # Refresh PATH from registry (in case MSI just updated it)
+            # A Lemonade installed after this process started is on the registry PATH only.
             self.refresh_path_from_registry()
 
             tooling = resolve_lemonade()
@@ -330,8 +348,8 @@ class LemonadeInstaller:
                 return LemonadeInfo(
                     installed=False,
                     error=(
-                        "Lemonade Server not found (no modern install at its "
-                        "canonical path, no lemonade-server in PATH)"
+                        "Lemonade Server not found (no install at its "
+                        "canonical path)"
                     ),
                 )
 
@@ -342,10 +360,7 @@ class LemonadeInstaller:
                 return LemonadeInfo(
                     installed=True,
                     path=tooling.client_path,
-                    error=(
-                        f"Failed to get version from {tooling.client_path} "
-                        f"({tooling.kind} tooling)"
-                    ),
+                    error=(f"Failed to get version from {tooling.client_path}"),
                 )
 
             return LemonadeInfo(
@@ -353,98 +368,29 @@ class LemonadeInstaller:
             )
 
         except Exception as e:
-            return LemonadeInfo(installed=False, error=str(e))
-
-    def needs_install(self, info: LemonadeInfo) -> bool:
-        """
-        Check if installation or update is needed.
-
-        Args:
-            info: Current installation info
-
-        Returns:
-            True if install/update is needed
-        """
-        if not info.installed:
-            return True
-
-        if not info.version:
-            return True
-
-        # Compare versions
-        current = info.version_tuple
-        target = self._parse_version(self.target_version)
-
-        if not current or not target:
-            return True
-
-        # Need install if current version is older
-        return current < target
-
-    def _parse_version(self, version: str) -> Optional[tuple]:
-        """Parse version string into tuple. See :func:`gaia.version.parse_version`."""
-        return parse_version(version)
+            return LemonadeInfo(installed=False, error=str(e), check_failed=True)
 
     @property
     def release_page_url(self) -> str:
         """Upstream release page — the authoritative list of published assets."""
         return f"{GITHUB_RELEASE_TAG_BASE}/v{self.target_version}"
 
-    def _deb_arch(self) -> str:
-        """Map platform.machine() to the Debian arch used in upstream asset names."""
-        arch = DEB_ARCH_BY_MACHINE.get(self.machine)
-        if arch is None:
-            raise RuntimeError(
-                f"Architecture '{self.machine}' has no Lemonade Linux package. "
-                f"Upstream v{self.target_version} publishes amd64 (x86_64) and "
-                f"arm64 (aarch64) .deb assets only — see {self.release_page_url}."
-            )
-        return arch
-
     def get_download_url(self) -> str:
-        """
-        Get the download URL for the current platform and architecture.
+        """The URL of this version's Windows MSI, the full or minimal one.
 
-        Returns:
-            Download URL for the installer
+        Only the Windows uninstall downloads an installer; Linux and macOS
+        remove Lemonade without one.
 
         Raises:
-            RuntimeError: If the platform or architecture is not supported
+            RuntimeError: Not on Windows.
         """
-        version = self.target_version
-
-        if self.system == "windows":
-            if self.minimal:
-                # Minimal installer for lightweight setup
-                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server-minimal.msi"
-            else:
-                # Full installer
-                return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade.msi"
-        elif self.system == "linux":
-            # Linux DEB - no minimal variant yet.
-            # Note: v10.0.0+ changed naming from lemonade_ to lemonade-server_,
-            # and the asset carries a distro infix (see LINUX_DEB_DISTRO_TAG).
-            return (
-                f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_"
-                f"{version}-{LINUX_DEB_DISTRO_TAG}_{self._deb_arch()}.deb"
-            )
-        elif self.system == "darwin":
-            # The .pkg ships arm64-only binaries and installs cleanly on Intel,
-            # so an unguarded install would only fail later at "Bad CPU type".
-            if self.machine not in ("arm64", "aarch64"):
-                raise RuntimeError(
-                    f"Architecture '{self.machine}' has no Lemonade macOS package. "
-                    f"Upstream v{self.target_version} publishes an Apple-Silicon-only "
-                    f".pkg — see {self.release_page_url}.\n"
-                    "On an Apple Silicon Mac this means Python is running under "
-                    "Rosetta; re-run GAIA with a native arm64 Python."
-                )
-            return f"{GITHUB_RELEASE_BASE}/v{version}/Lemonade-{version}-Darwin.pkg"
-        else:
+        if self.system != "windows":
             raise RuntimeError(
-                f"Platform '{self.system}' is not supported. "
-                "GAIA init only supports Windows, Linux, and macOS."
+                f"GAIA downloads a Lemonade installer only to uninstall it on "
+                f"Windows, not on '{self.system}'."
             )
+        name = "lemonade-server-minimal.msi" if self.minimal else "lemonade.msi"
+        return f"{GITHUB_RELEASE_BASE}/v{self.target_version}/{name}"
 
     def get_installer_filename(self) -> str:
         """Get the installer filename for the current platform.
@@ -549,6 +495,7 @@ class LemonadeInstaller:
             InstallerIntegrityError: The download is truncated or fails its
                 checksum.
             RuntimeError: The download fails.
+            OSError: The file cannot be written, e.g. the disk is full.
         """
         url = self.get_download_url()
         release_key = url[len(GITHUB_RELEASE_BASE) + 1 :]
@@ -608,17 +555,30 @@ class LemonadeInstaller:
                 chunk_size = 8192
                 digest = hashlib.sha256()
 
-                with open(dest_path, "wb") as f:
+                try:
+                    f = open(dest_path, "wb")
+                except OSError as e:
+                    raise _SaveFailed(e) from e
+                try:
                     while True:
                         chunk = response.read(chunk_size)
                         if not chunk:
                             break
-                        f.write(chunk)
+                        try:
+                            f.write(chunk)
+                        except OSError as e:
+                            raise _SaveFailed(e) from e
                         digest.update(chunk)
                         downloaded += len(chunk)
 
-                        if self.progress_callback:
-                            self.progress_callback(downloaded, total_size)
+                finally:
+                    try:
+                        f.close()  # Flushes, so a full disk can surface here too.
+                    except OSError as e:
+                        raise _SaveFailed(e) from e
+        except _SaveFailed as e:
+            # A full disk is not a network failure; let the caller name the folder.
+            raise e.error from None
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise LemonadeAssetError(
@@ -651,33 +611,6 @@ class LemonadeInstaller:
                 f"Retry, or download it by hand from {self.release_page_url}."
             )
 
-    def install(
-        self, installer_path: Optional[Path] = None, silent: bool = True
-    ) -> InstallResult:
-        """Install Lemonade Server. On Linux, installer_path is unused (PPA flow)."""
-        self._print_status(f"Installing Lemonade Server (system={self.system})")
-        try:
-            if self.system == "windows":
-                if installer_path is None or not installer_path.exists():
-                    return InstallResult(
-                        success=False, error=f"Installer not found: {installer_path}"
-                    )
-                return self._install_windows(installer_path, silent)
-            elif self.system == "linux":
-                return self._install_via_ppa(non_interactive=silent)
-            elif self.system == "darwin":
-                if installer_path is None or not installer_path.exists():
-                    return InstallResult(
-                        success=False, error=f"Installer not found: {installer_path}"
-                    )
-                return self._install_macos(installer_path, non_interactive=silent)
-            else:
-                return InstallResult(
-                    success=False, error=f"Platform '{self.system}' is not supported"
-                )
-        except Exception as e:
-            return InstallResult(success=False, error=str(e))
-
     def wait_for_msi_mutex(self, timeout: int = 30) -> bool:
         """
         Wait for any running MSI installations to complete.
@@ -690,8 +623,6 @@ class LemonadeInstaller:
         """
         if self.system != "windows":
             return True
-
-        import time
 
         waited = 0
         while waited < timeout:
@@ -715,8 +646,8 @@ class LemonadeInstaller:
                 log.warning("Could not check for running msiexec processes: %s", e)
                 self._announce(
                     f"Could not check for other Windows Installer operations ({e}). "
-                    "Continuing; if the install fails with error 1618, wait for "
-                    "the other installation to finish and re-run `gaia init`."
+                    "Continuing; if the uninstall fails with error 1618, wait for "
+                    "the other installation to finish and run it again."
                 )
                 return True
         return False
@@ -783,227 +714,6 @@ class LemonadeInstaller:
             log.debug(f"Failed to find product code: {e}")
         return None
 
-    def _install_windows(self, installer_path: Path, silent: bool) -> InstallResult:
-        """Install on Windows using msiexec."""
-        try:
-            # Wait for any running MSI operations before starting
-            if not self.wait_for_msi_mutex(timeout=30):
-                return InstallResult(
-                    success=False,
-                    error="Another MSI installation is in progress. "
-                    "Please wait for it to finish or close Windows Installer.",
-                )
-
-            cmd = ["msiexec", "/i", str(installer_path)]
-
-            if silent:
-                cmd.extend(["/qn", "/norestart"])
-
-            log_dir = Path.home() / ".cache" / "gaia" / "installer"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            msi_log = log_dir / "msi_install.log"
-            cmd.extend(["/l*v", str(msi_log)])  # Verbose logging to file
-
-            log.debug(f"Running: {' '.join(cmd)}")
-
-            if silent:
-                self._print_status(
-                    "Running silent MSI installer (should complete in ~10 seconds)..."
-                )
-            else:
-                self._print_status("Running MSI installer...")
-
-            # MSI should install in 10-15 seconds, timeout after 60 seconds (indicates stuck process)
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,  # 60 second timeout (should complete in ~10s)
-                check=False,
-            )
-
-            if result.returncode == 0:
-                return InstallResult(
-                    success=True,
-                    version=self.target_version,
-                    message=f"Installed Lemonade v{self.target_version}",
-                )
-            elif result.returncode in _MSI_SUCCESS_REBOOT_REQUIRED:
-                return InstallResult(
-                    success=True,
-                    version=self.target_version,
-                    message=(
-                        f"Installed Lemonade v{self.target_version}. "
-                        "Restart Windows to finish the installation."
-                    ),
-                    restart_required=True,
-                )
-            elif result.returncode == 1602:
-                return InstallResult(
-                    success=False, error="Installation was cancelled by user"
-                )
-            elif result.returncode == 1603:
-                return InstallResult(
-                    success=False,
-                    error=f"Installation failed (error 1603). See the MSI log: {msi_log}",
-                )
-            elif result.returncode == 1618:
-                return InstallResult(
-                    success=False,
-                    error="Another installation is in progress (error 1618). "
-                    "Wait a moment and try again.",
-                )
-            else:
-                return InstallResult(
-                    success=False,
-                    error=(
-                        f"msiexec failed with code {result.returncode}: "
-                        f"{result.stderr} See the MSI log: {msi_log}"
-                    ),
-                )
-
-        except subprocess.TimeoutExpired:
-            # Print MSI log to help diagnose the hang
-            error_msg = "Installation timed out (expected ~10s, hung for 60s)"
-            try:
-                if msi_log.exists():
-                    self._print_status(f"MSI log file: {msi_log}")
-                    log_content = msi_log.read_text(encoding="utf-16", errors="ignore")
-                    # Print last 100 lines of log
-                    log_lines = log_content.split("\n")
-                    relevant_lines = log_lines[-100:]
-                    log.error("=== MSI Install Log (last 100 lines) ===")
-                    for line in relevant_lines:
-                        log.error(line)
-                    log.error("=== End MSI Install Log ===")
-
-                    # Also print to console
-                    if self.console:
-                        self.console.print(
-                            "\n   [red]MSI Install Log (last 50 lines):[/red]"
-                        )
-                        for line in relevant_lines[-50:]:
-                            if line.strip():
-                                self.console.print(f"   [dim]{line}[/dim]")
-            except Exception as e:
-                log.debug(f"Could not read MSI log: {e}")
-
-            return InstallResult(success=False, error=error_msg)
-        except FileNotFoundError:
-            return InstallResult(success=False, error="msiexec not found")
-        except Exception as e:
-            return InstallResult(success=False, error=str(e))
-
-    def _install_macos(
-        self, installer_path: Path, non_interactive: bool = False
-    ) -> InstallResult:
-        """Install on macOS with `installer -pkg <path> -target /`.
-
-        The .pkg writes to /Applications, /usr/local/bin and /Library/Launch*,
-        so it needs admin rights. The sudo requirement is announced before sudo
-        is ever invoked — never a bare, unexplained password prompt.
-        """
-        manual_cmd = f"sudo installer -pkg {shlex.quote(str(installer_path))} -target /"
-        is_root = hasattr(os, "geteuid") and os.geteuid() == 0
-        sudo_prefix = [] if is_root else ["sudo"]
-
-        try:
-            if not is_root:
-                cached = subprocess.run(
-                    ["sudo", "-n", "true"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    stdin=subprocess.DEVNULL,
-                    check=False,
-                )
-                if cached.returncode != 0:
-                    if non_interactive:
-                        return InstallResult(
-                            success=False,
-                            error=(
-                                "Installing Lemonade on macOS requires administrator "
-                                "rights, but this run is non-interactive and sudo "
-                                "needs a password.\n"
-                                "Run 'sudo -v' first and retry, or install manually:\n"
-                                f"  {manual_cmd}"
-                            ),
-                        )
-                    # Must reach the user even with no Rich console (gaia install
-                    # --lemonade constructs the installer without one).
-                    self._announce(
-                        "Administrator rights are required to install Lemonade — "
-                        "sudo will ask for your password."
-                    )
-
-            cmd = sudo_prefix + [
-                "installer",
-                "-pkg",
-                str(installer_path),
-                "-target",
-                "/",
-            ]
-            self._print_status(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600, check=False
-            )
-
-            if result.returncode != 0:
-                return InstallResult(
-                    success=False,
-                    error=(
-                        f"installer failed with code {result.returncode}:\n"
-                        f"{(result.stdout + result.stderr).strip()}\n"
-                        f"Retry manually: {manual_cmd}"
-                    ),
-                )
-
-            # `installer` can exit 0 while MDM or a blocked payload leaves nothing
-            # behind, so trust the probe rather than the exit code.
-            verify = self.check_installation()
-            if not verify.installed:
-                return InstallResult(
-                    success=False,
-                    error=(
-                        "installer reported success but Lemonade was not found "
-                        "afterwards (looked for lemond/lemonade in /usr/local/bin "
-                        "and /Applications/lemonade-app.app).\n"
-                        f"Probe error: {verify.error}\n"
-                        f"Try installing manually: {manual_cmd}"
-                    ),
-                )
-
-            installed_version = verify.version or self.target_version
-            return InstallResult(
-                success=True,
-                version=installed_version,
-                message=f"Installed Lemonade v{installed_version}",
-            )
-
-        except subprocess.TimeoutExpired:
-            return InstallResult(
-                success=False,
-                error=(
-                    "macOS installer timed out after 600s. "
-                    f"Retry manually: {manual_cmd}"
-                ),
-            )
-        except KeyboardInterrupt:
-            # Ctrl-C at the sudo prompt is BaseException — without this it escapes
-            # every caller's `except Exception` as a raw traceback.
-            return InstallResult(
-                success=False,
-                error=(
-                    "Installation cancelled at the administrator prompt. "
-                    f"To install without sudo prompting, run 'sudo -v' first, "
-                    f"or install manually: {manual_cmd}"
-                ),
-            )
-        except FileNotFoundError as e:
-            return InstallResult(
-                success=False, error=f"Required command not found: {e}"
-            )
-
     @staticmethod
     def _uninstall_macos() -> InstallResult:
         """macOS: the upstream .pkg ships no uninstaller, so say so and hand over steps.
@@ -1028,207 +738,6 @@ class LemonadeInstaller:
                 "xargs -n1 sudo pkgutil --forget"
             ),
         )
-
-    @staticmethod
-    def _check_linux_version() -> Optional[str]:
-        """
-        Check if the Linux version meets minimum requirements.
-
-        Lemonade Server .deb requires Ubuntu 24.04+ or Debian 13+ due to
-        dependencies like libasound2t64 that don't exist on older releases.
-
-        Returns:
-            None if compatible, or an error message string if not.
-        """
-        try:
-            # Parse /etc/os-release (systemd standard, present on all modern distros)
-            with open("/etc/os-release", encoding="utf-8") as f:
-                os_info = dict(line.strip().split("=", 1) for line in f if "=" in line)
-            # Strip quotes from values
-            os_info = {k: v.strip('"') for k, v in os_info.items()}
-
-            distro = os_info.get("ID", "").lower()
-            version = os_info.get("VERSION_ID", "")
-            pretty_name = os_info.get("PRETTY_NAME", "Unknown Linux")
-
-            # Check Ubuntu 24.04+
-            if distro == "ubuntu" and version:
-                if int(version.split(".")[0]) < 24:
-                    return f"Requires Ubuntu 24.04+. Detected: {pretty_name}"
-
-            # Check Debian 13+
-            elif distro == "debian" and version:
-                if int(version) < 13:
-                    return f"Requires Debian 13+. Detected: {pretty_name}"
-
-        except Exception as e:
-            log.debug(f"Could not check Linux version: {e}")
-
-        return None
-
-    def _install_via_ppa(self, non_interactive: bool = False) -> InstallResult:
-        """Install Lemonade Server on Linux via the Launchpad PPA.
-
-        Linux >= v10.0.1 is distributed only through ppa:lemonade-team/stable.
-        Requires Ubuntu 24.04+ (Debian and older Ubuntu are gated by
-        _check_linux_version).
-        """
-        try:
-            version_error = self._check_linux_version()
-            if version_error:
-                return InstallResult(success=False, error=version_error)
-
-            # add-apt-repository ships pre-installed on Ubuntu 24.04+; if missing
-            # the user is on a minimal image and needs a clear error, not silent apt churn.
-            if shutil.which("add-apt-repository") is None:
-                return InstallResult(
-                    success=False,
-                    error=(
-                        "add-apt-repository not found (required for PPA install).\n"
-                        "Install it first: sudo apt-get install software-properties-common\n"
-                        "Then re-run: gaia init"
-                    ),
-                )
-
-            is_root = hasattr(os, "geteuid") and os.geteuid() == 0
-            sudo_prefix = [] if is_root else ["sudo"]
-
-            # Pre-flight sudo when non-interactive: surface a clean error instead
-            # of hanging at a hidden TTY password prompt.
-            if not is_root and non_interactive:
-                sudo_check = subprocess.run(
-                    ["sudo", "-n", "true"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    stdin=subprocess.DEVNULL,
-                    check=False,
-                )
-                if sudo_check.returncode != 0:
-                    return InstallResult(
-                        success=False,
-                        error=(
-                            "sudo requires a password but gaia init --yes is non-interactive.\n"
-                            "Either run 'sudo -v' first to cache credentials, "
-                            "configure passwordless sudo, or run gaia init as root."
-                        ),
-                    )
-            elif not is_root:
-                self._announce(
-                    "Administrator rights are required to add the Lemonade PPA — "
-                    "sudo will ask for your password."
-                )
-
-            env = os.environ.copy()
-            if non_interactive:
-                env["DEBIAN_FRONTEND"] = "noninteractive"
-
-            def _run(step: str, cmd: list, timeout: int) -> subprocess.CompletedProcess:
-                self._print_status(f"{step}: {' '.join(cmd)}")
-                return subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    check=False,
-                )
-
-            result = _run(
-                "Add PPA",
-                sudo_prefix + ["add-apt-repository", "-y", LEMONADE_PPA],
-                timeout=120,
-            )
-            if result.returncode != 0:
-                outage = diagnose_launchpad_outage(result.stdout + result.stderr)
-                if outage:
-                    return InstallResult(success=False, error=outage)
-                return InstallResult(
-                    success=False,
-                    error=(
-                        f"Failed to add Lemonade PPA (system={self.system}, root={is_root}).\n"
-                        f"add-apt-repository output:\n{(result.stdout + result.stderr).strip()}\n"
-                        "See https://amd-gaia.ai/docs/reference/troubleshooting"
-                    ),
-                )
-
-            update_result = _run(
-                "Update apt cache", sudo_prefix + ["apt-get", "update"], timeout=300
-            )
-            # apt-get update exits 0 when only *some* indexes fail, so a Launchpad
-            # outage is silent here and resurfaces as "Unable to locate package".
-            outage = diagnose_launchpad_outage(
-                update_result.stdout + update_result.stderr
-            )
-            if outage:
-                return InstallResult(success=False, error=outage)
-            if update_result.returncode != 0:
-                # An unrelated third-party repo failing is not ours to block on;
-                # the Lemonade index specifically resolved or we returned above.
-                log.warning(
-                    "apt-get update failed (rc=%s); continuing with possibly stale cache: %s",
-                    update_result.returncode,
-                    (update_result.stdout + update_result.stderr).strip()[-500:],
-                )
-
-            result = _run(
-                "Install lemonade-server",
-                sudo_prefix + ["apt-get", "install", "-y", "lemonade-server"],
-                timeout=600,
-            )
-            if result.returncode != 0:
-                return InstallResult(
-                    success=False,
-                    error=(
-                        f"apt-get install lemonade-server failed (step=Install, root={is_root}):\n"
-                        f"{(result.stdout + result.stderr).strip()}\n"
-                        "Your apt state may be partial — run 'sudo dpkg --configure -a' to recover.\n"
-                        "See https://amd-gaia.ai/docs/reference/troubleshooting"
-                    ),
-                )
-
-            # Use the real installed version — PPA may ship a different version than target.
-            verify = self.check_installation()
-            installed_version = verify.version or "unknown"
-            if verify.installed and verify.version != self.target_version:
-                log.warning(
-                    "PPA installed Lemonade %s but GAIA expected %s",
-                    verify.version,
-                    self.target_version,
-                )
-
-            return InstallResult(
-                success=True,
-                version=installed_version,
-                message=f"Installed Lemonade v{installed_version} via PPA",
-            )
-
-        except subprocess.TimeoutExpired as e:
-            return InstallResult(
-                success=False,
-                error=(
-                    f"PPA install timed out during step (cmd={e.cmd}). "
-                    "If this happened during apt-get install, run 'sudo dpkg --configure -a'."
-                ),
-            )
-        except FileNotFoundError as e:
-            return InstallResult(
-                success=False, error=f"Required command not found: {e}"
-            )
-
-    def is_platform_supported(self) -> bool:
-        """Check if the current platform is supported for installation."""
-        return self.system in ("windows", "linux", "darwin")
-
-    def get_platform_name(self) -> str:
-        """Get a friendly name for the current platform."""
-        names = {
-            "windows": "Windows",
-            "linux": "Linux",
-            "darwin": "macOS",
-        }
-        return names.get(self.system, self.system.capitalize())
 
     def uninstall(self, silent: bool = True) -> InstallResult:
         """
@@ -1314,85 +823,115 @@ class LemonadeInstaller:
                 )
 
             installed_version = info.version.lstrip("v")
-            failures = []
+            failed = f"Could not uninstall Lemonade Server v{installed_version}:"
+            by_hand = _remove_by_hand(installed_version)
+            rejected = []
+            not_published = []
+            not_downloaded = []
 
             # Try both minimal and full MSI variants
             for use_minimal in [True, False]:
                 variant = "minimal" if use_minimal else "full"
+                # Same platform as this one; only the version and variant differ.
+                uninstall_installer = copy.copy(self)
+                uninstall_installer.target_version = installed_version.lstrip("v")
+                uninstall_installer.minimal = use_minimal
+                url = uninstall_installer.get_download_url()
+                self._print_status(
+                    f"Downloading {variant} MSI v{installed_version} for uninstall..."
+                )
                 try:
-                    uninstall_installer = LemonadeInstaller(
-                        target_version=installed_version,
-                        minimal=use_minimal,
-                        console=self.console,
-                    )
-                    self._print_status(
-                        f"Downloading {variant} MSI v{installed_version} for uninstall..."
-                    )
                     msi_path = uninstall_installer.download_installer()
-
-                    cmd = ["msiexec", "/x", str(msi_path)]
-                    if silent:
-                        cmd.extend(["/qn", "/norestart"])
-
-                    log.debug(f"Running: {' '.join(cmd)}")
-                    try:
-                        result = subprocess.run(
-                            cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=300,
-                            check=False,
-                        )
-                    finally:
-                        discard_download(msi_path)
-
-                    if result.returncode == 0:
-                        return InstallResult(
-                            success=True,
-                            message="Lemonade Server uninstalled successfully",
-                        )
-                    elif result.returncode == 1605:
-                        # Wrong MSI variant — try the other one
-                        log.debug(
-                            f"{variant} MSI didn't match installed product, "
-                            "trying other variant"
-                        )
-                        continue
-                    elif result.returncode == 1618:
-                        return InstallResult(
-                            success=False,
-                            error="Another installation is in progress (error 1618). "
-                            "Wait a moment and try again.",
-                        )
-                    else:
-                        return InstallResult(
-                            success=False,
-                            error=f"msiexec failed with code {result.returncode}: {result.stderr}",
-                        )
                 except (UnpinnedInstallerError, InstallerIntegrityError) as e:
-                    # GAIA will not run an installer it cannot verify.
                     return InstallResult(
                         success=False,
-                        error=f"Could not uninstall Lemonade Server v{installed_version}: "
-                        f"{e} Uninstall it from Windows Settings > Apps, or upgrade "
-                        f"to v{LEMONADE_VERSION} first with `gaia init` and retry.",
+                        error=f"{failed} GAIA did not run the {variant} MSI because "
+                        f"it could not verify it. {e} {by_hand}",
                     )
-                except Exception as e:
-                    log.warning(f"Uninstall with the {variant} MSI failed: {e}")
-                    failures.append(f"{variant} MSI: {e}")
+                except LemonadeAssetError as e:
+                    log.warning("Upstream does not publish %s: %s", url, e)
+                    not_published.append(url)
                     continue
+                except RuntimeError as e:
+                    log.warning("Could not download %s: %s", url, e)
+                    not_downloaded.append(f"{url}: {e}")
+                    continue
+                except OSError as e:
+                    return InstallResult(
+                        success=False,
+                        error=f"{failed} GAIA could not save the {variant} MSI in "
+                        f"{tempfile.gettempdir()}: {e}. Free disk space or fix that "
+                        f"folder's permissions and retry. {by_hand}",
+                    )
 
-            # Both strategies failed
-            detail = f" ({'; '.join(failures)})" if failures else ""
+                cmd = ["msiexec", "/x", str(msi_path)]
+                if silent:
+                    cmd.extend(["/qn", "/norestart"])
+
+                log.debug(f"Running: {' '.join(cmd)}")
+                try:
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        check=False,
+                    )
+                finally:
+                    discard_download(msi_path)
+
+                if result.returncode == 0:
+                    return InstallResult(
+                        success=True,
+                        message="Lemonade Server uninstalled successfully",
+                    )
+                elif result.returncode == 1605:
+                    # Wrong MSI variant — try the other one
+                    log.debug(
+                        f"{variant} MSI didn't match installed product, "
+                        "trying other variant"
+                    )
+                    rejected.append(variant)
+                    continue
+                elif result.returncode == 1618:
+                    return InstallResult(
+                        success=False,
+                        error="Another installation is in progress (error 1618). "
+                        "Wait a moment and try again.",
+                    )
+                else:
+                    return InstallResult(
+                        success=False,
+                        error=f"msiexec failed with code {result.returncode}: {result.stderr}",
+                    )
+
+            reasons = []
+            if rejected:
+                which = "either" if len(rejected) == 2 else f"the {rejected[0]}"
+                reasons.append(f"Windows Installer did not accept {which} MSI.")
+            if not_published:
+                reasons.append(
+                    f"The release no longer publishes {' or '.join(not_published)}."
+                )
+            if not_downloaded:
+                reasons.append(
+                    "GAIA could not download the MSI needed to uninstall it "
+                    f"({'; '.join(not_downloaded)}). Check your network "
+                    "connection or proxy settings and retry."
+                )
             return InstallResult(
-                success=False,
-                error=f"Could not uninstall Lemonade Server v{installed_version}: "
-                f"Windows Installer did not accept either MSI{detail}. Uninstall it "
-                "from Windows Settings > Apps.",
+                success=False, error=f"{failed} {' '.join(reasons)} {by_hand}"
             )
 
-        except subprocess.TimeoutExpired:
-            return InstallResult(success=False, error="Uninstall timed out")
+        except subprocess.TimeoutExpired as e:
+            # Not retried with the other MSI: this one may still be running.
+            return InstallResult(
+                success=False,
+                error=f"Uninstall timed out: msiexec did not finish within "
+                f"{e.timeout:.0f} seconds. Windows Installer may still be "
+                "finishing, so wait a minute before retrying (retrying sooner "
+                f"fails with error 1618). {_remove_by_hand(None)}",
+            )
         except FileNotFoundError:
             return InstallResult(success=False, error="msiexec not found")
         except Exception as e:

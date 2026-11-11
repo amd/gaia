@@ -80,3 +80,25 @@ def test_contexts_do_not_share(store):
     )
     home = _new_chat(store, "home").get_memory_system_prompt()
     assert "garden planner" in home and "garden planner" not in work
+
+
+def test_a_memory_erased_since_is_not_shown_to_a_new_chat(store):
+    """Privacy: an erase anywhere must reach the next chat, shared copy or not."""
+    secret = store.store("fact", "The user's door code is 4417.", source="user")
+    first = _new_chat(store).get_memory_system_prompt()
+    assert "4417" in first
+    store.forget(secret)
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+def test_each_chat_model_gets_its_own_section(store):
+    """Tool errors are shown per model, so models must not share a section."""
+    a = _Host(store)
+    a.model_id = "model-a"
+    a._refresh_stable_memory_prompt(share=True)
+    a.get_memory_system_prompt()
+    b = _Host(store)
+    b.model_id = "model-b"
+    b._refresh_stable_memory_prompt(share=True)
+    b.get_memory_system_prompt()
+    assert len(memory_mod._SHARED_STABLE_PROMPTS) == 2

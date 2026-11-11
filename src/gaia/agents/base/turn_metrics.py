@@ -38,6 +38,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from collections import deque
@@ -53,6 +54,7 @@ from gaia.utils.perf_trace import (  # noqa: F401  (re-exported)
     note_wait,
     span,
 )
+from gaia.utils.tiktoken_bundle import use_bundled_cache
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,9 @@ _CHARS_PER_TOKEN = 4.28
 
 SCHEMA = "gaia.turn/1"
 POST_SCHEMA = "gaia.turn_post/1"
+
+# Module-level: recorders are per-agent, and appends over ~4 KiB can interleave.
+_WRITE_LOCK = threading.Lock()
 
 
 def turn_log_path() -> Optional[Path]:
@@ -114,6 +119,7 @@ class _Tokenizer:
         try:
             import tiktoken
 
+            use_bundled_cache()
             self._enc = tiktoken.get_encoding("cl100k_base")
             self.name = "tiktoken:cl100k_base"
         except Exception as e:  # noqa: BLE001 - load failure is named, not hidden
@@ -539,9 +545,11 @@ class TurnRecorder:
         if self.path is None:
             return
         try:
+            line = json.dumps(record, default=str) + "\n"
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, default=str) + "\n")
+            with _WRITE_LOCK:
+                with open(self.path, "a", encoding="utf-8") as fh:
+                    fh.write(line)
         except OSError as e:
             # Diagnostic-only: a log we cannot write must not fail the turn.
             logger.warning("could not append turn record to %s: %s", self.path, e)

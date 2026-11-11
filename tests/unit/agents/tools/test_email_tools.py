@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Read-only email tools for the flagship agent (Phase 0 of the email skill).
+"""Reading tools for the flagship agent (Phase 0 of the email skill).
 
 The backend tests drive a real ``httpx`` client over a ``MockTransport``, so
 they assert the *shape of the outgoing Graph request* — path, ``$select``,
@@ -149,7 +149,26 @@ def test_list_inbox_unread_only_sets_filter():
         return json_response({"value": []})
 
     make_backend(handler).list_inbox(unread_only=True)
-    assert seen["url"].params["$filter"] == "isRead eq false"
+    assert seen["url"].params["$filter"] == (
+        "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false"
+    )
+
+
+@pytest.mark.parametrize("unread_only", [True, False])
+def test_list_inbox_filter_leads_with_the_sorted_property(unread_only):
+    """Graph answers InefficientFilter when $orderby's property does not lead
+    $filter (#4806)."""
+    seen = {}
+
+    def handler(request):
+        seen["url"] = request.url
+        return json_response({"value": []})
+
+    make_backend(handler).list_inbox(unread_only=unread_only)
+    params = seen["url"].params
+    assert params["$orderby"] == "receivedDateTime desc"
+    if "$filter" in params:
+        assert params["$filter"].startswith("receivedDateTime ")
 
 
 def test_list_inbox_without_unread_sends_no_filter():
@@ -426,7 +445,10 @@ def harness_factory():
 def test_grant_identity_is_the_namespaced_flagship_id():
     # Must match gaia.connectors.grants' namespacing for a wheel-installed agent.
     assert EMAIL_AGENT_ID == "installed:gaia"
-    assert MAIL_SCOPES == ("https://graph.microsoft.com/Mail.ReadWrite",)
+    assert MAIL_SCOPES == (
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+    )
 
 
 def test_list_inbox_tool_returns_structured_success(harness_factory):
@@ -687,6 +709,12 @@ def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch
             {},
             "OAuth client",
         ),
+        # Mid-save by another GAIA operation: retry, never "reconnect".
+        (
+            {"google": {"provider": "google", "scopes": [], "error": "busy"}},
+            {},
+            "another GAIA operation",
+        ),
     ],
 )
 def test_no_mailbox_error_names_each_providers_own_state(
@@ -715,7 +743,8 @@ def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
         _Bare()._build_email_backend()
     message = str(err.value)
     assert "calendar.events" in message
-    assert GMAIL_READONLY in message
+    assert "gmail.readonly" in message and "gmail.compose" in message
+    assert "gmail.modify" not in message
 
 
 def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
@@ -848,6 +877,9 @@ def test_skill_tools_required_match_the_registered_tools():
         "search_email",
         "read_email",
         "list_mail_folders",
+        "get_thread",
+        "list_connected_mailboxes",
+        "list_waiting_on_you",
     }
     assert registered <= set(_TOOL_REGISTRY)
     assert set(_inbox_triage_skill().gaia.tools_required) == registered
@@ -870,20 +902,18 @@ def test_email_tools_are_bundled_for_the_loader():
     """An unbundled tool can never be pulled in with its cohort."""
     # The chat agent is a separate hub package; the core unit-test job does not
     # install it. "Test Chat Agent" and "Test Gaia Agent" do, and run this there.
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 
-    bundles = PROFILE_TOOL_CONFIGS["full"].bundles
-    email = next(
-        (b for b in bundles if b.name == "email"),
-        None,
-    )
-    assert email is not None, (
-        "the 'email' bundle is missing from the full profile: add it to "
-        "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
+    bundles = {b.name: b for b in PROFILE_TOOL_CONFIGS["full"].bundles}
+    missing = {"email", "email_threads"} - set(bundles)
+    assert not missing, (
+        f"bundle(s) {missing} missing from the full profile: add them to "
+        "gaia_agent.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
-    assert email.members == set(_inbox_triage_skill().gaia.tools_required)
+    members = bundles["email"].members | bundles["email_threads"].members
+    assert members == set(_inbox_triage_skill().gaia.tools_required)
 
 
 # --------------------------------------------------------------------------

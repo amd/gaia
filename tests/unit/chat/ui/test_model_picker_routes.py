@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
 from gaia.ui import warmup
 from gaia.ui.database import ChatDatabase
@@ -209,6 +210,8 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["state"] == "not_downloaded"
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["available"] is True
     assert body["memory_source"] == "AMD iGPU"
+    # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
+    assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
 
 
 def test_cloud_list_is_unchanged(client, lemonade):
@@ -344,6 +347,121 @@ def test_an_unsized_model_offers_only_automatic_at_its_flat_window(
     assert "keeps the automatic size" in body["note"]
 
 
+UNREGISTERED = "Unlisted-Dense-30B-GGUF"
+
+
+@pytest.fixture
+def unregistered(lemonade):
+    lemonade.models.append(
+        {
+            "id": UNREGISTERED,
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 19.9,
+            "labels": ["chat"],
+            "max_context_window": 131072,
+        }
+    )
+    return lemonade
+
+
+def test_an_unregistered_model_offers_32k_up_to_its_trained_window(
+    client, unregistered
+):
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == [32768, 65536, 131072]
+    assert body["automatic"] == 65536
+    assert "can't check these fit" in body["note"]
+
+
+def test_an_unregistered_model_saves_a_chosen_size(client, unregistered):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["chosen"] == 131072
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["context_sizes"] == {UNREGISTERED: 131072}
+
+
+@pytest.mark.parametrize("ctx_size", [16384, 262144])
+def test_an_unregistered_model_refuses_sizes_outside_its_range(
+    client, unregistered, ctx_size
+):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": ctx_size},
+    )
+    assert resp.status_code == 422
+    assert "not offered" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("window", [None, 0, -1, True, "131072", 131072.0])
+def test_an_unregistered_model_with_no_usable_trained_window_keeps_automatic(
+    client, unregistered, window
+):
+    unregistered.models[-1]["max_context_window"] = window
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+    assert "keeps the automatic size" in body["note"]
+
+
+def test_an_unregistered_model_trained_below_32k_keeps_automatic(client, unregistered):
+    unregistered.models[-1]["max_context_window"] = 16384
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+
+
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_a_catalog_error_fails_the_context_view_loudly(
+    client, unregistered, monkeypatch, method
+):
+    def failing(m, path, payload=None):
+        if path == "models?show_all=true":
+            return 500, {}
+        return unregistered(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", failing)
+    if method == "get":
+        resp = client.get(
+            "/api/providers/local/context", params={"model": UNREGISTERED}
+        )
+    else:
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": UNREGISTERED, "ctx_size": 65536},
+        )
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and UNREGISTERED in detail
+    if config_mod.GAIA_CONFIG_FILE.exists():
+        assert UNREGISTERED not in config_mod.GAIA_CONFIG_FILE.read_text(
+            encoding="utf-8"
+        )
+
+
+def test_a_registered_model_never_reads_the_catalog_for_its_window(
+    client, lemonade, monkeypatch
+):
+    def no_catalog(m, path, payload=None):
+        assert path != "models?show_all=true", "a registered model needs no catalog"
+        return lemonade(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", no_catalog)
+    resp = client.get(
+        "/api/providers/local/context", params={"model": DEFAULT_MODEL_NAME}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["options"]
+
+
 def test_cloud_models_have_no_context_choice(client, lemonade):
     resp = client.get("/api/providers/local/context", params={"model": "fireworks.glm"})
     assert resp.status_code == 422
@@ -402,6 +520,22 @@ def test_status_answering_model_is_loaded_and_busy(client, lemonade):
     assert body["memory"]["model_gb"] == pytest.approx(16.2 * 1.05 + 1.0, abs=0.1)
 
 
+def test_status_sizes_a_custom_model_listed_without_its_namespace(client, lemonade):
+    """Lemonade lists a registered ``user.X`` as ``X``; the size must still match."""
+    lemonade.loaded = [_entry("user.Custom-Chat-GGUF")]
+    lemonade.models.append(
+        {
+            "id": "Custom-Chat-GGUF",
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 16.2,
+            "labels": ["chat"],
+        }
+    )
+    body = client.get("/api/providers/local/status").json()
+    assert body["memory"]["model_gb"] == pytest.approx(16.2 * 1.05 + 1.0, abs=0.1)
+
+
 def test_status_needs_the_ui_header(client, lemonade):
     resp = client.get("/api/providers/local/status", headers={"X-Gaia-UI": ""})
     assert resp.status_code == 403
@@ -422,6 +556,26 @@ def test_restart_starts_a_stopped_server_with_the_active_model(client, lemonade,
     assert resp.status_code == 202
     _join_restart()
     assert jobs == [(DEFAULT_MODEL_NAME, False)]
+
+
+def test_restart_starts_a_stopped_server_for_a_cloud_model(client, db, lemonade, jobs):
+    """Cloud models go through the local server, so a stopped one needs starting."""
+    db.set_setting("custom_model", "fireworks.glm")
+    lemonade.down = True
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 202
+    assert resp.json()["starting_server"] is True
+    _join_restart()
+    assert jobs == [("fireworks.glm", False)]
+
+
+def test_restart_of_a_running_server_for_a_cloud_model_is_refused(
+    client, db, lemonade, jobs
+):
+    db.set_setting("custom_model", "fireworks.glm")
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 422
+    assert jobs == []
 
 
 def test_restart_refuses_while_the_model_answers(client, lemonade, jobs):

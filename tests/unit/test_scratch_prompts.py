@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
 from gaia.agents.base.tool_grants import SCRATCH_ARG, grant_scope
 from gaia.agents.base.tools import tool
 from gaia.security import PathValidator
@@ -211,3 +212,49 @@ def test_a_scratch_marked_call_has_no_grant_scope(tmp_path):
 
     assert marked is None
     assert unmarked.label == "running Python files"
+
+
+def test_the_wire_args_are_only_what_the_model_sent(folders):
+    """#5361: a policy client must not match on keys GAIA added to the prompt."""
+    project, scratch = folders
+    agent, handler = _agent(folders)
+    risk_note = "Sends your commits to the remote repository."
+    # A host that names the folder and a risk note the model never sent.
+    agent.confirmation_args_for_call = lambda _name, args: {
+        **args,
+        "working_directory": str(project),
+        RISK_NOTE_ARG: risk_note,
+    }
+    call = {"file_path": str(scratch / "explore.py")}
+
+    _, [request] = _drive(agent, handler, "execute_python_file", call)
+    assert request["args"][SCRATCH_ARG] == str(scratch.resolve())
+    assert request["args"]["working_directory"] == str(project)
+
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["args"] == call
+    assert wire["prompt_context"] == {
+        "working_directory": str(project),
+        "risk_note": risk_note,
+    }
+
+
+def test_a_relative_write_is_judged_where_the_tool_writes_it(folders, monkeypatch):
+    # The process sits in scratch, but the tool resolves bare names against the
+    # chat workspace, so the write lands in the user's folder and must be asked.
+    project, scratch = folders
+    agent, handler = _agent(folders)
+    monkeypatch.chdir(scratch)
+
+    def preflight(_args):
+        return None
+
+    preflight.target_of = lambda args: project / args["file_path"]
+    entry = dict(agent._tools_registry["write_file"], preflight=preflight)
+    monkeypatch.setitem(agent._tools_registry, "write_file", entry)
+
+    _result, prompts = _drive(
+        agent, handler, "write_file", {"file_path": "explore.py", "content": "x"}
+    )
+
+    assert len(prompts) == 1

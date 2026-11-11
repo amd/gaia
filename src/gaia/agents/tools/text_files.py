@@ -3,7 +3,8 @@
 """Shared text-file helpers for the file tool mixins.
 
 Decoding by byte-order mark, so UTF-16/UTF-32 text (what Windows PowerShell 5.1
-``>`` redirection and some Notepad saves write) reads as text, not binary; and
+``>`` redirection and some Notepad saves write) reads as text, not binary; Windows
+ANSI (CP1252) text that is not UTF-8 reads as CP1252; and
 bounding a matching line to an excerpt that still shows the match.
 """
 
@@ -20,21 +21,39 @@ _BOMS = (
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
 
+# Bytes CP1252 maps to control characters text never holds; NUL marks binary.
+_CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13}
+_SNIFF_BYTES = 1 << 16
+
 MATCH_EXCERPT_CHARS = 200
 _ELLIPSIS = "..."
 
 
 def text_encoding(path: Union[str, os.PathLike]) -> str:
-    """The codec to open *path* as text with: its BOM's codec, else UTF-8.
+    """The codec to open *path* as text with: its BOM's codec, UTF-8, or CP1252.
 
     The BOM codecs (``utf-16``, ``utf-32``, ``utf-8-sig``) consume the BOM, so
-    it never reaches the decoded text.
+    it never reaches the decoded text. Without a BOM, bytes that are not UTF-8
+    but decode strictly as CP1252 with no control characters are CP1252.
     """
     with open(path, "rb") as stream:
-        head = stream.read(4)
+        head = stream.read(_SNIFF_BYTES)
     for bom, encoding in _BOMS:
         if head.startswith(bom):
             return encoding
+    try:
+        head.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError as exc:
+        # A multibyte character cut at the sniff limit is still UTF-8.
+        if len(head) == _SNIFF_BYTES and exc.start >= len(head) - 3:
+            return "utf-8"
+    if _CONTROL_BYTES.isdisjoint(head):
+        try:
+            head.decode("cp1252")
+            return "cp1252"
+        except UnicodeDecodeError:
+            pass
     return "utf-8"
 
 

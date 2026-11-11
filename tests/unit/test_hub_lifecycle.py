@@ -291,6 +291,35 @@ def test_status_aggregates(tmp_path):
     assert d["health"] == HEALTH_HEALTHY
 
 
+def test_status_shows_a_pip_installed_agents_package_version(tmp_path):
+    reg = _FakeRegistration("my-agent")
+    reg.version = "0.1.0"
+
+    st = status(
+        "my-agent",
+        registry=_FakeRegistry([reg]),
+        install_root=tmp_path,
+        loader=lambda aid, r: [],
+    )
+
+    assert st.installed_version == "0.1.0"
+
+
+def test_status_prefers_the_hub_install_record(tmp_path):
+    _install_sentinel(tmp_path, "demo", version="2.1.0")
+    reg = _FakeRegistration("demo")
+    reg.version = "9.9.9"
+
+    st = status(
+        "demo",
+        registry=_FakeRegistry([reg]),
+        install_root=tmp_path,
+        loader=lambda aid, r: [],
+    )
+
+    assert st.installed_version == "2.1.0"
+
+
 def test_status_all_covers_installed_and_registered(tmp_path):
     _install_sentinel(tmp_path, "demo")
     reg = _FakeRegistry(

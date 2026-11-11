@@ -48,6 +48,10 @@ link the original), or feature requests that need community discussion first.
 2. **Check for duplicates** — link the original instead of answering twice.
 3. **Cite real locations only.** Reference `file.py:line` when you've actually found it; never
    guess a line number to look thorough.
+4. **Read the failing evidence before naming a cause.** When the issue cites CI runs or logs,
+   read the failing part first (`gh run view <id> --log-failed`). A cause found only in the
+   code is a guess: call it unconfirmed and name the log that would settle it. #6579's reply
+   blamed the install path; the run it cited showed the quit question blocking SIGTERM.
 
 ## Length caps by response type
 
@@ -75,7 +79,8 @@ correcting them abstractly.
 **Code:**
 - In-core agent framework: `src/gaia/agents/` — `base/`, `tools/`, `code_index/`, `registry.py`
 - Packaged agents: `hub/agents/<id>/python/` — `gaia` (the flagship), `chat` (its base
-  class), `email`, plus the `hello-world` / `word-count` / `connectors-demo` templates.
+  class), and `email`. The one reference agent package `gaia agent init` mirrors is
+  `tests/fixtures/agents/hello-world/`.
   Per-task capabilities (coding, data exploration, document briefs, …) are skills under
   `hub/skills/`.
 - CLI: `src/gaia/cli.py` · MCP: `src/gaia/mcp/` · LLM backends: `src/gaia/llm/` (+ `providers/`)

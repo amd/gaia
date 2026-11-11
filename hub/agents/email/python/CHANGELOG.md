@@ -9,6 +9,150 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Under the daemon, a forwarded-token hiccup no longer asks for a browser
+  re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
+  unexpected error in the check, now reports `error` ("couldn't check") like the
+  standalone path; a token short on scopes reports `connection_missing_scopes`
+  with the scopes to add. Only a missing forwarded token still reports
+  `reauth_required`.
+
+### Changed
+
+- **Unattended scheduler failures now notify users with the right action.** Failed scheduled sends, snooze restores, and interrupted sends use distinct messages; an interrupted send warns that it may already have been delivered and advises checking Sent before retrying (#5411).
+
+- **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
+
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
+  reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
+  anything older. GAIA updates its own Lemonade Server itself; the `hint` for
+  a user-run server points at https://lemonade-server.ai instead of a command.
+  `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
+
+### Fixed
+
+- **A batch archive, label, star or mark that went through is no longer
+  reported as failed (#6994).** When the change landed in Gmail or Outlook but
+  its undo record could not be saved, the message was listed under `failed`, so
+  the agent could retry it or tell the user nothing changed. It is now listed
+  under `succeeded` with `action_id: null` and an `undo_error`, and the batch
+  result adds `not_undoable_count` and a summary saying it can't be undone.
+
+- **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
+  `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
+  documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
+  already returned them, but `openapi.email.json` listed only 200 and 422, so
+  generated clients never saw them. No request or response shape changed.
+
+- **A sidecar left running for days keeps working.** The one-file binary
+  unpacks its files into the OS temp folder, and macOS deletes files there
+  that are older than three days, so a long-running sidecar lost files it
+  still read. It now marks its own unpacked files as in use at startup and
+  every six hours. Leftovers from a sidecar that has exited still get
+  cleaned (#6850).
+- **A chat that switches model mid-conversation gets the model it asked
+  for.** `POST /v1/email/query` with a `session_id` used to keep running the
+  session's agent on whatever model it was first built with, even when a later
+  turn named another `model`. That turn now rebuilds the session's agent on
+  the requested model, keeping the session's memory-off toggle and autonomy
+  level, and a failed rebuild is a 502 that leaves the session usable. Naming
+  the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
+  follow-up can name a thread the previous turn showed. (#2834)
+
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
+- **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
+- **Concurrent startup no longer fails to open the email state database
+  during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
+  retry helper when another email agent is opening the same `state.db`.
+  Its core floor is now 0.25.3, the first release with that helper. (#6041)
+- **Unread Outlook listings no longer fail at Microsoft Graph.** The core and
+  email-agent backends now put a broad `receivedDateTime` predicate before
+  `isRead` whenever they sort unread mail newest-first. That meets Graph's
+  `$filter` / `$orderby` rule instead of returning `InefficientFilter` (#4806).
+- **The email package no longer installs beside an incompatible GAIA core.**
+  Its declared core floor covers the email agent module-level imports,
+  including its guided Outlook setup route. (#4430)
+- **A note the model writes before a tool call no longer shows as
+  `[unmapped agent event: commentary]`.** The host's output handler now marks
+  that text as `commentary`; the translator drops it, since the words already
+  went out as `token` events.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
+- **Connect prompts name the right Settings tab.** The agent sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; it now says
+  "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as delivered.**
+  `POST /v1/email/agent/confirm-tool` answered `ok` even when nothing was
+  waiting for the decision (already answered, timed out, or never asked). It now
+  answers 409, like the flagship agent's tool decision route. (#4889)
+- **One very long turn no longer vanishes from the conversation.** A pushed
+  turn bigger than the whole history budget was dropped, answer included. It is
+  now kept with its longest messages cut and a note saying how much.
+- **A follow-up about a thread shown last turn now works in the TUI.** Find a
+  thread, then ask who said what in it: the second question used to fail,
+  because the host pushes back only the conversation's words and the thread id
+  never made it into the next turn. The model guessed one, and Gmail rejected
+  `[ID of Northgate migration sync — phase 2 sequencing]` with a 400. A
+  session-scoped agent (a `/v1/email/query` caller that sends `session_id`, as
+  the TUI does) now remembers the last 10 threads `get_thread` and
+  `summarize_thread` showed, and hands them back with the history as
+  `- [thread] <subject> (thread_id <id>)` lines, the subjects fenced as
+  untrusted. It also remembers each thread's mailbox, so the follow-up routes
+  without a `mailbox` argument. The Agent UI relay doesn't send `session_id`
+  yet, so it doesn't get this. Both tools now refuse an id that can't be a
+  thread id before calling the mail API, with `thread_id '<id>' is not a thread
+  id. Call search_messages first and pass the thread_id from its result.`
+  (#2834)
+- **Pushed history that doesn't fit the model's window no longer overflows
+  it.** `/v1/email/query` used the `context` the host pushed as-is, but the
+  host sizes it without seeing this agent's prompt and tools. On a 32K window
+  (an NPU model) the two together could exceed the window and fail the turn.
+  The agent now keeps the newest whole turns that fit beside its prompt and
+  streams a `status` event when older ones drop out of view.
+- **Outlook messages show their real age and the newest one is replied to.**
+  The Outlook backend handed downstream Graph's ISO-8601 `receivedDateTime` in
+  the `internalDate` field, which every consumer reads as epoch milliseconds
+  and turned into 0. Every message looked like it arrived at the epoch, so the
+  needs-you ages were empty, the "newest message in the thread" reply target
+  never fired, and the recency order of the needs-review list was lost. The
+  backend now emits epoch milliseconds, using one timestamp parser shared with
+  the follow-up tools.
+- **A mailbox another GAIA operation is saving is reported as busy, not as
+  missing permissions.** While the daemon, the Agent UI or the CLI is mid-save
+  on a connection, the connection listing returns it marked `"error": "busy"`
+  with no scopes. Mailbox onboarding used to read that as "missing N
+  permissions" and send the user to reconnect; it now reports the `error` state
+  with "being saved by another GAIA operation right now. Retry in a moment."
+  The calendar pick raises `ConnectionBusyError` instead of asking for a
+  calendar grant, and `GET /v1/email/connectors` adds a per-provider `busy`
+  flag so a client knows `can_send: false` is not final. A mailbox route that
+  hits a busy connection used to answer `403`, as if the account needed
+  reconnecting; it now answers `502` with a detail saying the connection is
+  being saved by another GAIA operation, so treat that 502 as transient and
+  retry. The agent routes answer `503` with `Retry-After`. A calendar that was
+  busy when a session started now works once the save finishes, instead of
+  staying unavailable for the whole session. While a higher-ranked calendar
+  account is busy, the agent now waits for it instead of using another
+  account's calendar. A calendar error that needs a reconnect now says so,
+  instead of a generic configuration error.
+
 - **A `/query` run waiting for the model streams that it is waiting.** The run
   thread runs as the user's turn: `status` events with `phase: "model_queue"`
   and a `queue` object (see the npm `SPEC.md`), interactive lease priority, and

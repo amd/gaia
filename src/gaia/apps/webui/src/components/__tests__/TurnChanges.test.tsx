@@ -10,6 +10,7 @@ import { DiffCard } from '../render/DiffCard';
 import { UndoHistorySettings } from '../settings/UndoHistorySettings';
 import { resetTurnChangesCache } from '../../hooks/useTurnChanges';
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 import type { TurnChanges as Turn } from '../../types/changes';
 
 const turn = (over: Partial<Turn> = {}): Turn => ({
@@ -107,14 +108,71 @@ describe('TurnChanges', () => {
             turns: [turn({ incomplete: true, untracked: [{ kind: 'shell', detail: 'npm run build', paths: [] }] })],
         });
         render(<TurnChanges sessionId="s1" messageId={7} />);
-        expect(await screen.findByText(/Undo may be incomplete/)).toBeInTheDocument();
+        expect(await screen.findByRole('note')).toHaveTextContent(
+            "GAIA also ran 1 command it can't track. If it changed any files, Undo won't restore them.",
+        );
         expect(screen.getByText('Command: npm run build')).toBeInTheDocument();
+    });
+
+    it('groups identical snippets into one line', async () => {
+        const snippet = { kind: 'run_python', detail: 'reads incident logs, counts errors by hour', paths: [] };
+        vi.spyOn(api, 'listTurnChanges').mockResolvedValue({
+            turns: [turn({ files: [], incomplete: true, untracked: Array(7).fill(snippet) })],
+        });
+        render(<TurnChanges sessionId="s1" messageId={7} />);
+        expect(await screen.findByRole('note')).toHaveTextContent(
+            "GAIA ran 7 Python snippets it can't track. If they changed any files, Undo won't restore them.",
+        );
+        expect(screen.getAllByRole('listitem')).toHaveLength(1);
+        expect(screen.getByText('Python: reads incident logs, counts errors by hour ×7')).toBeInTheDocument();
+        // Nothing GAIA tracked, so there is nothing to review or undo.
+        expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    });
+
+    it('lists different snippets under one expandable line', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockResolvedValue({
+            turns: [turn({
+                incomplete: true,
+                untracked: [
+                    { kind: 'run_python', detail: 'save totals to totals.csv', paths: [] },
+                    { kind: 'run_python', detail: 'write the chart', paths: [] },
+                    { kind: 'run_python', detail: 'write the chart', paths: [] },
+                ],
+            })],
+        });
+        render(<TurnChanges sessionId="s1" messageId={7} />);
+        const summary = await screen.findByText('Python snippets ×3');
+        expect(summary.tagName).toBe('SUMMARY');
+        expect(screen.getByText('save totals to totals.csv')).toBeInTheDocument();
+        expect(screen.getByText('write the chart ×2')).toBeInTheDocument();
+    });
+
+    it('a turn that only ran read-only work shows nothing', async () => {
+        const list = vi.spyOn(api, 'listTurnChanges').mockResolvedValue({
+            turns: [turn({ files: [], incomplete: false, untracked: [] })],
+        });
+        const { container } = render(<TurnChanges sessionId="s1" messageId={7} />);
+        await waitFor(() => expect(list).toHaveBeenCalled());
+        expect(container).toBeEmptyDOMElement();
     });
 
     it('a listing error is shown, not swallowed', async () => {
         vi.spyOn(api, 'listTurnChanges').mockRejectedValue(new Error('backend down'));
         render(<TurnChanges sessionId="s1" messageId={7} />);
         expect(await screen.findByRole('note')).toHaveTextContent('backend down');
+    });
+
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch", in the chosen language (#6588)', async () => {
+        vi.spyOn(api, 'listTurnChanges').mockRejectedValue(new TypeError('Failed to fetch'));
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<TurnChanges sessionId="s1" messageId={7} />);
+            const note = await screen.findByRole('note');
+            expect(note).toHaveTextContent('تعذّر التحقق من تغييرات الملفات في هذا الدور: تعذّر الوصول إلى GAIA حاليًا.');
+            expect(note).not.toHaveTextContent('Failed to fetch');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 
     it('a 409 that is not a conflict offers no undo-anyway', async () => {

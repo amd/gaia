@@ -361,7 +361,7 @@ class KokoroTTS:
             return processed_text
         except Exception as e:
             self.log.error(f"Error during preprocessing test: {e}")
-            return None
+            raise
 
     def test_generate_audio_file(
         self, test_text: str, output_file: str = "output.wav"
@@ -380,10 +380,13 @@ class KokoroTTS:
             print(f"- Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
         except Exception as e:
             self.log.error(f"Error during audio generation test: {e}")
+            raise
 
     def test_streaming_playback(self, test_text: str) -> None:
         """Test streaming audio generation with progress display."""
         self._require_sounddevice()
+        stream = None
+        stream_thread = None
         try:
             # Setup audio stream
             stream = sd.OutputStream(
@@ -411,8 +414,6 @@ class KokoroTTS:
 
             if total_chunks == 0:
                 print("No audio chunks generated from input text.")
-                stream.stop()
-                stream.close()
                 return
 
             # Define and start streaming thread
@@ -484,14 +485,21 @@ class KokoroTTS:
             stream_thread.join()
 
             print("\n\n\n")
-            stream.stop()
-            stream.close()
-
-            print("\nStreaming test completed")
-            print(f"Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
 
         except Exception as e:
             self.log.error(f"Error during streaming test: {e}")
+            raise
+        finally:
+            # Without the sentinel the playback thread blocks forever.
+            if stream_thread is not None and stream_thread.is_alive():
+                audio_queue.put(None)
+                stream_thread.join()
+            if stream is not None:
+                stream.stop()
+                stream.close()
+
+        print("\nStreaming test completed")
+        print(f"Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
 
 
 def main():

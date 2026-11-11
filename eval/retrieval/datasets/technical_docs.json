@@ -391,15 +391,15 @@
       "id": "tech-019",
       "doc": "amd_cdna4_whitepaper",
       "question": "What is the per-direction bandwidth of each Infinity Fabric link in the AMD CDNA 4 architecture?",
-      "answer": "76.8GB/s",
+      "answer": "72GB/s",
       "answer_aliases": [
-        "76.8 GB/s"
+        "72 GB/s"
       ],
       "answer_type": "numeric",
       "evidence": [
         {
           "page": 13,
-          "quote": "at 38.4Gbps for a total link bandwidth of 76.8GB/s in each direction"
+          "quote": "run up to 36Gbps for a total link bandwidth of 72GB/s in each direction"
         }
       ],
       "tags": [
@@ -1047,7 +1047,7 @@
       "evidence": [
         {
           "page": 5,
-          "quote": "and the inner-layer has dimensionality df f = 2048."
+          "quote": "and the inner-layer has dimensionality df f"
         }
       ],
       "tags": [
@@ -1087,7 +1087,7 @@
       "evidence": [
         {
           "page": 8,
-          "quote": "During training, we employed label smoothing of value ϵls = 0.1"
+          "quote": "During training, we employed label smoothing of value ϵls"
         }
       ],
       "tags": [

@@ -32,7 +32,7 @@ def _agent(config):
 
     tools = {}
 
-    def fake_tool(atomic=True):
+    def fake_tool(atomic=True, **_kwargs):
         def decorator(func):
             tools[func.__name__] = func
             return func

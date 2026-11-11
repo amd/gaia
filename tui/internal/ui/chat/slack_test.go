@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/gaiaslack"
 )
@@ -89,6 +90,34 @@ func TestOfferIsNotRepeatedInOneSession(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("the offer appeared %d times, want 1", count)
+	}
+}
+
+func TestOfferWaitsUntilTheAnswerIsDone(t *testing.T) {
+	slackOfferRetry = time.Millisecond
+	t.Cleanup(func() { slackOfferRetry = time.Second })
+	m := slackModel(t)
+	m.streaming = true
+	msg := slackStatusMsg{
+		status: gaiaslack.Status{SlackInstalled: true, ShouldOfferSetup: true},
+		offer:  true,
+	}
+	held, cmd := m.handleSlackStatus(msg)
+	if hasStatus(held.(ChatModel)) {
+		t.Fatalf("the offer landed mid-turn:\n%s", lastStatus(t, held.(ChatModel)))
+	}
+	if cmd == nil {
+		t.Fatal("a held-back offer was dropped instead of retried")
+	}
+	again, ok := cmd().(slackStatusMsg)
+	if !ok {
+		t.Fatal("the retry did not re-deliver the offer")
+	}
+	done := held.(ChatModel)
+	done.streaming = false
+	shown, _ := done.handleSlackStatus(again)
+	if !strings.Contains(lastStatus(t, shown.(ChatModel)), "/slack setup") {
+		t.Error("the offer never appeared after the turn ended")
 	}
 }
 

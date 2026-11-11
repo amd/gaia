@@ -16,11 +16,11 @@ import json
 import mimetypes
 import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia_agent_email import action_store
+from gaia_agent_email.timestamps import parse_timestamp_ms
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import (
     extract_sender_email,
@@ -87,12 +87,10 @@ def _load_attachment_files(paths: str) -> Optional[List[Dict[str, Any]]]:
 def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[float]:
     """Seconds between the original message's receipt and now (the reply time).
 
-    Accepts two receipt-anchor formats that the email backends use:
-
-    - **Gmail** ``internalDate``: numeric millis since Unix epoch (int or str),
-      e.g. ``"1717502400000"``.
-    - **Outlook** ``receivedDateTime`` (mapped to ``internalDate`` by the Outlook
-      backend): ISO-8601 string, e.g. ``"2026-06-04T12:00:00Z"``.
+    Reads ``internalDate``, which every backend emits as epoch milliseconds
+    (Gmail natively; the Outlook backend converts Graph's ``receivedDateTime``).
+    Parsing goes through the shared ``parse_timestamp_ms``, which also accepts an
+    ISO-8601 string.
 
     Returns ``None`` when no usable anchor is present or parsing fails — the
     caller skips recording rather than fabricating a latency.
@@ -100,23 +98,10 @@ def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[flo
     raw = original_msg.get("internalDate")
     if raw in (None, ""):
         return None
-    # Try numeric (Gmail millis) first.
     try:
-        received_s = int(raw) / 1000.0
-        return time.time() - received_s
-    except (TypeError, ValueError):
-        pass
-    # Try ISO-8601 string (Outlook receivedDateTime). Handle trailing 'Z'
-    # which datetime.fromisoformat does not accept before Python 3.11.
-    try:
-        iso = str(raw).strip()
-        if iso.endswith("Z"):
-            iso = iso[:-1] + "+00:00"
-        received_s = datetime.fromisoformat(iso).astimezone(timezone.utc).timestamp()
-        return time.time() - received_s
-    except (TypeError, ValueError):
-        pass
-    return None
+        return time.time() - parse_timestamp_ms(raw) / 1000.0
+    except ValueError:
+        return None
 
 
 def _record_reply_observation(agent, original_msg: Dict[str, Any]) -> None:

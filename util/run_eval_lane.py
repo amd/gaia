@@ -6,15 +6,22 @@
     python util/run_eval_lane.py --category gaia_memory --category gaia_honesty
 
 A hand-rolled local run drifts from CI in ways that change scores or do harm:
-the backend started from the checkout instead of the staged ``~/gaia-eval``
-fixtures, the real ``gh`` on PATH while tool calls are auto-approved (writes
-aimed at real GitHub), the judge's credentials inherited by the agent under
-test, and agent state left in the real ``~/.gaia`` by an earlier run. This
+the backend started from the checkout instead of the staged fixtures, the real
+``gh`` on PATH while tool calls are auto-approved (writes aimed at real GitHub),
+the judge's credentials inherited by the agent under test, and agent state left
+in the real ``~/.gaia`` by an earlier run. This
 script takes the lane environment from ``util/eval_lane_matrix.py`` and repeats
 the workflow's setup step for step, including a fresh GAIA home per category
 (``util/eval_gaia_home.py``) under ``--out``, deleted when the category ends
 clean. A category with any result other than PASS keeps its home (chat
 history, agent steps, memory) under ``--out/kept-homes/<category>``.
+
+Unlike CI, nothing is staged in the real home: the fixtures go to
+``--out/eval-root`` and the fixture server binds a free port, and the runner
+rewrites the scenarios' ``~/gaia-eval`` and ``127.0.0.1:8765`` to them
+(``gaia.eval.fixture_env``). Two runs with different ``--out`` folders (and
+``--port``) therefore stage and serve side by side; their evals still take
+turns on the machine-wide eval lock.
 
 Categories run one at a time, each against its own backend (CLAUDE.md: one eval
 per Lemonade). Logs and scorecard paths land in ``--out``.
@@ -23,18 +30,21 @@ per Lemonade). Logs and scorecard paths land in ``--out``.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_gaia_home import env_for  # noqa: E402
+from eval_gaia_home import env_for, write_default_model  # noqa: E402
 from eval_lane_matrix import REPO_ROOT, lane_env  # noqa: E402
 
 LANES_FILE = REPO_ROOT / "eval" / "ci_lanes.json"
@@ -54,9 +64,72 @@ def baseline_eval_model() -> str:
     return model
 
 
-JUDGE_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
-FIXTURE_PORT = 8765
+JUDGE_CREDENTIALS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_BACKUP",
+    "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY",
+    "ANTHROPIC_API_KEY",
+)
+SERVE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "gaia" / "serve_fixtures.py"
+#: Staging builds git fixtures and signs a hub; minutes on a slow box, never this long.
+STAGE_TIMEOUT_S = 1800
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
+#: Modules whose origin proves which checkout the backend and eval run.
+ANCHOR_MODULES = ("gaia", "gaia_agent")
+_ORIGINS_SCRIPT = """
+import importlib, json, sys
+out = {}
+for name in sys.argv[1:]:
+    try:
+        out[name] = importlib.import_module(name).__file__
+    except ImportError as e:
+        out[name] = "ImportError: " + str(e)
+print(json.dumps(out))
+"""
+
+
+def source_roots() -> list[Path]:
+    """This checkout's import roots: ``src`` and each hub agent's ``python`` dir."""
+    return [REPO_ROOT / "src"] + [
+        init.parent.parent
+        for init in sorted(REPO_ROOT.glob("hub/agents/*/python/*/__init__.py"))
+    ]
+
+
+def pin_checkout(env: dict) -> dict:
+    """*env* with this checkout's source roots at the front of ``PYTHONPATH``."""
+    roots = [str(root) for root in source_roots()]
+    inherited = env.get("PYTHONPATH", "").split(os.pathsep)
+    tail = [p for p in inherited if p and p not in roots]
+    return {**env, "PYTHONPATH": os.pathsep.join(roots + tail)}
+
+
+def require_checkout_imports(env: dict) -> None:
+    """Refuse to run when a child started with *env* imports another checkout."""
+    if env.get("GAIA_ALLOW_EXTERNAL_IMPORTS") == "1":
+        return
+    out = subprocess.run(
+        [sys.executable, "-c", _ORIGINS_SCRIPT, *ANCHOR_MODULES],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    strays = []
+    for name, origin in json.loads(out.strip().splitlines()[-1]).items():
+        if not origin or origin.startswith("ImportError"):
+            strays.append(f"{name} -> {origin or 'no __file__'}")
+        elif REPO_ROOT not in Path(origin).resolve().parents:
+            strays.append(f"{name} -> {Path(origin).resolve()}")
+    if strays:
+        raise SystemExit(
+            "The backend and eval would not run this checkout:\n  "
+            + "\n  ".join(strays)
+            + f"\n\nThis checkout: {REPO_ROOT}\n"
+            "Re-run `uv pip install -e .` from here, or set "
+            "GAIA_ALLOW_EXTERNAL_IMPORTS=1 to score the installed packages."
+        )
 
 
 def lane_categories(lane: str) -> list[str]:
@@ -69,8 +142,12 @@ def lane_categories(lane: str) -> list[str]:
     raise SystemExit(f"No lane named {lane!r} in {LANES_FILE}. Lanes: {known}")
 
 
-def plan(categories: list[str], home: Path, port: int) -> dict:
-    """Environment, working directory and extra eval args CI would use."""
+def plan(categories: list[str], stage_home: Path, port: int) -> dict:
+    """Environment, working directory and extra eval args CI would use.
+
+    *stage_home* is where ``stage_eval_env.py --home`` stages this run's
+    fixtures; :func:`fixture_server_env` adds the server's port once it is bound.
+    """
     flags = lane_env(categories)
     env = {
         "GAIA_MEMORY_DISABLED": flags["memory_disabled"],
@@ -86,10 +163,13 @@ def plan(categories: list[str], home: Path, port: int) -> dict:
     extra_args: list[str] = []
     fixtures = flags["gaia_fixtures"] == "1"
     if fixtures:
-        cwd = home / "gaia-eval"
+        cwd = stage_home / "gaia-eval"
         env.update(
             {
-                "GAIA_HUB_URL": f"http://127.0.0.1:{FIXTURE_PORT}/fixture_hub",
+                "GAIA_EVAL_ROOT": str(cwd),
+                # mini_repo has no .git; stop the agent's git at the staged
+                # folder instead of finding the checkout that holds --out.
+                "GIT_CEILING_DIRECTORIES": str(stage_home),
                 "GAIA_WEB_ALLOWED_HOSTS": "127.0.0.1",
                 "GAIA_AUTO_APPROVE_TOOLS": "1",
                 "GAIA_EVAL_MAILBOX": str(
@@ -101,7 +181,9 @@ def plan(categories: list[str], home: Path, port: int) -> dict:
                     / "eval_inbox.mbox"
                 ),
                 # The staged fake gh first: tool calls are auto-approved here.
-                "PATH": str(home / ".gaia-eval-bin") + os.pathsep + os.environ["PATH"],
+                "PATH": str(stage_home / ".gaia-eval-bin")
+                + os.pathsep
+                + os.environ["PATH"],
             }
         )
         extra_args = [
@@ -118,6 +200,67 @@ def plan(categories: list[str], home: Path, port: int) -> dict:
         "memory": flags["memory_disabled"] == "0",
         "backend": f"http://127.0.0.1:{port}",
     }
+
+
+def fixture_server_env(fixture_port: int) -> dict[str, str]:
+    """What the backend and the runner need to reach the fixture server."""
+    return {
+        "GAIA_EVAL_FIXTURE_PORT": str(fixture_port),
+        "GAIA_HUB_URL": f"http://127.0.0.1:{fixture_port}/fixture_hub",
+    }
+
+
+def start_fixture_server(hub_dir: Path):
+    """Serve the routed fixtures on a free port in a thread; returns the server."""
+    spec = importlib.util.spec_from_file_location("serve_fixtures", SERVE_FIXTURES)
+    serve_fixtures = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(serve_fixtures)
+    server = serve_fixtures.make_server(0, hub_dir=hub_dir)
+    threading.Thread(
+        target=server.serve_forever, name="fixture-server", daemon=True
+    ).start()
+    return server
+
+
+def stage_fixtures(stage_home: Path, staged_home: Path, env: dict) -> None:
+    """Stage this run's fixtures, fake gh and hub under *stage_home*, from scratch.
+
+    Starter skills and the hub's trust land in *staged_home*, the template each
+    category's GAIA home is copied from.
+    """
+    if stage_home.exists():
+        _remove_tree(stage_home)
+    stage_home.mkdir(parents=True)
+    staged_home.mkdir(parents=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "tests/fixtures/gaia/stage_eval_env.py",
+            "--home",
+            str(stage_home),
+            "--gaia-home",
+            str(staged_home),
+            "--hub-out",
+            str(stage_home / "fixture-hub"),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        timeout=STAGE_TIMEOUT_S,
+    )
+
+
+def _clear_readonly(func, path, _exc):
+    # git writes its objects read-only, which rmtree cannot delete on Windows.
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _remove_tree(path: Path) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_clear_readonly)
+    else:
+        shutil.rmtree(path, onerror=_clear_readonly)
 
 
 def _get(url: str) -> bool:
@@ -165,9 +308,10 @@ def main() -> int:
     args.judge_model = args.judge_model or baseline_eval_model()
 
     categories = lane_categories(args.lane) if args.lane else args.category
-    home = Path.home()
-    p = plan(categories, home, args.port)
     args.out.mkdir(parents=True, exist_ok=True)
+    # Absolute: the backend's cwd and the scenario paths are built from it.
+    stage_home = (args.out / "eval-root").resolve()
+    p = plan(categories, stage_home, args.port)
 
     if _get(f"{p['backend']}/api/health"):
         raise SystemExit(
@@ -175,43 +319,25 @@ def main() -> int:
             "the eval must drive a backend started with this lane's environment."
         )
 
-    env = {**os.environ, **p["env"]}
+    env = pin_checkout({**os.environ, **p["env"]})
+    require_checkout_imports(env)
     # Absolute: eval_gaia_home.py check compares the exported paths verbatim.
     homes = (args.out / "gaia-homes").resolve()
     if homes.exists():
         shutil.rmtree(homes)
     staged_home = homes / "_staged"
     if p["fixtures"]:
-        staged_home.mkdir(parents=True)
-        subprocess.run(
-            [
-                sys.executable,
-                "tests/fixtures/gaia/stage_eval_env.py",
-                "--home",
-                str(home),
-                "--gaia-home",
-                str(staged_home),
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-            check=True,
-        )
-    children = []
+        stage_fixtures(stage_home, staged_home, env)
+    server = None
     try:
         if p["fixtures"]:
-            children.append(
-                subprocess.Popen(
-                    [
-                        sys.executable,
-                        "tests/fixtures/gaia/serve_fixtures.py",
-                        "--port",
-                        str(FIXTURE_PORT),
-                    ],
-                    cwd=REPO_ROOT,
-                    env=_without_judge(env),
-                    stdout=open(args.out / "fixtures.log", "w", encoding="utf-8"),
-                    stderr=subprocess.STDOUT,
-                )
+            server = start_fixture_server(stage_home / "fixture-hub")
+            fixture_port = server.server_address[1]
+            env.update(fixture_server_env(fixture_port))
+            print(
+                f"fixtures staged at {stage_home}, served on "
+                f"http://127.0.0.1:{fixture_port}/",
+                flush=True,
             )
         failed = []
         for category in categories:
@@ -226,8 +352,9 @@ def main() -> int:
             return 1
         return 0
     finally:
-        for child in children:
-            _stop_tree(child)
+        if server is not None:
+            server.shutdown()
+            server.server_close()
         shutil.rmtree(homes, ignore_errors=True)
 
 
@@ -246,9 +373,7 @@ def category_home(cat_home: Path, staged_home: Path) -> dict[str, str]:
 
 def write_agent_model(cat_home: Path, model: str) -> None:
     """Make *model* the agent's model in *cat_home*, as `gaia config set` would."""
-    (cat_home / "config.json").write_text(
-        json.dumps({"default_model": model}), encoding="utf-8"
-    )
+    write_default_model(cat_home, model)
 
 
 def _without_judge(env: dict) -> dict:
@@ -319,6 +444,11 @@ def _run_category(category: str, env: dict, p: dict, args) -> int:
                     p["backend"],
                     "--model",
                     args.judge_model,
+                    *(
+                        ["--agent-model", args.agent_model]
+                        if getattr(args, "agent_model", None)
+                        else []
+                    ),
                     *p["extra_args"],
                 ],
                 cwd=REPO_ROOT,

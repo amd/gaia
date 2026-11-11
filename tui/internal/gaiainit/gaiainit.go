@@ -21,7 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -59,18 +61,60 @@ const notReadyExitCode = 1
 // gaia (#the --check rollout).
 var ErrUnanswered = errors.New("setup readiness could not be determined")
 
-// Binary resolves the `gaia` CLI on PATH. A package var, not a bare
-// exec.LookPath call, so tests can substitute a stub without spawning the real
-// CLI (mirrors daemon.Options.StartCommand's injection point).
+// ErrNoCLI distinguishes a missing `gaia` command from an installed CLI that
+// cannot answer a readiness probe. Verify still wraps both cases in
+// ErrUnanswered, but only the latter can be remedied by running `gaia init`.
+var ErrNoCLI = errors.New("the `gaia` CLI is not available")
+
+// InstallCommand and InstallPowerShellCommand are the supported bootstrap
+// commands when the CLI itself is unavailable.
+const (
+	InstallCommand           = "curl -fsSL https://amd-gaia.ai/install.sh | sh"
+	InstallPowerShellCommand = "irm https://amd-gaia.ai/install.ps1 | iex"
+)
+
+// selfExecutable is os.Executable, swapped out by tests.
+var selfExecutable = os.Executable
+
+// ResolveCLI finds the `gaia` CLI. First the one beside this program: the
+// terminal installers ship it there, and another `gaia` earlier on PATH may be
+// a different release. Then PATH, then ~/.gaia/bin, where the one-line
+// installer links it; a terminal opened before that installer edited the
+// shell's startup file has no PATH entry for that folder yet.
+func ResolveCLI() (string, error) {
+	if self, err := selfExecutable(); err == nil {
+		// LookPath on a full path still checks it is executable (and adds .exe on Windows).
+		if bin, err := exec.LookPath(filepath.Join(filepath.Dir(self), "gaia")); err == nil {
+			return bin, nil
+		}
+	}
+	bin, pathErr := exec.LookPath("gaia")
+	if pathErr == nil {
+		return bin, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("%w, and the home folder is unknown: %w", pathErr, err)
+	}
+	// LookPath on a full path still checks it is executable (and adds .exe on Windows).
+	bin, err = exec.LookPath(filepath.Join(home, ".gaia", "bin", "gaia"))
+	if err != nil {
+		return "", fmt.Errorf("%w, and %w", pathErr, err)
+	}
+	return bin, nil
+}
+
+// Binary resolves the `gaia` CLI. A package var, not a bare ResolveCLI call,
+// so tests can substitute a stub without spawning the real CLI (mirrors
+// daemon.Options.StartCommand's injection point).
 var Binary = func() (string, error) {
-	bin, err := exec.LookPath("gaia")
+	bin, err := ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not on PATH, so setup cannot run. " +
-				"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
-				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or " +
-				"`pip install amd-gaia` into the Python environment on your PATH, " +
-				"then retry. From a clone of the repo, `pip install -e .` works too")
+			"%w: the `gaia` CLI is not beside gaia-tui, on PATH or in ~/.gaia/bin, so setup cannot run. "+
+				"Reinstall GAIA from https://amd-gaia.ai/#install, or run `"+InstallCommand+"` "+
+				"(on Windows: `"+InstallPowerShellCommand+"`), then retry",
+			ErrNoCLI)
 	}
 	return bin, nil
 }
@@ -101,7 +145,9 @@ func RunArgs(claudeMode bool) []string {
 	// installed — so setup from this screen dead-ended on a component the screen
 	// does not use. Released installs skip the step anyway, so this changes
 	// nothing for them.
-	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build"}
+	//
+	// --skip-pip-extras: the apps never pip-install; GAIA ships its own packages.
+	args := []string{"init", "--profile", Profile, "--yes", "--skip-webui-build", "--skip-pip-extras"}
 	if claudeMode {
 		args = append(args, "--skip-chat-model")
 	}

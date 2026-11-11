@@ -269,7 +269,7 @@ _SUBCOMMAND_CLASS: Dict[str, Dict[str, TimeoutClass]] = {
     "choco": {"install": BUILD, "upgrade": BUILD},
     "winget": {"install": BUILD, "upgrade": BUILD},
     "scoop": {"install": BUILD, "update": BUILD},
-    "gaia": {"eval": TEST, "test": TEST, "init": BUILD, "install": BUILD},
+    "gaia": {"eval": TEST, "test": TEST, "init": BUILD},
 }
 
 # ``npm run <script>`` / ``pnpm run`` / ``yarn run`` — the script name decides.

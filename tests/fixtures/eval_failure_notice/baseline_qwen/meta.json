@@ -1,0 +1,6 @@
+{
+  "agent_type": "gaia",
+  "model": "Qwen3.6-35B-A3B-GGUF",
+  "eval_model": "claude-sonnet-4-6",
+  "purpose": "Test fixture for util/eval_failure_notice.py, not a committed baseline. scorecard_gaia_memory.json is trimmed from flagship run 41588974379, scorecard_gaia_honesty.json from run 41353279225 (v0.25.4-rc3)."
+}

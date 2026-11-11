@@ -263,6 +263,30 @@ describe("main dispatch", () => {
     );
   });
 
+  it("refuses unknown boolean switches instead of silently running", async () => {
+    for (const argv of [["--forse"], ["fetch", "--developer-mode"]]) {
+      await expect(main(argv)).rejects.toThrow(/unknown option/);
+      await expect(main(argv)).rejects.toThrow(/bare `--`/);
+    }
+  });
+
+  it("refuses option names that collide with Object.prototype keys", async () => {
+    for (const flag of ["--constructor", "--toString", "--hasOwnProperty", "--__proto__"]) {
+      await expect(main([flag])).rejects.toThrow(`unknown option '${flag}'`);
+      await expect(main([flag, "--help"])).rejects.toThrow(/unknown option/);
+    }
+  });
+
+  it("rejects an unknown command even when help is requested", async () => {
+    await expect(main(["fecth", "--help"])).rejects.toThrow("unknown command 'fecth'");
+  });
+
+  it("refuses known boolean switches when the command would ignore them", async () => {
+    for (const flag of ["--force", "--allow-insecure-base-url"]) {
+      await expect(main(["version", flag])).rejects.toThrow(new RegExp(`${flag} is not valid`));
+    }
+  });
+
   it("prints help for --help and for the help command", async () => {
     for (const argv of [["--help"], ["-h"], ["help"], ["fetch", "--help"]]) {
       await expect(main(argv)).resolves.toBe(0);

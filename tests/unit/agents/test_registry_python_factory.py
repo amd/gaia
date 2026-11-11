@@ -442,8 +442,8 @@ class TestChatFactoryRegression:
         """
         import dataclasses as _dc
 
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgentConfig
 
         valid_fields = {f.name for f in _dc.fields(ChatAgentConfig)}
         assert "rag_documents" in valid_fields
@@ -459,7 +459,7 @@ class TestChatFactoryRegression:
         guard for AC item "built-in chat continues to receive its session
         kwargs unchanged".
         """
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
 

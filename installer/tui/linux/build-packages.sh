@@ -4,11 +4,16 @@
 #
 # Build the Linux .deb and .rpm packages for the GAIA Terminal UI.
 #
-#   ./build-packages.sh --version <x.y.z> --payload <dir> --out <dir>
+#   ./build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir>
+#   ./build-packages.sh --version <x.y.z|x.y.z-rc.N> --print-package-version
 #
 # Produces BOTH of:
 #   <out>/gaia_<version>_amd64.deb
 #   <out>/gaia-<version>.x86_64.rpm
+#
+# A release candidate's file names keep its -rc.N, but the version INSIDE both
+# packages is X.Y.Z~rc.N: dpkg and rpm sort a tilde before the bare version, so
+# the final installs over its candidates as an upgrade.
 #
 # x86-64 only. Requires fpm and rpmbuild — see README.md for the container.
 #
@@ -27,6 +32,10 @@ readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
 readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+# The frozen `gaia` core (installer/core/freeze.py): an executable and its
+# _internal folder, installed together and linked onto PATH.
+readonly CORE_DIR="usr/lib/gaia"
+readonly PRERM_FILE="${SCRIPT_DIR}/prerm"
 
 readonly DESKTOP_FILE="${SCRIPT_DIR}/gaia-tui.desktop"
 readonly ICON_FILE="${SCRIPT_DIR}/gaia-tui.png"
@@ -34,14 +43,23 @@ readonly LICENSE_FILE="${REPO_ROOT}/LICENSE.md"
 
 usage() {
     cat >&2 <<'EOF'
-Usage: build-packages.sh --version <x.y.z> --payload <dir> --out <dir>
+Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir> [--without-core]
+       build-packages.sh --version <x.y.z|x.y.z-rc.N> --print-package-version
 
-  --version   Release version, e.g. 1.4.0. MAJOR.MINOR.PATCH only (see below).
-  --payload   Directory containing exactly the executables gaia-tui and gaia-agent.
+  --version   Release version: 1.4.0, or 1.4.0-rc.2 for a release candidate.
+              The candidate's packages carry 1.4.0~rc.2, which sorts before 1.4.0.
+  --payload   Directory containing the executables gaia-tui and gaia-agent, and
+              core/, the frozen gaia (its executable and _internal folder).
   --out       Directory to write the .deb and .rpm into (created if absent).
+  --without-core
+              Build a package with no gaia core, as releases before it shipped
+              one were. Only for rebuilding such a release's package in CI.
+  --print-package-version
+              Print the version the packages would carry, and build nothing.
 
-All three arguments are required. Both packages are always built; there is no
-flag to produce only one. See installer/tui/linux/README.md.
+To build, --version, --payload and --out are all required. Both packages are
+always built; there is no flag to produce only one. See
+installer/tui/linux/README.md.
 EOF
 }
 
@@ -59,12 +77,16 @@ die() {
 VERSION=""
 PAYLOAD_DIR=""
 OUT_DIR=""
+PRINT_PACKAGE_VERSION=0
+WITHOUT_CORE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) [ $# -ge 2 ] || die "--version requires a value." "Example: --version 1.4.0"; VERSION="$2"; shift 2 ;;
         --payload) [ $# -ge 2 ] || die "--payload requires a value." "Example: --payload ./stage/linux-x64"; PAYLOAD_DIR="$2"; shift 2 ;;
         --out)     [ $# -ge 2 ] || die "--out requires a value." "Example: --out ./dist"; OUT_DIR="$2"; shift 2 ;;
+        --print-package-version) PRINT_PACKAGE_VERSION=1; shift ;;
+        --without-core) WITHOUT_CORE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *)         usage; die "unknown argument: $1" ;;
     esac
@@ -72,26 +94,33 @@ done
 
 MISSING_ARGS=()
 [ -n "$VERSION" ]     || MISSING_ARGS+=(--version)
-[ -n "$PAYLOAD_DIR" ] || MISSING_ARGS+=(--payload)
-[ -n "$OUT_DIR" ]     || MISSING_ARGS+=(--out)
+if [ "$PRINT_PACKAGE_VERSION" -eq 0 ]; then
+    [ -n "$PAYLOAD_DIR" ] || MISSING_ARGS+=(--payload)
+    [ -n "$OUT_DIR" ]     || MISSING_ARGS+=(--out)
+fi
 
 if [ ${#MISSING_ARGS[@]} -gt 0 ]; then
     usage
     die "missing required argument(s): ${MISSING_ARGS[*]}"
 fi
 
-# RPM forbids '-' in the Version field, so a semver prerelease suffix cannot be
-# passed through unchanged. Reject it here with the reason rather than letting
-# rpmbuild fail three minutes later with a less obvious message.
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    EXTRA=()
-    case "$VERSION" in
-        *-*) EXTRA=("RPM does not allow '-' in a version; a prerelease suffix has to become an rpm Release." \
-                    "Pass the release version alone, e.g. --version ${VERSION%%-*}.") ;;
-    esac
+# RPM forbids '-' in the Version field, so only the one prerelease form the
+# release pipeline produces is accepted, and it is respelled for the packages.
+# Anything else stops here rather than inside rpmbuild three minutes later.
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    PKG_VERSION="$VERSION"
+elif [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-rc\.([1-9][0-9]*)$ ]]; then
+    PKG_VERSION="${BASH_REMATCH[1]}~rc.${BASH_REMATCH[2]}"
+else
     die "--version '${VERSION}' is not a valid version." \
-        "Expected MAJOR.MINOR.PATCH with digits only, e.g. 1.4.0." \
-        "${EXTRA[@]+"${EXTRA[@]}"}"
+        "Expected MAJOR.MINOR.PATCH with digits only, e.g. 1.4.0, or a release candidate" \
+        "spelled MAJOR.MINOR.PATCH-rc.N, e.g. 1.4.0-rc.2 (util/release_tag.py's npm form)."
+fi
+readonly PKG_VERSION
+
+if [ "$PRINT_PACKAGE_VERSION" -eq 1 ]; then
+    printf '%s\n' "$PKG_VERSION"
+    exit 0
 fi
 
 # ── Inputs ──────────────────────────────────────────────────────────────────
@@ -106,7 +135,12 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the binaries into ${PAYLOAD_DIR}."
 done
 
-for required in "$DESKTOP_FILE" "$ICON_FILE"; do
+[ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
+    "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
+    "Unpack the gaia-core-linux-x64 build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
+    "Without it the terminal UI cannot run setup or start the daemon."
+
+for required in "$DESKTOP_FILE" "$ICON_FILE" "$PRERM_FILE"; do
     [ -f "$required" ] || die "packaging asset not found: ${required}" \
         "It ships alongside this script; the checkout looks incomplete."
 done
@@ -156,6 +190,14 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
     install -m 0755 "${PAYLOAD_DIR}/${binary}" "${STAGE}/usr/bin/${binary}"
 done
 
+if [ "$WITHOUT_CORE" -eq 0 ]; then
+    install -d -m 0755 "${STAGE}/${CORE_DIR}"
+    cp -a "${PAYLOAD_DIR}/core/." "${STAGE}/${CORE_DIR}/"
+    chmod 0755 "${STAGE}/${CORE_DIR}/gaia"
+    # Relative, so the link holds wherever the package is unpacked.
+    ln -s "../lib/gaia/gaia" "${STAGE}/usr/bin/gaia"
+fi
+
 install -m 0644 "$DESKTOP_FILE"  "${STAGE}/usr/share/applications/gaia-tui.desktop"
 install -m 0644 "$ICON_FILE"     "${STAGE}/${ICON_DIR}/gaia-tui.png"
 install -m 0644 "$LICENSE_FILE"  "${STAGE}/${DOC_DIR}/LICENSE.md"
@@ -169,7 +211,7 @@ FPM_COMMON=(
     -s dir
     -C "$STAGE"
     --name "$PKG_NAME"
-    --version "$VERSION"
+    --version "$PKG_VERSION"
     --maintainer "$MAINTAINER"
     --vendor "$VENDOR"
     --url "$HOMEPAGE"
@@ -177,16 +219,19 @@ FPM_COMMON=(
     --description "$SUMMARY"
     --deb-user root  --deb-group root
     --rpm-user root  --rpm-group root
-    # No pre/post-removal scripts anywhere in this build: uninstalling must
-    # never reach into ~/.gaia, and the surest way to guarantee that is to
-    # ship no removal hook at all.
+    # The one removal hook stops a daemon running the gaia this package is
+    # about to remove or replace. It never deletes anything under ~/.gaia.
+    --before-remove "$PRERM_FILE"
     --force
 )
 
 # rpmbuild otherwise emits /usr/lib/.build-id/** symlinks keyed on the binary's
 # build ID. They serve debuginfo lookups we do not ship, and two packages that
 # ever share a build ID collide on those paths at install time.
+# rpm owns only the files it is told about, so without --directories removing
+# the package left the core's folder tree behind; dpkg tracks directories itself.
 RPM_ONLY=(--rpm-rpmbuild-define '_build_id_links none')
+[ "$WITHOUT_CORE" -eq 1 ] || RPM_ONLY+=(--directories "/${CORE_DIR}")
 
 build_one() {
     target="$1"; arch="$2"; output="$3"

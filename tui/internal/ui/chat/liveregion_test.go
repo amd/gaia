@@ -254,11 +254,17 @@ func TestLiveRegionOutcomesAreReadableWithoutColour(t *testing.T) {
 
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
-	if !strings.Contains(out, "failed") {
+	// Mid-turn it is an error the agent may still retry past; once the turn
+	// ends on it, it is a failure — in words both times.
+	if !strings.Contains(out, "└ error") {
 		t.Errorf("a failed step must say so in words, not in red:\n%s", out)
 	}
 	if !strings.Contains(out, "4 unread") {
 		t.Errorf("a succeeded step must report what it came back with:\n%s", out)
+	}
+	ended := feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Could not send it."})
+	if got := transcriptText(ended); !strings.Contains(got, "└ failed") {
+		t.Errorf("a failure the turn ended on must say failed:\n%s", got)
 	}
 	for _, emoji := range []string{"🔧", "🧠", "🎯", "✓", "✗", "⚠️"} {
 		if strings.Contains(out, emoji) {

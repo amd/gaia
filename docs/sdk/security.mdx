@@ -48,9 +48,13 @@ checks through `gaia.agents.tools.path_access` rather than adding their own.
 Three things are wider on purpose:
 
 - A name search (`search_file`, `find_files` with a named scope) can return paths
-  under the common document folders. Opening one is still checked.
+  under the common document folders. Opening one is still checked. On macOS an
+  undirected search skips Desktop, Documents, Downloads, iCloud Drive, Music, the
+  TV app's library and the Photos library unless the user named the folder or allowed it, because
+  macOS blocks the first read of them behind a permission prompt; the result says
+  which it skipped.
 - Output a tool writes to GAIA's own folders (`~/.gaia/screenshots`,
-  `~/.gaia/transcripts`, `~/.gaia/tts`) is not the user's files and is not checked.
+  `~/.gaia/transcripts`, `~/.gaia/cache/audio/generations`) is not the user's files and is not checked.
 - `capture_skill` may copy a local skill folder from anywhere, because every
   capture asks the user first with the source shown.
 
@@ -86,7 +90,10 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
 ```
 
 - The scope becomes the overlap of the host's scope and the list. An entry
-  outside the host's scope is logged and ignored; it never widens.
+  outside the host's scope is logged and ignored; it never widens the validator.
+  One host picks its scope from the list: an Agent UI chat with no attached
+  documents whose default scope shares nothing with the list is scoped to the
+  listed folders instead, minus any too broad to grant.
 - Later grants are held to it too: `add_allowed_path`, approval prompts (including
   an approve-everything harness or full access), and persisted CLI grants.
 - The scratch directory set by `set_scratch_dir` stays allowed even when it sits

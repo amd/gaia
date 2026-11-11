@@ -23,6 +23,7 @@ mechanism. See ``docs/plans/skill-format.mdx``.
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -34,6 +35,11 @@ from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.permissions import Permission, parse_permissions
 
 log = get_logger(__name__)
+
+# Mintlify keeps the heading's em dash in the slug.
+_TOOLS_DOCS_URL = (
+    f"{FORMAT_DOCS_URL}#tools-vs-tools_required-%E2%80%94-never-conflate-them"
+)
 
 #: The one required file in a skill directory.
 SKILL_FILENAME = "SKILL.md"
@@ -109,7 +115,7 @@ class SkillRequirements:
                 f"Skill '{skill_name}': metadata.gaia.requirements must be a mapping, "
                 f"got {type(data).__name__}. Example: "
                 "'requirements: {python: \">=3.10\"}'. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         known = {
@@ -127,14 +133,14 @@ class SkillRequirements:
                 raise SkillValidationError(
                     f"Skill '{skill_name}': metadata.gaia.requirements.{key} must be a "
                     f"list, got {type(value).__name__}. "
-                    f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                    f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
                 )
         hardware = data.get("hardware") or {}
         if not isinstance(hardware, dict):
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.requirements.hardware must be a "
                 f"mapping, got {type(hardware).__name__}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         return cls(
@@ -163,6 +169,8 @@ class SkillTool:
     parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
     returns: Optional[dict[str, Any]] = None
     atomic: bool = False
+    #: Every call waits for the user's approval; no grant pre-authorizes it.
+    requires_confirmation: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to the frontmatter shape."""
@@ -174,6 +182,8 @@ class SkillTool:
             out["returns"] = dict(self.returns)
         if self.atomic:
             out["atomic"] = self.atomic
+        if self.requires_confirmation:
+            out["requires_confirmation"] = self.requires_confirmation
         return out
 
     @classmethod
@@ -183,7 +193,7 @@ class SkillTool:
             raise SkillValidationError(
                 f"Skill '{skill_name}': each metadata.gaia.tools entry must be a "
                 f"mapping with a 'name', got {type(data).__name__}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
         name = data.get("name")
         if not name or not isinstance(name, str):
@@ -200,7 +210,7 @@ class SkillTool:
                 f"Skill '{skill_name}': tool '{name}' has 'parameters' of type "
                 f"{type(raw_params).__name__}; it must be a mapping of "
                 "parameter name to {type, required, default}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
         parameters: dict[str, dict[str, Any]] = {}
         for param_name, spec in raw_params.items():
@@ -210,7 +220,7 @@ class SkillTool:
                     f"'{param_name}' must be a mapping like "
                     "'{type: string, required: true}', got "
                     f"{type(spec).__name__}. "
-                    f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                    f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
                 )
             parameters[param_name] = dict(spec)
 
@@ -219,7 +229,7 @@ class SkillTool:
             raise SkillValidationError(
                 f"Skill '{skill_name}': tool '{name}' has 'returns' of type "
                 f"{type(returns).__name__}; it must be a mapping like "
-                f"'{{type: object}}'. See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"'{{type: object}}'. See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         return cls(
@@ -228,6 +238,7 @@ class SkillTool:
             parameters=parameters,
             returns=dict(returns) if returns is not None else None,
             atomic=bool(data.get("atomic", False)),
+            requires_confirmation=bool(data.get("requires_confirmation", False)),
         )
 
 
@@ -240,6 +251,12 @@ class GaiaMetadata:
     requirements: SkillRequirements = field(default_factory=SkillRequirements)
     tools: list[SkillTool] = field(default_factory=list)
     tools_required: list[str] = field(default_factory=list)
+    #: Skills this one combines with on a single request. Names that are not
+    #: installed are ignored where the list is used, never an error here.
+    pairs_with: list[str] = field(default_factory=list)
+    #: Tools from ``tools_required`` that only this skill drives. Calling one
+    #: means the skill is in use, so the agent loads it if the model did not.
+    loads_with: list[str] = field(default_factory=list)
     #: ``metadata.gaia`` keys GAIA does not model, preserved for round-trip.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -260,6 +277,10 @@ class GaiaMetadata:
             out["tools"] = [t.to_dict() for t in self.tools]
         if self.tools_required:
             out["tools_required"] = list(self.tools_required)
+        if self.pairs_with:
+            out["pairs_with"] = list(self.pairs_with)
+        if self.loads_with:
+            out["loads_with"] = list(self.loads_with)
         out.update(self.extra)
         return out
 
@@ -272,7 +293,7 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia must be a mapping, got "
                 f"{type(data).__name__}. Omit it entirely for an instruction-only "
-                f"skill. See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"skill. See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         tier = data.get("security_tier", DEFAULT_SECURITY_TIER)
@@ -297,7 +318,7 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.tools must be a list, got "
                 f"{type(tools).__name__}. Each entry declares one @tool function this "
-                f"skill provides. See {FORMAT_DOCS_URL}#tools-vs-tools_required"
+                f"skill provides. See {_TOOLS_DOCS_URL}"
             )
 
         tools_required = data.get("tools_required") or []
@@ -305,7 +326,31 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.tools_required must be a list of "
                 f"registry tool names, got {type(tools_required).__name__}. "
-                f"See {FORMAT_DOCS_URL}#tools-vs-tools_required"
+                f"See {_TOOLS_DOCS_URL}"
+            )
+
+        pairs_with = data.get("pairs_with") or []
+        if not isinstance(pairs_with, list):
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.pairs_with must be a list of "
+                f"skill names, got {type(pairs_with).__name__}. "
+                f"See {FORMAT_DOCS_URL}#field-reference"
+            )
+
+        loads_with = data.get("loads_with") or []
+        if not isinstance(loads_with, list):
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with must be a list of "
+                f"tool names from tools_required, got {type(loads_with).__name__}. "
+                f"See {FORMAT_DOCS_URL}#field-reference"
+            )
+        stray = sorted({str(t) for t in loads_with} - {str(t) for t in tools_required})
+        if stray:
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with names "
+                f"{', '.join(stray)}, which tools_required does not list. A tool "
+                "that loads the skill must be one its procedure uses; add it to "
+                f"tools_required or drop it. See {FORMAT_DOCS_URL}#field-reference"
             )
 
         known = {
@@ -314,6 +359,8 @@ class GaiaMetadata:
             "requirements",
             "tools",
             "tools_required",
+            "pairs_with",
+            "loads_with",
         }
         return cls(
             security_tier=tier,
@@ -323,6 +370,8 @@ class GaiaMetadata:
             ),
             tools=[SkillTool.from_dict(t, skill_name=skill_name) for t in tools],
             tools_required=[str(t) for t in tools_required],
+            pairs_with=[str(p) for p in pairs_with],
+            loads_with=[str(t) for t in loads_with],
             extra={k: v for k, v in data.items() if k not in known},
         )
 
@@ -550,7 +599,7 @@ def parse_skill(text: str, *, source: str = "<string>") -> Skill:
         raise SkillValidationError(
             f"{source}: field 'metadata' must be a mapping of vendor namespaces "
             f"(e.g. 'metadata: {{gaia: {{...}}}}'), got {type(raw_metadata).__name__}. "
-            f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+            f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
         )
 
     present_ignored = [k for k in IGNORED_STANDARD_KEYS if k in frontmatter]
@@ -630,6 +679,123 @@ def parse_skill_file(
                 f"'name: {directory_name}'. See {FORMAT_DOCS_URL}#naming"
             )
 
+    return skill
+
+
+_NON_NAME_CHARS = re.compile(r"[^a-z0-9]+")
+
+# Fallback parses already warned about; discovery and load_skill reparse often.
+_WARNED_PROJECT_FALLBACKS: set[tuple[str, str]] = set()
+_WARNED_PROJECT_FALLBACKS_LOCK = threading.Lock()
+
+
+def _project_skill_name(raw: str) -> str:
+    """``My_Skill`` -> ``my-skill``: the loadable spelling of a Claude Code name."""
+    return _NON_NAME_CHARS.sub("-", raw.strip().lower()).strip("-")
+
+
+def _first_paragraph(body: str) -> str:
+    for block in re.split(r"\n\s*\n", body):
+        lines = [ln for ln in block.strip().splitlines() if not ln.startswith("#")]
+        text = " ".join(" ".join(lines).split())
+        if text:
+            return text
+    return ""
+
+
+def parse_project_skill_file(
+    path: Path | str,
+    *,
+    root: Optional[str] = None,
+    read_only: bool = True,
+) -> Skill:
+    """Parse a repository's ``.claude/skills`` skill the way Claude Code reads it.
+
+    A GAIA-valid skill parses exactly as :func:`parse_skill_file` would. One
+    GAIA's schema rejects is still loaded, with a warning naming why, when
+    Claude Code would load it: the name may be any case or use underscores
+    (normalised to a loadable ``lower-hyphen`` name) and need not match its
+    directory, a missing ``description`` is the body's first paragraph, the
+    1,024-character description cap does not apply, and a malformed
+    ``version`` or ``metadata`` is dropped. ``metadata.gaia`` that does not
+    parse is dropped whole, so a broken declaration never grants anything.
+
+    Raises:
+        SkillValidationError: no frontmatter, no usable name, or no
+            description and an empty body.
+    """
+    path = Path(path)
+    skill_file = path / SKILL_FILENAME if path.is_dir() else path
+    try:
+        return parse_skill_file(skill_file, root=root, read_only=read_only)
+    except SkillValidationError as strict_error:
+        reason = strict_error
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise reason from None  # already says the file is missing or unreadable
+    source = str(skill_file)
+    frontmatter, body = split_frontmatter(text, source=source)
+
+    raw_name = frontmatter.get("name")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raw_name = skill_file.parent.name
+    name = _project_skill_name(raw_name)
+    if not NAME_PATTERN.match(name) or len(name) > MAX_NAME_LENGTH:
+        raise SkillValidationError(
+            f"{source}: name {raw_name!r} cannot be made a skill name (lowercase "
+            f"letters, digits and hyphens, at most {MAX_NAME_LENGTH} characters). "
+            f"Rename it. See {FORMAT_DOCS_URL}#naming"
+        ) from reason
+
+    description = frontmatter.get("description")
+    if not isinstance(description, str) or not description.strip():
+        description = _first_paragraph(body)
+    if not description:
+        raise SkillValidationError(
+            f"{source}: no 'description' and an empty body, so nothing says when "
+            f"to use this skill. Add 'description: ...' to the frontmatter. "
+            f"See {FORMAT_DOCS_URL}#adopted-base-agent-skills-standard"
+        ) from reason
+
+    version = frontmatter.get("version")
+    if not isinstance(version, str) or not SEMVER_PATTERN.match(version):
+        version = None
+    license_ = frontmatter.get("license")
+    raw_metadata = frontmatter.get("metadata")
+    if not isinstance(raw_metadata, dict):
+        raw_metadata = {}
+    try:
+        gaia = GaiaMetadata.from_dict(raw_metadata.get("gaia"), skill_name=name)
+        Skill(name=name, description=description, gaia=gaia).parsed_permissions()
+    except SkillValidationError as exc:
+        log.warning("%s: ignoring its metadata.gaia: %s", source, exc)
+        gaia = GaiaMetadata()
+
+    known_top_level = {"name", "description", "license", "version", "metadata"}
+    skill = Skill(
+        name=name,
+        description=description,
+        body=body.strip("\n"),
+        license=str(license_) if license_ is not None else None,
+        version=version,
+        gaia=gaia,
+        other_metadata={k: v for k, v in raw_metadata.items() if k != "gaia"},
+        extra_fields={k: v for k, v in frontmatter.items() if k not in known_top_level},
+    )
+    skill.path = skill_file
+    skill.root = root
+    skill.read_only = read_only
+    key = (source, str(reason))
+    with _WARNED_PROJECT_FALLBACKS_LOCK:
+        first = key not in _WARNED_PROJECT_FALLBACKS
+        _WARNED_PROJECT_FALLBACKS.add(key)
+    (log.warning if first else log.debug)(
+        "%s is not a valid GAIA skill (%s); loaded as Claude Code skill %r.",
+        source,
+        reason,
+        name,
+    )
     return skill
 
 

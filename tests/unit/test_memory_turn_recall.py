@@ -114,7 +114,7 @@ class TestRelevantMemoriesAreSurfaced:
 
         ctx = host.get_memory_dynamic_context()
 
-        assert "Stored memories that may bear on this message:" in ctx
+        assert "Stored memories that may bear on this message (dated notes" in ctx
         assert (
             "  - [note] toybox tests need TOYBOX_CLOCK=frozen or they fail "
             "(learned 2026-06-03, last confirmed 2026-09-20)"
@@ -309,7 +309,7 @@ class TestWhatIsNeverSurfaced:
 
 
 class TestTruncatedItemsStayRecallable:
-    """A memory the 4000-char cap left out is missing from the stable prompt.
+    """A memory the size cap left out is missing from the stable prompt.
 
     It must not also be suppressed from per-turn recall, or it becomes
     invisible on both paths -- worse than before the ages were added.
@@ -567,7 +567,7 @@ class TestStablePromptFillsItsBudget:
         assert "  - Lives in Calgary (" in prompt
         assert fact in host._stable_memory_ids
         assert "more stored memories are not listed here" in prompt
-        assert len(prompt) <= 4000
+        assert len(prompt) <= memory_module.STABLE_MEMORY_PROMPT_CHARS
 
     def test_notes_and_upcoming_reminders_are_shown_lessons_are_not(self, host, store):
         store.store(

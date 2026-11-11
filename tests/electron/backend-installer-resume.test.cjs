@@ -1,9 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// "Installed" must mean `gaia init` finished, not that the venv exists: an
-// install interrupted during setup used to report "already installed" on the
-// next launch and never set up Lemonade or the models.
+// The installer installs the app and its Python backend, and downloads no
+// model: `gaia init` (Lemonade and the models) belongs to the app's first-run
+// setup, where the user chooses cloud or local and sees the download (#5629).
+// "Installed" therefore means the package is in place at the app's version.
 
 const fs = require("fs");
 const path = require("path");
@@ -15,26 +16,57 @@ const installerPath = path.resolve(
   "../../src/gaia/apps/webui/services/backend-installer.cjs"
 );
 
-function loadInstaller(previousState) {
+function loadInstaller(
+  previousState,
+  {
+    freeBytes = 1e9 * 4096,
+    flagship = false,
+    refresh = { code: 0 },
+    appVersion = null,
+    venvVersion = "0.25.0",
+    venv = true,
+    pip = { code: 0 },
+  } = {}
+) {
   const files = new Map();
   if (previousState) {
     files.set("/fixture/.gaia/electron-install-state.json", JSON.stringify(previousState));
   }
-  const spawn = jest.fn(() => {
+  if (flagship) files.set("/fixture/.gaia/agents/gaia/.installed", "{}");
+  const spawn = jest.fn((cmd, argv) => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    queueMicrotask(() => child.emit("exit", 0));
+    const refreshing = argv[0] === "init";
+    const installing = argv[0] === "pip";
+    queueMicrotask(() => {
+      if (refreshing && refresh.stderr) child.stderr.emit("data", Buffer.from(refresh.stderr));
+      if (installing && pip.stderr) child.stderr.emit("data", Buffer.from(pip.stderr));
+      child.emit("exit", refreshing ? refresh.code : installing ? pip.code : 0);
+    });
     return child;
   });
   const fakeFs = {
     ...fs,
-    existsSync: (file) => String(file).includes("/venv") || files.has(String(file)),
-    readFileSync: (file, enc) =>
-      files.has(String(file)) ? files.get(String(file)) : fs.readFileSync(file, enc),
+    existsSync: (file) => (venv && String(file).includes("/venv")) || files.has(String(file)),
+    readFileSync: (file, enc) => {
+      if (files.has(String(file))) return files.get(String(file));
+      if (appVersion && String(file).endsWith("package.json")) {
+        return JSON.stringify({ version: appVersion });
+      }
+      if (String(file) === "/fixture/.gaia/electron-install.log") {
+        throw Object.assign(new Error("no log"), { code: "ENOENT" });
+      }
+      return fs.readFileSync(file, enc);
+    },
+    readdirSync: (dir) =>
+      ({
+        "/fixture/.gaia/venv/lib": ["python3.12"],
+        "/fixture/.gaia/venv/lib/python3.12/site-packages": [`amd_gaia-${venvVersion}.dist-info`],
+      })[String(dir)] || [],
     writeFileSync: (file, data) => files.set(String(file), String(data)),
     mkdirSync: jest.fn(),
-    statfsSync: () => ({ bavail: 1e9, bsize: 4096 }),
+    statfsSync: () => ({ bavail: freeBytes / 4096, bsize: 4096 }),
     createWriteStream: () => ({ write: jest.fn(), end: jest.fn(), on: jest.fn() }),
   };
   const offline = {
@@ -63,7 +95,8 @@ function loadInstaller(previousState) {
         return {
           spawn,
           execSync: jest.fn(),
-          spawnSync: jest.fn(() => ({ status: 0, stdout: "GAIA version 0.25.0" })),
+          // Without the venv, no `gaia` is on PATH either.
+          spawnSync: jest.fn(() => ({ status: venv ? 0 : 1, stdout: "GAIA version 0.25.0" })),
         };
       }
       return require(name);
@@ -80,8 +113,25 @@ function loadInstaller(previousState) {
 const initRuns = (spawn) => spawn.mock.calls.filter(([, argv]) => argv[0] === "init");
 const pipRuns = (spawn) => spawn.mock.calls.filter(([, argv]) => argv[0] === "pip");
 
-describe("an install whose setup never finished", () => {
-  test("interrupted during gaia init: the next launch runs gaia init, not 'already installed'", async () => {
+describe("the installer downloads no model", () => {
+  test("a fresh install never runs gaia init", async () => {
+    const { installer, spawn, state } = loadInstaller(null);
+    const progress = [];
+
+    await installer.installBackend({
+      version: "0.25.0",
+      isPackaged: false,
+      onProgress: (stage, percent, message) => progress.push({ stage, percent, message }),
+    });
+
+    expect(pipRuns(spawn).length).toBeGreaterThan(0);
+    expect(initRuns(spawn)).toHaveLength(0);
+    expect(progress.some((p) => /model/i.test(p.message))).toBe(false);
+    expect(progress[progress.length - 1].percent).toBe(100);
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+
+  test("an install stopped where an older installer ran gaia init is ready, with nothing re-run", async () => {
     const { installer, spawn, state } = loadInstaller({
       state: "installing",
       stage: "gaia-init",
@@ -90,16 +140,11 @@ describe("an install whose setup never finished", () => {
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
-    expect(initRuns(spawn)).toHaveLength(1);
-    expect(initRuns(spawn)[0][1]).toEqual(
-      expect.arrayContaining(["--profile", "gaia", "--yes"])
-    );
-    // The package was already in place: setup resumes, nothing reinstalls.
-    expect(pipRuns(spawn)).toHaveLength(0);
-    expect(state()).toMatchObject({ state: "ready", init: "done" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
   });
 
-  test("a setup that failed last time runs again", async () => {
+  test("a setup an older installer failed is left to the app's first-run setup", async () => {
     const { installer, spawn, state } = loadInstaller({
       state: "ready",
       version: "0.25.0",
@@ -108,11 +153,11 @@ describe("an install whose setup never finished", () => {
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
-    expect(initRuns(spawn)).toHaveLength(1);
-    expect(state()).toMatchObject({ state: "ready", init: "done" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
   });
 
-  test("interrupted while installing the package: it reinstalls, then sets up", async () => {
+  test("interrupted while installing the package: it reinstalls, and still sets nothing up", async () => {
     const { installer, spawn } = loadInstaller({
       state: "installing",
       stage: "install-package",
@@ -122,7 +167,16 @@ describe("an install whose setup never finished", () => {
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
     expect(pipRuns(spawn).length).toBeGreaterThan(0);
-    expect(initRuns(spawn)).toHaveLength(1);
+    expect(initRuns(spawn)).toHaveLength(0);
+  });
+
+  test("the disk check asks only for room for the Python backend", async () => {
+    const { installer } = loadInstaller(null, { freeBytes: 3 * 1024 ** 3 });
+
+    const report = await installer.runPreChecks({});
+
+    expect(report.disk.ok).toBe(true);
+    expect(installer.MIN_DISK_SPACE_BYTES).toBeLessThan(3 * 1024 ** 3);
   });
 });
 
@@ -131,7 +185,6 @@ describe("a finished install", () => {
     const { installer, spawn } = loadInstaller({
       state: "ready",
       version: "0.25.0",
-      init: "done",
     });
 
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
@@ -145,5 +198,203 @@ describe("a finished install", () => {
     await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
 
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+const AGENT_ONLY = ["init", "--agent-only"];
+
+describe("the agent refresh after an update", () => {
+  const OLD = { state: "ready", version: "0.24.0" };
+
+  test("an update refreshes the installed agent, after the package, with no model step", async () => {
+    const { installer, spawn, state } = loadInstaller(OLD, { flagship: true });
+    const progress = [];
+
+    await installer.ensureBackend({
+      version: "0.25.1",
+      isPackaged: false,
+      onProgress: (stage, percent) => progress.push({ stage, percent }),
+    });
+
+    const calls = spawn.mock.calls.map(([, argv]) => argv);
+    expect(initRuns(spawn).map(([, argv]) => [...argv])).toEqual([AGENT_ONLY]);
+    expect(calls.findIndex((a) => a[0] === "init")).toBeGreaterThan(
+      calls.findLastIndex((a) => a[0] === "pip")
+    );
+    expect(progress[progress.length - 1]).toEqual({ stage: "agent-refresh", percent: null });
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+
+  test("a first install leaves the agent to first-run setup", async () => {
+    const { installer, spawn } = loadInstaller(null);
+
+    await installer.ensureBackend({ version: "0.25.1", isPackaged: false });
+
+    expect(pipRuns(spawn).length).toBeGreaterThan(0);
+    expect(initRuns(spawn)).toHaveLength(0);
+  });
+
+  test("a launch with nothing to update does not touch the agent", async () => {
+    const { installer, spawn } = loadInstaller({ state: "ready", version: "0.25.0" }, { flagship: true });
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  test("a failed refresh throws its own cause and stays on record", async () => {
+    const { installer, state } = loadInstaller(OLD, {
+      flagship: true,
+      refresh: { code: 1, stderr: "some warning\nError: Could not reach the hub: timed out\n" },
+    });
+
+    await expect(installer.ensureBackend({ version: "0.25.1", isPackaged: false })).rejects.toMatchObject({
+      stage: "agent-refresh",
+      message: "Could not reach the hub: timed out",
+    });
+
+    expect(state()).toMatchObject({ state: "failed", stage: "agent-refresh" });
+  });
+
+  test.each([
+    ["failed", { state: "failed", stage: "agent-refresh", version: "0.25.0" }],
+    ["quit part way", { state: "installing", stage: "agent-refresh", version: "0.25.0" }],
+  ])("a refresh that %s runs again without reinstalling the package", async (_name, previous) => {
+    const { installer, spawn, state } = loadInstaller(previous, { flagship: true });
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
+
+    expect(pipRuns(spawn)).toHaveLength(0);
+    expect(initRuns(spawn).map(([, argv]) => [...argv])).toEqual([AGENT_ONLY]);
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+});
+
+describe("whether a launch needs the install screen", () => {
+  test("a finished install at the app's version does not", () => {
+    const { installer } = loadInstaller({ state: "ready" }, { appVersion: "0.25.0" });
+    expect(installer.isBackendCurrent()).toBe(true);
+  });
+
+  test("an install from before the state file existed does not", () => {
+    const { installer } = loadInstaller(null, { appVersion: "0.25.0" });
+    expect(installer.isBackendCurrent()).toBe(true);
+  });
+
+  test("a release candidate's backend matches in its PEP 440 spelling", () => {
+    const { installer } = loadInstaller(
+      { state: "ready" },
+      { appVersion: "0.25.0-rc.1", venvVersion: "0.25.0rc1" }
+    );
+    expect(installer.isBackendCurrent()).toBe(true);
+  });
+
+  test("an update does", () => {
+    const { installer } = loadInstaller({ state: "ready" }, { appVersion: "0.25.1" });
+    expect(installer.isBackendCurrent()).toBe(false);
+  });
+
+  test.each([
+    ["a failed install", { state: "failed", stage: "install-package", message: "pip exit 1" }],
+    ["a failed agent refresh", { state: "failed", stage: "agent-refresh" }],
+    ["an interrupted install", { state: "installing", stage: "install-package" }],
+    ["a partial install", { state: "partial", stage: "install-package" }],
+  ])("%s does, and its record survives the check", (_name, previous) => {
+    const { installer, state } = loadInstaller(previous, { appVersion: "0.25.0" });
+
+    expect(installer.isBackendCurrent()).toBe(false);
+    expect(state()).toMatchObject(previous);
+  });
+});
+
+describe("too little disk space for an update", () => {
+  const LOW = 1024 ** 3;
+
+  test("refuses with what to free, and leaves the working install ready", async () => {
+    const { installer, spawn, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { freeBytes: LOW }
+    );
+
+    const err = await installer
+      .ensureBackend({ version: "0.25.1", isPackaged: false })
+      .then(() => null, (e) => e);
+
+    expect(err).toBeInstanceOf(installer.InstallError);
+    expect(err.reason).toBe("disk");
+    expect(err.message).toMatch(/Required: 2048 MB, available: 1024 MB/);
+    expect(err.message).toMatch(/Your installed GAIA 0\.25\.0 was not changed\./);
+    expect(err.suggestion).toMatch(/Free at least 1024 MB more at \/fixture/);
+    expect(pipRuns(spawn)).toHaveLength(0);
+    expect(state()).toMatchObject({ state: "ready", version: "0.25.0" });
+  });
+
+  test("an install from before the state file existed stays without a failure record", async () => {
+    const { installer, state } = loadInstaller(null, { freeBytes: LOW });
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toBeNull();
+  });
+
+  test("a launch with nothing to update starts, however full the disk", async () => {
+    const { installer, spawn, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { freeBytes: LOW }
+    );
+
+    await installer.ensureBackend({ version: "0.25.0", isPackaged: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(state()).toMatchObject({ state: "ready" });
+  });
+
+  test("a first install has nothing to keep, so it is recorded as failed", async () => {
+    const { installer, state } = loadInstaller(null, { freeBytes: LOW, venv: false });
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toMatchObject({ state: "failed", stage: "pre-checks" });
+  });
+
+  test("an install that already failed stays failed", async () => {
+    const { installer, state } = loadInstaller(
+      { state: "failed", stage: "install-package", version: "0.25.1" },
+      { freeBytes: LOW }
+    );
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk" });
+
+    expect(state()).toMatchObject({ state: "failed" });
+  });
+
+  test.each([
+    "error: Failed to write to target: No space left on device (os error 28)",
+    "error: failed to write: There is not enough space on the disk. (os error 112)",
+  ])("uv running out of space part way is a disk failure: %s", async (stderr) => {
+    const { installer, state } = loadInstaller(
+      { state: "ready", version: "0.25.0" },
+      { pip: { code: 2, stderr } }
+    );
+
+    await expect(
+      installer.ensureBackend({ version: "0.25.1", isPackaged: false })
+    ).rejects.toMatchObject({ reason: "disk", stage: "install-package" });
+
+    // uv may have replaced some of the old packages, so this install is not kept as ready.
+    expect(state()).toMatchObject({ state: "failed" });
+  });
+});
+
+describe("readLogTail", () => {
+  test("an install that wrote no log yet has no tail", () => {
+    const { installer } = loadInstaller(null);
+    expect(installer.readLogTail()).toEqual([]);
   });
 });

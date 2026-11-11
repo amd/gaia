@@ -309,7 +309,8 @@ def test_step_exhaustion_after_write_returns_incomplete(agent, tmp_path):
     result = agent.process_query("Save to `summary.md`", max_steps=1)
     assert (tmp_path / "summary.md").read_text() == "real"
     assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The framework read the whole write back and it matched; the model need not.
+    assert "read back" not in result["result"]
 
 
 def test_turn_reset_does_not_reuse_prior_save(agent):
@@ -496,6 +497,15 @@ def test_binary_save_requires_its_own_write_but_not_a_text_read(tmp_path):
     assert gaps(ledger, "Saved to `out.png`.")
     ledger.record("generate_image", {}, {"image_path": "out.png"}, True)
     assert not gaps(ledger, "Saved to `out.png`.")
+
+
+@pytest.mark.parametrize("tool", ["generate_music", "generate_sound_effect"])
+def test_generated_audio_counts_as_binary_save_evidence(tool, tmp_path):
+    ledger = CompletionEvidence("Save the audio to `sound.wav`", str(tmp_path))
+    ledger.record(tool, {}, {"audio_path": "other.wav"}, True)
+    assert gaps(ledger, "Saved to `sound.wav`.")
+    ledger.record(tool, {}, {"audio_path": "sound.wav"}, True)
+    assert not gaps(ledger, "Saved to `sound.wav`.")
 
 
 def test_refused_mutation_does_not_invalidate_a_completed_save(ledger):
@@ -1265,3 +1275,223 @@ def test_a_short_retraction_after_the_correction_does_not_bring_back_the_answer(
 )
 def test_only_an_acknowledgement_restores_the_earlier_answer(reply, restored):
     assert (_with_replaced_answer(reply, _SUMMARY) is not None) is restored
+
+
+_SHARE = r"\\server\share\f.pdf"
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_script_args_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    """A share named in code crashed a turn when resolving it raised WinError 64;
+    it must be keyed by its text, never resolved."""
+    from gaia.agents.base import completion
+
+    real = completion.os.path.realpath
+
+    def _no_network(path, *a, **kw):
+        if str(path).startswith(("\\\\", "//")):
+            raise AssertionError(f"resolved a network path: {path}")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _no_network)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    key = ledger.key(share)
+    assert "server" in key and "f.pdf" in key
+    ledger.snapshot("run_python", {"code": f"open(r'{share}')"})
+
+
+def test_an_unresolvable_local_path_is_keyed_not_raised(tmp_path, monkeypatch):
+    import os
+
+    from gaia.agents.base import completion
+
+    def _broken(path, *a, **kw):
+        raise OSError(1920, "The file cannot be accessed by the system", path)
+
+    monkeypatch.setattr(completion.os.path, "realpath", _broken)
+    ledger = CompletionEvidence("Fix it.", str(tmp_path))
+    expected = os.path.normcase(os.path.join("out", "report.md"))
+    assert ledger.key("out/report.md").endswith(expected)
+
+
+def test_a_validator_is_never_asked_about_a_network_share(tmp_path):
+    validator = MagicMock()
+    ledger = CompletionEvidence("Fix it.", str(tmp_path), validator=validator)
+    assert ledger._readable(ledger.key(_SHARE), validator) is False
+    validator.validate_read.assert_not_called()
+
+
+@pytest.mark.parametrize("share", [_SHARE, "//server/share/f.pdf"])
+def test_a_unc_path_in_a_save_claim_never_touches_the_network(
+    tmp_path, monkeypatch, share
+):
+    from gaia.agents.base import completion
+
+    def _guard(real):
+        def _no_network(path, *a, **kw):
+            if str(path).startswith(("\\\\", "//")):
+                raise AssertionError(f"touched a network path: {path}")
+            return real(path, *a, **kw)
+
+        return _no_network
+
+    for name in ("realpath", "isfile", "isdir", "exists"):
+        monkeypatch.setattr(
+            completion.os.path, name, _guard(getattr(completion.os.path, name))
+        )
+    monkeypatch.setattr(completion.os, "stat", _guard(completion.os.stat))
+    monkeypatch.setattr(completion.os, "walk", _guard(completion.os.walk))
+
+    ledger = CompletionEvidence(f"Save the report to {share}", str(tmp_path))
+    ledger.exec_windows.append((0, 1, True, 0))  # a script ran and succeeded
+    ledger.snapshot("run_python", {"code": f"open(r'{share}', 'w')"})
+    found = gaps(ledger, f"I saved the report to {share}.")
+    assert any("f.pdf" in gap for gap in found)
+
+
+_ORDERS = "order_id,region,product,units,unit_price\n492,South,Doohickey,30,47.00\n"
+
+
+def _report_turn(tmp_path):
+    """The user grants only orders.csv, then names a report beside it."""
+    from gaia.security import PathValidator
+
+    fx = tmp_path / "fx"
+    (fx / "work").mkdir(parents=True)
+    orders = fx / "orders.csv"
+    orders.write_text(_ORDERS)
+    report = fx / "work" / "report.md"
+    validator = PathValidator(allowed_paths=[str(orders)])
+    cwd = tmp_path / "server"
+    cwd.mkdir()
+    ledger = CompletionEvidence(
+        f"Create {report} with a markdown table of the 3 largest orders in "
+        f"{orders} (order_id, region, product, revenue), then read it back to "
+        "confirm.",
+        str(cwd),
+        validator=validator,
+    )
+    return ledger, validator, report
+
+
+def _run_python(ledger, validator, code):
+    args = {"code": code}
+    before = ledger.snapshot("run_python", args, validator)
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    result = {"status": "success", "stdout": done.stdout, "return_code": 0}
+    ledger.record("run_python", args, result, True, before=before)
+
+
+def _report_code(report):
+    """The shape Gemma wrote: inline CSV, the output path held in a variable."""
+    return (
+        f'csv_data = """{_ORDERS}"""\n'
+        "rows = [line.split(',') for line in csv_data.strip().splitlines()[1:]]\n"
+        "table = '| order_id | region | product | revenue |\\n|---|---|---|---|\\n'\n"
+        "for r in rows:\n"
+        "    revenue = int(r[3]) * float(r[4])\n"
+        "    table += f'| {r[0]} | {r[1]} | {r[2]} | {revenue:.2f} |\\n'\n"
+        f"report_path = r'{report}'\n"
+        "with open(report_path, 'w') as f:\n"
+        "    f.write(table)\n"
+        "print('written')\n"
+    )
+
+
+def _claimed(ledger, report):
+    return gaps(ledger, f"The report has been successfully created at `{report}`.")
+
+
+def test_script_write_to_a_named_file_outside_the_read_grant_counts(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    _run_python(ledger, validator, _report_code(report))
+    assert "| 492 | South | Doohickey | 1410.00 |" in report.read_text()
+    found = _claimed(ledger, report)
+    assert not any("No successful write" in gap for gap in found), found
+    # Written but never read back: that note is still true.
+    assert any("read back" in gap for gap in found), found
+
+
+def test_script_that_leaves_the_named_file_alone_is_still_flagged(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    _run_python(ledger, validator, "print(1 + 1)")
+    assert not report.exists()
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+
+
+def test_named_file_unchanged_since_before_the_turn_is_still_flagged(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| old |\n")
+    _run_python(ledger, validator, f"print(open(r'{report}').read())")
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+
+
+def test_an_unchanged_snapshot_beats_an_mtime_inside_the_run(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| old |\n")
+    _run_python(ledger, validator, "print(1 + 1)")
+    # A coarse file clock can date the earlier write inside the run's window.
+    _, end, ok, run = ledger.exec_windows[0]
+    ledger.exec_windows[0] = (0, end, ok, run)
+    assert any("No successful write" in gap for gap in _claimed(ledger, report))
+    assert ledger.key(str(report)) not in ledger.written_files()
+
+
+def test_a_withheld_named_file_is_never_probed(tmp_path, monkeypatch):
+    ledger, validator, report = _report_turn(tmp_path)
+    validator.withhold_path(str(report.parent))
+    monkeypatch.setattr(ledger, "_stamp", lambda p: pytest.fail(f"probed {p}"))
+    assert ledger.snapshot("run_python", {}, validator) == {}
+
+
+def _assert_named_link_never_probed(ledger, validator, monkeypatch):
+    monkeypatch.setattr(ledger, "_stamp", lambda p: pytest.fail(f"probed {p}"))
+    assert ledger.snapshot("run_python", {}, validator) == {}
+    ledger.exec_windows.append((0, 2**62, True, 0))  # any mtime is "in the run"
+    found = gaps(ledger, "Done.")
+    assert any("No successful write" in gap for gap in found), found
+
+
+def test_a_named_file_that_links_outside_the_grant_is_never_probed(
+    tmp_path, monkeypatch
+):
+    ledger, validator, report = _report_turn(tmp_path)
+    outside = tmp_path / "private.md"
+    outside.write_text("secret")
+    try:
+        report.symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation requires elevated privilege on this host")
+        raise
+    _assert_named_link_never_probed(ledger, validator, monkeypatch)
+
+
+def test_a_named_link_is_refused_even_where_symlinks_cannot_be_made(
+    tmp_path, monkeypatch
+):
+    from gaia.agents.base import completion
+
+    ledger, validator, report = _report_turn(tmp_path)
+    report.write_text("| row |\n")
+    real = completion.os.path.islink
+    monkeypatch.setattr(
+        completion.os.path,
+        "islink",
+        lambda p: completion.os.path.normcase(str(p))
+        == completion.os.path.normcase(str(report))
+        or real(p),
+    )
+    _assert_named_link_never_probed(ledger, validator, monkeypatch)
+
+
+def test_a_script_literal_outside_the_read_grant_is_never_probed(tmp_path):
+    ledger, validator, report = _report_turn(tmp_path)
+    other = report.parent / "other.md"
+    code = f"open(r'{other}', 'w')"
+    assert ledger.key(str(other)) not in ledger.snapshot(
+        "run_python", {"code": code}, validator
+    )

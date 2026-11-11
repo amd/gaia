@@ -107,7 +107,7 @@ def test_reason_names_the_status_and_never_the_body():
 
 # Lemonade 2026.40.0's status-less frames when its hop to a cloud provider
 # fails: libcurl's error, wrapped by CloudServer::forward_streaming_request.
-# kw-05 (#5087) died on the first one after 34 s with no response headers.
+# A task in #5087 died on the first one after 34 s with no response headers.
 _CLOUD_DROP = (
     "backend connection failed during SSE stream before DONE: "
     "CURL error: Failure when receiving data from the peer"
