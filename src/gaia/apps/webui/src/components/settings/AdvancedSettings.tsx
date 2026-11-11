@@ -5,13 +5,13 @@ import { useEffect, useState, useRef, useCallback, type ReactNode } from 'react'
 import { ChevronDown, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import * as api from '../../services/api';
 import { log } from '../../utils/logger';
-import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
+import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -135,7 +135,7 @@ export function AdvancedSettings() {
 
     // null: an unreadable config hides the model; the banner shows config_error.
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
-    const { isLoadingModel, isDownloadingModel, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
+    const { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
     const version = __APP_VERSION__;
 
@@ -199,7 +199,7 @@ export function AdvancedSettings() {
                                 </div>
                                 <button
                                     className="btn-model-action btn-model-action--download"
-                                    onClick={() => downloadModel(false)}
+                                    onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
                                     {isDownloadingModel ? (
@@ -210,6 +210,7 @@ export function AdvancedSettings() {
                                 </button>
                             </div>
                         )}
+                        {notDownloaded && downloadError && <ErrorNotice message={downloadError} />}
 
                         {needsLoad && (
                             <div className="model-action-row model-action-row--load">
@@ -218,7 +219,7 @@ export function AdvancedSettings() {
                                         {wrongModel ? t('settings.advanced.wrongModel') : t('settings.advanced.smallContext')}
                                     </span>
                                     <span className="model-action-desc">
-                                        {t('settings.advanced.loadHint', { name: modelName ?? '', size: `${(MIN_CONTEXT_SIZE / 1024).toFixed(0)}K` })}
+                                        {t('settings.advanced.loadHint', { name: modelName ?? '' })}
                                     </span>
                                 </div>
                                 <button
@@ -268,7 +269,7 @@ export function AdvancedSettings() {
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
                                         className="btn-force-redownload"
-                                        onClick={() => downloadModel(true)}
+                                        onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
                                         {isDownloadingModel ? (
@@ -279,6 +280,7 @@ export function AdvancedSettings() {
                                     </button>
                                 </div>
                             )}
+                            {!notDownloaded && downloadError && <ErrorNotice message={downloadError} />}
                         </details>
                     </>
                 ) : (

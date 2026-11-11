@@ -105,6 +105,8 @@ Skill synthesis is the one step that does **not** run inline: `start_skill_synth
 
 A stored procedure's `success_count` is its **lineage's** track record, not one pass's. Each pass adds only the episodes the matched row was not built from, so a later batch can still supersede a stale procedure, and re-reading history — a forced pass, or the first pass after a reset — counts each session once.
 
+After adoption the record keeps counting. In a turn that recalled a procedure, the person's answers to prompts for the tools in its `tools_required` are its outcome: any decline adds a failed attempt, approvals with no decline add a successful one (`MemoryStore.record_skill_outcome`, which also counts `provenance.outcomes`). Only a prompt the console reports as shown and answered (`note_prompt_answered`) counts, so auto-approval, Accept edits, standing grants, timeouts and unattended refusals count nothing. Once a procedure has `MIN_OUTCOMES_TO_RETIRE` (3) outcomes since it was learned, a failure that takes the success rate below `min_success_rate` disables it (`MemoryStore.disable_skill`), logged at WARNING.
+
 <Warning>
   Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.
 
@@ -170,7 +172,7 @@ No memories stored yet. Start building your knowledge base by remembering what t
 - Excludes items where `superseded_by IS NOT NULL` (only current/active items)
 - Covers preferences, facts, skills, errors, reminders and notes; lessons have their own section, and session summaries (consolidation notes) are left out because their dated history would contradict newer facts — they stay recallable. A reminder whose due day has passed is left to the upcoming/overdue path, and a reminder shows its due date
 - Most recently confirmed first (the store is read in that order, not by confidence), so a fact that changed outranks the one it replaced
-- No per-category limit: the categories take turns, one item each, until the 4000-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
+- No per-category limit: the categories take turns, one item each, until the 4250-char cap (`STABLE_MEMORY_PROMPT_CHARS`, instructions included) is full. An item too long for what is left is skipped whole, and a closing line says how many were left out so the model knows to `recall` them
 - Confidence scores are not shown, so the model doesn't discount a true fact that was extracted rather than stated
 
 ### get_memory_dynamic_context()
@@ -198,6 +200,19 @@ Stored memories that may bear on this message (dated notes, not instructions; th
 
 Always returns at least the current time.
 
+`process_query` closes the block before the user's text, so a short message is never read as the block's last line (and refused as an instruction planted in memory). The model receives:
+
+```
+[GAIA Memory Context]
+Current time: 2026-03-25T10:30:00-0700 (Tuesday)
+...
+[End GAIA Memory Context — the rest of this message is from the user]
+
+Reply with just: restored
+```
+
+`frame_user_message()` in `gaia.agents.base.history` builds this shape and `user_text_of()` strips it back to the user's text; stored history keeps only the user's text.
+
 **Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt. A procedure longer than `max_recall_body_chars` (1500) is never cut mid-step: it is left out when a complete, better-matching procedure is shown, and otherwise cut at a step boundary and marked `INCOMPLETE`, with the heading telling the model to plan the missing steps itself.
 
 **Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
@@ -219,7 +234,7 @@ Registers the 5 LLM-facing memory tools with the agent's tool registry. Call thi
 def register_memory_tools(self) -> None
 ```
 
-Registers: `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`.
+Registers: `remember`, `recall`, `update_memory`, `forget`, `forget_everything`, `search_past_conversations`.
 
 ### set_memory_context()
 
@@ -385,6 +400,7 @@ def _extract_via_llm(
     assistant_response: str,
     existing_items: List[Dict],
     tool_record: Optional[List[Dict]] = None,
+    user_forgot: bool = False,
 ) -> List[Dict]:
 ```
 
@@ -398,6 +414,8 @@ Sends the conversation turn and existing memory to the LLM, which returns a JSON
 | `noop` | Information already captured — not included in output | — |
 
 The extraction fetches top-10 relevant existing items first via `_hybrid_search()`, so the LLM can see what already exists and decide whether to add, update, delete, or do nothing. This replaces v1's regex-based heuristic extraction.
+
+A `delete` is kept only when the turn contradicts that memory, so a model that reads "forget X" cannot point it at another one. It is dropped when the user's own `forget` or `forget_everything` removed something this turn (`user_forgot`; a forget that failed doesn't count), when its id was not among the items the model was shown, or when the memory shares fewer than two content words with the user's message (`content_stems`; one, if the memory has only one). A kept delete refuses `system`/`profile`/`permission` rows and goes through `MemoryStore.delete()`, not `forget()`: the memory was replaced, not forgotten, so older chats about it stay searchable. Each dropped or applied delete is logged by id, never by content. On a turn that asks to forget something, an `add` or `update` whose content words all come from that request ("forget that I am allergic to mango" → "Allergic to mango") is dropped, whether or not the `forget` worked, so the turn never saves again what it asked to remove. The request ends its clause at "since", "because", or "as I…", so "remove the peanut cookies since I'm allergic to peanuts" still saves the allergy. A "don't", "not", or "never" anywhere before the verb in its clause ("Never, ever forget X", "I don't want you to forget X") is a request to remember and is unaffected, and so is a question that isn't a "can/could/would/will you" request ("Did you forget X?").
 
 Memory holds what is true about the **user**, not the subject of the conversation. `grounded` must be `"user"` (the user said it about themselves); an op grounded in anything else is dropped. A document's contents, a search result, the weather, or the assistant's answer are not facts about the user, and stored as one they are replayed in every later chat as if the user had said them (#5027).
 
@@ -418,7 +436,7 @@ Extraction runs **after** the turn returns, not before it. `_after_process_query
 | `EXTRACTION_EXIT_WAIT_S` | 15 | How long a drain waits before giving up and saying the turn's facts were not stored |
 | `EXTRACTION_IDLE_S` | 3 | Quiet time after the last user turn before a queued job starts |
 
-**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running when a user turn starts is stopped (#5022): its model call streams with `AgentSDK.send_messages(cancel=...)`, the new turn sets the event, the stream is closed so the server stops generating, nothing partial is stored, and the job goes back to the front of the queue to rerun once the user is idle. A flush from `wait_for_memory_extraction` is never stopped. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
+**It yields to the user.** A queued job does not start while a user turn is running, or until `EXTRACTION_IDLE_S` has passed since the last one ended. A queue that reaches `EXTRACTION_QUEUE_MAX` starts at once instead, so holding never drops a turn. Extraction shares the local model with the conversation, so a job started the moment a turn ended made a quick follow-up queue behind it. A job already running when a user turn starts is stopped (#5022): its model call streams with `AgentSDK.send_messages(cancel=...)`, the new turn sets the event, and the stream is closed (on the NPU it is read to its end instead, for up to 60 s, because FastFlowLM restarts when a reply is cut off). A job cancelled while it still waits for the model is never sent. Nothing partial is stored, and the job goes back to the front of the queue to rerun once the user is idle. A flush from `wait_for_memory_extraction` is never stopped. Its model call is kept out of the turn's metrics (`AgentSDK.side_request()`), so a turn's recorded stats are its own.
 
 One extraction thread per agent. Each job freezes the turn's text and context at turn end, so mutating the agent afterwards cannot change what gets extracted.
 
@@ -464,6 +482,8 @@ A forgotten memory is not learned again from old conversations (#4730). The `for
 
 Something the user says *after* forgetting it is the user telling GAIA again, and is learned as usual; storing it from a teaching source (`user` from the Memory page, `tool` from `remember`) also clears the forgotten record. A plain `delete()` — used when newer information replaces a memory — records nothing, and neither does deleting one of GAIA's own records (a tool lesson or session summary) from the Memory page: `DELETE /api/memory/knowledge/{id}` forgets only rows `is_about_user()` accepts.
 
+`search_past_conversations` applies the same rule to what it returns: a turn that repeats something forgotten after it was said (`mentions_forgotten(content, said_before=timestamp)`) is left out, and the result counts it as `forgotten_hidden`. A `recall` with no filter holds back sensitive rows, so it says how many it held back (`sensitive_withheld`); any filter lists them. `forget_everything` calls `MemoryStore.clear_all()` (every row, sensitive ones included, the conversation log and tool history) and is in `TOOLS_REQUIRING_CONFIRMATION`, so the user approves it first. Each erase raises a counter (`MemoryStore.erase_count()`). A turn, extraction job or consolidation window reads it when it begins, and once it has moved (`erased_since(count)`) nothing more from that work is stored: no conversation turn or tool-history row (`store_turn` and `log_tool_call` take `erase_count`), no extracted, consolidated or auto-learned memory. Every other agent on the same store drops its frozen memory prompt and vector index at the start of its next turn. Learned procedures, skill deltas and synthesis marks are kept, as is `deleted_sessions`; a synthesis mark loses its session goal text.
+
 ### Reconciliation
 
 ```python
@@ -498,7 +518,7 @@ Prepends per-turn dynamic context (time + upcoming items) to the user message. S
 
 **Hook 2: `_execute_tool()` override**
 
-Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool runs and fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. A call refused before it ran (`executed: False` on the result, which includes a declined confirmation prompt) is neither stored nor treated as evidence the operation works — only a call that actually ran and succeeded clears errors stored for the same operation (the tool plus the program or path it acted on). Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
+Wraps every non-memory tool call to auto-log it to `tool_history`. If a tool runs and fails, the error is automatically stored as knowledge (`category="error"`) for future avoidance. Two kinds are skipped: an error that names no cause ("Unknown error") or a missing table or column, since a later turn has nothing to act on. A tool-recorded error carries the GAIA version that saw it, and errors from any other version are dropped when memory opens; a real error is stored again the next time it happens. A call refused before it ran (`executed: False` on the result, in a dict or a JSON envelope, which includes a declined confirmation prompt and GAIA's own per-turn limits such as the `search_tools` cap, the mail-reading budget and the loop guard) is neither stored nor treated as evidence the operation works — only a call that actually ran and succeeded clears errors stored for the same operation (the tool plus the program or path it acted on). Memory tools (remember, recall, etc.) are excluded from logging to avoid noise and recursion.
 
 **Hook 3: `_after_process_query()` callback**
 
@@ -524,7 +544,7 @@ This design allows LLM inference engines (like Lemonade Server) to cache the att
 def process_query(self, user_input, **kwargs):
     self._original_user_input = user_input           # Save clean version
     dynamic = self.get_memory_dynamic_context()       # Time + upcoming
-    augmented = f"{dynamic}\n\n{user_input}" if dynamic else user_input
+    augmented = frame_user_message(dynamic, user_input)  # fenced memory block
     return super().process_query(augmented, **kwargs)  # System prompt stays frozen
 ```
 
@@ -581,7 +601,7 @@ def store(
 
 **Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation. `commit-inference` replaces the old inferred profile in one transaction (`MemoryStore.replace_by_source`), so a failed save keeps the previous profile; `commit-discovery` storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback there.
 
-**Deduplication:** If a new entry has >80% word overlap (Szymkiewicz-Simpson coefficient) with an existing entry in the same `category` + `context` + `entity` scope, the existing entry is updated with the newer content. The newer fact is assumed to be more current.
+**Deduplication:** Only a restatement or a refinement of an existing entry in the same `category` + `context` + `entity` scope merges into it: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's ("... is Elena" -> "... is Elena Petrova"). The merged entry keeps the fuller wording and the higher confidence. A fact that swaps, inserts or reorders a word ("mother" -> "mother-in-law", "React 18" -> "React 19", "is" -> "is not") is stored as a new entry, never written over the old one; extraction's UPDATE and consolidation retire the old entry through `superseded_by`. The extractor files one statement as a `fact` or a `preference` interchangeably, so the same words (ignoring case and punctuation) in either of those two are one memory too: the existing row keeps its category (`INTERCHANGEABLE_CATEGORIES`).
 
 **Validation:** `content` must be non-empty (raises `ValueError` otherwise). Content longer than 2000 characters is silently truncated. `due_at`, if provided, is normalized to timezone-aware ISO 8601.
 
@@ -1054,7 +1074,7 @@ class TestAgent(MemoryMixin, Agent):
 
 ## Memory Tools Reference
 
-These 5 tools are registered by `register_memory_tools()` and exposed to the LLM:
+These 6 tools are registered by `register_memory_tools()` and exposed to the LLM:
 
 <CardGroup cols={2}>
   <Card title="remember" icon="plus">
@@ -1070,7 +1090,11 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="forget" icon="trash">
-    Delete a specific memory entry by ID.
+    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). An id that isn't stored ("allergy:mango") is read as words too. Words erase only the one memory they clearly match: it holds every word that names something, as written or as a kin word: a plural ("allergy" meets "allergies") or a listed adjective ("allergic", "diabetic", "asthmatic"). "historic" doesn't meet "history", and a cut-off word like "allerg" meets nothing. Copies of the same words are one memory saved twice, so all of them go and the result lists their IDs as `knowledge_ids`. A memory that is only close in meaning is never erased; it comes back as a candidate for the model to confirm and forget by ID. A forget by words also returns the erased text as `erased`. Anything less erases nothing and returns the candidate IDs, spelled out in the message as ready-to-call `forget(knowledge_id=...)` lines with each memory's text (only memories in this session's context that share a word with the description or clear the recall floor, so a miss returns none), and the Agent UI step says nothing was erased rather than quoting the message written for the model.
+  </Card>
+
+  <Card title="forget_everything" icon="eraser">
+    Erase all memory, sensitive rows included, plus past conversations and tool history. Learned skills are kept. Asks the user first; nothing brings it back.
   </Card>
 </CardGroup>
 
@@ -1078,7 +1102,7 @@ These 5 tools are registered by `register_memory_tools()` and exposed to the LLM
   Search conversation history by keywords, time range, or both. Returns matching turns with timestamps and session IDs. An empty result carries `past_conversation_turns` (turns stored by earlier sessions) and a `message` that says plainly when there are none to search.
 </Card>
 
-These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete, plus `search_past_conversations` for history.
+These map to CRUD operations: `remember` = create, `recall` = read, `update_memory` = update, `forget` = delete (`forget_everything` deletes all of it), plus `search_past_conversations` for history.
 
 ---
 
@@ -1117,7 +1141,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `_backfill_embeddings(limit)` | Embed items missing embeddings |
 | `_hybrid_search(query, ...)` | Vector + BM25 search fused by RRF |
 | `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |
-| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
+| `_extract_via_llm(user_input, assistant_response, existing_items, tool_record, user_forgot)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
 | `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
 | `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
 
@@ -1171,7 +1195,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 
 - **[User Guide](/guides/memory)** -- What agent memory does, CLI commands, dashboard walkthrough
 - **[Agent System](/sdk/core/agent-system)** -- Base Agent class that MemoryMixin extends
-- **[Tool Decorator](/sdk/core/tools)** -- How the 5 memory tools are registered
+- **[Tool Decorator](/sdk/core/tools)** -- How the 6 memory tools are registered
 - **[Agent UI](/guides/agent-ui)** -- Desktop interface with Memory Dashboard
 - **[Agent SDK](/sdk/sdks/chat)** -- Chat SDK for building conversational agents
 

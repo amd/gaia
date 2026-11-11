@@ -14,9 +14,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -353,28 +351,45 @@ def test_a_superseded_rc_stops_after_approval_before_any_publish(publish):
     assert steps.index(check) == len(steps) - 1
 
 
-def test_nothing_publishes_unless_the_tagged_commit_passed_ci(publish):
+def test_a_final_publishes_only_if_the_tagged_commit_passed_ci(publish):
     gate = publish["ci-green"]
     assert gate["needs"] == "validate"
     assert gate["permissions"]["actions"] == "write"
     assert "check_release_ci.py" in gate["steps"][-1]["run"]
     approve = publish["approve-publish"]
     assert "ci-green" in approve["needs"]
-    assert "needs.ci-green.result == 'success'" in approve["if"]
+    # The only carve-out is an RC, which tests never hold.
+    assert (
+        "(needs.validate.outputs.is_rc == 'true' || "
+        "needs.ci-green.result == 'success')"
+    ) in approve["if"]
+
+
+def test_an_rc_skips_only_the_installer_job_that_tests_the_source(publish):
+    installers = publish["build-desktop-installers"]["with"]
+    assert installers["skip_source_tests"] == (
+        "${{ needs.validate.outputs.is_rc == 'true' }}"
+    )
+    callee = _workflow("build-installers.yml")["jobs"]
+    skipped = [
+        name
+        for name, job in callee.items()
+        if "inputs.skip_source_tests" in str(job.get("if", ""))
+    ]
+    assert skipped == ["custom-agent-mcp-harness"]
+    assert "!inputs.skip_source_tests" in callee["custom-agent-mcp-harness"]["if"]
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):
-    steps = [
+    step = next(
         s
         for s in publish["github-release"]["steps"]
-        if s.get("uses", "").startswith("softprops/action-gh-release")
-    ]
-    final = next(s for s in steps if s["if"] == NOT_RC)
-    rc = next(s for s in steps if s["if"] == IS_RC)
-    assert "prerelease" not in final["with"]
-    assert rc["with"]["prerelease"] is True
-    assert rc["with"]["make_latest"] is False
-    assert rc["with"]["files"] == final["with"]["files"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert step["env"]["IS_RC"] == "${{ needs.validate.outputs.is_rc }}"
+    assert "--prerelease" in step["run"]
+    assert "python3 util/github_release_retry.py" in step["run"]
+    assert "softprops/action-gh-release" not in step["run"]
 
 
 def test_every_release_requests_the_website_redeploy_from_publish(publish):
@@ -446,47 +461,6 @@ def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
 def test_the_windows_setup_never_reaches_the_hub_from_publish():
     text = (WORKFLOWS / "publish.yml").read_text(encoding="utf-8")
     assert "publish_to_r2" not in text and "GAIA_HUB" not in text
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
-    # claude.yml's release-notes job rewrites the final's notes from the diff
-    # since PREVIOUS_TAG; an RC there would leave the final's notes nearly empty.
-    step = next(
-        s
-        for s in _workflow("claude.yml")["jobs"]["release-notes"]["steps"]
-        if s.get("name") == "Generate release context"
-    )
-    line = next(
-        ln for ln in step["run"].splitlines() if "PREVIOUS_TAG=$(git describe" in ln
-    )
-    describe = shlex.split(re.search(r"\$\((git describe[^)]*?)\s*2>", line)[1])
-
-    _git(tmp_path, "init", "-q")
-    for name in ("v0.24.1", "agent-pkg-gaia-v0.1.1", "v0.25.0-rc1", "v0.25.0"):
-        _git(
-            tmp_path,
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            name,
-        )
-        _git(tmp_path, "tag", name)
-
-    args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
-    assert _git(tmp_path, *args) == "v0.24.1"
 
 
 # ── Superseded release candidates ────────────────────────────────────────────

@@ -1,26 +1,20 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Unit tests for the one-time versioned ``~/.gaia`` state migration (issue #2155).
+"""Unit tests for the daemon's custody schema-version stamp (``daemon.migrate``).
 
-Covers the acceptance criteria from V2-13:
+* cold state: a fresh profile stamps the current version and starts;
+* warm state: a populated install is stamped without copying its chat history or
+  memory into ``host/custody/`` (nothing reads those copies, #7092);
+* idempotent: an already-stamped install is a no-op;
+* a corrupt stamp or an unknown-newer version is refused loudly.
 
-* warm-state: a populated pre-v2 fixture migrates into the custody layout;
-* idempotent: a second run is a no-op (the version stamp gates re-runs);
-* cold-state: a fresh profile with nothing to migrate still stamps and succeeds
-  (per the CLAUDE.md hidden-state rule);
-* mid-migration failure leaves the originals intact, the version un-stamped, and
-  is recoverable on retry — and fails loud;
-* schema version stamped and checked; an unknown-newer version → loud refusal.
-
-Fixtures are *real* SQLite databases built by the actual pre-v2 store classes
-(``MemoryStore`` / ``ChatDatabase``), so the migration is exercised against the
-same on-disk schema an upgrader really has — not a hand-rolled stand-in.
+The populated fixture uses the real ``MemoryStore`` / ``ChatDatabase`` classes, so
+it is the on-disk state a user really has.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 
 import pytest
 
@@ -104,7 +98,7 @@ def test_read_schema_version_missing_key_raises_loud(homes):
 
 
 # ---------------------------------------------------------------------------
-# Cold state (nothing to migrate)
+# Cold state (fresh install)
 # ---------------------------------------------------------------------------
 
 
@@ -113,164 +107,80 @@ def test_cold_state_stamps_and_reports(homes):
     assert result["status"] == migrate.MigrationState.MIGRATED
     assert result["from_version"] == 0
     assert result["to_version"] == migrate.SCHEMA_VERSION
-    assert result["applied"] == []  # no legacy stores existed
+    assert result["applied"] == []
     assert migrate.read_schema_version() == migrate.SCHEMA_VERSION
-    # No custody stores were fabricated out of nothing.
-    assert not migrate.custody_sessions_db().exists()
-    assert not migrate.custody_memory_db().exists()
+    # Only the stamp is written under custody.
+    assert [p.name for p in migrate.custody_dir().iterdir()] == ["schema.json"]
 
 
 # ---------------------------------------------------------------------------
-# Warm state (populated fixture)
+# Warm state: live chat history and memory are never copied
 # ---------------------------------------------------------------------------
 
 
-def test_warm_state_migrates_sessions_and_memory(homes):
+def test_populated_install_is_stamped_without_copying_databases(homes):
     legacy, _ = homes
-    sessions_src, session_id = _seed_legacy_sessions(legacy)
+    sessions_src, _ = _seed_legacy_sessions(legacy)
     memory_src = _seed_legacy_memory(legacy)
+    sessions_before = sessions_src.read_bytes()
+    memory_before = memory_src.read_bytes()
 
     result = migrate.run_migrations()
 
     assert result["status"] == migrate.MigrationState.MIGRATED
     assert result["to_version"] == migrate.SCHEMA_VERSION
-    assert len(result["applied"]) == 2
-
-    # Custody copies exist under the v2 layout...
-    assert migrate.custody_sessions_db().exists()
-    assert migrate.custody_memory_db().exists()
-
-    # ...and the originals are preserved (non-destructive).
-    assert sessions_src.exists()
-    assert memory_src.exists()
-
-    # The migrated sessions DB carries the real pre-v2 row.
-    conn = sqlite3.connect(str(migrate.custody_sessions_db()))
-    try:
-        row = conn.execute(
-            "SELECT title FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    assert row is not None and row[0] == "pre-v2 chat"
+    assert result["applied"] == []
+    assert [p.name for p in migrate.custody_dir().iterdir()] == ["schema.json"]
+    assert not list(migrate.custody_dir().rglob("*.db"))
+    # The live stores are untouched.
+    assert sessions_src.read_bytes() == sessions_before
+    assert memory_src.read_bytes() == memory_before
 
 
-def _memory_contents(db_path):
-    conn = sqlite3.connect(str(db_path))
-    try:
-        return [r[0] for r in conn.execute("SELECT content FROM knowledge")]
-    finally:
-        conn.close()
+def test_already_migrated_install_starts_and_keeps_old_copies(homes):
+    """An install stamped at v1 by an older build (with its copies) still starts,
+    and the copies already on disk are left alone."""
+    stamp = migrate.schema_stamp_path()
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(
+        json.dumps({"schema_version": 1, "applied": ["sessions:gaia_chat.db"]}),
+        encoding="utf-8",
+    )
+    old_copy = migrate.custody_dir() / "agents" / "chat" / "sessions.db"
+    old_copy.parent.mkdir(parents=True)
+    old_copy.write_bytes(b"old copy")
+    stamp_before = stamp.read_text(encoding="utf-8")
 
+    result = migrate.run_migrations()
 
-def test_an_isolated_gaia_home_never_imports_the_default_homes_memory(
-    tmp_path, monkeypatch
-):
-    """A daemon under GAIA_HOME migrated ``~/.gaia/memory.db`` into its custody.
-
-    A fresh isolated home (an eval category, a test, a second profile) then
-    started with the default home's personal facts and chats.
-    """
-    user_home = tmp_path / "user"
-    monkeypatch.setattr(migrate.Path, "home", classmethod(lambda cls: user_home))
-    _seed_legacy_memory(user_home / ".gaia")
-    isolated = tmp_path / "isolated"
-    isolated.mkdir()
-    monkeypatch.setenv("GAIA_HOME", str(isolated))
-    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
-
-    migrate.run_migrations()
-
-    custody = migrate.custody_memory_db()
-    assert custody.is_relative_to(isolated)
-    assert not custody.exists() or _memory_contents(custody) == []
-
-
-def test_gaia_home_migrates_its_own_legacy_memory(tmp_path, monkeypatch):
-    isolated = tmp_path / "isolated"
-    _seed_legacy_memory(isolated)
-    monkeypatch.setenv("GAIA_HOME", str(isolated))
-    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
-    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
-
-    migrate.run_migrations()
-
-    assert _memory_contents(migrate.custody_memory_db()) == ["user prefers dark mode"]
+    assert result["status"] == migrate.MigrationState.CURRENT
+    assert result["applied"] == []
+    assert stamp.read_text(encoding="utf-8") == stamp_before
+    assert old_copy.read_bytes() == b"old copy"
 
 
 def test_second_run_is_noop(homes):
-    legacy, _ = homes
-    _seed_legacy_sessions(legacy)
-    _seed_legacy_memory(legacy)
-
     first = migrate.run_migrations()
     assert first["status"] == migrate.MigrationState.MIGRATED
-
-    sessions_dst = migrate.custody_sessions_db()
-    mtime_before = sessions_dst.stat().st_mtime_ns
+    stamp_before = migrate.schema_stamp_path().read_text(encoding="utf-8")
 
     second = migrate.run_migrations()
     assert second["status"] == migrate.MigrationState.CURRENT
+    assert second["from_version"] == migrate.SCHEMA_VERSION
     assert second["applied"] == []
-    # The second run did not rewrite the already-migrated store.
-    assert sessions_dst.stat().st_mtime_ns == mtime_before
+    assert migrate.schema_stamp_path().read_text(encoding="utf-8") == stamp_before
 
 
-def test_second_run_ignores_new_legacy_writes(homes):
-    """Once stamped, the migration never re-touches legacy state — even if the old
-    location is written again — so it can't clobber post-migration custody data."""
-    legacy, _ = homes
-    _seed_legacy_sessions(legacy)
+def test_stamp_lands_under_an_isolated_gaia_home(tmp_path, monkeypatch):
+    isolated = tmp_path / "isolated"
+    monkeypatch.setenv("GAIA_HOME", str(isolated))
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("GAIA_DAEMON_HOME", raising=False)
+
     migrate.run_migrations()
 
-    # Simulate a stray later write to the OLD location; the stamped migration
-    # must ignore it (idempotent by version, not by content diffing).
-    migrate.legacy_memory_db().write_bytes(b"stray-post-migration-bytes")
-    result = migrate.run_migrations()
-    assert result["status"] == migrate.MigrationState.CURRENT
-    assert not migrate.custody_memory_db().exists()
-
-
-# ---------------------------------------------------------------------------
-# WAL safety: committed-but-uncheckpointed rows must survive the migration
-# ---------------------------------------------------------------------------
-
-
-def test_uncheckpointed_wal_row_is_migrated(homes):
-    """Regression for the raw-byte-copy data-loss bug: a row committed to the WAL
-    but not yet checkpointed lives in the ``-wal`` sidecar, which a raw copy of the
-    main ``.db`` misses. The engine-level snapshot must capture it — here with the
-    writer STILL OPEN (the worst case: a live legacy process)."""
-    legacy, _ = homes
-    db = migrate.legacy_memory_db()
-    db.parent.mkdir(parents=True, exist_ok=True)
-
-    writer = sqlite3.connect(str(db))
-    try:
-        writer.execute("PRAGMA journal_mode=WAL")
-        writer.execute("CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT)")
-        writer.execute("INSERT INTO k(v) VALUES('checkpointed')")
-        writer.commit()
-        # Fold the first row into the main file, then commit a SECOND row that
-        # stays in the -wal (no checkpoint) — exactly what a raw copy would drop.
-        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        writer.execute("INSERT INTO k(v) VALUES('in-wal-only')")
-        writer.commit()
-        assert (db.parent / f"{db.name}-wal").exists()  # sanity: WAL is populated
-
-        result = migrate.run_migrations()
-        assert result["status"] == migrate.MigrationState.MIGRATED
-    finally:
-        writer.close()
-
-    conn = sqlite3.connect(str(migrate.custody_memory_db()))
-    try:
-        values = {row[0] for row in conn.execute("SELECT v FROM k").fetchall()}
-    finally:
-        conn.close()
-    # Both rows survive — the uncheckpointed one is NOT lost.
-    assert values == {"checkpointed", "in-wal-only"}
+    assert migrate.schema_stamp_path().is_relative_to(isolated)
+    assert migrate.read_schema_version() == migrate.SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -288,56 +198,3 @@ def test_unknown_newer_version_refuses_loud(homes):
         migrate.run_migrations()
     msg = str(ei.value)
     assert "NEWER" in msg or "newer" in msg
-
-
-# ---------------------------------------------------------------------------
-# Mid-migration failure: originals intact, version un-stamped, recoverable
-# ---------------------------------------------------------------------------
-
-
-def test_failed_step_preserves_originals_and_does_not_stamp(homes, monkeypatch):
-    legacy, _ = homes
-    sessions_src, _ = _seed_legacy_sessions(legacy)
-    memory_src = _seed_legacy_memory(legacy)
-
-    def boom(src, dst, mode=0o600):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", boom)
-
-    with pytest.raises(MigrationError) as ei:
-        migrate.run_migrations()
-    assert "No data was lost" in str(ei.value)
-
-    # Originals untouched; version NOT stamped (so the next start retries).
-    assert sessions_src.exists()
-    assert memory_src.exists()
-    assert migrate.read_schema_version() == 0
-
-
-def test_retry_after_failure_completes(homes, monkeypatch):
-    legacy, _ = homes
-    _seed_legacy_sessions(legacy)
-    _seed_legacy_memory(legacy)
-
-    calls = {"n": 0}
-    real_copy = migrate._atomic_sqlite_snapshot
-
-    def flaky(src, dst, mode=0o600):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise OSError("transient")
-        return real_copy(src, dst, mode)
-
-    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", flaky)
-    with pytest.raises(MigrationError):
-        migrate.run_migrations()
-    assert migrate.read_schema_version() == 0
-
-    # Retry (fault cleared) completes and stamps.
-    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", real_copy)
-    result = migrate.run_migrations()
-    assert result["status"] == migrate.MigrationState.MIGRATED
-    assert migrate.read_schema_version() == migrate.SCHEMA_VERSION
-    assert migrate.custody_sessions_db().exists()
-    assert migrate.custody_memory_db().exists()

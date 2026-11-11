@@ -431,50 +431,42 @@ def test_an_uncontended_lock_does_not_slow_down_in_a_crowded_folder(tmp_path):
     assert statistics.median(times) < 0.002, f"median {statistics.median(times)}"
 
 
-def _median_hand_off(target, rounds=40):
-    """Median time from a release to the queued waiter holding the lock.
+class _ReleaseOnSleep:
+    """The clock a waiter sleeps on: it records each sleep instead of taking it,
+    and the holder lets go during sleep number *release_at*."""
 
-    The release comes at a random point in the waiter's poll, so a 20 ms poll
-    averages about 10 ms and a 1 ms poll about 0.5 ms.
-    """
-    import random
+    def __init__(self, holder, release_at):
+        self.holder, self.release_at, self.sleeps = holder, release_at, []
 
-    gaps = []
-    for _ in range(rounds):
-        took = []
+    def __getattr__(self, name):
+        return getattr(time, name)
 
-        def waiter():
-            with file_lock(target, timeout=60):
-                took.append(time.perf_counter())
-
-        with file_lock(target):
-            thread = threading.Thread(target=waiter)
-            thread.start()
-            deadline = time.monotonic() + 30
-            while _live_entries(target) < 1:
-                assert time.monotonic() < deadline, "the waiter never queued"
-                time.sleep(0.001)
-            time.sleep(random.uniform(0.02, 0.04))
-            released = time.perf_counter()
-        thread.join()
-        gaps.append(took[0] - released)
-    return statistics.median(gaps)
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        if len(self.sleeps) == self.release_at:
+            self.holder.release()
 
 
 def test_a_busy_lock_hands_off_far_faster_than_a_flat_poll(tmp_path, monkeypatch):
-    """The waiter at the front notices a release fast, not on a 20 ms poll.
-
-    Timed against a flat 20 ms poll in the same run. A loaded runner, or one
-    that overshoots short sleeps (macOS CI), adds about the same delay to both,
-    so the test asserts the margin rather than a fixed bound.
-    """
+    """The waiter at the front polls every 1 ms, not 20, and takes the lock on
+    the first poll after the release."""
     from gaia.utils import file_lock as mod
+    from gaia.utils.file_lock import acquire_file_lock
 
-    real = _median_hand_off(tmp_path / "real.json")
-    monkeypatch.setattr(mod, "_poll_interval", lambda listed_ahead: 0.02)
-    flat = _median_hand_off(tmp_path / "flat.json")
-    assert flat - real >= 0.004, f"{real * 1000:.1f} ms vs {flat * 1000:.1f} ms flat"
-    assert _queue_files(tmp_path / "real.json") == []
+    target = tmp_path / "state.json"
+    holder = acquire_file_lock(target)
+    clock = _ReleaseOnSleep(holder, release_at=3)
+    monkeypatch.setattr(mod, "time", clock)
+
+    try:
+        waiter = acquire_file_lock(target, timeout=60)
+    finally:
+        holder.release()
+    try:
+        assert clock.sleeps == [mod._NEXT_POLL_SECONDS] * 3
+    finally:
+        waiter.release()
+    assert _queue_files(target) == []
 
 
 def test_waiters_far_back_poll_slowly_and_the_front_fast():

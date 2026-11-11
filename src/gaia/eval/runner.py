@@ -66,6 +66,27 @@ AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
 
+
+def eval_checkout_error() -> Optional[str]:
+    """Say why eval can't run when the repo's ``eval/`` assets are absent.
+
+    Scenarios, corpus and MCP config ship only in a source checkout, never in
+    the wheel, so an installed package resolves them into site-packages.
+    """
+    if SCENARIOS_DIR.is_dir():
+        return None
+    return (
+        "gaia eval agent needs a GAIA source checkout, but no scenarios "
+        f"directory exists at {SCENARIOS_DIR}. The scenarios, corpus and MCP "
+        "config live in the repository's eval/ directory and are not part of "
+        "the installed package.\n"
+        "  Clone the repo and install it in editable mode, then run from it:\n"
+        "    git clone https://github.com/amd/gaia && cd gaia\n"
+        '    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python\n'
+        "  See https://amd-gaia.ai/docs/guides/eval#prerequisites"
+    )
+
+
 # ── MCP interpreter resolution ────────────────────────────────────────────
 #
 # ``mcp-config.json`` is a template: hosts with ``python3`` but no bare
@@ -3489,6 +3510,11 @@ class AgentEvalRunner:
             print(json.dumps(result, indent=2))
             return result
 
+        checkout_error = eval_checkout_error()
+        if checkout_error:
+            print(f"[ERROR] {checkout_error}", file=sys.stderr)
+            sys.exit(1)
+
         if fix_mode and resume_dir is None:
             require_clean_tree_for_fix()
 
@@ -4179,8 +4205,8 @@ def generate_corpus():
 
     The corpus is committed ground truth — the manifest's facts were written
     from these exact files — so nothing here rewrites it. Lists the documents,
-    then raises ``RuntimeError`` when the manifest is absent or names a file
-    that is not on disk.
+    then raises ``RuntimeError`` when the manifest is absent, names a file
+    that is not on disk, or a corpus file on disk is missing from it.
     """
     print("[CORPUS] Validating corpus against manifest.json...")
 
@@ -4228,6 +4254,28 @@ def generate_corpus():
             "the manifest entry if the document was renamed."
         )
     print("[CORPUS] All manifest files present on disk [OK]")
+
+    # And the other way around: a document added to disk without a manifest
+    # entry would score against facts that do not exist for it.
+    undeclared = []
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        declared = {doc.get("filename") for doc in entries}
+        if base.exists():
+            for f in sorted(base.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith(".")
+                    and f.name not in declared
+                ):
+                    undeclared.append(str(f.relative_to(CORPUS_DIR)))
+
+    if undeclared:
+        raise RuntimeError(
+            f"{len(undeclared)} file(s) in {CORPUS_DIR} are not named in "
+            f"{MANIFEST}: {', '.join(undeclared)}. Add a manifest entry for "
+            "them, or remove the files if they were left behind."
+        )
+    print("[CORPUS] All corpus files declared in the manifest [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

@@ -90,6 +90,12 @@ class AgentSidecarSpec:
     health_timeout: float = 30.0
     grant_agent_id: Optional[str] = None
     forward_providers: Tuple[str, ...] = field(default_factory=tuple)
+    # macOS: read secrets through the daemon, for a frozen agent whose every
+    # update would otherwise re-prompt for each keychain item (#6481).
+    daemon_owns_keychain: bool = False
+    # First binary that deletes the keychain credential file. An older one would
+    # leave it readable, so it gets no file and reads the keychain itself.
+    keychain_file_min_version: Optional[str] = None
     forwarded_mode_env_var: Optional[str] = None
     required_connections: Tuple[ConnectorRequirement, ...] = field(
         default_factory=tuple
@@ -108,6 +114,9 @@ class AgentSidecarSpec:
     category: str = ""
     tags: Tuple[str, ...] = field(default_factory=tuple)
     icon: str = ""
+    #: The agent class's ``CONSUMES_MCP_SERVERS``. The UI offers a per-agent
+    #: switch on each MCP connector only for agents that set it.
+    consumes_mcp_servers: bool = False
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -191,13 +200,36 @@ _EMAIL_REQUIRED_CONNECTIONS = (
 _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
-        scopes=("https://www.googleapis.com/auth/gmail.readonly",),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+            "https://www.googleapis.com/auth/calendar.events",
+        ),
+        required_scopes=(
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.compose",
+        ),
+        reason=(
+            "Read and search your Gmail, draft and send mail when you approve it, "
+            "and see and, with your approval, change your Google calendar."
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
-        scopes=("https://graph.microsoft.com/Mail.ReadWrite",),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+            "https://graph.microsoft.com/Calendars.ReadWrite",
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.Send",
+        ),
+        reason=(
+            "Read and search your Outlook mail, draft and send mail when you "
+            "approve it, and see and, with your approval, change your Outlook "
+            "calendar."
+        ),
     ),
 )
 
@@ -552,11 +584,16 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             mode_env_var="GAIA_GAIA_AGENT_MODE",
             cache_dir_name="gaia",
             dev_src_dir=_default_gaia_src_dir(),
+            # A first start unpacks a ~170 MB binary while antivirus scans it;
+            # 30 s timed out on a cold Windows PC before it ever answered.
+            health_timeout=120.0,
             # No forward_providers: the flagship reaches external services through
             # MCP servers the user activates, not daemon-forwarded OAuth tokens.
             # Listing a provider here would hand it credentials it cannot use.
             # required_connections feeds grant scope derivation, not forwarding.
             required_connections=_GAIA_REQUIRED_CONNECTIONS,
+            daemon_owns_keychain=True,
+            keychain_file_min_version="0.3.4",
             description=(
                 "The flagship agent — conversation, document Q&A, data "
                 "analysis, and web research, with memory that persists and "
@@ -571,5 +608,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             category="general",
             tags=("general", "chat", "rag", "memory", "skills"),
             icon="sparkles",
+            consumes_mcp_servers=True,
         ),
     }

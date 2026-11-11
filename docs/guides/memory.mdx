@@ -67,7 +67,7 @@ curl http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 
-The email agent is not available in private chats or while memory is turned off. The chat HTTP API stops these requests before sending them to the email agent, which does not yet support these settings. Use the GAIA agent to continue with memory disabled.
+The email agent supports private chats and memory-off turns when it advertises contract 2.16 or later. In those modes it suppresses memory reads and writes for the turn. An older email sidecar is rejected with an update prompt rather than silently saving a private turn. Use the GAIA agent if the email sidecar is not yet upgraded.
 
 While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
@@ -168,7 +168,7 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
 
 ## Memory Tools
 
-The agent has 5 memory tools it can use during conversation. You do not call these directly -- the LLM decides when to use them based on your conversation.
+The agent has 6 memory tools it can use during conversation. You do not call these directly -- the LLM decides when to use them based on your conversation.
 
 ### remember
 
@@ -223,11 +223,24 @@ Agent: "You have a busy afternoon. By the way, your online course
 
 ### forget
 
-Removes a specific memory entry by ID. GAIA won't learn it again from the old conversations that mentioned it. If you tell GAIA again later, it learns it again.
+Removes one memory, by its ID or by your own words for it ("allergic to shellfish"). Words erase a memory only when exactly one clearly matches, and if that memory was saved more than once, every copy goes; otherwise nothing is erased and GAIA checks which one you meant. GAIA won't learn it again from the old conversations that mentioned it. If you tell GAIA again later, it learns it again.
 
 ```
 You: "Forget what you know about the old deployment process"
 Agent: [recalls the entry, deletes it]
+```
+
+Searching past conversations doesn't bring a forgotten memory back: a turn said before you forgot it is left out of the results.
+
+### forget_everything
+
+Erases everything GAIA remembered about you and your chats: every fact, preference and reminder, sensitive ones included, and the stored past conversations and tool history. GAIA asks you to approve it first, because it can't be undone. Other open chats stop using the erased memories from their next message.
+
+Two things are kept. Skills GAIA learned for doing tasks ([procedural memory](#procedural-memory-skills) and the adjustments it made to installed skills) stay; `gaia skill deltas <skill> --reset` undoes what it learned about a skill, and [deleting the memory file](#deleting-all-memory) removes all of it. Chats listed in the sidebar, the current one included, stay until you delete them there. **Delete all memories** on the Memory page erases the same things.
+
+```
+You: "Forget everything you know about me"
+Agent: [asks to erase all of memory, then erases it]
 ```
 
 ### search_past_conversations
@@ -273,7 +286,7 @@ Recurring reminders advance their date automatically each time they fire (e.g. *
 
 ## Knowledge Categories
 
-Every memory entry belongs to one of six categories:
+Every memory entry belongs to one of nine categories. These six can be created in chat:
 
 | Category | What it stores | Example |
 |----------|---------------|---------|
@@ -283,6 +296,14 @@ Every memory entry belongs to one of six categories:
 | **skill** | Learned workflows and multi-step patterns | "To deploy: run tests, build, push to staging, verify, promote" |
 | **note** | Free-form observations, journal entries, or meeting notes | "Standup 2026-04-01: API migration complete" |
 | **reminder** | Time-sensitive items to follow up on | "Check if the PR was merged by Friday" (use with `due_at`) |
+
+The other three can't be created from a chat turn. They come from onboarding, system context collection, and the `gaia memory` commands; the memory dashboard can also save reviewed `profile` entries:
+
+| Category | What it stores | Example |
+|----------|---------------|---------|
+| **profile** | Background about you from onboarding and discovery | "User's primary tools and languages: Python, TypeScript" |
+| **system** | Facts about your machine and GAIA install, if you turn system context on | GAIA and Lemonade versions, OS, CPU/GPU/RAM, installed apps |
+| **permission** | Approvals for goals the agent infers in autonomous mode | "Always accept maintenance tasks" |
 
 The agent automatically categorizes knowledge when you ask it to remember something. You can also specify the category explicitly:
 
@@ -423,7 +444,7 @@ The **Advanced** tab keeps the full view for troubleshooting:
 
 - **Stats overview** -- total memories, sessions, tool calls, success rate, and embedding coverage
 - **Knowledge browser** -- filterable, sortable table of all memory entries, including confidence and source, with inline editing
-- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count. A call that was denied or refused before it ran is listed under **Denied** and is left out of the call count, success rate and error history, since the tool never ran
+- **Tool performance** -- per-tool success rates, error history, average duration. Memory tools (`remember`, `recall`, `update_memory`, `forget`, `forget_everything`, `search_past_conversations`) are not logged, so they never appear here or in the **Tool Calls** count. A call that was denied or refused before it ran is listed under **Denied** and is left out of the call count, success rate and error history, since the tool never ran
 - **Upcoming and overdue** -- time-sensitive items due soon or past due
 - **Conversation history** -- searchable archive of all past sessions with consolidation status. Deleting a chat deletes it here, and its tool calls from **Tool performance**; what GAIA learned from it stays under **About you**. Chats from earlier GAIA versions were filed under a random id, so they stay here until memory prunes them, about 90 days on, or you use **Delete all memories**
 - **Superseded items** -- toggle to see fact history and how knowledge evolved over time
@@ -477,8 +498,8 @@ These mechanisms run automatically -- you don't need to manage them.
 - **Confidence scoring** -- every entry has a 0.0--1.0 confidence. Newly created entries start lower for auto-captured items (LLM-extracted and discovery at **0.4**; tool-stored, error, and consolidation at **0.5**) and higher for user-created dashboard entries (**0.8**). Each recall adds +0.02, so frequently-used memories rank higher in the system prompt.
 - **Confidence decay** -- entries not accessed for 30+ days are multiplied by 0.9 at most once a month (checked at session start, and never within a month of you confirming one), so stale knowledge fades in favor of what you actively use.
 - **Fact lineage** -- when a fact changes, the old version is kept with a `superseded_by` link and its original timestamp, so you can answer "what framework were we using in March?" The dashboard's superseded view shows the full chain.
-- **Automatic error learning** -- a tool call that ran and failed is stored as an error pattern; the next session's system prompt lists it, dated, under "Problems seen before" so the agent doesn't repeat it. The list is framed as notes, not orders: a URL, file or command you hand the agent is still tried, and a passing failure (a timeout, a 503) is marked as one. Calls the permission layer refused — including ones you declined at the confirmation prompt — are not stored (they describe your current permissions, which can change) and never clear what is already stored; an error is dropped as soon as the same operation (the same program or path) actually runs and succeeds.
-- **Lessons from fixes** -- when a call fails and a changed call of the same kind then works in the same turn (for example `pytest` fails until the agent adds `env TOYBOX_CLOCK=frozen`), GAIA keeps both calls as a lesson for that project. Later sessions anywhere in the same project see it in their system prompt with the date it was learned; another project never does. Scope is the project root -- the repository you are working in, or `GAIA_PROJECT_ROOT` when you set it -- so approving a file elsewhere mid-session doesn't move your lessons. It gains confidence each session the fix works again, is dropped if the fix itself fails, and a newer fix for the same operation replaces the older one rather than piling up variants.
+- **Automatic error learning** -- a tool call that ran and failed is stored as an error pattern; the next session's system prompt lists it, dated, under "Problems seen before" so the agent doesn't repeat it. The list is framed as notes, not orders: a URL, file or command you hand the agent is still tried, and a passing failure (a timeout, a 503) is marked as one. Calls the permission layer refused — including ones you declined at the confirmation prompt — are not stored (they describe your current permissions, which can change) and never clear what is already stored. Neither are GAIA's own per-turn limits, such as a cap on tool searches or on how much mail one turn reads. An error is dropped as soon as the same operation (the same program or path) actually runs and succeeds.
+- **Lessons from fixes** -- when a call fails and a changed call of the same kind then works in the same turn (for example `pytest` fails until the agent adds `env TOYBOX_CLOCK=frozen`), GAIA keeps both calls as a lesson for that project. Later sessions anywhere in the same project see it in their system prompt with the date it was learned; another project never does. Scope is the project root -- the repository you are working in, or `GAIA_PROJECT_ROOT` when you set it -- so approving a file elsewhere mid-session doesn't move your lessons. It gains confidence each session the fix works again, is dropped if the fix itself fails, and a newer fix for the same operation replaces the older one rather than piling up variants. When a Python snippet fails because a module isn't installed and a rewritten snippet works, the lesson says what the working one used instead (for example `csv` in place of `pandas`); it is dropped once that module imports, or when GAIA or its Python changes.
 - **Session consolidation** -- conversations older than 14 days are distilled into durable notes (extracted facts live indefinitely; raw conversations are pruned at 90 days, but only once their whole session has been distilled), so old context is never lost.
 - **Background reconciliation** -- on startup the agent resolves contradictory facts across sessions, superseding the older item and boosting the newer (and reinforcing) one's confidence.
 
@@ -497,6 +518,8 @@ A procedure is only synthesized when **all** of these hold:
 These thresholds live in `~/.gaia/memory_settings.json` under a `skill_synthesis` section, so you can tighten or relax them per machine.
 
 Synthesized skills follow the same lineage rules as facts: a better recipe **supersedes** an older one rather than overwriting it, and nothing is deleted automatically.
+
+A learned procedure keeps a track record after it is first used. When GAIA recalls one and asks you to approve one of its steps, your answer counts: declining counts against the procedure, approving counts for it. Prompts for tools the procedure doesn't use don't count, and neither do steps that ran without asking you (Accept edits, an earlier Always allow, or full access). After a procedure has three answers of its own, GAIA stops recalling it once it falls below the 80% success rate it was learned at, and a new run of the same task can learn a replacement.
 
 **Off switches:**
 
@@ -589,7 +612,7 @@ are replaced rather than duplicated. To force a refresh yourself, run
   </Card>
 
   <Card title="Agent SDK" icon="comments" href="/sdk/sdks/chat">
-    Chat SDK for building conversational agents programmatically
+    Agent SDK for building conversational agents programmatically
   </Card>
 
   <Card title="Build Your First Agent" icon="rocket" href="/quickstart#build-your-first-agent">

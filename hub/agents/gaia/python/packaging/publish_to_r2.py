@@ -36,8 +36,11 @@ Idempotency (re-running a published release is a no-op):
     with a warning and the PUBLISHED sha256/size is what the summary reports --
     neither Go nor PyInstaller is byte-reproducible, so a rebuild of a released
     version always differs. ``--strict-immutable`` restores the hard failure.
+    Either way, stored bytes that differ from the sha256 the catalog lists
+    fail loudly: a racing publish overwrote the committed file.
   * Any other 409 (``artifact_mismatch`` / ``artifact_unverifiable`` /
-    ``id_conflict`` / ``manifest_mismatch``) means the catalog was NOT modified, and stays a failure.
+    ``id_conflict`` / ``manifest_mismatch`` / ``concurrent_publish_conflict``)
+    is a real rejection and stays a failure.
 
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token raises
 with an actionable message.
@@ -195,6 +198,31 @@ def _download_published(
             f"HTTP {resp.status_code}. Cannot verify idempotency; failing loudly."
         )
     return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
+
+
+def _listed_sha256(base_url: str, agent_id: str, version: str, filename: str) -> str:
+    """SHA-256 the catalog lists for this filename -- what installs verify against."""
+    url = f"{base_url.rstrip('/')}/agents/{agent_id}/manifest.json"
+    resp = requests.get(url, headers={"accept": "application/json"}, timeout=60)
+    if resp.status_code != 200:
+        raise SystemExit(
+            f"error: 409 said '{filename}' exists but GET {url} returned "
+            f"HTTP {resp.status_code}. Cannot confirm the catalog's checksum; "
+            "failing loudly."
+        )
+    try:
+        catalog = resp.json()
+    except ValueError as e:
+        raise SystemExit(f"error: GET {url} did not return JSON: {e}") from e
+    for channel in ("versions", "next_versions"):
+        entry = (catalog.get(channel) or {}).get(version) or {}
+        for art in entry.get("artifacts") or []:
+            if art.get("filename") == filename and art.get("sha256"):
+                return str(art["sha256"])
+    raise SystemExit(
+        f"error: 409 said '{filename}' exists but {url} lists no sha256 for it "
+        f"under {version}. Cannot confirm what installs verify against; failing loudly."
+    )
 
 
 def _r2_credentials() -> tuple[str, str, str] | None:
@@ -371,10 +399,11 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Only ONE of the Worker's five 409s means "already published":
-        # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
-        # / manifest_mismatch all say "the catalog was NOT modified" -- reconciling those against the
-        # R2 object would report success for a release the hub never recorded.
+        # Only version_exists means "already published". artifact_mismatch /
+        # artifact_unverifiable / id_conflict / manifest_mismatch say the catalog
+        # was NOT modified, and concurrent_publish_conflict says a racing publish
+        # left the stored file disagreeing with the catalog -- reconciling any of
+        # those would report success for a release installs cannot use.
         error_code = ""
         try:
             error_code = str(resp.json().get("error", {}).get("code", ""))
@@ -387,11 +416,20 @@ def publish_one(
                 f"published' and the Worker did not record it in the catalog. "
                 f"{resp.text[:500]}"
             )
-        # Already published. Nothing can overwrite it, so the only question is
-        # what this run reports downstream.
+        # Already published. A racing publish can still have overwritten the
+        # stored bytes, so check them against the checksum installs verify.
         remote_sha, remote_size = _download_published(
             base_url, agent_id, version, filename
         )
+        listed_sha = _listed_sha256(base_url, agent_id, version, filename)
+        if remote_sha != listed_sha:
+            raise SystemExit(
+                f"error: concurrent_publish_conflict: {filename} at "
+                f"{agent_id}@{version} serves sha256={remote_sha} but the catalog "
+                f"lists {listed_sha}, so installs fail their checksum check. A "
+                "racing publish overwrote the committed file. Release a new "
+                "version to replace this one."
+            )
         if remote_sha == local_sha:
             print(
                 "[publish] OK 409 — already published with identical bytes "

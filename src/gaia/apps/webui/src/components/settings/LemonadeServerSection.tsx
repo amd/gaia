@@ -6,12 +6,15 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import { lemonadeKeyRejected } from '../../utils/lemonade';
+import { useChatStore } from '../../stores/chatStore';
 import type { LemonadeTarget, LemonadeTargetBody } from '../../types';
 import '../SettingsModal.css';
 
 /** Which Lemonade Server GAIA uses: its own, or one the user already runs. */
 export function LemonadeServerSection() {
     const t = useT();
+    const runSetupAgain = useChatStore((s) => s.runSetupAgain);
+    const closeSettings = useChatStore((s) => s.closeSettings);
     const [target, setTarget] = useState<LemonadeTarget | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [url, setUrl] = useState('');
@@ -37,13 +40,18 @@ export function LemonadeServerSection() {
             setTarget(next);
             setKey('');
             setKeyAsked(false);
+            // Saved, but GAIA's own isn't installed yet: setup installs it.
+            if (next.mode === 'gaia' && !next.gaia_installed) {
+                closeSettings();
+                runSetupAgain(true);
+            }
         } catch (err) {
             setKeyAsked(lemonadeKeyRejected(err));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setBusy(false);
         }
-    }, []);
+    }, [closeSettings, runSetupAgain]);
 
     const connect = () => void save({ mode: 'external', base_url: url.trim(), api_key: key.trim() || undefined });
 
@@ -64,18 +72,22 @@ export function LemonadeServerSection() {
     if (!target) return null;
 
     const external = target.mode === 'external';
+    const fromEnv = target.source === 'env';
     return (
         <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
             <h4>{t('settings.advanced.modelServer')}</h4>
             <p className="model-override-desc" role="status">
-                {target.source === 'env'
+                {fromEnv
                     ? t('settings.server.usesEnv', { url: target.base_url ?? '' })
                     : external
                         ? t('settings.server.usesYours', { url: target.base_url ?? '' })
                         : t('settings.server.usesOwn')}
             </p>
-            {target.source === 'env' ? (
-                <p className="model-status-hint">{t('settings.server.unsetEnv')}</p>
+            {!fromEnv && target.env_url_ignored && (
+                <p className="model-status-hint">{t('settings.server.envIgnored', { url: target.env_url_ignored })}</p>
+            )}
+            {fromEnv ? (
+                <p className="model-status-hint">{t('settings.server.envUseOwn')}</p>
             ) : (
                 <>
                     <p className="model-status-hint">
@@ -111,23 +123,23 @@ export function LemonadeServerSection() {
                             </button>
                         </div>
                     </form>
-                    {external && (
-                        <div className="setting-actions">
-                            <button type="button" className="btn-secondary" disabled={busy} onClick={() => void save({ mode: 'gaia' })}>
-                                {t('settings.server.useOwn')}
-                            </button>
-                        </div>
-                    )}
-                    {error && (
-                        <div className="model-warning" role="alert">
-                            <AlertCircle size={14} />
-                            <div className="model-warning-content">
-                                <strong>{keyAsked ? t('settings.server.needsKey') : t('settings.server.notSwitched')}</strong>
-                                <p>{error}</p>
-                            </div>
-                        </div>
-                    )}
                 </>
+            )}
+            {external && (
+                <div className="setting-actions">
+                    <button type="button" className="btn-secondary" disabled={busy} onClick={() => void save({ mode: 'gaia' })}>
+                        {t('settings.server.useOwn')}
+                    </button>
+                </div>
+            )}
+            {error && (
+                <div className="model-warning" role="alert">
+                    <AlertCircle size={14} />
+                    <div className="model-warning-content">
+                        <strong>{keyAsked ? t('settings.server.needsKey') : t('settings.server.notSwitched')}</strong>
+                        <p>{error}</p>
+                    </div>
+                </div>
             )}
         </section>
     );

@@ -159,6 +159,9 @@ func TestSSEClientCloseTreatsAnAlreadyEndedRunAsStopped(t *testing.T) {
 // A daemon that is gone by exit time cannot be told anything; Close says so.
 func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
 	f := newFakeRelay(t)
+	// Dropped by the relay rather than refused by a closed port: a freed port
+	// can be taken by another test process, which would then answer the cancel.
+	f.cancelDropped = true
 	started := make(chan struct{})
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
@@ -173,10 +176,6 @@ func TestSSEClientCloseReportsAnUndeliverableCancel(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	<-started
-	// Listener first: dropping the stream starts the cancel, which must not
-	// find the daemon still accepting.
-	f.srv.Listener.Close()
-	f.srv.CloseClientConnections()
 	err := c.Close()
 	if err == nil || !strings.Contains(err.Error(), "could not tell the 'email' agent to stop run") {
 		t.Fatalf("Close error = %v, want an undeliverable-cancel report", err)

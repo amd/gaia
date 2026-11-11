@@ -30,7 +30,8 @@ Tiers:
       plan names everything it keeps.
 
 Opt-in extras (only valid alongside ``--purge``):
-    * ``--purge-lemonade`` — best-effort Lemonade Server removal.
+    * ``--purge-lemonade`` — best-effort removal of a system-wide Lemonade
+      Server (GAIA's own goes with ``--purge``).
     * ``--purge-models``   — remove ``~/.cache/lemonade/models/``.
     * ``--purge-hf-cache`` — remove the HuggingFace hub cache (restores the
       legacy ``gaia uninstall --models`` cleanup capability).
@@ -222,6 +223,9 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "electron-updater.log",
         gaia / "electron-startup-failures.json",
         gaia / "bin",
+        # The frozen gaia the one-line installer keeps, and an AppImage's copy.
+        gaia / "core",
+        gaia / "app-core",
         gaia / "traces",
     ]
 
@@ -409,7 +413,7 @@ def _installer_posix_path_dirs(home: Optional[Path] = None) -> set:
 
 
 def _is_installer_export(line: str, allowed_dirs: set) -> bool:
-    """Current (venv/bin + bin) and pre-0.23 (venv/bin only) export shapes."""
+    """Current (bin only), 0.23+ (venv/bin + bin) and pre-0.23 (venv/bin only) shapes."""
     if not (line.startswith(_RC_EXPORT_PREFIX) and line.endswith('"')):
         return False
     dirs = line[len(_RC_EXPORT_PREFIX) : -1].split(":")
@@ -963,7 +967,7 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "                                   (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
-        "  --purge-lemonade                 Also uninstall Lemonade Server",
+        "  --purge-lemonade                 Also uninstall a system-wide Lemonade Server",
         "  --purge-models                   Also remove Lemonade's models cache",
         "  --purge-hf-cache                 Also remove the HuggingFace hub cache",
         "",
@@ -1173,10 +1177,10 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
 
     inst = instance.read_instance()
     if inst is None:
-        return True
+        return _stop_orphaned_sidecars(printer)
     try:
         if not instance.pid_alive(inst.pid):
-            return True
+            return _stop_orphaned_sidecars(printer)
         try:
             client.request_shutdown(inst)
         except DaemonError:
@@ -1200,6 +1204,28 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
         )
         return False
     _print(f"  [daemon] stopped the GAIA daemon (pid {inst.pid})", printer=printer)
+    return _stop_orphaned_sidecars(printer)
+
+
+def _stop_orphaned_sidecars(printer: Callable[[str], None] = print) -> bool:
+    """Stop the agents a dead daemon left running. False when one survives."""
+    from gaia.daemon.sidecars import ledger
+
+    killed, survivors = ledger.reap_after_stop()
+    for pid in killed:
+        if pid not in survivors:
+            _print(
+                f"  [daemon] stopped an agent the daemon left running (pid {pid})",
+                printer=printer,
+            )
+    if survivors:
+        pids = ", ".join(str(pid) for pid in survivors)
+        _print(
+            f"error: GAIA agent process(es) {pids} are still running. End them "
+            "(Task Manager on Windows, `kill -9` elsewhere), then re-run.",
+            printer=printer,
+        )
+        return False
     return True
 
 
@@ -1345,6 +1371,22 @@ def _is_running_from_venv(venv: Path) -> bool:
         return False
 
 
+def _is_launched_from(directory: Path) -> bool:
+    """Whether a console-script launcher in ``directory`` started this process.
+
+    uv's and pip's launchers set ``sys.argv[0]`` to their own path, less ``.exe``;
+    ``python.exe`` is then a child, so the launcher stays locked until we exit.
+    """
+    if not sys.argv or not sys.argv[0]:
+        return False
+    try:
+        return Path(sys.argv[0]).parent.resolve(strict=False) == directory.resolve(
+            strict=False
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def _powershell_literal(path: Path) -> str:
     """Quote a filesystem path as a single-quoted PowerShell literal."""
     return "'" + str(path).replace("'", "''") + "'"
@@ -1353,17 +1395,20 @@ def _powershell_literal(path: Path) -> str:
 def _defer_windows_venv_removal(
     venv: Path, *, printer: Callable[[str], None] = print
 ) -> bool:
-    """Schedule a best-effort delete of this process's venv after it exits.
+    """Schedule a best-effort delete of a directory this process runs from.
 
     Windows keeps ``python.exe`` and extension modules in the active virtual
-    environment open until this command exits. The detached helper therefore
-    waits for our PID, retries briefly, and records any final failure in the
-    system temp directory instead of hiding a failed cleanup.
+    environment open until this command exits, and the ``gaia.exe`` launcher in
+    ``~/.gaia/bin`` that started it. The detached helper therefore waits for our
+    PID (and a parent launched from ``venv``), retries briefly, and records any
+    final failure in the system temp directory instead of hiding a failed cleanup.
     """
     if not _is_windows():
         return False
 
-    log_path = Path(tempfile.gettempdir()) / f"gaia-uninstall-venv-{os.getpid()}.log"
+    log_path = (
+        Path(tempfile.gettempdir()) / f"gaia-uninstall-{venv.name}-{os.getpid()}.log"
+    )
     escaped_venv = _powershell_literal(venv)
     escaped_log = _powershell_literal(log_path)
     parent_pid = os.getppid()
@@ -1412,154 +1457,43 @@ def _defer_windows_venv_removal(
     return True
 
 
-def _resolve_lemonade_python() -> Optional[str]:
-    """Return the best-guess Python interpreter that owns ``lemonade-server``.
-
-    When called from the GAIA installer bundle, ``sys.executable`` is the
-    bundled venv, NOT where Lemonade was installed — so running ``pip
-    uninstall`` against it is always a no-op. Locate the real one by
-    inspecting ``lemonade-server`` on PATH:
-
-      * POSIX: read the script's shebang.
-      * Windows: walk the parent directory for ``python.exe`` /
-        ``Scripts/python.exe``.
-
-    Returns ``None`` when we can't make a confident guess; callers should
-    then skip the pip fallback rather than pip-uninstall the wrong env.
-    """
-    lemonade = shutil.which("lemonade-server")
-    if not lemonade:
-        return None
-
-    lemonade_path = Path(lemonade)
-
-    if sys.platform.startswith("win"):
-        # Typical layouts:
-        #   <env>/Scripts/lemonade-server.exe → <env>/python.exe
-        #   <env>/Scripts/lemonade-server.exe → <env>/Scripts/python.exe
-        scripts_dir = lemonade_path.parent
-        candidates = [
-            scripts_dir / "python.exe",
-            scripts_dir.parent / "python.exe",
-            scripts_dir / "pythonw.exe",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-        return None
-
-    # POSIX / macOS: parse the shebang of the console script.
-    try:
-        with open(lemonade_path, "rb") as fp:
-            first_line = fp.readline()
-    except OSError:
-        return None
-    if not first_line.startswith(b"#!"):
-        return None
-    shebang = first_line[2:].strip().decode("utf-8", errors="replace")
-    # Handle `#!/usr/bin/env python3` as well as a direct path.
-    parts = shebang.split()
-    if not parts:
-        return None
-    if parts[0].endswith("env") and len(parts) > 1:
-        return parts[1]
-    return parts[0]
-
-
 def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
-    """Best-effort Lemonade Server removal.
+    """Remove a system-wide Lemonade Server, if one is installed.
 
-    Returns False only when the installation check itself raised, because then
+    Returns False only when the installation check itself failed, because then
     "not installed" would be a guess and the caller must not report success. A
-    removal that fails after a good check is still reported as a warning and
-    returns True, so the rest of the uninstall flow proceeds.
+    removal that fails after a good check is reported as a warning and returns
+    True, so the rest of the uninstall flow proceeds.
     """
+    from gaia.installer.lemonade_installer import LemonadeInstaller
+
     _print("  [lemonade] attempting to uninstall Lemonade Server...", printer=printer)
-
-    # Strategy 1: the shared LemonadeInstaller class knows how to uninstall
-    # on Windows (msiexec) and Linux (apt / dpkg).
-    try:
-        from gaia.installer.lemonade_installer import LemonadeInstaller
-
-        installer = LemonadeInstaller()
-        info = installer.check_installation()
-        if info.check_failed:
-            _print(
-                f"  [lemonade] installation check failed: {info.error}",
-                printer=printer,
-            )
-            _print(
-                "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
-                "if it is present",
-                printer=printer,
-            )
-            return False
-        if not info.installed:
-            _print(
-                "  [lemonade] not installed — nothing to do",
-                printer=printer,
-            )
-            return True
-
-        result = installer.uninstall(silent=True)
-        if result.success:
-            _print(
-                "  [lemonade] uninstalled via LemonadeInstaller",
-                printer=printer,
-            )
-            return True
+    installer = LemonadeInstaller()
+    info = installer.check_installation()
+    if info.check_failed:
         _print(
-            f"  [lemonade] LemonadeInstaller.uninstall failed: {result.error}",
+            f"  [lemonade] installation check failed: {info.error}",
             printer=printer,
         )
-    except Exception as exc:  # pragma: no cover - defensive
         _print(
-            f"  [lemonade] LemonadeInstaller unavailable: {exc}",
+            "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
+            "if it is present",
             printer=printer,
         )
+        return False
+    if not info.installed:
+        _print("  [lemonade] not installed — nothing to do", printer=printer)
+        return True
 
-    # Strategy 2: pip uninstall against the interpreter that actually owns
-    # the ``lemonade-server`` console script. Pip-uninstalling against
-    # ``sys.executable`` is wrong here: when invoked from the installer
-    # bundle that's the GAIA venv, NOT where Lemonade lives.
-    python = _resolve_lemonade_python()
-    if python is None:
-        _print(
-            "  [lemonade] lemonade-server not on PATH; skipping pip uninstall.",
-            printer=printer,
-        )
+    result = installer.uninstall(silent=True)
+    if result.success:
+        _print("  [lemonade] uninstalled Lemonade Server", printer=printer)
     else:
-        try:
-            result = subprocess.run(
-                [python, "-m", "pip", "uninstall", "-y", "lemonade-sdk"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if result.returncode == 0:
-                _print(
-                    f"  [lemonade] removed via `{python} -m pip uninstall lemonade-sdk`",
-                    printer=printer,
-                )
-                return True
-            _print(
-                "  [lemonade] pip uninstall did not remove lemonade-sdk "
-                f"(exit {result.returncode}); giving up cleanly",
-                printer=printer,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _print(
-                f"  [lemonade] pip uninstall unavailable: {exc}",
-                printer=printer,
-            )
-
-    _print(
-        "  [lemonade] could not auto-remove Lemonade Server. If you want it "
-        "gone, uninstall it manually via your OS package manager.",
-        printer=printer,
-    )
-    return True  # best-effort — never fail the command
+        _print(
+            f"  [lemonade] could not uninstall Lemonade Server: {result.error}",
+            printer=printer,
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1584,6 +1518,7 @@ def execute_plan(
     """
     all_ok = True
     venv_path = _gaia_home(home) / "venv"
+    bin_path = _gaia_home(home) / "bin"
 
     for message in plan.blocked_edits:
         _print(f"  [error] {message}", printer=printer)
@@ -1592,13 +1527,15 @@ def execute_plan(
     def _remove(path: Path) -> None:
         nonlocal all_ok
         # Windows cannot delete the active venv's interpreter or extension
-        # modules. Defer this known GAIA-owned path before rmtree can leave a
-        # partially deleted environment for later purge steps to import from.
+        # modules, nor the ~/.gaia/bin launcher that started us. Defer these
+        # known GAIA-owned paths before rmtree can leave a partial tree behind.
         if (
-            path == venv_path
-            and _is_windows()
+            _is_windows()
             and not _is_link(path)
-            and _is_running_from_venv(path)
+            and (
+                (path == venv_path and _is_running_from_venv(path))
+                or (path == bin_path and _is_launched_from(path))
+            )
         ):
             if not _defer_windows_venv_removal(path, printer=printer):
                 all_ok = False
@@ -1842,7 +1779,7 @@ def register_subparser(
         "--purge-lemonade",
         action="store_true",
         dest="purge_lemonade",
-        help="Also uninstall Lemonade Server (requires --purge).",
+        help="Also uninstall a system-wide Lemonade Server (requires --purge).",
     )
     parser.add_argument(
         "--purge-models",

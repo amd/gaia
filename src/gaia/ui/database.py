@@ -270,8 +270,10 @@ _CHAT_SCHEMA_COLUMNS = {
     "messages": {
         "agent_steps",
         "inference_stats",
+        "library_notices",
         "model_messages",
         "search_text",
+        "stopped",
         "turn_summary",
     },
     "scheduled_tasks": {"last_error"},
@@ -315,6 +317,7 @@ class ChatDatabase:
         enable_wal(self._conn)
         self._schema_migration_active = False
         self._init_schema()
+        self._migrate_legacy_agent_mode()
         logger.info("Chat database initialized: %s", db_path)
 
     def _schema_is_current(self) -> bool:
@@ -419,6 +422,31 @@ class ChatDatabase:
                 migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
 
+    def _migrate_legacy_agent_mode(self) -> None:
+        """Rewrite a stored agent_mode 'autonomous' to 'goal_driven', once.
+
+        'autonomous' never had its own behaviour (#2005) and is refused on
+        write, so 'goal_driven' is what such a database already ran as.
+        """
+        # Read first: reopening a current database must take no write lock.
+        legacy = self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'agent_mode' AND value = 'autonomous'"
+        ).fetchone()
+        if legacy is None:
+            return
+        with self._transaction():
+            changed = self._conn.execute(
+                "UPDATE settings SET value = 'goal_driven' "
+                "WHERE key = 'agent_mode' AND value = 'autonomous'"
+            ).rowcount
+        if changed:
+            logger.warning(
+                "Migrated stored agent_mode 'autonomous' to 'goal_driven': "
+                "'autonomous' is not implemented "
+                "(https://github.com/amd/gaia/issues/2005) and always ran as "
+                "'goal_driven'."
+            )
+
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""
         self._conn.execute("""CREATE TABLE IF NOT EXISTS settings (
@@ -469,6 +497,9 @@ class ChatDatabase:
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
         self._add_column("messages", "turn_summary", "TEXT")
+        self._add_column("messages", "library_notices", "TEXT")
+        # 1 when the user's Stop ended this reply, so a reload still says so.
+        self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -952,7 +983,9 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -964,14 +997,15 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -984,6 +1018,8 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
+                    int(stopped),
                 ),
             )
 
@@ -1011,7 +1047,9 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -1029,6 +1067,7 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             if msg_id is not None:
@@ -1041,8 +1080,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1055,6 +1094,8 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
+                    int(stopped),
                 ),
             )
 
@@ -1119,6 +1160,11 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("library_notices"):
+                try:
+                    msg["library_notices"] = json.loads(msg["library_notices"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["library_notices"] = None
             if msg.get("turn_summary"):
                 try:
                     msg["turn_summary"] = json.loads(msg["turn_summary"])
@@ -1153,6 +1199,54 @@ class ChatDatabase:
                 ) from e
             out.append(
                 {"id": row["id"], "created_at": row["created_at"], "summary": summary}
+            )
+        return out
+
+    def answer_costs(
+        self, session_id: Optional[str] = None, since_day: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Each answer's saved cost, oldest first, for one chat or from *since_day* on.
+
+        *since_day* is a ``YYYY-MM-DD`` prefix compared as text, so it must sit at
+        or before the day wanted; callers trim the rows to the exact instant.
+        """
+        where = ["role = 'assistant'", "turn_summary IS NOT NULL"]
+        args: List[Any] = []
+        if session_id is not None:
+            where.append("session_id = ?")
+            args.append(session_id)
+        if since_day is not None:
+            where.append("created_at >= ?")
+            args.append(since_day)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, session_id, created_at, turn_summary FROM messages "
+                f"WHERE {' AND '.join(where)} ORDER BY created_at ASC, id ASC",
+                args,
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                summary = json.loads(row["turn_summary"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {row['session_id']} has an "
+                    f"unreadable turn summary ({e}); inspect the messages table "
+                    "in the chat database."
+                ) from e
+            cost = summary.get("cost") if isinstance(summary, dict) else None
+            model = summary.get("model") if isinstance(summary, dict) else None
+            out.append(
+                {
+                    "message_id": row["id"],
+                    "session_id": row["session_id"],
+                    "created_at": row["created_at"],
+                    "cost": cost if isinstance(cost, dict) else {"kind": "unknown"},
+                    "model": model.get("name") if isinstance(model, dict) else None,
+                    "remote": (
+                        bool(model.get("remote")) if isinstance(model, dict) else None
+                    ),
+                }
             )
         return out
 
