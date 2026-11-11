@@ -3482,13 +3482,6 @@ afterwards (or `swebench <run_dir>` does, later).
         ),
     )
 
-    # Agent list command — show installed agents + what the Agent Hub offers, so
-    # `gaia agent install <id>` is discoverable (and the id referenced in install
-    # errors resolves to a real command).
-    agent_subparsers.add_parser(
-        "list",
-        help="List installed agents and the agents available to install",
-    )
     _hide_subcommands(agent_subparsers, HIDDEN_AGENT_COMMANDS)
 
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
@@ -8722,7 +8715,7 @@ def handle_agent_command(args):
         print("❌ Error: No agent action specified")
         print(
             "Available actions: test, configure, health, status, export, import, "
-            "install, list"
+            "install"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -8733,78 +8726,9 @@ def handle_agent_command(args):
         handle_agent_import(args)
     elif args.agent_action == "install":
         handle_agent_install(args)
-    elif args.agent_action == "list":
-        handle_agent_list(args)
     else:
         print(f"❌ Unknown agent action: {args.agent_action}")
         sys.exit(1)
-
-
-def handle_agent_list(_args):
-    """List installed agents and the agents available to install.
-
-    Read-only discovery for ``gaia agent install`` — degrades to an
-    installed-only listing (with a loud note) if the hub catalog is unreachable,
-    never a silent empty result.
-    """
-    from gaia.hub import catalog, installer
-
-    installed = installer.list_installed()
-
-    available = []
-    offline = False
-    try:
-        result = catalog.load_index()
-        available = result.agents
-        offline = result.offline
-    except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
-        print(f"⚠ Could not reach the agent catalog: {exc}", file=sys.stderr)
-
-    available_ids = {e.get("id") for e in available}
-    if available:
-        suffix = " (offline cache)" if offline else ""
-        print(f"Available to install{suffix}:")
-        for entry in sorted(available, key=lambda a: a.get("id", "")):
-            aid = entry.get("id", "?")
-            ver = entry.get("latest_version", "?")
-            mark = ""
-            if aid in installed:
-                # Show what is on disk; build metadata (+...) doesn't change the release.
-                local = installed[aid].version
-                if ver == "?" or local.split("+", 1)[0] == str(ver).split("+", 1)[0]:
-                    mark = "  [installed]"
-                else:
-                    mark = f"  [installed; catalog latest {ver}]"
-                ver = local
-            gate, gate_error = catalog.listing_core_gate(entry)
-            if gate_error:
-                mark += f"  [unreadable min_gaia_version: {gate_error}]"
-            if gate.requires_gaia_version:
-                mark += f"  [needs GAIA {gate.requires_gaia_version}+"
-                mark += (
-                    f"; installs {gate.installable_version}]"
-                    if gate.installable_version
-                    else "]"
-                )
-            print(f"  {aid:<24} {ver}{mark}")
-
-    extra = [aid for aid in sorted(installed) if aid not in available_ids]
-    if extra:
-        print("\nInstalled (not in the catalog):")
-        for aid in extra:
-            print(f"  {aid:<24} {installed[aid].version}")
-
-    if not available and not installed:
-        print("No agents installed, and the agent catalog is unavailable.")
-    else:
-        print("\nInstall one with: gaia agent install <id>")
-        if any(
-            catalog.listing_core_gate(e)[0].requires_gaia_version for e in available
-        ):
-            print(
-                f"A version marked 'needs GAIA' installs after upgrading the core: "
-                f"{catalog.core_upgrade_hint()}"
-            )
 
 
 def handle_agent_install(args):
@@ -8839,10 +8763,6 @@ def handle_agent_install(args):
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: surface loudly, exit 1
         print(f"❌ Could not install '{agent_id}': {exc}", file=sys.stderr)
-        print(
-            "   If the id is wrong, run `gaia agent list` to see available agents.",
-            file=sys.stderr,
-        )
         sys.exit(1)
 
     print(f"✅ Installed '{result.id}' v{result.version} to {result.path}")

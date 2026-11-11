@@ -203,8 +203,7 @@ def _require_safe_agent_id(agent_id: str) -> str:
         raise InstallError(
             f"Invalid agent id {agent_id!r}: agent ids must start with a letter "
             "or digit and contain only letters, digits, '.', '_' or '-' "
-            "(max 128 chars). Check the id against the hub catalog "
-            "('gaia agent list') or the package's gaia-agent.yaml."
+            "(max 128 chars). Check the id against the package's gaia-agent.yaml."
         )
     return agent_id
 

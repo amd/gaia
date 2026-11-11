@@ -926,16 +926,12 @@ The download-server path fetches the published, SHA-verified artifact into
 `~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Install headlessly with:
 
 ```bash
-gaia agent list                            # installed + available to install
 gaia agent install <id>                    # latest published version
 gaia agent install <id> --version 0.5.0    # a specific version
 gaia agent install <id> --trust            # required for non-verified agents
 ```
 
-`gaia agent list` shows what is available to install so you know which id to pass.
-An installed agent shows the version on disk with an `[installed]` marker, plus the
-catalog's latest version when the two differ. This is the supported way to provision a sidecar
-agent on a machine with no UI.
+This is the supported way to provision a sidecar agent on a machine with no UI.
 
 <Note>
 `gaia agent install` installs **in-process**. Updating an agent that is

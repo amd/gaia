@@ -802,7 +802,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia stats` - Show statistics from the most recent run
 - `gaia memory` - Manage agent memory (onboarding bootstrap, status)
 - `gaia diagnostics` - Bundle logs + system info into a tarball for bug reports
-- `gaia agent {test|configure|health|status|export|import|install|list}` - Manage agents
+- `gaia agent {test|configure|health|status|export|import|install}` - Manage agents
 
 `gaia hub` and `gaia agent {init|version|pack|publish|login}` still work for scripts
 and release tooling but are hidden from `gaia -h`. **There is no user-facing Agent

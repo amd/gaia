@@ -86,9 +86,9 @@ def test_install_error_exits_nonzero_and_is_loud(monkeypatch, capsys):
     assert "checksum mismatch" in err
 
 
-def test_install_unknown_id_suggests_agent_list(monkeypatch, capsys):
+def test_install_unknown_id_names_no_removed_command(monkeypatch, capsys):
     # A typo'd id 404s on the manifest fetch (a plain requests error, not an
-    # InstallError) — the generic branch must point the user at `gaia agent list`.
+    # InstallError); the error must not send the user to `gaia agent list`.
     def _boom(agent_id, *, version=None, trusted=False):
         raise RuntimeError(
             "404 Client Error: Not Found for url: .../emial/manifest.json"
@@ -100,7 +100,14 @@ def test_install_unknown_id_suggests_agent_list(monkeypatch, capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "Could not install 'emial'" in err
-    assert "gaia agent list" in err
+    assert "agent list" not in err
+
+
+def test_agent_list_is_not_a_command(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.build_parser().parse_args(["agent", "list"])
+    assert exc.value.code == 2
+    assert "invalid choice: 'list'" in capsys.readouterr().err
 
 
 def test_install_trust_required_names_the_flag(monkeypatch, capsys):
@@ -113,121 +120,3 @@ def test_install_trust_required_names_the_flag(monkeypatch, capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "--trust" in err
-
-
-# ---------------------------------------------------------------------------
-# gaia agent list
-# ---------------------------------------------------------------------------
-
-
-class _CatalogResult:
-    def __init__(self, agents, offline=False):
-        self.agents = agents
-        self.offline = offline
-
-
-class _Installed:
-    def __init__(self, version):
-        self.version = version
-
-
-def _patch_list(monkeypatch, *, agents, installed, offline=False, raise_exc=None):
-    from gaia.hub import catalog
-    from gaia.hub import installer as inst
-
-    monkeypatch.setattr(inst, "list_installed", lambda *a, **k: installed)
-    if raise_exc is not None:
-
-        def _boom(*a, **k):
-            raise raise_exc
-
-        monkeypatch.setattr(catalog, "load_index", _boom)
-    else:
-        monkeypatch.setattr(
-            catalog, "load_index", lambda *a, **k: _CatalogResult(agents, offline)
-        )
-
-
-def test_list_shows_catalog_with_installed_marker(monkeypatch, capsys):
-    _patch_list(
-        monkeypatch,
-        agents=[
-            {"id": "gaia", "latest_version": "0.5.0"},
-            {"id": "summarize", "latest_version": "1.2.0"},
-        ],
-        installed={"gaia": _Installed("0.5.0")},
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    out = capsys.readouterr().out
-    assert "gaia" in out and "0.5.0" in out
-    assert "[installed]" in out  # gaia is marked installed
-    assert "summarize" in out
-    assert "gaia agent install <id>" in out
-
-
-def test_list_shows_installed_version_not_catalog_latest(monkeypatch, capsys):
-    _patch_list(
-        monkeypatch,
-        agents=[{"id": "gaia", "latest_version": "0.3.0"}],
-        installed={"gaia": _Installed("0.3.1+v0.25.1-rc5")},
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
-    assert "0.3.1+v0.25.1-rc5" in line
-    assert "[installed; catalog latest 0.3.0]" in line
-
-
-def test_list_same_release_ignores_build_metadata(monkeypatch, capsys):
-    _patch_list(
-        monkeypatch,
-        agents=[{"id": "gaia", "latest_version": "0.3.1"}],
-        installed={"gaia": _Installed("0.3.1+v0.25.1-rc5")},
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
-    assert "0.3.1+v0.25.1-rc5  [installed]" in line
-    assert "catalog latest" not in line
-
-
-def test_list_without_a_catalog_version_says_installed_only(monkeypatch, capsys):
-    _patch_list(
-        monkeypatch,
-        agents=[{"id": "gaia"}],
-        installed={"gaia": _Installed("0.3.1")},
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    line = next(ln for ln in capsys.readouterr().out.splitlines() if "gaia " in ln)
-    assert "0.3.1  [installed]" in line
-    assert "catalog latest" not in line
-
-
-def test_list_degrades_loudly_when_hub_unreachable(monkeypatch, capsys):
-    from gaia.hub import catalog
-
-    _patch_list(
-        monkeypatch,
-        agents=[],
-        installed={"gaia": _Installed("0.5.0")},
-        raise_exc=catalog.CatalogError("hub down"),
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    captured = capsys.readouterr()
-    # Loud note on stderr, not a silent empty result.
-    assert "Could not reach the agent catalog" in captured.err
-    # Still lists what IS installed.
-    assert "gaia" in captured.out
-    assert "Installed (not in the catalog)" in captured.out
-
-
-def test_list_empty_state_is_actionable(monkeypatch, capsys):
-    from gaia.hub import catalog
-
-    _patch_list(
-        monkeypatch,
-        agents=[],
-        installed={},
-        raise_exc=catalog.CatalogError("hub down"),
-    )
-    cli.handle_agent_list(Namespace(agent_action="list"))
-    out = capsys.readouterr().out
-    assert "No agents installed" in out
