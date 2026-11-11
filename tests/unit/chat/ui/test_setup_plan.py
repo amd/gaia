@@ -598,6 +598,27 @@ def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
     assert cloud["id"] not in ids
 
 
+@pytest.mark.parametrize(
+    "entry, kept",
+    [
+        ({"id": "fireworks.glm-5p3-flash", "labels": ["chat"]}, False),
+        ({"id": "openrouter.some-model", "labels": ["chat", "cloud"]}, False),
+        ({"id": "user.My-Local-GGUF", "labels": ["chat"], "device": "none"}, True),
+    ],
+)
+def test_catalog_tells_a_local_model_from_a_cloud_one(
+    flm_box, monkeypatch, entry, kept
+):
+    fake = flm_box()
+    listed = fake.list_models
+    row = {"downloaded": True, "recipe": "llamacpp", **entry}
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [row]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert (row["id"] in ids) is kept
+
+
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     flm_box()
     plan = sp.build_plan()
