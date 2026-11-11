@@ -28,6 +28,8 @@ export interface VoiceStatus {
     silence_ms: number;
     status_updates: boolean;
     captions: boolean;
+    /** Hands-free only: answer when addressed by name, or just after GAIA spoke. */
+    wake_word?: boolean;
 }
 
 export interface VoiceSettings {
@@ -38,6 +40,7 @@ export interface VoiceSettings {
     silence_ms: number;
     status_updates: boolean;
     captions: boolean;
+    wake_word: boolean;
 }
 
 /** `language: ''` goes back to following the app's language. */

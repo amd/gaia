@@ -62,7 +62,7 @@ vi.mock('../../services/voiceApi', () => ({
     downloadVoiceModel: vi.fn(async (model: string) => ({ model, downloaded: true })),
 }));
 
-import { afterName, afterStopWord, asksForQuiet, closeVoice, imageIn, openVoice, primaryAction, type VoiceHost } from '../controller';
+import { afterName, afterStopWord, asksForQuiet, closeVoice, FOLLOW_UP_MS, imageIn, toggleMute, openVoice, primaryAction, type VoiceHost } from '../controller';
 
 const state = () => useVoiceStore.getState();
 const socket = () => fx.sockets[fx.sockets.length - 1];
@@ -360,6 +360,61 @@ describe('voice mode turn loop', () => {
         expect(asksForQuiet('Stop the music.')).toBe(false);
         expect(afterName('okay Gaia, what time is it')).toBe('what time is it');
         expect(afterName('what a gala')).toBeNull();
+    });
+
+    describe('wake word', () => {
+        const WAKE: VoiceStatus = { ...READY, wake_word: true };
+        afterEach(() => vi.useRealTimers());
+
+        it('opening voice mode has her attention; after a quiet while only her name does', async () => {
+            const h = await open(host(), WAKE);
+            vi.useFakeTimers();
+            serve({ type: 'ready', speech: true });
+            expect(state().standby).toBe(false);
+            vi.advanceTimersByTime(FOLLOW_UP_MS + 1);
+            expect(state().standby).toBe(true);
+            serve({ type: 'final', text: 'I just did not upload them into the folder.' });
+            expect(h.sendTurn).not.toHaveBeenCalled();
+            serve({ type: 'final', text: 'Hey GAIA, what time is it?' });
+            expect(h.sendTurn).toHaveBeenCalledWith('what time is it?', expect.anything());
+            expect(state().standby).toBe(false);
+        });
+
+        it('a reply right after she speaks needs no name, and her work never times out', async () => {
+            const h = await open(host(), WAKE);
+            vi.useFakeTimers();
+            serve({ type: 'ready', speech: true });
+            serve({ type: 'final', text: 'draw a heron' });
+            vi.advanceTimersByTime(FOLLOW_UP_MS * 5);
+            expect(state().standby).toBe(false);
+            tap!.done({ type: 'done' } as StreamEvent);
+            vi.advanceTimersByTime(FOLLOW_UP_MS - 500);
+            serve({ type: 'final', text: 'make it blue' });
+            expect(h.sendTurn).toHaveBeenCalledTimes(2);
+        });
+
+        it('push-to-talk never waits for a name', async () => {
+            const h = await open(host(), { ...WAKE, turn_taking: 'push_to_talk' });
+            vi.useFakeTimers();
+            serve({ type: 'ready', speech: true });
+            vi.advanceTimersByTime(FOLLOW_UP_MS * 3);
+            serve({ type: 'final', text: 'what time is it' });
+            expect(h.sendTurn).toHaveBeenCalledOnce();
+        });
+    });
+
+    it('mute turns the microphone off and on without stopping GAIA', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'draw a heron' });
+        toggleMute();
+        expect(state().muted).toBe(true);
+        expect(fx.mics[fx.mics.length - 1].pause).toHaveBeenCalled();
+        expect(h.stopTurn).not.toHaveBeenCalled();
+        expect(state().turnRunning).toBe(true);
+        toggleMute();
+        expect(state().muted).toBe(false);
+        expect(fx.mics[fx.mics.length - 1].resume).toHaveBeenCalled();
     });
 
     it('a bare "stop" only stops', async () => {

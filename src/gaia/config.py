@@ -273,6 +273,8 @@ class GaiaConfig:
         voice_silence_ms: How long a pause ends your turn (300-1200).
         voice_status_updates: Speak a short line before each step in voice mode.
         voice_captions: Show live captions in voice mode.
+        voice_wake_word: In hands-free voice mode, answer only when addressed
+            ("Hey GAIA") or just after GAIA spoke.
     """
 
     profile: str = "chat"
@@ -303,6 +305,7 @@ class GaiaConfig:
     voice_silence_ms: int = 500
     voice_status_updates: bool = True
     voice_captions: bool = True
+    voice_wake_word: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
