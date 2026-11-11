@@ -43,7 +43,12 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -155,6 +160,11 @@ from gaia.agents.base.turn_scope import (
     POST_ANSWER_CLOSING_PROMPT,
     REOPENED_MARKER,
     TurnScopeGuard,
+)
+from gaia.agents.base.unasked_edits import (
+    limits_edit,
+    removal_note,
+    unasked_removals,
 )
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
@@ -693,7 +703,6 @@ class ToolExecutionTimeout(Exception):
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
-    "run_cli_command",
     # Installs software, and signs a CLI in to the user's account. Both mutate
     # the machine on the user's behalf, and neither can ever be pre-authorized:
     # the only grant that skips this gate covers ``run_shell_command`` reads
@@ -1435,6 +1444,8 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    # Only a bare "Starting now."; "Starting with X ... now" is often a fact.
+    r"|starting now(?:[.!]|\.\.\.|…)?$"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1442,6 +1453,9 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 )
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+_STEP_HEADING_PATTERN = re.compile(
+    r"(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\s*:?", re.IGNORECASE
 )
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
@@ -1631,6 +1645,10 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         _PLAN_HEADING_PATTERN.match(re.sub(r"[*_`#>]", "", line).strip())
         for line in heading_lines
     ):
+        return "narration"
+    # Only a bare "Step 1/3" heading with nothing under it; any step text is content.
+    step = _STEP_HEADING_PATTERN.fullmatch(last_line)
+    if step and int(step.group(1)) < int(step.group(2)):
         return "narration"
     return None
 
@@ -2253,10 +2271,10 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -2746,7 +2764,6 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        use_chatgpt: bool = False,
         claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
@@ -2778,7 +2795,6 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -2841,10 +2857,6 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
-        if use_chatgpt:
-            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -2872,6 +2884,7 @@ Do NOT wrap conversational replies in JSON.
         # the entries from _turn_error_start on.
         self.error_history = []
         self._turn_error_start = 0
+        self._turn_unasked_removals = []
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -2960,13 +2973,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2975,7 +2996,25 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
@@ -3094,8 +3133,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -3106,7 +3143,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -3135,7 +3172,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
@@ -4166,6 +4203,10 @@ Do NOT wrap conversational replies in JSON.
             None if self._active_tool_filter is None else list(self._active_tool_filter)
         )
         return schemas
+
+    def _history_tool_schemas(self):
+        """The tool schemas history is budgeted against."""
+        return self._openai_tools
 
     def _thin_tool_schemas(self) -> bool:
         """True when ``tools=`` carries thin schemas, with full docs on request.
@@ -7115,6 +7156,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _skill_tool_scope(self, tool_name: str) -> Any:
+        """Bind a loaded skill's tool to this agent, as its body is when it runs.
+
+        A skill's preflight and approval prompt need the agent too, and a skill
+        tool has no ``self``; any other tool gets a no-op context.
+        """
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill is None:
+            return contextlib.nullcontext()
+        from gaia.skills.context import bind
+
+        return bind(self, skill)
+
     def _policy_refusal(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -7143,7 +7198,8 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args or {})
+            with self._skill_tool_scope(tool_name):
+                refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -7481,6 +7537,7 @@ Do NOT wrap conversational replies in JSON.
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
             if outermost:
+                self._note_edit_removals(tool_args, result)
                 result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
@@ -7498,6 +7555,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            self._note_edit_removals(tool_args, result)
             return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
@@ -7521,6 +7579,40 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _note_edit_removals(self, tool_args: Any, result: Any) -> None:
+        """Keep the lines a "change nothing else" edit removed unasked."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        old, new = args.get("old_content"), args.get("new_content")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return
+        if self._is_error_result(result):
+            return
+        request = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        if not limits_edit(str(request or "")):
+            return
+        removals = getattr(self, "_turn_unasked_removals", None)
+        if removals is None:
+            return
+        raw_path = str(args.get("file_path") or "")
+        path = os.path.abspath(raw_path) if raw_path else ""
+        key = os.path.normcase(path)
+        path = next((p for p, _ in removals if os.path.normcase(p) == key), path)
+
+        def _fold(line: str) -> str:
+            return " ".join(line.split()).lower()
+
+        restored = {_fold(line) for line in new.splitlines()}
+        removals[:] = [
+            (p, line)
+            for p, line in removals
+            if os.path.normcase(p) != key or _fold(line) not in restored
+        ]
+        for line in unasked_removals(old, new, str(request)):
+            if (path, line) not in removals:
+                removals.append((path, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
@@ -7718,7 +7810,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, RESOLVED_PATH_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -7771,9 +7870,17 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        prompt_args = _with_resolved_target(
-            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
-        )
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        prompt_args = _with_resolved_target(prompt_args, preflight)
+        # A tool whose arguments don't say what will happen shows what will,
+        # on top of whatever the host already added to the prompt.
+        prompt_args_of = getattr(preflight, "prompt_args_of", None)
+        if callable(prompt_args_of):
+            with self._skill_tool_scope(tool_name):
+                shown = prompt_args_of(tool_args)
+            prompt_args = (
+                {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
+            )
         if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
             resolved_path = prompt_args.get("file_path")
             if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
@@ -7814,9 +7921,11 @@ Do NOT wrap conversational replies in JSON.
             }
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above. So is a call
-        # only a person may approve.
+        # only a person may approve, or one approved on its exact text.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
+            prompt_args.get(RISK_NOTE_ARG)
+            or prompt_args.get(NEEDS_PERSON_ARG)
+            or prompt_args.get(EXACT_TEXT_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
@@ -7847,6 +7956,11 @@ Do NOT wrap conversational replies in JSON.
             ):
                 note_decision(tool_name, bool(approved))
             if not approved:
+                # What a preflight prepared for this prompt must not outlive a no.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:
@@ -8810,9 +8924,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -8844,6 +8960,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8880,7 +9002,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -9513,12 +9641,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 
@@ -10222,7 +10345,7 @@ Do NOT wrap conversational replies in JSON.
             return []
         records = getattr(self, "_turn_tool_executions", None) or []
         written_keys = {evidence.key(p) for p in written}
-        inputs = []
+        inputs, input_names = [], []
         for raw in input_paths(records) + mentioned_paths(query):
             path = path_locator(roots)(raw)
             if path is None or evidence.key(path) in written_keys:
@@ -10233,7 +10356,10 @@ Do NOT wrap conversational replies in JSON.
                 and not validator.validate_read(path, prompt_user=False)[0]
             ):
                 continue
-            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            text = blocks_text(self._deliverable_blocks(path))
+            inputs.append(text)
+            if text.strip():
+                input_names.append(path)
             if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
                 break
         return file_findings(
@@ -10242,6 +10368,7 @@ Do NOT wrap conversational replies in JSON.
             query=query,
             context=history,
             inputs=inputs,
+            input_names=input_names,
             answer=answer,
         )
 
@@ -10340,6 +10467,10 @@ Do NOT wrap conversational replies in JSON.
         note = self._planted_instructions_note(body)
         if note:
             body = f"{body.rstrip()}\n\n{note}"
+        removals = getattr(self, "_turn_unasked_removals", None) or []
+        removed = removal_note(removals, body)
+        if removed:
+            body = f"{body.rstrip()}\n\n{removed}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10775,6 +10906,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
+        self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
         self._last_tool_schemas = None
@@ -10831,7 +10963,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -10844,7 +10976,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -10883,6 +11017,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         stopped_on_announced_step = False
         look_first_reprompted = False
+        save_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         corrected_test_claims: set = set()
@@ -12430,7 +12565,6 @@ Do NOT wrap conversational replies in JSON.
                     _QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
-                        "query_indexed_documents",
                     )
                     if tool_name in _QUERY_TOOLS:
                         result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12713,7 +12847,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
-                    "query_indexed_documents",
                 )
                 if tool_name in _QUERY_TOOLS:
                     result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12896,8 +13029,7 @@ Do NOT wrap conversational replies in JSON.
                 # This is a known failure pattern — the agent stops mid-workflow.
                 _INDEX_TOOLS = (
                     "index_document",
-                    "index_documents",
-                    "index_dir",
+                    "index_directory",
                     "index_folder",
                 )
                 _PLANNING_PHRASES = (
@@ -12935,7 +13067,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
-                    "query_indexed_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1
@@ -13104,6 +13235,23 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
+                        continue
+
+                # "Please remember this" answered with "noted" and no save.
+                unsaved = getattr(self, "_unsaved_memory_request", None)
+                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
+                    called = {name for name, _ in tool_call_log} | {
+                        record.get("tool") for record in self._turn_tool_executions
+                    }
+                    nudge = unsaved(called)
+                    if nudge:
+                        save_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Asked to remember, nothing saved; asking "
+                            "the agent to save it"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        conversation.append({"role": "user", "content": nudge})
                         continue
 
                 # Universal planning-text guard: catch any short response that is

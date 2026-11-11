@@ -32,7 +32,6 @@ Atomicity guarantees:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -289,14 +288,3 @@ def check_agent_grant(
     """
     granted = set(list_agent_grants(connector_id).get(agent_id, []))
     return set(required_scopes) <= granted
-
-
-# Public alias kept for the asyncio-friendly API. The underlying call is
-# sync because file I/O on local disk is fast and the per-process write
-# is rare. Callers in async code can use ``await asyncio.to_thread(...)``
-# if they need to keep the loop unblocked under heavy concurrency.
-async def grant_agent_async(
-    connector_id: str, agent_id: str, scopes: List[str]
-) -> None:
-    """Async wrapper around ``grant_agent`` for native-async callers."""
-    await asyncio.to_thread(grant_agent, connector_id, agent_id, scopes)

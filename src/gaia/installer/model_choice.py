@@ -96,10 +96,6 @@ class NeedsAcknowledgement(Exception):
         self.detail = detail
 
 
-class ModelChoiceError(Exception):
-    """A model choice that cannot be made, with what to do instead."""
-
-
 def ids_match(a: Optional[str], b: Optional[str]) -> bool:
     from gaia.llm.lemonade_client import _model_ids_match
 

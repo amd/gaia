@@ -122,7 +122,7 @@ func TestRelayedModelSwitchIsNeverSentAsAQuestion(t *testing.T) {
 	if len(*saves) != 0 {
 		t.Fatalf("the switch was saved before the agent ran a turn on it: %+v", *saves)
 	}
-	m = finishTurn(t, m)
+	finishTurn(t, m)
 	if len(*saves) != 1 || (*saves)[0] != (savedCall{"local", localModel}) {
 		t.Errorf("the switch was not remembered after a turn completed on it: %+v", *saves)
 	}
@@ -185,7 +185,7 @@ func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "AMD LLM Gateway · DeepSeek-V4.1-Flash (remote)") {
 		t.Errorf("header = %q", h)
 	}
-	m = finishTurn(t, m)
+	finishTurn(t, m)
 	if len(*saves) != 1 || (*saves)[0] != (savedCall{"amd", gatewayMdl}) {
 		t.Errorf("saved %+v", *saves)
 	}

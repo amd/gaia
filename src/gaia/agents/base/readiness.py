@@ -565,17 +565,6 @@ def pull_model(probe_base: str, model_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def model_list_unreadable(hint: Optional[str]) -> bool:
-    """Whether a hint reports the one failure the structured fields cannot.
-
-    The backend answered /health but its model list read failed, so
-    ``present:false`` means "could not tell", not "missing". Only the hint
-    carries that distinction.
-    """
-    h = (hint or "").lower()
-    return "model list" in h and "could not be read" in h
-
-
 def compute_init_status(
     requirements: AgentRequirements, agent_name: str = "This agent"
 ):

@@ -906,9 +906,9 @@ describe('status hues stay on status', () => {
 
     /** A selector naming any of these is claiming a status, so it may paint one. */
     const STATUS_WORDS = [
-        'error', 'danger', 'fail', 'warn', 'deny', 'cancel',
+        'error', 'danger', 'fail', 'warn', 'deny',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'unsupported', 'bad',
+        'urgent', 'missing', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

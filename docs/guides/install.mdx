@@ -90,6 +90,8 @@ This is the page to start from if you want to **use** GAIA. GAIA runs AI agents 
 
     AppImages are self-contained and require no installation. Move it anywhere convenient (e.g., `~/Applications/`).
 
+    On launch GAIA adds itself to your app grid by writing `gaia-desktop.desktop` to `~/.local/share/applications/`, so the desktop shows its window with GAIA's name and icon. Move the AppImage and the next launch updates it. If an AppImage manager such as Gear Lever or AppImageLauncher already added GAIA to the app grid, GAIA keeps that entry and writes none of its own.
+
   </Tab>
 </Tabs>
 
@@ -359,7 +361,7 @@ To also remove your data, run this as your own user before you remove the packag
 ```
 
 ### Linux (AppImage)
-Delete the `.AppImage` file. To also remove your data, delete `~/.gaia/`.
+Delete the `.AppImage` file. Its app-grid entry hides itself once the file is gone; to remove it too, delete `~/.local/share/applications/gaia-desktop.desktop` and `~/.local/share/icons/hicolor/256x256/apps/gaia-desktop.png`. To also remove your data, delete `~/.gaia/`.
 
 ### Tiered cleanup with `gaia uninstall`
 

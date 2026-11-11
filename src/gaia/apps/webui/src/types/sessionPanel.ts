@@ -130,8 +130,3 @@ export interface SessionGit {
     repos: GitRepo[];
     reason?: string;
 }
-
-export interface TunnelDevice {
-    name: string;
-    lastSeen: string;
-}

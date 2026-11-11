@@ -350,8 +350,7 @@ Agents accept many configuration parameters. Here's what each one does:
 agent = MyAgent(
     # === LLM Selection ===
     use_claude=False,              # Use Anthropic Claude API
-    use_chatgpt=False,             # Removed; True raises migration guidance
-    # If both are False, uses local Lemonade Server
+    # If False, uses local Lemonade Server
 
     # === Local LLM Settings ===
     base_url="http://localhost:13305/api/v1",  # Lemonade server URL
@@ -385,7 +384,7 @@ agent = MyAgent()
 # Or explicitly configure
 agent = MyAgent(
     base_url="http://localhost:13305/api/v1",
-    model_id="Qwen3.5-35B-A3B-GGUF"
+    model_id="Qwen3.6-35B-A3B-GGUF"
 )
 ```
 
@@ -433,11 +432,9 @@ agent = MyAgent(
 
 <Accordion title="Gateway models through Lemonade">
 
-The direct OpenAI and LiteLLM adapters have been removed. Configure the upstream
-model in Lemonade and pass its server URL and catalog model ID to the agent.
-See [gateway migration](/sdk/sdks/llm#gateway-migration). Legacy
-`use_chatgpt=True` calls raise an actionable error rather than selecting another
-provider.
+Configure the upstream model in Lemonade and pass its server URL and catalog
+model ID to the agent.
+See [gateway migration](/sdk/sdks/llm#gateway-migration).
 
 </Accordion>
 

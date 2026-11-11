@@ -7,7 +7,18 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from gaia.llm.local_only import CloudDisabledError
 from gaia.utils import perf_trace
@@ -1040,8 +1051,11 @@ class LemonadeProvider(LLMClient):
         port: Optional[int] = None,
         system_prompt: Optional[str] = None,
         api_key: Optional[str] = None,
+        model_metadata: Optional[Iterable[Dict[str, Any]]] = None,
         **kwargs,
     ):
+        """*model_metadata*: ``/models`` entries the caller already read, so
+        ``cloud_model_provider`` knows them without another catalog request."""
         # Build kwargs for LemonadeClient, only including non-None values
         backend_kwargs = {}
         if model is not None:
@@ -1057,6 +1071,8 @@ class LemonadeProvider(LLMClient):
         backend_kwargs.update(kwargs)
 
         self._backend = LemonadeClient(**backend_kwargs)
+        if model_metadata is not None:
+            self._backend.remember_model_metadata(model_metadata)
         self._model = model
         self._last_model = model
         self._system_prompt = system_prompt
@@ -1079,9 +1095,10 @@ class LemonadeProvider(LLMClient):
 
         Goes through the backend, which carries the catalog metadata, so a
         provider discovered at runtime is recognised as well as the two whose
-        id prefixes are known up front. Answers ``None`` for a runtime-
-        discovered provider until a client in this process has read the catalog
-        (``refresh_model_catalog``, or any call that reads ``list_models``).
+        id prefixes are known up front. Names a runtime-discovered provider
+        only once this client holds its catalog entry (``model_metadata`` at
+        construction, or any call that reads ``list_models``); before that, a
+        model another client discovered counts as cloud under its id prefix.
         """
         return self._backend.cloud_model_provider(
             model or self._last_model or self._model or DEFAULT_MODEL_NAME
@@ -1108,18 +1125,6 @@ class LemonadeProvider(LLMClient):
     ) -> bool:
         """Wait for GAIA's own server to answer again (see ``LemonadeClient``)."""
         return self._backend.wait_for_gaia_lemonade(model, on_status=on_status)
-
-    def refresh_model_catalog(self, show_all: bool = True) -> None:
-        """Read the Lemonade catalog once so ``cloud_model_provider`` can
-        recognise a runtime-discovered provider right away.
-
-        A freshly constructed client has no catalog metadata yet —
-        ``cloud_model_provider`` only reads what ``list_models`` has cached —
-        so anything composed from it immediately after construction (a
-        switch message, a rebuilt system prompt) would call a runtime-
-        discovered cloud model local (#4365).
-        """
-        self._backend.list_models(show_all=show_all)
 
     def generate(
         self,

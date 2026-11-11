@@ -68,6 +68,11 @@ A document only joins `self.rag.indexed_files` once it is searchable. While one
 is still indexing in the background, `documents_still_indexing(self.rag)` (in
 `gaia.agents.tools.rag_tools`) returns its path; `ChatAgent` uses it to tell
 the model each turn which documents are indexed and which are not ready yet.
+When a background index finishes, the indexing thread records the document on
+`self.indexed_files` and `self.current_session` and rebuilds the system prompt,
+the same as a foreground index, so no second tool call is needed. If it fails
+instead, `documents_failed_indexing(self.rag)` returns `(path, reason)` until
+the document is indexed again, and `ChatAgent` tells the model to report it.
 
 Of the five, only `self.rag` is enforced at the point of use: `query_documents`
 and `query_specific_file` read it through a helper that raises a
@@ -349,7 +354,9 @@ class RAGToolsMixin:
                 "already_indexed": bool,
                 "reindexed": bool,
                 "error_type": str,   # "embedding_unavailable" on an embedder
-                "next_step": str     # outage, with how to fix it
+                                     # outage; "vision_model_failed" when the
+                                     # vision model read none of the images
+                "next_step": str     # with how to fix an embedder outage
             }
         """
         pass

@@ -284,17 +284,3 @@ on user needs."""
                 return self.get_vlm_system_prompt()
         """
         return self.get_base_vlm_guidelines()
-
-    def cleanup_vlm(self) -> None:
-        """
-        Cleanup VLM resources.
-
-        Call this when done with VLM operations to free resources.
-        """
-        if hasattr(self, "vlm_client") and self.vlm_client:
-            try:
-                if hasattr(self.vlm_client, "cleanup"):
-                    self.vlm_client.cleanup()
-                logger.debug("VLM client cleaned up")
-            except Exception as e:
-                logger.warning(f"VLM cleanup warning: {e}")

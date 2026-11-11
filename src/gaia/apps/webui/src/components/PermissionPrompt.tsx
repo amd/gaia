@@ -15,6 +15,7 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
+import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
@@ -30,7 +31,11 @@ function summarize(n: GaiaNotification): string {
 }
 
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
-const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'run_cli_command', 'wait_for_condition']);
+const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition']);
+
+/** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). The flagship runs them from its send-email skill, so they also arrive namespaced. */
+const EXACT_MAIL_TOOLS = ['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft'];
+const EXACT_SUMMARY_TOOLS = new Set([...EXACT_MAIL_TOOLS, ...EXACT_MAIL_TOOLS.map((tool) => `send-email/${tool}`)]);
 
 /**
  * A relayed command prompt with no args: `command[\n…]\nin <folder>[\n(extras)]\n<risk note>`
@@ -136,11 +141,18 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
     const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
+    // An email is approved as it will be sent, so all of it shows, uncollapsed.
+    // Over the sidecar relay it arrives as the summary.
+    const exactText = typeof args._exact_text === 'string'
+        ? args._exact_text
+        : EXACT_SUMMARY_TOOLS.has(notification.tool ?? '') ? notification.summary ?? '' : '';
     const relayed = !hasArgs && COMMAND_SUMMARY_TOOLS.has(notification.tool ?? '')
         ? splitCommandSummary(notification.summary ?? '')
         : null;
     const isPath = notification.tool === PATH_ACCESS_TOOL;
     const { heading, question } = permissionPromptText(notification, t, markLtr);
+
+    const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
     // Take focus from the composer so its Enter can't land on a button here.
     useEffect(() => { cardRef.current?.focus({ preventScroll: true }); }, []);
@@ -201,18 +213,21 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={code} />}
+                    {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
                     {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
-                    {!detail && !code && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
+                    {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
+                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title={t('prompt.timer')}>{formatCountdown(remaining)}</span>
                 )}
             </div>
-            {hasArgs && (
+            {hasArgs && !exactText && (
                 <div className="perm-card-args">
                     <button
                         type="button"

@@ -73,6 +73,11 @@ export interface ApiSchemas {
   LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
   LoadedModelInfo: LoadedModelInfo;
+  LogFileInfo: LogFileInfo;
+  LogLineInfo: LogLineInfo;
+  LogReadResponse: LogReadResponse;
+  LogSourceInfo: LogSourceInfo;
+  LogSourcesResponse: LogSourcesResponse;
   McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
   MemoryUsage: MemoryUsage;
@@ -118,12 +123,9 @@ export interface ApiSchemas {
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
   SpeechSettingsUpdate: SpeechSettingsUpdate;
-  StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
   TaskCreate: TaskCreate;
-  TaskListResponse: TaskListResponse;
-  TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
   TurnSummaryCost: TurnSummaryCost;
@@ -788,6 +790,50 @@ export interface LoadedModelInfo {
   recipe?: string | null;
 }
 /**
+ * One log file a source offers.
+ */
+export interface LogFileInfo {
+  modified?: number | null;
+  name: string;
+  path: string;
+  size_bytes?: number | null;
+}
+/**
+ * One redacted log line.
+ */
+export interface LogLineInfo {
+  severity?: string | null;
+  tag?: string | null;
+  text: string;
+}
+/**
+ * A log's recent lines for the viewer, or a reason code when it can't be read.
+ */
+export interface LogReadResponse {
+  available?: boolean;
+  base_url?: string | null;
+  cursor?: string | null;
+  detail?: string | null;
+  dropped?: number;
+  lines?: LogLineInfo[];
+  log_path?: string | null;
+  owner?: string | null;
+  reason?: string | null;
+  reset?: boolean;
+  server_answering?: boolean | null;
+  source?: string | null;
+}
+/**
+ * A group of logs: model_server | gaia | service | agent | desktop | other.
+ */
+export interface LogSourceInfo {
+  files?: LogFileInfo[];
+  id: string;
+}
+export interface LogSourcesResponse {
+  sources: LogSourceInfo[];
+}
+/**
  * Typed request body for PUT /api/memory/settings.
  */
 export interface MemorySettingsBody {
@@ -1093,6 +1139,10 @@ export interface ResourceUsage {
    */
   networks_error?: string | null;
   /**
+   * Why NPUs can't be read when they're read apart from GPUs (Linux).
+   */
+  npus_error?: string | null;
+  /**
    * False until the first sample is in.
    */
   ready: boolean;
@@ -1332,10 +1382,6 @@ export interface SpeechSettingsUpdate {
   speed?: number | null;
   voice?: string | null;
 }
-export interface StartAgentServerRequest {
-  backend_url?: string;
-  port?: number;
-}
 /**
  * System readiness status.
  */
@@ -1402,21 +1448,6 @@ export interface TargetRequest {
 export interface TaskCreate {
   description: string;
   order_index?: number;
-}
-/**
- * List of background tasks.
- */
-export interface TaskListResponse {
-  tasks: TaskResponse[];
-}
-/**
- * A single background task visible to the frontend.
- */
-export interface TaskResponse {
-  error?: string | null;
-  id: string;
-  name: string;
-  status: string;
 }
 export interface TaskStatusUpdate {
   result?: string | null;

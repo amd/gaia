@@ -91,7 +91,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.6-35B-A3B-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -143,7 +143,6 @@ class ChatDatabase:
 | `count_sessions` | `() -> int` | Count total sessions |
 | `update_session` | `(session_id, title?, system_prompt?) -> Optional[Dict]` | Update session title and/or system prompt |
 | `delete_session` | `(session_id) -> bool` | Delete a session and its messages (cascading) |
-| `touch_session` | `(session_id) -> None` | Update the session's `updated_at` timestamp |
 
 **Example:**
 
@@ -153,7 +152,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3.5-35B-A3B-GGUF",
+    model="Qwen3.6-35B-A3B-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -184,6 +183,9 @@ existing databases; legacy rows retain their original text-only context.
 Restoration budgets complete turns against the resolved model/device window
 (including `GAIA_CTX_SIZE` and the NPU ceiling), reserving the current prompt, native tool schemas, output allowance and
 2K estimated tokens of headroom. History uses at most half the resolved window.
+The agent re-checks that budget once the turn's memory context, skills and tool
+list are resolved, and leaves out any further older turns they no longer leave
+room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
 history budget; the newest turn is retained if it fits. The full stored trace
@@ -465,7 +467,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "lemonade_running": true,
       "lemonade_error": null,
       "lemonade_probe": "ok",
-      "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+      "model_loaded": "Qwen3.6-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
@@ -543,7 +545,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="GET /api/system/resources">
-    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead.
+    This PC's CPU, memory, GPU, NPU and network use for the chat's resource strip, with about a minute of history (oldest first, one sample per `interval_ms`). Needs the `X-Gaia-UI: 1` header. Sampling starts on the first request and stops on its own about 15 seconds after the last one. `ready` is `false` until the first sample is in. `503` when CPU or memory can't be read, with the reason in `detail`; a GPU or network failure alone is reported in `devices_error` or `networks_error` instead. On Linux an AMD NPU is read through its `amdxdna` driver, which reports usage on Linux 7.1 and later with the AMD PMF driver loaded; an NPU that can't be read is reported in `npus_error`.
 
     On Windows the figures come from the counters Task Manager reads: CPU is `% Processor Utility`, a GPU or NPU (a compute-only adapter) is its busiest engine, and `networks` lists the connected hardware adapters (no Hyper-V, WSL or VPN interfaces). On Linux, AMD GPUs are read from sysfs and networks are interfaces with a `device` link; macOS reports CPU, memory and its `en` interfaces.
 
@@ -592,7 +594,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -600,7 +602,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to load. |
-    | `ctx_size` | number | No | Context window size in tokens. Defaults to `32768`. |
+    | `ctx_size` | number | No | Context window size in tokens. Defaults to the window a chat on that model asks for: its `MODELS` entry sized to this PC's memory, or `GAIA_CTX_SIZE` when set. The response reports the size used. |
     | `force` | boolean | No | Load even while a chat is answering. Defaults to `false`. |
 
     When `llamacpp_backend` is set in `~/.gaia/config.json` and the model runs on llama.cpp, the load asks Lemonade for that backend.
@@ -611,7 +613,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "status": "loading",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -623,7 +625,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "force": false,
       "load_after": false
     }
@@ -633,13 +635,13 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     |-------|------|----------|-------------|
     | `model_name` | string | Yes | Name of the model to download. |
     | `force` | boolean | No | Re-download even if the model already exists. Defaults to `false`. |
-    | `load_after` | boolean | No | Load the model after the download completes. Skipped while a chat is answering. Defaults to `false`. |
+    | `load_after` | boolean | No | Load the model after the download completes, at the same window `load-model` defaults to. Skipped while a chat is answering. Defaults to `false`. |
 
     **Response (202):**
     ```json
     {
       "status": "downloading",
-      "model": "Qwen3.5-35B-A3B-GGUF"
+      "model": "Qwen3.6-35B-A3B-GGUF"
     }
     ```
 
@@ -742,7 +744,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"],
       "folders": ["/home/me/projects/site"]
@@ -1532,22 +1534,6 @@ of that router's connector types.
     Runtime MCP client status from the most recent chat session — connected
     servers, aggregate tool count, last-error details.
   </Accordion>
-
-  <Accordion title="GET /api/mcp/agent-server/status">
-    Status of GAIA's own MCP server — whether it's running, its port, and the
-    URL MCP clients connect to.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/agent-server/start">
-    Start GAIA's MCP server as a background subprocess so external MCP
-    clients (e.g. Claude Code) can call Agent UI tools (sessions, chat, files,
-    memory). Optional JSON body `{"port": <int>}`; defaults to
-    `AGENT_UI_MCP_PORT`.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/agent-server/stop">
-    Stop GAIA's MCP server, if it was started by the UI.
-  </Accordion>
 </AccordionGroup>
 
 ### Session environment, outputs and agent info
@@ -1825,14 +1811,12 @@ Used to reach the UI from a phone.
 <AccordionGroup>
   <Accordion title="POST /api/documents/upload">
     Multipart drag-and-drop upload. Stores the file in the library and
-    enqueues it for indexing. A file that can't be read is a **422** whose
+    enqueues it for indexing. Content already in the library returns the
+    existing document; if that document's stored file is gone, the new copy
+    takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
     `detail.message` says what to do.
-  </Accordion>
-
-  <Accordion title="GET /api/documents/monitor/status">
-    Status of the background `document_monitor.py` file-watcher.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">
@@ -1875,15 +1859,6 @@ Used to reach the UI from a phone.
   <Accordion title="DELETE /api/sessions/{session_id}/messages/{message_id}/and-below">
     Delete a message and every message after it (the "resend from here"
     pattern).
-  </Accordion>
-</AccordionGroup>
-
-### System (advanced)
-
-<AccordionGroup>
-  <Accordion title="GET /api/system/tasks">
-    Inspect the background dispatch queue (model downloads, indexing jobs,
-    etc.) used by `src/gaia/ui/dispatch.py`.
   </Accordion>
 </AccordionGroup>
 
@@ -2165,20 +2140,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     chain (`superseded_by`).
   </Accordion>
 
-  <Accordion title="GET /api/memory/contexts">
-    List every distinct context tag with its knowledge count.
-  </Accordion>
-
   <Accordion title="GET /api/memory/entities/{entity}">
     All knowledge linked to one entity name.
-  </Accordion>
-
-  <Accordion title="GET /api/memory/errors">
-    Recent tool errors across every tool, most recent first.
-  </Accordion>
-
-  <Accordion title="GET /api/memory/tools/{tool_name}/history">
-    Recent call history for a single tool (arguments, result, latency).
   </Accordion>
 
   <Accordion title="GET /api/memory/conversations/search">
@@ -2626,7 +2589,7 @@ plan and make one set of choices.
     Write a troubleshooting report for a bug report: setup's record (its last
     run, the plan and every stage's full log) saved as `setup-report.json` in
     GAIA's home, bundled with GAIA's logs and a system snapshot by `gaia
-    diagnostics`, with secret environment variables redacted; logs go in as they are. Returns `{"name", "path", "size_bytes"}`.
+    diagnostics`, with secret environment variables and secrets in the logs redacted. Returns `{"name", "path", "size_bytes"}`.
     **500** naming the cause when the bundle can't be written.
   </Accordion>
 
@@ -2845,6 +2808,39 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     mobile access, **502** when the daemon did not switch. A failed switch to
     GAIA's own puts the previous mode back; a failed switch to the user's
     server stays saved.
+  </Accordion>
+</AccordionGroup>
+
+### Logs
+
+GAIA's logs and the model server's, for the log viewer. Every line is redacted
+before it is sent (API keys, bearer tokens and similar). Both routes need the
+`X-Gaia-UI: 1` header and refuse mobile access (**403**).
+
+<AccordionGroup>
+  <Accordion title="GET /api/logs">
+    `{"sources": [{"id", "files": [{"name", "path", "size_bytes", "modified"}]}]}`
+    in viewer order: `model_server`, `gaia` (`gaia.log`), `service`
+    (`daemon.log`), `agent` (`gaia-agent.log` and each agent's five newest
+    sidecar logs), `desktop` (`electron-main.log`, `electron-install.log`,
+    `electron-updater.log`) and `other` (the rest of `~/.gaia/logs`). Only files
+    that exist are listed; `model_server` lists none.
+  </Accordion>
+
+  <Accordion title="GET /api/logs/{source}">
+    A log's last lines. Query: `file` (a name `GET /api/logs` listed; the
+    source's first file when omitted), `after` (the `cursor` a previous read
+    returned, for only the lines written since), `limit` (1-5000, default 1000).
+    Returns `lines` (`text`, `severity` of `debug`/`info`/`warning`/`error` or
+    `null`, `tag`), `cursor`, `reset` (the log started over: replace, don't
+    append), `dropped`, `log_path`, and `available`; when `false`, `reason` is
+    `no_file` or `unreadable`, and for `model_server` also `not_running`,
+    `remote`, `no_stream` or `stream_failed`, with `detail`. `model_server`
+    reads GAIA's own Lemonade's `lemond.log` (`source: "file"`, readable when the
+    server is down, `server_answering` on a fresh read) or the user's Lemonade's
+    log stream (`source: "stream"`), and sets `owner` and `base_url`. **404**
+    for an unknown source or file; **409** when GAIA's Lemonade choice can't be
+    read.
   </Accordion>
 </AccordionGroup>
 
@@ -3098,8 +3094,8 @@ model with no known price reads as unknown, never $0. Cloud models from
 
 ### Hub
 
-Install and uninstall agents from the download server catalog — the backend for
-the desktop app's `gaia://hub/install/<id>` deep link.
+Install and uninstall agents from the download server catalog. The app uses
+these to install the GAIA agent when it is missing.
 
 <AccordionGroup>
   <Accordion title="GET /api/agents/catalog">
