@@ -138,6 +138,14 @@ def _config() -> GaiaConfig:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _voice_now() -> tuple:
+    """The voice and speed saved right now, as (voice, speed)."""
+    from gaia.audio.lemonade_tts import DEFAULT_VOICE
+
+    config = GaiaConfig.load()
+    return config.read_aloud_voice or DEFAULT_VOICE, config.read_aloud_speed / 100
+
+
 def _language(config: GaiaConfig, app_language: str) -> str:
     """The spoken language: the setting, else the app's own language."""
     return config.voice_language or (app_language or "en").lower()[:2]
@@ -321,6 +329,7 @@ async def voice_session(websocket: WebSocket) -> None:
             sink=_Sink(),
             synthesizer=tts,
             catalog=_catalog,
+            voice_settings=_voice_now,
         )
 
     try:

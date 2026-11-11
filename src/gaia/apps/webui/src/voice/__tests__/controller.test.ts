@@ -46,6 +46,7 @@ vi.mock('../audio', async (orig) => ({
             push: vi.fn(), end: vi.fn(), close: vi.fn(), level: () => 0,
             flush: vi.fn(() => fx.calls.push('flush')),
             duck: vi.fn((on: boolean) => fx.calls.push(on ? 'duck' : 'unduck')),
+            setVolume: vi.fn(),
         };
         fx.players.push(p);
         return p;

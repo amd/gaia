@@ -15,7 +15,7 @@ import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Deque, List, Optional, Protocol
+from typing import Awaitable, Callable, Deque, List, Optional, Protocol, Tuple
 
 import numpy as np
 
@@ -114,6 +114,7 @@ class VoiceSession:
         synthesizer: Synthesizer,
         catalog: Callable[[], List[dict]],
         listener_factory=None,
+        voice_settings: Optional[Callable[[], Tuple[str, float]]] = None,
     ):
         self.target = target
         self.options = options
@@ -121,6 +122,8 @@ class VoiceSession:
         self._sink = sink
         self._synth = synthesizer
         self._catalog = catalog
+        # Read before each reply, so a voice changed mid-conversation is heard next.
+        self._voice_settings = voice_settings
         # Looked up at call time so tests can stand in a fake recognizer.
         self._listener_factory = listener_factory or _realtime_listener
         self._listener: Optional[RealtimeListener] = None
@@ -259,6 +262,14 @@ class VoiceSession:
             raise VoiceError("bad_request", f"speak kind must be one of {SPEAK_KINDS}")
         if self._speaker is None:
             return
+        if (
+            self._voice_settings is not None
+            and not self.speaking
+            and self._queue.empty()
+        ):
+            self.options.voice, self.options.speed = await asyncio.to_thread(
+                self._voice_settings
+            )
         if kind == "status":
             line = first_sentence(text)
             if line:
