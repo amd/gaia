@@ -204,21 +204,6 @@ def extract_images_from_page_pdfium(pdf_path: str, page_num: int) -> List[dict]:
     return images
 
 
-def extract_images_from_page(
-    page, page_num: int  # pylint: disable=unused-argument
-) -> List[dict]:
-    """
-    DEPRECATED: Use extract_images_from_page_pdfium instead.
-
-    Kept for backwards compatibility; it extracts nothing.
-    """
-    logger.warning(
-        "extract_images_from_page is deprecated and extracts nothing - "
-        "use extract_images_from_page_pdfium"
-    )
-    return []
-
-
 class PdfPageInspectionError(RuntimeError):
     """A page's image inventory could not be read (#3551).
 

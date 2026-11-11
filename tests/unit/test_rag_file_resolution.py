@@ -178,7 +178,7 @@ def test_indexing_reports_session_save_failure(tmp_path, tool_name, save_succeed
     host.session_manager.save_session.return_value = save_succeeds
     host.rebuild_system_prompt = MagicMock()
 
-    def index_file(_rag, path):
+    def index_file(_rag, path, **_kwargs):
         rag.indexed_files.add(path)
         return {"success": True, "file_name": document.name}, None
 
@@ -236,7 +236,7 @@ class TestIndexDocumentEviction:
         host.rebuild_system_prompt = MagicMock()
         calls = []
 
-        def index_file(_rag, path):
+        def index_file(_rag, path, **_kwargs):
             calls.append(path)
             return dict(rag_result(old, new, path)), None
 
@@ -307,3 +307,76 @@ class TestIndexDocumentEviction:
 
         assert str(keep) in host.indexed_files
         assert str(old) not in host.indexed_files
+
+
+class TestIndexDocumentUnreadImages:
+    """The agent hears when a document's images were not read (#4799)."""
+
+    def _index(self, tmp_path, extra):
+        doc = tmp_path / "q3.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        host = _make_host(_fake_rag(set()))
+        host.indexed_files = set()
+        host.current_session = None
+        host.rebuild_system_prompt = MagicMock()
+
+        def index_file(_rag, path, **_kwargs):
+            return {"success": True, "file_name": doc.name, **extra}, None
+
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            return _tool("index_document")(file_path=str(doc))
+
+    def test_the_reply_says_which_images_went_unread(self, tmp_path):
+        note = "Text in images on 2 page(s) was not read because the vision model (v) was not available."
+        result = self._index(
+            tmp_path, {"unread_image_pages": 2, "unread_images_note": note}
+        )
+
+        assert result["status"] == "success"
+        assert result["unread_image_pages"] == 2
+        assert note in result["message"]
+        assert "Tell the user" in result["message"]
+
+    def test_a_fully_read_document_says_nothing_about_images(self, tmp_path):
+        result = self._index(tmp_path, {})
+
+        assert "unread_image_pages" not in result
+        assert "images" not in result["message"]
+
+
+class TestIndexDocumentRereadsUnreadImages:
+    """A tracked file whose images went unread is indexed again once they can be read."""
+
+    def _index(self, tmp_path, readable):
+        doc = tmp_path / "q3.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        rag = _fake_rag({str(doc)})
+        rag.is_current.return_value = True
+        rag.unread_images_readable.return_value = readable
+        host = _make_host(rag)
+        host.indexed_files = {str(doc)}
+        host.current_session = None
+        host.rebuild_system_prompt = MagicMock()
+        calls = []
+
+        def index_file(_rag, path, **_kwargs):
+            calls.append(path)
+            return {"success": True, "file_name": doc.name, "reindexed": True}, None
+
+        with patch("gaia.agents.tools.rag_tools._index_within_budget", index_file):
+            result = _tool("index_document")(file_path=str(doc))
+        return result, calls
+
+    def test_readable_images_send_it_back_to_the_index(self, tmp_path):
+        result, calls = self._index(tmp_path, readable=True)
+
+        assert (
+            calls
+        ), "the tool answered 'Already indexed' instead of reading the images"
+        assert not result.get("already_indexed")
+
+    def test_otherwise_it_stays_already_indexed(self, tmp_path):
+        result, calls = self._index(tmp_path, readable=False)
+
+        assert calls == []
+        assert result["already_indexed"]

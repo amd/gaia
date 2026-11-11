@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-# ``gaia-agent-chat`` -> id ``chat`` -> dir ``hub/agents/chat/python``.
+# ``gaia-agent-email`` -> id ``email`` -> dir ``hub/agents/email/python``.
 DIST_PREFIX = "gaia-agent-"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP_PY = REPO_ROOT / "setup.py"

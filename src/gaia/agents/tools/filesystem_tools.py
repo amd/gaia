@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
@@ -212,6 +212,14 @@ def _index_search_failed_note(exc: BaseException) -> str:
     )
 
 
+class PathAccessDenied(ValueError):
+    """The validator refused a path; ``refusal`` is the tool result to return."""
+
+    def __init__(self, denied: dict):
+        super().__init__(f"Access denied: {denied['error']}")
+        self.refusal = {**denied, "error": str(self)}
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -258,11 +266,11 @@ class FileSystemToolsMixin:
         return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
-        """Validate and resolve a path. Raises ValueError if blocked."""
+        """Validate and resolve a path. Raises PathAccessDenied if blocked."""
         resolved = _resolve_target(path, None, _workspace_default(self))
         denied = read_access_error(self, resolved)
         if denied:
-            raise ValueError(f"Access denied: {denied['error']}")
+            raise PathAccessDenied(denied)
         return resolved
 
     def workspace_roots(self) -> list:
@@ -327,7 +335,7 @@ class FileSystemToolsMixin:
             sort_by: str = "name",
             filter_type: str = None,
             max_items: int = 50,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
@@ -445,6 +453,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -459,7 +469,7 @@ class FileSystemToolsMixin:
             include_pattern: str = None,
             exclude_pattern: str = None,
             dirs_only: bool = False,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Show a tree visualization of a directory structure.
 
             Useful for understanding project layouts and folder hierarchies.
@@ -583,6 +593,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -590,7 +602,7 @@ class FileSystemToolsMixin:
                 return f"Error generating tree: {e}"
 
         @tool(atomic=True)
-        def file_info(path: str) -> str:
+        def file_info(path: str) -> Union[str, dict]:
             """Get comprehensive information about a file or directory.
 
             Returns size, dates, type, MIME type, encoding, and format-specific
@@ -776,6 +788,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -792,7 +806,7 @@ class FileSystemToolsMixin:
             date_range: str = None,
             max_results: int = 25,
             sort_by: str = "relevance",
-        ) -> str:
+        ) -> Union[str, dict]:
             """Search for files by name, content, or metadata.
 
             The primary file search tool: hits the file system index when one
@@ -1102,6 +1116,8 @@ class FileSystemToolsMixin:
                     lines.append(f"\n{skipped_note}")
                 return "\n".join(lines) + skip_note + stopped + index_note
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -1117,7 +1133,7 @@ class FileSystemToolsMixin:
             mode: str = "full",
             offset: int = 0,
             limit: Optional[int] = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Read and display a file's contents with intelligent type-based analysis.
 
             For text/code: shows content with line numbers.
@@ -1343,13 +1359,15 @@ class FileSystemToolsMixin:
                 reads.note(resolved, seen)
                 return "\n".join(output_lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error reading file: {e}")
                 return f"Error reading file: {e}"
 
-        def _bookmark_impl(action: str, path: str, label: str) -> str:
+        def _bookmark_impl(action: str, path: str, label: str) -> Union[str, dict]:
             try:
                 index = mixin._bookmark_index()
                 if action == "list":
@@ -1425,6 +1443,8 @@ class FileSystemToolsMixin:
 
             except FileIndexUnavailableError as e:
                 return str(e)
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -1436,7 +1456,7 @@ class FileSystemToolsMixin:
             action: str = "list",
             path: str = None,
             label: str = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Save, list, or remove bookmarks for frequently accessed files and directories.
 
             Bookmarks persist across sessions in the file system index.
@@ -1450,7 +1470,10 @@ class FileSystemToolsMixin:
                 label: Human-friendly name for the bookmark (optional, for add)
             """
             result = _bookmark_impl(action, path, label)
-            return _take_rebuild_notice(mixin, mixin._fs_index) + result
+            notice = _take_rebuild_notice(mixin, mixin._fs_index)
+            if isinstance(result, dict):
+                return {**result, "error": notice + result["error"]}
+            return notice + result
 
         # --- Helper functions (not tools, not decorated) ---
 
