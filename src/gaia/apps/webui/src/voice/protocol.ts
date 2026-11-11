@@ -46,6 +46,9 @@ export type ServerEvent =
     | { type: 'holding'; text: string }
     /** A sound that was not speech (typing, a cough); nothing was sent. */
     | { type: 'ignored'; reason: string }
+    /** The recognizer dropped and is being reopened; then it is back. */
+    | { type: 'recovering' }
+    | { type: 'recovered' }
     | { type: 'timing'; heard_ms: number; think_ms: number; voice_ms: number; total_ms: number }
     | { type: 'flush' }
     | { type: 'limit'; seconds?: number }

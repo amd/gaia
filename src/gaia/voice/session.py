@@ -42,6 +42,13 @@ LEVEL_INTERVAL = 0.05
 MAX_DICTATION_SECONDS = 300
 #: A lone "okay" or "so" with less voiced sound than this was a noise.
 FILLER_VOICED_MS = 350
+#: This much talking with no word from the recognizer means it stalled.
+STALL_VOICED_MS = 1500
+STALL_SECONDS = 4.0
+MAX_UTTERANCE_SECONDS = 90.0
+#: Reopen the recognizer at most this often before giving up.
+MAX_REOPENS = 3
+REOPEN_WINDOW = 120.0
 PURPOSES = ("dictation", "voice")
 SPEAK_KINDS = ("spoken", "status")
 
@@ -130,6 +137,12 @@ class VoiceSession:
         # Voiced milliseconds of utterances whose transcript is still to come.
         self._voiced: Deque[int] = deque()
         self._sustained = False
+        self._in_speech = False
+        self._speech_at = 0.0
+        self._heard_at = 0.0
+        self._unheard_ms = 0
+        self._reopening = False
+        self._reopens: List[float] = []
         #: The app asked a yes/no question: a bare "yes" or "okay" is the answer.
         self.expecting_answer = False
         self._hold: Optional[asyncio.Task] = None
@@ -153,6 +166,7 @@ class VoiceSession:
         )
         await self._listener.connect()
         self._started_at = time.monotonic()
+        self._heard_at = self._started_at
         self._reader = asyncio.create_task(self._read_listener())
         if wants_speech and self._sink is not None:
             self._speaker = asyncio.create_task(self._speak_loop())
@@ -200,9 +214,16 @@ class VoiceSession:
                 await self._emit({"type": "limit", "seconds": MAX_DICTATION_SECONDS})
                 await self.commit()
             return
-        await self._listener.send_pcm16(frame)
+        if self._reopening:
+            return
+        try:
+            await self._listener.send_pcm16(frame)
+        except VoiceError:
+            # The reader sees the same loss and reopens the recognizer.
+            await self._listener.close()
+            return
         samples = pcm.pcm16_to_float(frame)
-        self._meter.feed(samples)
+        await self._watch(self._meter.feed(samples))
         if (
             self.speaking
             and not self._sustained
@@ -275,17 +296,94 @@ class VoiceSession:
     async def _read_listener(self) -> None:
         assert self._listener is not None
         conversing = self.options.purpose == "voice" and self.options.hands_free
+        while not self._closed:
+            try:
+                async for event in self._listener.events():
+                    self._heard_at = time.monotonic()
+                    self._unheard_ms = 0
+                    if event["type"] == "speech_started":
+                        self._in_speech = True
+                        self._speech_at = self._heard_at
+                    elif event["type"] in ("speech_stopped", "final"):
+                        self._in_speech = False
+                    if conversing:
+                        await self._converse(event)
+                        continue
+                    if event["type"] == "speech_stopped":
+                        # Heard you, before the transcript lands.
+                        await self.play_earcon()
+                    await self._emit(event)
+                why = "the recognizer closed the connection"
+            except VoiceError as e:
+                if e.code not in ("session_lost", "asr_failed"):
+                    await self._emit(e.to_event())
+                    return
+                why = e.detail or str(e)
+            if self._closed or not await self._reopen(why):
+                return
+
+    async def _reopen(self, why: str) -> bool:
+        """The recognizer dropped (another app loaded a different model, or it
+        stalled): open it again. False, with the error sent, when it can't be."""
+        now = time.monotonic()
+        self._reopens = [t for t in self._reopens if now - t < REOPEN_WINDOW]
+        if len(self._reopens) >= MAX_REOPENS:
+            await self._emit(
+                VoiceError(
+                    "asr_failed",
+                    "Speech recognition keeps stopping, so voice mode has paused.",
+                    detail=why[:300],
+                ).to_event()
+            )
+            return False
+        self._reopens.append(now)
+        log.warning("voice: recognizer lost (%s); reopening", why)
+        self._reopening = True
+        await self._emit({"type": "recovering"})
         try:
-            async for event in self._listener.events():
-                if conversing:
-                    await self._converse(event)
-                    continue
-                if event["type"] == "speech_stopped":
-                    # Heard you, before the transcript lands.
-                    await self.play_earcon()
-                await self._emit(event)
+            assert self._listener is not None
+            await self._listener.close()
+            listener = self._listener_factory(
+                self.target,
+                self.options.asr_model,
+                silence_ms=self.options.silence_ms,
+                vad=self.options.hands_free,
+            )
+            await listener.connect()
         except VoiceError as e:
             await self._emit(e.to_event())
+            return False
+        finally:
+            self._reopening = False
+        self._listener = listener
+        self._in_speech = False
+        self._unheard_ms = 0
+        self._heard_at = time.monotonic()
+        self._voiced.clear()
+        self._meter.end()
+        await self._emit({"type": "recovered"})
+        return True
+
+    async def _watch(self, voiced_ms: int) -> None:
+        """Someone is talking and the recognizer says nothing: it has stalled."""
+        if self._reopening:
+            return
+        if self._in_speech:
+            if time.monotonic() - self._speech_at > MAX_UTTERANCE_SECONDS:
+                # Speech that never ends is a recognizer that stopped answering.
+                self._in_speech = False
+                assert self._listener is not None
+                await self._listener.close()
+            return
+        self._unheard_ms += voiced_ms
+        if (
+            self._unheard_ms >= STALL_VOICED_MS
+            and time.monotonic() - self._heard_at >= STALL_SECONDS
+        ):
+            self._unheard_ms = 0
+            assert self._listener is not None
+            # Closing it ends the reader's loop, which reopens it.
+            await self._listener.close()
 
     async def _converse(self, event: dict) -> None:
         """Hands-free voice: the turn-taker decides what each sound means."""

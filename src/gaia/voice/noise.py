@@ -96,14 +96,18 @@ class SpeechMeter:
         self._run = 0
         self._recent: Deque[bool] = deque(maxlen=LOOKBACK_MS // SUBFRAME_MS)
         self._active = False
+        self._total = 0
         self.voiced_ms = 0
 
-    def feed(self, samples: np.ndarray) -> None:
+    def feed(self, samples: np.ndarray) -> int:
+        """Take audio in; returns the voiced milliseconds it added."""
+        before = self._total
         data = np.concatenate([self._rest, samples.astype(np.float32, copy=False)])
         count = data.size // self._step
         for i in range(count):
             self._subframe(data[i * self._step : (i + 1) * self._step])
         self._rest = data[count * self._step :]
+        return self._total - before
 
     def begin(self) -> None:
         """The recognizer heard speech start; count from a little before now."""
@@ -128,6 +132,8 @@ class SpeechMeter:
         run_ms = self._run * SUBFRAME_MS
         counts = run_ms >= MIN_RUN_MS
         self._recent.append(counts)
+        if counts:
+            self._total += SUBFRAME_MS
         if self._active and counts:
             # The frames that built the run count once it qualifies.
             self.voiced_ms += MIN_RUN_MS if run_ms == MIN_RUN_MS else SUBFRAME_MS

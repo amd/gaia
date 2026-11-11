@@ -304,6 +304,13 @@ function onEvent(event: ServerEvent): void {
             set({ heard: '', heardPartial: false });
             if (!get().turnRunning && get().phase === 'thinking') set({ phase: resting() });
             return;
+        case 'recovering':
+            log.ui.warn('Voice: the recognizer dropped; reopening it');
+            if (!get().turnRunning && get().phase !== 'speaking') set({ phase: 'warming', heardPartial: false });
+            return;
+        case 'recovered':
+            if (get().phase === 'warming') set({ phase: resting() });
+            return;
         case 'timing':
             log.ui.info(`voice timing: heard ${event.heard_ms} ms, think ${event.think_ms} ms, voice ${event.voice_ms} ms, total ${event.total_ms} ms`);
             return;
