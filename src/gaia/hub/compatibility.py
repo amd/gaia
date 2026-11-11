@@ -163,6 +163,12 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
     return f"{os_key}-{arch_key}"
 
 
+def _format_disk(gb: float) -> str:
+    if gb < 1:
+        return f"{gb * 1024:.0f} MB"
+    return f"{gb:.1f} GB"
+
+
 def _coerce_requirements(requirements: Any) -> Requirements:
     """Accept either a :class:`Requirements` or a plain mapping (index entry)."""
     if isinstance(requirements, Requirements):
@@ -202,8 +208,8 @@ def check_compatibility(
         requirements: A :class:`Requirements` or the catalog index entry's
             ``requirements`` mapping (must at least carry ``platforms``).
         download_size_bytes: Size of the artifact to be downloaded; used with a
-            headroom multiplier to estimate required free disk when the manifest
-            declares no explicit ``min_disk_gb``.
+            headroom multiplier to estimate required free disk. A declared
+            ``min_disk_gb`` only raises that estimate, never lowers it.
         install_dir: Where the agent will be installed; the disk check probes
             this volume. Defaults to ``<gaia_home>/agents``.
         detected_npu: Whether an NPU was actually detected by the caller's
@@ -280,24 +286,25 @@ def check_compatibility(
 
     # --- disk (hard) ---
     free_disk = detect_free_disk_gb(install_dir)
-    if reqs.min_disk_gb is not None:
-        required_disk_gb = float(reqs.min_disk_gb)
-    else:
-        required_disk_gb = (
-            download_size_bytes * _INSTALL_SIZE_HEADROOM[artifact_kind]
-        ) / _BYTES_PER_GB
+    # A declared min_disk_gb raises the floor; it never lowers it below what
+    # the artifact itself needs (the hub publishes 0 when the field is unset).
+    required_disk_gb = max(
+        float(reqs.min_disk_gb or 0),
+        download_size_bytes * _INSTALL_SIZE_HEADROOM[artifact_kind] / _BYTES_PER_GB,
+    )
     disk_ok = True
     if required_disk_gb > 0:
         if free_disk is None:
             warnings.append(
                 "Could not determine free disk space; install needs about "
-                f"{required_disk_gb:.1f} GB."
+                f"{_format_disk(required_disk_gb)}."
             )
         elif free_disk < required_disk_gb:
             disk_ok = False
             blockers.append(
-                f"Not enough disk space: install needs ~{required_disk_gb:.1f} GB "
-                f"but only {free_disk:.1f} GB is free on {install_dir}."
+                "Not enough disk space: install needs "
+                f"~{_format_disk(required_disk_gb)} but only "
+                f"{_format_disk(free_disk)} is free on {install_dir}."
             )
 
     # --- NPU / GPU (advisory) ---
