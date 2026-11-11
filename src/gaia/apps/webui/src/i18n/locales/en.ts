@@ -313,7 +313,7 @@ export const enMessages = {
     'media.showSmaller': 'Show smaller',
     'media.audioUnplayable': "This audio can't be played. The file may have been moved or deleted.",
     'media.savedTo': 'Saved to',
-    'media.listeningScript': 'Listening script:',
+    'media.listeningScript': 'Script saved to',
     // Recipe, workout and calculator cards
     'cards.tryGroup': 'Try an example',
     'cards.try': 'Try',

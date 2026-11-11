@@ -118,7 +118,7 @@ describe('audio card', () => {
         const where = Array.from(container.querySelectorAll('.render-audio__where'));
         expect(where.map((el) => el.textContent)).toEqual([
             'Saved to C:\\Users\\u\\Documents\\report.mp3',
-            'Listening script: C:\\Users\\u\\Documents\\report.script.md',
+            'Script saved to C:\\Users\\u\\Documents\\report.script.md',
         ]);
         // Paths stay left-to-right in an RTL chat, and are text: nothing here opens them.
         expect(where.every((el) => el.querySelector('bdi[dir="ltr"]') !== null)).toBe(true);

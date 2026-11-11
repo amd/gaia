@@ -71,7 +71,7 @@ _URL = re.compile(
 )
 _FOOTNOTE = re.compile(
     r"(?<=[\w.,;:!?%)\"”])\[\d{1,3}\]|[¹²³⁴⁵⁶⁷⁸⁹]|^[*†‡]\s?\S"
-    r"|(?<=[a-z)%][.,;])\d{1,2}(?=\s+[A-Z])",
+    r"|(?<=[a-z)%][.,;])(?<!\bp\.)(?<!\bpp\.)(?<!\bNo\.)(?<!\bFig\.)\d{1,2}(?=\s+[A-Z])",
     re.M,
 )
 # Letters and digits in hyphenated groups: three groups ("QX-4471-B") or a run
@@ -437,20 +437,26 @@ def _money(match: "re.Match[str]") -> str:
 
 # Each rule fixes one thing the Kokoro voice was heard to misread; order matters.
 _SPEAKABLE: Sequence[Tuple["re.Pattern[str]", object]] = (
+    # First, so "p.14 The" keeps its number when footnote marks are removed.
+    (re.compile(r"\bpp\.\s*(?=\d)"), "pages "),
+    (re.compile(r"\bp\.\s*(?=\d)"), "page "),
+    (re.compile(r"\bNo\.\s*(?=\d)"), "number "),
+    (re.compile(r"\bFig\.\s*(?=\d)"), "Figure "),
     # "[1]" is read out as "one"; a footnote mark is not part of the sentence.
     (re.compile(r"(?<=[\w.,;:!?%)\"”])\[\d{1,3}\]"), ""),
     (re.compile(r"[¹²³⁴⁵⁶⁷⁸⁹⁰]+"), ""),
     # A superscript note number extracts as a digit glued to the full stop.
-    (re.compile(r"(?<=[a-z)%][.,;])\d{1,2}(?=\s+[A-Z])"), ""),
+    (
+        re.compile(
+            r"(?<=[a-z)%][.,;])(?<!\bp\.)(?<!\bpp\.)(?<!\bNo\.)(?<!\bFig\.)\d{1,2}(?=\s+[A-Z])"
+        ),
+        "",
+    ),
     # "https colon slash slash" tells a listener nothing.
     (re.compile(r"\bhttps?://(?=\S)"), ""),
     (re.compile(r"\be\.g\.,?", re.I), "for example,"),
     (re.compile(r"\bi\.e\.,?", re.I), "that is,"),
     (re.compile(r"\bvs\.?(?=\s)"), "versus"),
-    (re.compile(r"\bpp\.\s*(?=\d)"), "pages "),
-    (re.compile(r"\bp\.\s*(?=\d)"), "page "),
-    (re.compile(r"\bNo\.\s*(?=\d)"), "number "),
-    (re.compile(r"\bFig\.\s*(?=\d)"), "Figure "),
     (re.compile(r"(?<![\w&])#(?=\d)"), "number "),
     (re.compile(r"(?<=\s)&(?=\s)"), "and"),
     (

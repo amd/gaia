@@ -239,6 +239,67 @@ def test_a_copy_that_cannot_be_saved_says_where_the_recording_is(
     )
 
 
+def test_a_script_copy_that_fails_does_not_undo_the_audio_copy(dictation, monkeypatch):
+    """The reply must match the disk: the audio is there, only the script is not."""
+    import shutil
+
+    real_copy = shutil.copyfile
+
+    def no_scripts(source, destination):
+        if str(destination).endswith(".script.md.part"):
+            raise PermissionError(13, "Permission denied")
+        return real_copy(source, destination)
+
+    monkeypatch.setattr(shutil, "copyfile", no_scripts)
+    out = dictation.allowed / "listen"
+    result = dictation.tool(str(dictation.allowed / "report.md"), output_path=str(out))
+
+    assert result["status"] == "success"
+    assert result["saved_to"] == str(out / "report.mp3")
+    assert (out / "report.mp3").is_file()
+    assert not (out / "report.script.md").exists()
+    kept_script = Path(result["script_path"])
+    assert kept_script.parent == media_dir("audio") and kept_script.is_file()
+    assert "Permission denied" in result["script_not_copied"]
+
+
+def test_a_model_that_cannot_answer_is_an_error_not_a_crash(dictation):
+    from gaia.llm.lemonade_client import CloudModelUnavailableError
+
+    def unavailable(**_kwargs):
+        raise CloudModelUnavailableError("The selected cloud model is unavailable.")
+
+    dictation.chat.send_messages = unavailable
+    result = dictation.tool(str(dictation.allowed / "report.md"))
+
+    assert result == {
+        "status": "error",
+        "error": "The selected cloud model is unavailable.",
+    }
+    dictation.synthesize.assert_not_called()
+
+
+def test_stop_during_a_rewrite_ends_the_reply_in_progress(dictation):
+    import threading
+
+    from gaia.chat.sdk import LLMCallCancelled
+
+    stop = threading.Event()
+    dictation.agent._cancel_event = stop
+    seen = []
+
+    def cancelled_mid_reply(**kwargs):
+        seen.append(kwargs.get("cancel"))
+        raise LLMCallCancelled()
+
+    dictation.chat.send_messages = cancelled_mid_reply
+    result = dictation.tool(str(dictation.allowed / "report.md"))
+
+    assert seen == [stop]
+    assert result["status"] == "cancelled"
+    dictation.synthesize.assert_not_called()
+
+
 def test_the_pages_reported_are_the_pages_read(dictation):
     pages = "\n\n".join(f"[Page {n}]\nPage {n} says hello." for n in (1, 2, 3))
     from gaia.audio import dictation as dictation_text

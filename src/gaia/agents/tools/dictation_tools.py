@@ -199,15 +199,24 @@ class DictationToolsMixin:
     def _listening_reply(self, chat: Any, system: str, prompt: str) -> str:
         """One part of the listening script from the host's chat model."""
         from gaia.audio.dictation import REWRITE_MAX_TOKENS, DictationError
+        from gaia.chat.sdk import LLMCallCancelled
         from gaia.llm.lemonade_client import no_thinking_kwargs
+        from gaia.tool_cancellation import ToolCancelled, current_cancel_event
 
-        response = chat.send_messages(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt=system,
-            tools=[],
-            max_tokens=REWRITE_MAX_TOKENS,
-            **no_thinking_kwargs(getattr(chat, "effective_model", None)),
-        )
+        # Stop ends the reply in progress, not just the wait for the next part.
+        stop = getattr(self, "_cancel_event", None) or current_cancel_event()
+        options = {"cancel": stop} if stop is not None else {}
+        try:
+            response = chat.send_messages(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=system,
+                tools=[],
+                max_tokens=REWRITE_MAX_TOKENS,
+                **options,
+                **no_thinking_kwargs(getattr(chat, "effective_model", None)),
+            )
+        except LLMCallCancelled as exc:
+            raise ToolCancelled("dictation was stopped") from exc
         usage = getattr(response, "usage", None)
         sink = getattr(self, "_tool_reported_usage", None)
         if sink is not None:
@@ -281,7 +290,10 @@ class DictationToolsMixin:
             LemonadeTTSClient,
             LemonadeTTSError,
         )
-        from gaia.llm.lemonade_client import resolve_lemonade_base_url
+        from gaia.llm.lemonade_client import (
+            LemonadeClientError,
+            resolve_lemonade_base_url,
+        )
         from gaia.tool_cancellation import ToolCancelled
         from gaia.upload_names import display_file_name
 
@@ -390,10 +402,16 @@ class DictationToolsMixin:
             if script is not None:
                 script_file = audio.with_suffix(".script.md")
                 script_file.write_text(script, encoding="utf-8")
+            script_not_copied = ""
             if user_audio is not None:
                 copy_for_user(audio, user_audio, "dictate_document")
                 if script_file is not None and user_script is not None:
-                    copy_for_user(script_file, user_script, "dictate_document")
+                    try:
+                        copy_for_user(script_file, user_script, "dictate_document")
+                    except CopyFailed as exc:
+                        # The audio is where the user asked; say only what is missing.
+                        script_not_copied = str(exc)
+                        user_script = None
         except ToolCancelled:
             if audio is not None:
                 audio.unlink(missing_ok=True)
@@ -407,6 +425,7 @@ class DictationToolsMixin:
         except (
             dictation.DictationError,
             LemonadeTTSError,
+            LemonadeClientError,
             ConnectionError,
             ImportError,
             OSError,
@@ -449,6 +468,8 @@ class DictationToolsMixin:
             result["saved_to"] = str(user_audio)
         if script_file is not None:
             result["script_path"] = str(user_script or script_file)
+        if script_not_copied:
+            result["script_not_copied"] = script_not_copied
         if left_out:
             listed = ", ".join(f"{n:,}" for n in sorted(set(left_out))[:12])
             result["figures_left_out"] = (

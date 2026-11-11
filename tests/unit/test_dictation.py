@@ -75,6 +75,14 @@ def test_each_signal_is_enough_on_its_own(text, reason):
     assert listening_reasons(text) == [reason]
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["See p.14 The table shows it.", "Use No.5 Engine oil.", "Read Fig.3 Below."],
+)
+def test_a_number_after_an_abbreviation_is_not_a_footnote(text):
+    assert "footnotes" not in listening_reasons(text)
+
+
 def test_ordinary_hyphens_and_numbers_are_not_signals():
     text = "A well-known, 30-year-old shop sold 12 loaves and 3 pies in 2026."
     assert listening_reasons(text) == []
@@ -213,6 +221,11 @@ def test_markdown_becomes_headings_and_plain_sentences():
         ("Failed on Aug. 4 and Sep 9.", "Failed on August 4 and September 9."),
         ("See p. 14 and pp. 4-9.", "See page 14 and pages 4-9."),
         ("Table No. 4 and Fig. 2.", "Table number 4 and Figure 2."),
+        # A number after an abbreviation is not a footnote mark.
+        ("See p.14 The table", "See page 14 The table"),
+        ("Use No.5 Engine", "Use number 5 Engine"),
+        ("Read Fig.3 Below", "Read Figure 3 Below"),
+        ("On pp.12 Next", "On pages 12 Next"),
         ("Cats vs. dogs.", "Cats versus dogs."),
         ("Heard as one two: 1/2 a cup.", "Heard as one two: one half a cup."),
         ("About 10–12 weeks.", "About 10 to 12 weeks."),

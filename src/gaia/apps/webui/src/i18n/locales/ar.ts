@@ -313,7 +313,7 @@ const messages: Messages = {
     'media.showSmaller': 'عرض بحجم أصغر',
     'media.audioUnplayable': 'تعذّر تشغيل هذا الصوت. ربما نُقل الملف أو حُذف.',
     'media.savedTo': 'حُفظ في',
-    'media.listeningScript': 'نص الاستماع:',
+    'media.listeningScript': 'حُفظ النص في',
     // Recipe, workout and calculator cards
     'cards.tryGroup': 'جرّب مثالًا',
     'cards.try': 'جرّب',

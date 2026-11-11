@@ -482,6 +482,66 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A dictation saved to the user's folder: the card names the copy and the script. */
+const DICTATION_CARD = {
+    src: '/api/media/audio/dictation_q3_report_20261016_150000_ab12cd.wav',
+    path: 'C:\\Users\\test\\.gaia\\cache\\audio\\generations\\dictation_q3_report_20261016_150000_ab12cd.wav',
+    duration_seconds: 196.54,
+    saved_to: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.mp3',
+    script_path: 'C:\\Users\\test\\Documents\\Audio books\\Q3 report.script.md',
+};
+
+/** One second of silence, so the player loads instead of reporting a broken file. */
+function oneSecondWav(): Buffer {
+    const rate = 8000;
+    const wav = Buffer.alloc(44 + rate * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + rate * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(rate * 2, 40);
+    return wav;
+}
+
+async function withDictationCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname.startsWith('/api/media/audio/'), (route) =>
+        route.fulfill({ status: 200, contentType: 'audio/wav', body: oneSecondWav() }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Turn Q3 report.pdf into audio', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The audio is ready.', created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'dictate_document', active: false, success: true, render: 'audio', data: DICTATION_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a dictation's audio card names the saved copy and the script (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withDictationCard);
+        const card = page.locator('.render-audio');
+        await expect(card.locator('audio')).toBeVisible();
+        await expect(card.locator('.render-audio__error')).toHaveCount(0);
+        const where = card.locator('.render-audio__where');
+        await expect(where).toHaveCount(2);
+        // The label follows the interface language; the path stays left to right.
+        await expect(where.nth(0)).toContainText(locale === 'ar' ? 'حُفظ في' : 'Saved to');
+        await expect(where.nth(1)).toContainText(locale === 'ar' ? 'حُفظ النص في' : 'Script saved to');
+        await expect(where.nth(0).locator('bdi[dir="ltr"]')).toHaveText(DICTATION_CARD.saved_to);
+        await expect(card.locator('.render-audio__meta')).toContainText('3:17');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`dictation-card-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
