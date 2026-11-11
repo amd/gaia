@@ -4277,6 +4277,23 @@ Do NOT wrap conversational replies in JSON.
         behind a once-per-session guard inside the override, not here.
         """
 
+    def _remind_task_list(self, messages: List[Dict], conversation: List[Dict]) -> None:
+        """Remind the model to start or advance its task list, at most once a turn.
+
+        Per-turn guidance, like the step-budget notices: in this turn's
+        request, never in saved history.
+        """
+        task_list = getattr(self, "task_list", None)
+        if task_list is None:
+            return
+        note = task_list.nudge()
+        if note is None:
+            return
+        transient = getattr(messages, "append_transient", messages.append)
+        transient({"role": "user", "content": note})
+        conversation.append({"role": "user", "content": note})
+        logger.debug("Task list reminder: %s", note)
+
     def _admit_skill_tools(  # pylint: disable=unused-argument
         self, names: List[str]
     ) -> bool:
@@ -7985,6 +8002,9 @@ Do NOT wrap conversational replies in JSON.
         note_skill = getattr(self, "_note_skill_tool_use", None)
         if note_skill is not None:
             note_skill(tool_name)
+        task_list = getattr(self, "task_list", None)
+        if task_list is not None:
+            task_list.action_started(tool_name, tool_args)
 
         tool = execution_registry[tool_name]["function"]
         sig = inspect.signature(tool)
@@ -10696,6 +10716,9 @@ Do NOT wrap conversational replies in JSON.
             # Spans a mixin parked for a turn that never opened must not
             # backdate the next one.
             self._pre_turn_spans = None
+            task_list = getattr(self, "task_list", None)
+            if task_list is not None:
+                task_list.end_turn()
 
     def _flush_post_turn_record(self) -> None:
         """Write the post-answer spans and stop routing waits to this turn."""
@@ -10930,6 +10953,9 @@ Do NOT wrap conversational replies in JSON.
         # Orientation. Runs before the prompt is composed so anything it
         # establishes is in the prompt on the turn that established it.
         self._on_task_start(user_input)
+        task_list = getattr(self, "task_list", None)
+        if task_list is not None:
+            task_list.begin_turn()
 
         # Lazy skill-body activation: re-selected every turn,
         # so a stale skill match never survives into a turn that no longer
@@ -11163,6 +11189,7 @@ Do NOT wrap conversational replies in JSON.
             # as the drain above: appended at the step boundary so the next
             # model call sees it.
             self._announce_step_budget(messages, conversation, steps_taken, steps_limit)
+            self._remind_task_list(messages, conversation)
 
             # Build the next prompt based on current state (this is for fallback mode only)
             # In chat mode, we'll just add to messages array

@@ -211,8 +211,8 @@ as "no documents are indexed" about a file the user can see attached.
 ## 4. The nine canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
-plus `needs_input` added as an additive MINOR by #2469, and `reasoning`, sent
-only on request, by contract 2.22). No others are valid on
+plus three additive MINORs: `needs_input` (#2469), `reasoning`, sent only on
+request (contract 2.22), and `task_list` (§4.5)). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
@@ -224,6 +224,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
+| `task_list` | `{items, current_action, action_started_at, steps_since_update, updated_at}` (§4.5) | replace the pinned task list above the composer. **Not terminal** |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
 | `error` | `{detail, status}` | surface the actionable error verbatim; terminal |
 
@@ -459,6 +460,35 @@ A phase lasts until the next phase, `token`, `tool_call` or `tool_result`. A
 receiver that shows narration separately should treat a phased `status` as
 state, not narration.
 
+### 4.5 `task_list` (additive)
+
+The plan the agent keeps for a multi-step request (`update_tasks`, from
+`TaskListMixin`). Every change sends the **whole** list, so a receiver replaces
+what it shows; it never merges. The list belongs to the conversation, not the
+turn: it is saved with the session and carried into later turns.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `items` | array | The steps, in order. Empty means the list was cleared. |
+| `items[].id` | int | 1-based position. |
+| `items[].content` | string | A short imperative step. |
+| `items[].status` | string | `pending`, `in_progress` or `completed`. While any step is unfinished exactly one is `in_progress`; when all are done none is. |
+| `items[].started_at` / `completed_at` | number? | Epoch seconds, `null` until it happens. |
+| `current_action` | string? | What the agent is doing now ("Running command: pytest"). |
+| `action_started_at` | number? | Epoch seconds the current action began. |
+| `steps_since_update` | int | Tool calls since the model last changed the list. A receiver shows the list as stale once this passes a few steps, so a list the model stopped keeping never sits there looking current. |
+| `updated_at` | number | Epoch seconds of this change; the newer of two lists wins. |
+
+`current_action` is meaningful only while a turn runs. The agent clears it
+after its terminal event, which a stream reader never sees, so a receiver drops
+it itself at `final` or `error`. A stored copy may still carry the last action
+(a relayed or killed turn saves before that clear); a reader ignores it when no
+turn is running, and the agent drops it on restore.
+
+`steps_since_update` and the live action cover only a list the current turn is
+working on. An earlier request's list, finished or not, is left as it was
+until the model touches it again.
+
 ---
 
 ## 5. `needs_confirmation` and the confirmation model
@@ -615,7 +645,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 > `grep '"type":"..."'` over `sse_handler.py` returns 18 strings, but two of
 > them — `file_list` and `search_results` — are **nested** `result_data.type`
 > values *inside* a `tool_result` event, not top-level event types. The handler
-> emits **16 distinct top-level event types** (listed below), plus the `None`
+> emits **17 distinct top-level event types** (listed below), plus the `None`
 > queue sentinel (stream close, not a wire event).
 
 ### 6.1 The four clean maps (named in the issue)
@@ -636,6 +666,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
 | `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
 | `plan` | `print_plan` | **fold** | `status` | Plan preview is progress narration; join `steps` into one `status` message. |
+| `task_list` | `print_task_list` | **map** | `task_list` | Passed through unchanged (§4.5). Handled before dispatch, like `tool_args`, so it never splits a `tool_call` from its arguments. |
 | `tool_args` | `pretty_print_json` (`title == "Arguments"`) | **fold** | `tool_call` | Merged into the preceding `tool_call` as `args` (§6.3), not a standalone event. |
 | `tool_result` | `pretty_print_json` (result branch) | **map** | `tool_result` | Direct. `result_data` (incl. nested `file_list` / `search_results`) → canonical `data`; `render` set from the sidecar's declared card type (replaces the #1000 fence hack). |
 | `tool_end` | `print_tool_complete` | **fold** | `tool_result` | Redundant terminator. The `tool_result` is the completion signal; if `tool_end` fires with no preceding result (skipped), synthesize a minimal `tool_result{tool, data:{}}` so completion is never lost. |
@@ -826,6 +857,13 @@ turns (and their estimated tokens) no longer replayed to the model, and
 turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once.
+
+The task list (§4.5) is saved in the session transcript (`--history-file`), so
+an agent started again on the same file starts with the same list. It writes
+one `task_list` right after the startup model ping; like that ping, the TUI
+reads it with the first turn it sends. The clear-conversation sentinel forgets
+the list. The TUI passes no `--history-file` today, so each launch starts with
+an empty list.
 
 Over stdio the agent never sends `needs_confirmation.confirm_url` or
 `error.source`. The TUI decodes them for other transports, and it sets `source`

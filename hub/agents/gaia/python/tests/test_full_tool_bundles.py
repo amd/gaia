@@ -133,6 +133,7 @@ def test_core_is_the_list_every_session_starts_on():
         "sleep",
         "summarize_document",
         "update_memory",
+        "update_tasks",
         "write_file",
     }
 

@@ -93,6 +93,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
     ShellToolsMixin,
+    TaskListMixin,
     WaitToolsMixin,
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
@@ -561,6 +562,7 @@ class ChatAgent(
     AudioGenerationToolsMixin,
     WaitToolsMixin,
     ReasoningEffortToolsMixin,
+    TaskListMixin,
     MCPClientMixin,
 ):
     """
@@ -3542,6 +3544,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - TaskListMixin (task_list_tools.py): update_tasks, the pinned task list
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:

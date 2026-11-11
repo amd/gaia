@@ -83,6 +83,7 @@ CANONICAL_EVENT_TYPES: "frozenset[str]" = frozenset(
         "tool_result",
         "needs_confirmation",
         "needs_input",
+        "task_list",
         "final",
         "error",
     }

@@ -3,7 +3,7 @@
 
 /** Events streamed over SSE during a chat turn. */
 
-import type { Document, InferenceStats, MCPServerStatus, McpOutput, TurnSummary } from './index';
+import type { Document, InferenceStats, MCPServerStatus, McpOutput, TaskListItem, TurnSummary } from './index';
 
 /** Extended SSE event types for agent communication. */
 export type StreamEventType =
@@ -15,6 +15,7 @@ export type StreamEventType =
     | 'thinking'     // Agent reasoning
     | 'commentary'   // A note the agent wrote before a tool call
     | 'plan'         // Agent plan
+    | 'task_list'    // The agent's task list changed (full state)
     | 'tool_start'   // Tool execution started
     | 'tool_end'     // Tool execution completed
     | 'tool_result'  // Tool result summary
@@ -70,7 +71,8 @@ export interface StreamEvent {
     sections?: number;
     start?: string;
     end?: string;
-    items?: FoundItem[];
+    /** `recording_found`: what a section found. `task_list`: the steps (see TaskListState). */
+    items?: FoundItem[] | TaskListItem[];
     /** Drop the answer text streamed since the last tool. On `thinking`: it was this reasoning.
      *  On `status`: the reply was cut off (the model server stopped) and starts over. */
     retracts_answer?: boolean;
@@ -85,6 +87,11 @@ export interface StreamEvent {
     current_step?: number;
     /** What a tool call does, in plain words (for tool_start and tool_args). */
     narration?: string;
+    /** Task list fields (for task_list events) — see TaskListState. */
+    current_action?: string | null;
+    action_started_at?: number | null;
+    steps_since_update?: number | null;
+    updated_at?: number | null;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
     /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */

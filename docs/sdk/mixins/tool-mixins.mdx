@@ -54,6 +54,7 @@ mixin and calling its `register_*_tools()` method. Each row is the exact
 | `audio_generation` | `from gaia.agents.tools.audio_generation_tools import AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade (`init_audio_generation`) |
 | `wait` | `from gaia.agents.tools.wait_tools import WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `from gaia.agents.tools.reasoning_tools import ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
+| `task_list` | `from gaia.agents.tools.task_list_tools import TaskListMixin` | `update_tasks`, a plan the agent keeps up to date; pinned above the message box (§9.7) |
 
 The sections below show usage patterns for the most common mixins; the
 `file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).
@@ -282,6 +283,60 @@ result = agent.process_query("analyze this image: photo.jpg")
 Need something the mixin doesn't cover — image captioning, storytelling, structured
 extraction? Register your own `@tool` that calls `self.vlm_client` directly; see
 [`examples/sd_agent_example.py`](https://github.com/amd/gaia/tree/main/examples/sd_agent_example.py).
+
+---
+
+## 9.7 Task List Mixin
+
+**Import:** `from gaia.agents.tools.task_list_tools import TaskListMixin`
+
+Gives the agent a plan it keeps up to date while it works. The Agent UI and the
+TUI pin the list just above the message box. The flagship `GaiaAgent` has it on
+its `full` profile.
+
+```python
+from gaia.agents.base.agent import Agent
+from gaia.agents.tools.task_list_tools import TaskListMixin
+
+class MyAgent(TaskListMixin, Agent):
+    def _get_system_prompt(self):
+        return "You fix bugs."  # when to keep a list is in the tool description
+
+    def _register_tools(self):
+        self.register_task_list_tools()
+        # Registers: update_tasks(items=None, advance=False, done=None, start=None)
+```
+
+**`update_tasks`:**
+- `items=[...]` sets the whole list (12 steps at most). Steps kept word for word
+  keep their status; `items=[]` clears the list.
+- `advance=true` finishes the running step and starts the next one.
+- `done=[2, 3]` marks steps done; `start=4` moves the running step.
+- No arguments reads the list back.
+
+While any step is unfinished, exactly one is running; the tool starts the next
+pending step itself to keep that true. A bad call (a step number that does not
+exist, too many steps) changes nothing and returns an error the model can fix.
+
+**Events and storage.** Every change calls `console.print_task_list(state)`,
+which the Agent UI and the stdio transport send as one `task_list` event (see
+the [event contract §4.5](https://github.com/amd/gaia/blob/main/docs/spec/agent-ui-query-sse-contract.md)).
+The base `Agent` fills in the live action line as tools run and clears it when
+the turn ends. To keep the list with a session, call
+`agent.bind_task_list_store(load, save)`: the Agent UI binds its session
+row, the stdio transport the session transcript file (`--history-file`).
+
+**The `plan` field is separate.** A JSON-envelope model's per-turn `plan`
+field still arrives as the `plan` event, which the Agent UI shows as a
+checklist inside the turn. Only a list the model keeps with `update_tasks` is
+pinned above the message box, so the same plan never shows twice.
+
+**Reminders.** Models often skip the tool description's guidance, so the
+agent reminds them, at most once per turn: after three tool calls with no list (start one, marking
+what is already done), or after three tool calls since the last change to the
+unfinished list this turn is keeping (advance it). An earlier request's list
+gets no reminder. A reminder goes to the model for that turn only
+and is never saved in the conversation.
 
 ---
 

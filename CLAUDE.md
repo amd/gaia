@@ -722,6 +722,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
+| `task_list` | `gaia.agents.tools.task_list_tools.TaskListMixin` | `update_tasks`, the plan pinned above the message box in both apps |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 

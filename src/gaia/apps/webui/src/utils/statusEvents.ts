@@ -4,7 +4,7 @@
 /** A `status` event's effect on the live line and the turn's timeline. */
 
 import { useChatStore } from '../stores/chatStore';
-import type { StreamEvent } from '../types';
+import type { FoundItem, StreamEvent } from '../types';
 import { agentEventToStep, isProgressTick, statusText } from './streamSteps';
 
 /** Live phases that are a call's own label or the client's wait notice, not the call's progress. */
@@ -27,7 +27,7 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
             start: event.start ?? '',
             end: event.end ?? '',
             summary: event.summary ?? '',
-            items: event.items ?? [],
+            items: (event.items ?? []) as FoundItem[],
         });
         return;
     }

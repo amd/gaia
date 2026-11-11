@@ -385,7 +385,7 @@ Rules a client must respect:
 Read this before you design a workflow around it. This section is about the HTTP
 surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
-Thirteen of the agent's 105 tools mutate the machine and need explicit approval
+Thirteen of the agent's 106 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
 offered the scratchpad, email, send-email, calendar, image-generation or skill-hub
 tools, so `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —

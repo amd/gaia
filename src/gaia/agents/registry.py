@@ -79,6 +79,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "gaia.agents.tools.reasoning_tools",
         "ReasoningEffortToolsMixin",
     ),
+    "task_list": ("gaia.agents.tools.task_list_tools", "TaskListMixin"),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading

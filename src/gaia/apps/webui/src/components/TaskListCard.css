@@ -1,0 +1,162 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.task-list-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.task-list-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    padding: 7px 12px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--radius-lg);
+}
+
+.task-list-head:hover {
+    background: var(--bg-hover);
+}
+
+.task-list-head:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.task-list-title {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.task-list-progress {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.task-list-stale {
+    color: var(--accent-yellow);
+    white-space: nowrap;
+}
+
+.task-item-more {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding-left: 22px;
+}
+
+.task-list-oneline {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.task-list-chevron {
+    margin-left: auto;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.task-list-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 30vh;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0 12px 6px;
+    list-style: none;
+}
+
+.task-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 2px 0;
+    line-height: 1.45;
+}
+
+.task-item-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.task-item-completed .task-item-text {
+    color: var(--text-muted);
+}
+
+.task-item-in_progress .task-item-text {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.task-item-time {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.task-mark {
+    flex-shrink: 0;
+    width: 14px;
+}
+
+.task-mark-done {
+    color: var(--accent-green);
+}
+
+.task-mark-running {
+    color: var(--accent);
+}
+
+.task-mark-pending {
+    color: var(--text-muted);
+}
+
+.task-list-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 8px;
+    border-top: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.task-list-action > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-list-card .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}

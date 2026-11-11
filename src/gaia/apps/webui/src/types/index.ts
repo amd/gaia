@@ -45,6 +45,8 @@ export interface Session {
     last_run_status?: 'done' | 'failed' | 'stopped' | null;
     /** Who started the chat: a person, the eval runner, or a schedule. */
     kind?: SessionKind;
+    /** The agent's task list, as of the last saved change; null when it has none. */
+    task_list?: TaskListState | null;
 }
 
 export type SessionKind = 'chat' | 'eval' | 'scheduled';
@@ -58,6 +60,28 @@ export interface ActiveRuns {
     /** Chats waiting for the model, first to run next first. */
     queued: string[];
     awaiting_user: Record<string, AwaitingUser>;
+}
+
+/** One step of the agent's task list. Times are epoch seconds. */
+export interface TaskListItem {
+    id: number;
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+    started_at: number | null;
+    completed_at: number | null;
+}
+
+/** The agent's task list — the payload of a `task_list` event. */
+export interface TaskListState {
+    items: TaskListItem[];
+    /** What the agent is doing right now; meaningful only while a turn runs. */
+    current_action?: string | null;
+    action_started_at?: number | null;
+    /** Tool calls since the model last changed the list; high means it stopped keeping it. */
+    steps_since_update?: number | null;
+    updated_at?: number | null;
+    /** Steps the view dropped from an over-long list (view-only, never on the wire). */
+    hidden?: number;
 }
 
 /** Per-device configuration for an agent (CPU / GPU / NPU). */
