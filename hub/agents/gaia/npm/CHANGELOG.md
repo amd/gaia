@@ -24,7 +24,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 ### Added
 
 - **The agent can change its own voice settings.** A new tool,
-  `set_voice_setting`, changes the voice, speed, volume, captions or wake
+  `set_voice_setting`, changes the voice, speed, volume, captions, chime or wake
   word when the user asks ("use a different voice", "speak slower"). It
   refuses every other setting and tells the agent to point the user to
   Settings. The registered tool count goes from 105 to 106.
