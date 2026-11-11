@@ -771,7 +771,6 @@ class TestBackwardCompatibility:
         # Test common parameters are accepted
         agent = TestAgent(
             use_claude=False,
-            use_chatgpt=False,
             model_id="test-model",
             max_steps=10,
             debug_prompts=False,

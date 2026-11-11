@@ -8,8 +8,8 @@ contributors follow the exact same pattern AMD uses for its own agents.
 
 ## What ships here
 
-Three packages ship: [`gaia/`](gaia/python/) (the flagship),
-[`chat/`](chat/python/) (the base class it composes), and [`email/`](email/python/).
+Two packages ship: [`gaia/`](gaia/python/) (the flagship, including its
+`ChatAgent` base class) and [`email/`](email/python/).
 Per-task agents were collapsed into skills the flagship loads on demand, so a new
 capability is a `SKILL.md` in [`hub/skills/`](../skills/), not a new package.
 

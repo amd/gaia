@@ -274,7 +274,7 @@ def test_local_capability_permission_is_refused_with_an_actionable_error():
     message = str(excinfo.value)
     assert "deferred to a later phase" in message
     assert "filesystem" in message
-    assert "1019" in message  # where to look next
+    assert "issues/2863" in message  # the open sandbox issue, where to look next
 
 
 @pytest.mark.parametrize(
@@ -398,6 +398,25 @@ def test_a_skill_tool_may_shadow_an_existing_registry_name(roots):
     assert _TOOL_REGISTRY["search_web"] is original
     # …and the skill's is reachable under its namespace.
     assert _TOOL_REGISTRY["web-search/search_web"]["skill"] == "web-search"
+
+
+def test_a_skill_tool_may_shadow_a_tool_of_the_agent_build_under_way(roots):
+    """A skill loaded while an agent registers its tools is not a name collision."""
+    from gaia.agents.base.tools import tool, tool_build
+
+    copy_fixture("web-search", roots["user"])
+    skill = make_manager(roots).load("web-search")
+    with tool_build():
+
+        @tool
+        def search_web(query: str) -> dict:
+            """The framework's search."""
+            return {}
+
+        registered = register_skill_tools(skill)
+
+    assert set(registered) == {"web-search/search_web"}
+    assert _TOOL_REGISTRY["search_web"]["function"] is search_web
 
 
 def test_unregister_removes_only_that_skills_tools(roots):
@@ -587,6 +606,7 @@ class _StubAgent:
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     get_skills_system_prompt = Agent.get_skills_system_prompt
 
     def __init__(self):
@@ -689,6 +709,10 @@ def test_agent_load_skill_puts_a_missing_commands_substitute_in_the_prompt(
         "version: 1.0.0\nmetadata:\n  gaia:\n    security_tier: community\n"
         "    permissions:\n      - shell:execute:pytest\n---\n\nRun the suite.\n",
     )
+    from gaia.skills.drift import relock
+
+    # The author's own skill: recorded as local, so no ceiling holds it.
+    relock(roots["user"])
     monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
     agent = _StubAgent()
 

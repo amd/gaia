@@ -98,6 +98,9 @@ type fakeRelay struct {
 	cancelDelay time.Duration
 	// cancelStatus overrides the status POST .../cancel answers with; zero is 200.
 	cancelStatus int
+	// cancelDropped closes a POST .../cancel's connection without an answer:
+	// a cancel that never reaches the agent.
+	cancelDropped bool
 
 	// followUpStatus overrides the status POST .../followup answers with.
 	// Zero means 200. The interesting values are the two refusals the real
@@ -296,6 +299,15 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(r.URL.Path, "/")
 		if f.cancelDelay > 0 {
 			time.Sleep(f.cancelDelay)
+		}
+		if f.cancelDropped {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				f.t.Errorf("hijack the cancel: %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
 		}
 		f.mu.Lock()
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])

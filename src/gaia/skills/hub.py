@@ -62,6 +62,10 @@ class SkillHubError(SkillError):
     """A hub request failed, or the hub rejected a publish."""
 
 
+class SkillChecksumError(SkillHubError):
+    """A downloaded bundle does not match the checksum the hub manifest lists."""
+
+
 # ---------------------------------------------------------------------------
 # URLs
 # ---------------------------------------------------------------------------
@@ -142,6 +146,8 @@ def search_skills(
     tool names. Words of one or two letters are ignored when the query also has a
     longer word. Results are ordered by how many distinct query words matched, most
     first; ties keep catalog order (by id), so results are stable between runs.
+    When an exact word misses, a conservative suffix fallback covers common
+    variants such as ``summarization`` and ``summarizing`` without a full stemmer.
 
     Args:
         query: Words to match; empty returns the whole skills lane in catalog
@@ -196,11 +202,41 @@ def search_skills(
             ]
         ).lower()
 
+    def stem_fallback(word: str) -> str:
+        """Return a conservative fallback stem for a query word.
+
+        Exact substring matches are always tried first.  The short suffix list
+        handles common skill-search variants without adding a language-specific
+        stemmer or allowing very short stems to match unrelated skills.
+        """
+        suffixes = (
+            ("ization", "iz"),
+            ("ations", ""),
+            ("ation", ""),
+            ("ies", ""),
+            ("ing", ""),
+            ("es", ""),
+            ("s", ""),
+        )
+        for suffix, replacement in suffixes:
+            if word.endswith(suffix):
+                stem = word[: -len(suffix)] + replacement
+                if len(stem) >= 4:
+                    return stem
+        return ""
+
     if words:
         scored = []
         for entry in entries:
             text = haystack(entry)
-            hits = sum(1 for word in words if word in text)
+            hits = 0
+            for word in words:
+                if word in text:
+                    hits += 1
+                    continue
+                stem = stem_fallback(word)
+                if stem and stem in text:
+                    hits += 1
             if hits:
                 scored.append((hits, entry))
         # sort() is stable, so equal scores keep catalog order.
@@ -274,9 +310,8 @@ class RemoteSkill:
             wanted = spec or "*"
             raise SkillNotFoundError(
                 f"No published version of skill '{self.name}' satisfies {wanted!r}. "
-                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, or "
-                f"run 'gaia skill info {self.name} --remote' to see the versions. "
-                f"See {_DOCS}"
+                f"Published: {', '.join(available) or '(none)'}. Loosen the pin, "
+                f"e.g. 'gaia skill install {self.name}' for the latest. See {_DOCS}"
             )
         return chosen
 
@@ -397,8 +432,8 @@ def fetch_skill_doc(
         raise SkillHubError(
             f"Could not fetch SKILL.md for '{name}' {version} from {url}: {exc}. The "
             "version's manifest is missing from the hub, or the hub is unreachable. "
-            "Retry, or pick another version with "
-            f"'gaia skill info {name} --remote'."
+            f"Retry, or pin another version with 'gaia skill install {name}@<version>' "
+            f"('gaia skill search {name}' shows the latest)."
         ) from exc
     text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     if not text.strip():
@@ -449,7 +484,7 @@ def download_artifact(
 
     actual = hashlib.sha256(payload).hexdigest()
     if actual != artifact.sha256:
-        raise SkillHubError(
+        raise SkillChecksumError(
             f"Checksum mismatch for '{name}' {version}: the hub manifest says "
             f"sha256={artifact.sha256} but the downloaded bundle hashes to "
             f"{actual}. Nothing was installed. Retry — if it persists, the artifact "

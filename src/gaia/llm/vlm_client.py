@@ -149,6 +149,8 @@ class VLMClient:
             if self.vlm_model in available_models:
                 logger.debug(f"VLM model available: {self.vlm_model}")
                 return True
+            if self._use_downloaded_tested_model():
+                return True
             else:
                 logger.warning(f"❌ VLM model not found: {self.vlm_model}")
                 logger.warning("")
@@ -283,6 +285,26 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             logger.debug(traceback.format_exc())
             raise VLMExtractionError(str(e), page_num, image_num) from e
 
+    def _use_downloaded_tested_model(self, entries: Optional[list] = None) -> bool:
+        """Switch to a downloaded tested vision model when ``vlm_model`` isn't one.
+
+        ``entries`` is the full catalog (``show_all``); read here when not given.
+        """
+        from gaia.llm.lemonade_client import downloaded_vision_model
+
+        if entries is None:
+            catalog = self.client.list_models(show_all=True)
+            entries = catalog.get("data", []) if isinstance(catalog, dict) else []
+        substitute = downloaded_vision_model(self.vlm_model, entries, self.client)
+        if not substitute:
+            return False
+        logger.info(
+            f"Reading images with {substitute}: {self.vlm_model} is not downloaded"
+        )
+        self.vlm_model = substitute
+        self._vlm_catalog_checked = True
+        return True
+
     def _refuse_missing_vlm(self, page_num: int, image_num: int) -> None:
         """Raise when the catalog explicitly says the VLM isn't downloaded.
 
@@ -293,12 +315,11 @@ Output format: Clean markdown with the ACTUAL text from the image."""
         if self._vlm_catalog_checked:
             return
         from gaia.llm.lemonade_client import (
-            AGENT_PROFILES,
-            MODELS,
             LemonadeClientError,
             _model_ids_match,
             cloud_model_provider,
         )
+        from gaia.llm.surface_hints import VISION_DOWNLOAD_HINT
 
         try:
             catalog = self.client.list_models(show_all=True)
@@ -324,18 +345,15 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             self._vlm_catalog_checked = True
             return
 
+        if self._use_downloaded_tested_model(entries):
+            return
+
         size = entry.get("size")
         size_hint = f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
-        vlm_agent_models = {MODELS[k].model_id for k in AGENT_PROFILES["vlm"].models}
-        cli_hint = (
-            ", or run `gaia download --agent vlm`"
-            if any(_model_ids_match(m, self.vlm_model) for m in vlm_agent_models)
-            else ""
-        )
         raise VLMExtractionError(
-            f"Vision model '{self.vlm_model}' is not downloaded{size_hint}. "
-            f"Download it from Settings → Model in the Agent UI{cli_hint}, then "
-            "retry. GAIA will not download it during image analysis.",
+            f"Vision model '{self.vlm_model}' is not downloaded{size_hint}, so "
+            "GAIA can't read images yet; it will not download it during image "
+            f"analysis. {VISION_DOWNLOAD_HINT}",
             page_num,
             image_num,
         )

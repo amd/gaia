@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.skills.capture import SkillCaptureError
 from gaia.skills.errors import SkillValidationError
 from gaia.skills.format import (
     DEFAULT_SECURITY_TIER,
@@ -281,17 +282,20 @@ def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
     assert "BINARY_POLICIES" in blocker
 
 
-def test_a_policed_binary_migrates_instead_of_being_refused(tmp_path):
-    """The other half of the rule, and the reason the fixture above moved off
-    `git`: `requires.bins` is refused because nothing could GATE the binary,
-    not because it names a binary. Once BINARY_POLICIES covers one, the same
-    skill migrates to a real grant."""
+def test_a_policed_binary_is_refused_at_the_experimental_ceiling(tmp_path):
+    """A policed binary passes the command-policy check but not the tier one:
+    a migrated skill lands `experimental`, whose ceiling holds no
+    `shell:execute`. It is refused with the message `gaia skill import` gives."""
     source = write_source(tmp_path / "src", "git-status", OPENCLAW_POLICED_BIN)
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
 
-    assert outcome.migrated, outcome.blockers
-    assert not outcome.blockers
+    assert not outcome.migrated
+    assert outcome.skill is None
     assert any("shell:execute:git" in line for line in outcome.mapped)
+    (blocker,) = outcome.blockers
+    assert "shell:execute:git" in blocker
+    assert "above the 'experimental' ceiling" in blocker
+    assert "from the hub" in blocker
 
 
 def test_refused_skill_cannot_be_installed(tmp_path):
@@ -543,7 +547,7 @@ def test_support_files_are_carried_across(tmp_path):
     (source / "scripts" / "run.sh").write_text("echo hi\n", encoding="utf-8")
 
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
-    target = install_migrated(outcome, tmp_path / "dest")
+    target = install_migrated(outcome, tmp_path / "dest", allow_experimental=True)
 
     assert (target / "template.md").read_text() == "# template\n"
     assert (target / "scripts" / "run.sh").is_file()
@@ -602,7 +606,15 @@ def test_real_openclaw_skill_migrates_or_reports_why(tmp_path, skill_dir):
 
     if outcome.migrated:
         validate_skill(outcome.skill, source=str(skill_dir))
-        target = install_migrated(outcome, tmp_path / "dest")
+        try:
+            target = install_migrated(
+                outcome, tmp_path / "dest", allow_experimental=True
+            )
+        except SkillCaptureError as exc:
+            # The same static audit import runs; a BLOCK writes nothing.
+            assert "verdict is BLOCK" in str(exc)
+            assert not (tmp_path / "dest" / outcome.skill.name).exists()
+            return
         assert parse_skill_file(target) == outcome.skill
         assert outcome.skill.security_tier == "experimental"
         # v1 only ever emits instruction-only or connector-bridged skills.

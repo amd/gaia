@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import hashlib
 import inspect
 import json
 import math
@@ -42,7 +43,12 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
 from gaia.agents.base.completion import (
     CompletionEvidence,
     caveated_answer,
@@ -53,10 +59,9 @@ from gaia.agents.base.completion import (
 from gaia.agents.base.console import (
     AgentConsole,
     SilentConsole,
-    TerminalConfirmationMixin,
     edit_is_inside,
     edit_target,
-    terminal_is_interactive,
+    someone_can_answer,
     user_denial_message,
 )
 from gaia.agents.base.context_eviction import (
@@ -91,7 +96,6 @@ from gaia.agents.base.denied_effects import (
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.extraction import MAX_SECONDS as EXTRACTION_MAX_SECONDS
 from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
-from gaia.agents.base.extraction import REASONING as EXTRACTION_REASONING
 from gaia.agents.base.extraction import (
     ExtractionLedger,
     extraction_response_format,
@@ -99,6 +103,7 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.grounding import (
     LOOK,
+    SCRIPT_COMPUTATION_TOOLS,
     grounding_correction,
     observed_excerpt,
     path_locator,
@@ -112,6 +117,12 @@ from gaia.agents.base.model_features import (
     features_for_model,
     withheld_tools,
 )
+from gaia.agents.base.planted_instructions import (
+    acted_after,
+    flag_tool_result,
+    planted_instructions_note,
+    source_label,
+)
 from gaia.agents.base.project_map import resolve_project_root
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
@@ -119,6 +130,7 @@ from gaia.agents.base.task_lessons import attach as attach_task_lessons
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
+    RESOLVED_PATH_ARG,
     SCRATCH_ARG,
     command_reaches_folder,
     is_inside_folder,
@@ -140,6 +152,7 @@ from gaia.agents.base.tools import (
     _TOOL_REGISTRY,
     bare_tool_name,
     describe_registry,
+    tool_build,
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_scope import (
@@ -165,19 +178,25 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
-from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
     budget_for_ctx,
     is_context_overflow_error,
     resolve_default_chat_model,
+    runs_on_npu,
     truncation_budget,
 )
 from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
+    MODEL_SERVER_DOWN,
+    LemonadeContextOverflowError,
     LemonadeStreamCutOffError,
+    classify_lemonade_exception,
 )
+from gaia.llm.reasoning import split_reasoning as _split_reasoning
+from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     RetryNotice,
     RetryState,
@@ -186,6 +205,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
 )
+from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
 from gaia.utils import awake_clock
 from gaia.utils.json_string import extract_json_string_field
@@ -201,6 +221,9 @@ if TYPE_CHECKING:
 # Set up logging via the project logger; importing this module must not
 # reconfigure the root logger.
 logger = get_logger(__name__)
+
+#: A message this long is also saved to a file the model can read with tools.
+LONG_MESSAGE_CHARS = 20_000
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -480,6 +503,14 @@ def tool_execution_timeout() -> float:
 DEFAULT_MODEL_STEP_RETRIES = 2
 DEFAULT_MODEL_RETRY_COOLDOWN = 30.0
 
+# Live lines and the restart note; the Agent UI matches these exact strings to
+# show them in the user's language.
+SERVER_RESTARTING_MESSAGE = "The model server stopped. GAIA is restarting it…"
+SERVER_STARTING_MESSAGE = "Starting the model server…"
+ANSWER_RESTART_MESSAGE = (
+    "The answer so far was cut off, so GAIA is starting it again from the top."
+)
+
 
 def model_step_retries() -> int:
     """How many times a model step that failed transiently is tried again.
@@ -696,6 +727,8 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # tool name, not host, and a platform-conditional entry would silently stop
     # applying the day a non-Windows backend (plyer) becomes reachable.
     "notify_desktop",
+    # Erases all memory and past conversations; nothing brings them back.
+    "forget_everything",
 }
 
 #: Put on a call the user declined, so the model stops instead of rerouting.
@@ -703,6 +736,21 @@ DECLINED_HINT = (
     "The user declined this. Do not try to get the same result another way "
     "(a different command, tool, or script). Tell the user what you were going "
     "to do and why, then stop."
+)
+
+#: Tools whose output is a computed result: when one was denied, nothing was computed.
+COMPUTATION_TOOLS = frozenset(
+    {"run_python", "execute_python_file", "run_shell_command", "query_data"}
+)
+COMPUTATION_NOT_RUN = (
+    "The computation did not run, so it produced no figures. Do not report "
+    "computed figures (totals, sums, counts, averages) as if it had. Tell the "
+    "user what is needed to compute them."
+)
+COMPUTATION_FAILED = (
+    "The computation failed before it printed anything, so nothing was "
+    "computed. Do not report computed figures (totals, sums, counts, averages). "
+    "Fix the error and run it again, or tell the user what is needed."
 )
 
 # Tools whose result is nothing but a receipt for what the agent itself just
@@ -878,6 +926,16 @@ _NO_TOOLS_RETRY_NOTE = (
 
 class _NotAnAnswer(ValueError):
     """The closing reply came back, but it was a tool call or nothing."""
+
+    #: The trimmed history it was asked with, so the retry doesn't trim again.
+    sent: Optional[List[Dict[str, Any]]] = None
+
+
+class _ClosingOverflow(RuntimeError):
+    """The closing call, and its one trimmed retry, were both too long."""
+
+    def __init__(self) -> None:
+        super().__init__(_CONTEXT_STILL_OVERFLOWING_MESSAGE)
 
 
 # Stands in for a call the loop stopped before it ran, so the transcript
@@ -1237,32 +1295,6 @@ _SINGLE_TOOL_DONE_SUFFIX = (
 # A rewritten answer can make a new false claim, so it gets a second
 # correction; the same claim repeated is a disagreement, kept with a caveat.
 _MAX_TEST_CLAIM_CORRECTIONS = 2
-_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-# Anchored: only a reply that *opens* with an unclosed block was cut off
-# mid-thought. A `<think>` mentioned mid-sentence is prose, and treating it as
-# reasoning silently deletes everything the model said after it.
-_CUT_OFF_THINK_PATTERN = re.compile(r"\A<think>(?!.*</think>)(.*)\Z", re.DOTALL)
-
-
-def _split_reasoning(text: str) -> Tuple[str, Optional[str]]:
-    """Split inline ``<think>`` reasoning out of a reply.
-
-    Returns ``(answer_text, reasoning)``. A reply that *opens* with an unclosed
-    ``<think>`` was cut off mid-thought and is reasoning to the end, and text
-    before a lone ``</think>`` (the template opened the block in the prompt) is
-    reasoning.
-    """
-    parts: List[str] = []
-    if "</think>" in text and "<think>" not in text.split("</think>", 1)[0]:
-        head, _, text = text.partition("</think>")
-        parts.append(head.strip())
-    cut_off = _CUT_OFF_THINK_PATTERN.match(text.lstrip())
-    if cut_off:
-        parts.append(cut_off.group(1).strip())
-        text = ""
-    parts.extend(m.strip() for m in _THINK_BLOCK_PATTERN.findall(text))
-    answer = _THINK_BLOCK_PATTERN.sub("", text).strip()
-    return answer, "\n\n".join(p for p in parts if p) or None
 
 
 def _response_reasoning(response: Any) -> Optional[str]:
@@ -1307,6 +1339,66 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# "Index my reports folder", "please re-index ~/docs": the verb opens a clause
+# and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
+# never count.
+_INDEX_REQUEST_PATTERN = re.compile(
+    r"(?:^|[.!?;:,\n]|\b(?:please|kindly|and|then|also|now|first|just|go ahead and"
+    r"|can you|could you|would you|will you|i want you to|i'd like you to"
+    r"|i need you to))\s*"
+    r"(?:re-?)?index\s+"
+    r"(?:(?:all|all of|everything in|the|my|this|that|these|those|our|every)\s+)*"
+    r"(?:[~./\\]|[a-z]:[\\/]|it\b|them\b"
+    r"|(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b"
+    r"|[\w.-]+\s+(?:folders?|director(?:y|ies)|files?|documents?|docs|reports?|pdfs?)\b)",
+    re.IGNORECASE,
+)
+_NEGATED_BEFORE_PATTERN = re.compile(
+    r"\b(?:don['’]?t|do not|never|not|no need to|without),?\s+"
+    r"(?:(?!(?:just|instead|but|rather|simply)\b)[\w'’]+,?\s+){0,3}$",
+    re.IGNORECASE,
+)
+# A yes/no permission question about indexing, e.g. "Should I index it?".
+_ASKS_TO_INDEX_PATTERN = re.compile(
+    r"\b(?:should|shall|may|can) I (?:go ahead and |proceed (?:with|to) )?"
+    r"(?:re-?)?index(?:ing)?\b"
+    r"|\b(?:would you like|do you want) me to (?:go ahead and )?(?:re-?)?index\b",
+    re.IGNORECASE,
+)
+# A choice or a cost/scale warning is a real question for the user.
+_INDEX_QUESTION_NEEDS_USER_PATTERN = re.compile(
+    r"\bwhich\b|\bor\b|\d{1,3}(?:,\d{3})+|\b\d{4,}\b|\bminutes?\b|\bhours?\b"
+    r"|\btakes? (?:a )?(?:while|long|time)\b|\bthousands?\b|\b[gm]b\b"
+    r"|\bdisk space\b|\bslow\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END_PATTERN = re.compile(r"[.!?](?=\s|$)|\n")
+_INDEX_TOOL_NAMES = ("index_directory", "index_document")
+
+
+def _requests_indexing(text: str) -> bool:
+    """Whether *text* tells the agent, un-negated, to index a folder or file."""
+    text = text or ""
+    for match in _INDEX_REQUEST_PATTERN.finditer(text):
+        verb = (
+            match.start()
+            + re.search(r"(?:re-?)?index\s", match.group(0), re.IGNORECASE).start()
+        )
+        sentence_start = max(text.rfind(p, 0, verb) for p in ".!?\n") + 1
+        if not _NEGATED_BEFORE_PATTERN.search(text[sentence_start:verb]):
+            return True
+    return False
+
+
+def _asks_permission_to_index(answer: str) -> bool:
+    """Whether *answer* is a bare yes/no question asking to index."""
+    match = _ASKS_TO_INDEX_PATTERN.search(answer or "")
+    if not match:
+        return False
+    end = _SENTENCE_END_PATTERN.search(answer, match.end())
+    if not end or end.group(0) != "?":
+        return False
+    return not _INDEX_QUESTION_NEEDS_USER_PATTERN.search(answer)
 
 
 def _holds_complete_text_call(response: str) -> bool:
@@ -1345,7 +1437,7 @@ _TOOL_MARKUP_FAILURE_ANSWER = (
 )
 _EMOJI_SHORTCODE_END_PATTERN = re.compile(r":[a-z0-9_+-]+:$", re.IGNORECASE)
 _NEXT_STEP_INTENT_PATTERN = re.compile(
-    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+)?"
+    r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
@@ -1356,6 +1448,113 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
 )
+# "Before finalizing, I will perform one final search…": a step never taken.
+_ANNOUNCED_ACTION_PATTERN = re.compile(
+    r"^(?P<lead>[^,;:]{1,60},\s+|(?:next|then|now)\s+)?"
+    r"(?:i'll|i will|i'm going to|i am going to"
+    r"|(?P<we>we'll|we will|let's|let us))\s+"
+    r"(?:(?:now|next|then|also|first|quickly|immediately|go ahead and"
+    r"|proceed to|need to|try to|attempt to)\s+)*"
+    r"(?:perform|run|re-?run|search|check|re-?check|fetch|look(?!\s+forward)"
+    r"|read|open|call|query|compute|calculate|analy[sz]e|execute|start|begin"
+    r"|proceed|continue|try"
+    r"|verify|gather|pull|download|compare|create|write|generate|list|scan"
+    r"|review|examine|investigate|test|find|retrieve|browse|visit|load|index"
+    r"|process|plot|chart|build|extract|count|sum|total|confirm|dig)\b",
+    re.IGNORECASE,
+)
+# What makes an announcement mean "this turn": "now", "one final search",
+# "Before finalizing, …", "… next", "… to confirm".
+_IMMEDIACY_PATTERN = re.compile(
+    r"\b(?:now|right away|immediately|straight away)\b"
+    r"|\b(?:one|a)\s+(?:more|final|last|quick|further)\b"
+    r"|\bnext\s*[.!]?\s*$|\bto (?:confirm|verify|double-check|make sure|be sure)\b"
+    r"|^(?:next|then|first|finally|now|before\s+\w+ing\b[^,]*|to (?:confirm|verify"
+    r"|be sure|make sure|double-check)[^,]*),"
+    r"|^(?:i'll|i will|i'm going to|i am going to)\s+"
+    r"(?:next|then|first|now)\b",
+    re.IGNORECASE,
+)
+# An offer, a condition, or a promise about later is an answer, not a step.
+_DEFERRED_ACTION_PATTERN = re.compile(
+    r"\b(?:if|when|whenever|once|after|unless|should)\s+(?:you|you'd|you're"
+    r"|you've|needed|necessary|asked|required|wanted|desired)\b"
+    r"|^(?:if|when|whenever|once|after|unless|in case|as soon as)\b"
+    r"|\bas soon as\b|\b(?:approv|allow|grant|permi|go-ahead)\w*"
+    r"|\b(?:let me know|tell me|say the word)\b"
+    r"|\bnext time\b|\bin the future\b|\bfrom now on\b|\bgoing forward\b"
+    r"|\blater\b|\btomorrow\b|\?\s*$"
+    r"|\bby (?:(?:mon|tues|wednes|thurs|fri|satur|sun)day|eod|cob|tonight|noon"
+    r"|the end of|end of|next)\b"
+    r"|\b(?:on|this|next) (?:mon|tues|wednes|thurs|fri|satur|sun)day\b"
+    r"|\bthis (?:week|weekend|morning|afternoon|evening|month|quarter)\b"
+    r"|\bnext (?:week|month|sprint|quarter|meeting|release|rc|year|run)\b"
+    r"|\b(?:continue to|keep you|keep an eye)\b",
+    re.IGNORECASE,
+)
+# A drafted email, message or post speaks in the user's voice; its closing
+# commitment ("I will review it by Friday") is content, not a pending step.
+_DRAFT_PATTERN = re.compile(
+    r"\A\s*(?:hi|hello|hey|dear|good (?:morning|afternoon|evening)|greetings)\b"
+    r"[^\n]{0,40}$"
+    r"|^\s*subject\s*:"
+    r"|\bhere(?:'s| is)\s+(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}(?:draft|reply"
+    r"|email|message|response|post|note|letter|update|announcement|notes)\b"
+    r"|\A[^\n]*\bdraft\b[^\n]*:\s*$"
+    r"|^\s*(?:best|thanks|thank you|regards|kind regards|best regards|cheers"
+    r"|sincerely|warmly|all the best)\s*[,!.]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A list item or a quoted line is content the user asked for or quoted.
+_LIST_ITEM_PATTERN = re.compile(r"^\s*(?:(?:[-*+•]|\d+[.)])\s|>)")
+# Each future action a paragraph announces. Two or more is a plan or a
+# tutorial the user asked for ("First, I'll… Next, I'll… Finally, I'll…").
+_FUTURE_ACTION_PATTERN = re.compile(
+    r"\b(?:i'll|i will|i'm going to|i am going to|we'll|we will)\s+\w",
+    re.IGNORECASE,
+)
+# A last sentence tied to this turn is a step even after a plan-like lead-in
+# ("I'll keep this short. I'll check the releases page now.").
+_THIS_TURN_PATTERN = re.compile(
+    r"\bnow\b(?!\s+that)|\bbefore\s+\w+ing\b", re.IGNORECASE
+)
+# "Executing the final write now.": a step in the present tense, due this turn.
+# Also "Proceeding with step 1.": announcing a numbered step of a plan that
+# was laid out instead of being run (#6914).
+_PROGRESSIVE_STEP_PATTERN = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|alright|now)[,.]?\s+)?"
+    r"(?:executing|running|performing|writing|applying|calling|fetching"
+    r"|searching|saving|updating|creating|making|proceeding)\b"
+    r"(?!\s+\w+ly\b)"
+    r"(?![^.!?:]*\b(?:comes?|is|are|was|were|works?|returns?|succeeds?|takes?"
+    r"|gives?|happens?|follows?)\b)"
+    r"(?:[^.!?:]{0,80}\b(?:now|next)\s*[.!]?\s*$"
+    r"|[^.!?:]{0,60}\bwith\s+step\s*\d+\s*[.!]?\s*$)",
+    re.IGNORECASE,
+)
+_UNFINISHED_STEP_QUOTE_MAX_CHARS = 200
+
+
+def _announces_action(sentence: str, short: bool = True) -> bool:
+    """*sentence* announces an action for this turn rather than for later.
+
+    Past the short-paragraph limit it needs an immediacy cue; within it, a bare
+    "I'll check X." counts, but a lead clause ("As the owner, …") must be one.
+    """
+    if _DEFERRED_ACTION_PATTERN.search(sentence):
+        return False
+    if _PROGRESSIVE_STEP_PATTERN.match(sentence):
+        return True
+    match = _ANNOUNCED_ACTION_PATTERN.match(sentence)
+    if not match:
+        return False
+    if match.group("we") and not re.search(r"\bnow\b", sentence, re.IGNORECASE):
+        return False  # "Next, we'll run the migration." is a tutorial step.
+    if re.search(r":\s*\S", sentence[match.end() :]):
+        return False  # "I'll start with the summary: sales are up 8%."
+    if _IMMEDIACY_PATTERN.search(sentence):
+        return True
+    return short and not match.group("lead")
 
 
 def _is_json(text: str) -> bool:
@@ -1408,10 +1607,26 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     last_line = re.sub(r"[*_`#>]", "", paragraphs[-1].splitlines()[-1]).strip()
     if last_line.endswith(":") and not _EMOJI_SHORTCODE_END_PATTERN.search(last_line):
         return "narration"
+    if not _DRAFT_PATTERN.search(text) and _tool_plan_step(paragraphs):
+        return "narration"
 
+    sentences = re.split(r"(?<=[.!?])\s+", last_line)
+    plain_paragraph = re.sub(r"[*_`#>]", "", paragraphs[-1])
+    is_plan = len(
+        _FUTURE_ACTION_PATTERN.findall(plain_paragraph)
+    ) >= 2 and not _THIS_TURN_PATTERN.search(sentences[-1])
+    if (
+        not is_plan
+        and not _DRAFT_PATTERN.search(text)
+        and not _LIST_ITEM_PATTERN.match(paragraphs[-1].splitlines()[-1])
+        and _announces_action(
+            sentences[-1],
+            short=len(paragraphs[-1]) <= _UNFINISHED_PARAGRAPH_MAX_CHARS,
+        )
+    ):
+        return "narration"
     if len(paragraphs[-1]) > _UNFINISHED_PARAGRAPH_MAX_CHARS:
         return None
-    sentences = re.split(r"(?<=[.!?])\s+", last_line)
     if _NEXT_STEP_INTENT_PATTERN.match(sentences[-1]):
         return "narration"
     heading_lines = [paragraphs[-1].splitlines()[0]]
@@ -1423,6 +1638,134 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
     ):
         return "narration"
     return None
+
+
+# A plan step the agent could have run itself: it uses, calls or runs a tool
+# ("use the `run_python` tool", "call `query_data`"), not just a code name.
+_TOOL_NAMING_PATTERN = re.compile(
+    r"\b(?:use|using|call|calling|run|running|invoke|invoking)\s+(?:the\s+)?"
+    r"(?:`[\w-]+`\s+tool\b|[\w-]+\s+tool\b|`[a-z][a-z0-9]*_[a-z0-9_]+`)",
+    re.IGNORECASE,
+)
+_PLAN_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+•]|\**\d+[.)]\**)\s+(?P<item>.+)$")
+# A plan that waits for the user's go-ahead is the answer they asked for.
+_ASKS_GO_AHEAD_PATTERN = re.compile(
+    r"\?\s*$|\b(?:let me know|tell me|say the word|want me to|would you like"
+    r"|shall i|should i|do you want|your (?:go-ahead|ok(?:ay)?)"
+    r"|ready when you are|just say go"
+    r"|confirm\w*|proceed\w*|approv\w*|once you"
+    r"|nothing(?:'s| has| was| is)(?: been)? changed yet"
+    r"|reply\s+(?:with\s+)?(?:[\"'“‘][^\"'”’\n]+[\"'”’]|\w+)\s+to)\b",
+    re.IGNORECASE,
+)
+_CLOSING_LINE_MAX_CHARS = 300
+
+
+def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
+    """The plan paragraph and its first tool step, when a tool plan ends the answer.
+
+    The plan lists two or more first-person future steps, one using a tool, and
+    at most one short closing line follows it: no figures, so no result, and no
+    question or request for the go-ahead.
+    """
+    for plan_at in (-1, -2):
+        if len(paragraphs) < -plan_at:
+            return None
+        lines = paragraphs[plan_at].splitlines()
+        last_item = max(
+            (i for i, line in enumerate(lines) if _PLAN_ITEM_PATTERN.match(line)),
+            default=-1,
+        )
+        if last_item < 0:
+            continue
+        # A closing line can sit right under the list, with no blank line.
+        tail = "\n".join(
+            line for line in lines[last_item + 1 :] if not line[:1].isspace()
+        ).strip()
+        closing = [c for c in [tail, *paragraphs[plan_at + 1 :]] if c]
+        if any(
+            len(c) > _CLOSING_LINE_MAX_CHARS
+            or re.search(r"\d", c)
+            or _ASKS_GO_AHEAD_PATTERN.search(c.replace("\u2019", "'"))
+            for c in closing
+        ):
+            return None
+        items = [
+            m.group("item").strip()
+            for m in map(_PLAN_ITEM_PATTERN.match, paragraphs[plan_at].splitlines())
+            if m
+        ]
+        future = [
+            item
+            for item in items
+            if _FUTURE_ACTION_PATTERN.match(
+                re.sub(r"[*_`]", "", item).replace("\u2019", "'")
+            )
+        ]
+        tool_steps = [item for item in future if _TOOL_NAMING_PATTERN.search(item)]
+        if len(future) >= 2 and tool_steps:
+            return paragraphs[plan_at], tool_steps[0]
+    return None
+
+
+def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
+    """Split a narrated answer into (what came before, the announced step).
+
+    The step is a tool plan's first tool step, else the last sentence when it
+    announces an action or ends in a colon; otherwise (a plan) it is ``None``
+    and the whole text is kept.
+    """
+    text = (answer or "").strip()
+    prose = _FENCED_BLOCK_PATTERN.sub("", text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", prose) if p.strip()]
+    plan = _tool_plan_step(paragraphs)
+    if plan:
+        return text[: text.rfind(plan[0])].rstrip(), plan[1]
+    last_line = text.splitlines()[-1] if text else ""
+    sentence = re.split(r"(?<=[.!?])\s+", last_line.strip())[-1]
+    plain = re.sub(r"[*_`#>]", "", sentence).replace("’", "'").strip()
+    if not plain or not (
+        plain.endswith(":")
+        or _announces_action(plain)
+        or _NEXT_STEP_INTENT_PATTERN.match(plain)
+    ):
+        return text, None
+    return text[: text.rfind(sentence)].rstrip(), sentence.strip()
+
+
+def _quoted_step(step: str) -> str:
+    if len(step) > _UNFINISHED_STEP_QUOTE_MAX_CHARS:
+        step = step[:_UNFINISHED_STEP_QUOTE_MAX_CHARS].rstrip() + "…"
+    return f'"{step}"'
+
+
+def _narration_reprompt(answer: str) -> str:
+    _, step = _split_announced_step(answer)
+    said = f" (you said {_quoted_step(step)})" if step else ""
+    return (
+        f"You described your next step instead of doing it{said}. "
+        "Do it now with a tool call, or give the final answer if the task is "
+        "complete."
+    )
+
+
+def _unfinished_step_answer(answer: str) -> str:
+    """The honest ending for a turn that stopped on a step it never took."""
+    body, step = _split_announced_step(answer)
+    if step:
+        opening = (
+            f"I didn't finish: I stopped at a step I announced but never "
+            f"carried out ({_quoted_step(step)})."
+        )
+    else:
+        opening = (
+            "I didn't finish: I wrote out the next steps but never carried them out."
+        )
+    parts = [opening]
+    if body:
+        parts.append(f"What I had so far:\n\n{body}")
+    parts.append('Send "continue" to pick up from there.')
+    return "\n\n".join(parts)
 
 
 # First-person intent that announces the call it rides with ("I'll read it").
@@ -1915,10 +2258,10 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -1936,19 +2279,18 @@ def _offer_skill_tools(agent: Any, skill: Any) -> None:
     a skill loaded mid-turn otherwise names tools the model cannot call until the
     next turn — and a one-turn task has no next turn.
 
-    Admits into the dynamic tool loader first, so the loader's own loaded set —
-    the thing the *next* turn rebuilds the subset from — knows about the tools
-    too. Widening only the filter would last exactly one turn, and every call of
-    a skill's tool would count against the escape-hatch signal.
+    An agent with a tool loader owns the list, so the next turn keeps them;
+    widening only the filter would last exactly one turn.
     """
     current = getattr(agent, "_active_tool_filter", None)
     if current is None:
         return
     wanted = _skill_tool_names(skill)
+    if agent._admit_skill_tools(wanted):
+        return
     missing = [
         tool for tool in wanted if tool in agent._tools_registry and tool not in current
     ]
-    agent._admit_skill_tools(wanted)
     if missing:
         # Appended, never re-sorted: a reshuffled list breaks the cached prefix.
         agent._apply_tool_filter([*current, *missing])
@@ -2009,6 +2351,48 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     if target == prompt_args["file_path"]:
         return prompt_args
     return {**prompt_args, "file_path": target}
+
+
+def _record_refused_write(
+    agent: Any, tool_name: str, tool_args: Any, result: Any
+) -> None:
+    """Put a write the path sandbox refused on this turn's ledger as final.
+
+    Code run through ``run_python`` or the shell isn't confined by the
+    sandbox, so the ledger is what keeps it off a path a write tool was just
+    refused. getattr throughout: test stubs copy ``_execute_tool``.
+    """
+    ledger = getattr(agent, "_denied_effects", None)
+    if ledger is None or not isinstance(result, dict):
+        return
+    if result.get("status") != "error" or not isinstance(tool_args, dict):
+        return
+    registry = getattr(agent, "_tools_registry", None) or {}
+    preflight = (registry.get(tool_name) or {}).get("preflight")
+    target_of = getattr(preflight, "target_of", None)
+    read_validator = getattr(agent, "_read_validator", None)
+    validator = read_validator() if callable(read_validator) else None
+    if validator is None or not callable(target_of):
+        return
+    try:
+        target = os.path.abspath(str(target_of(tool_args)))
+        real = os.path.realpath(target)
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        logger.debug("could not resolve the refused write's target: %s", e)
+        return
+    # A "read it first" or a size limit is a step to take, not a refusal.
+    if validator.is_path_allowed(real, prompt_user=False) and not (
+        validator.is_write_blocked(real)[0]
+    ):
+        return
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(result.get("error") or "refused by the path sandbox"),
+        kinds={PATH},
+        refused=True,
+        paths=[target, real],
+    )
 
 
 def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
@@ -2096,6 +2480,10 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Optional fixed execution boundary. ``None`` preserves the historical
+    # unrestricted behavior; an empty set deliberately permits no tools.
+    _tool_scope: Optional[FrozenSet[str]] = None
+
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
@@ -2145,6 +2533,12 @@ class Agent(abc.ABC):
     # Instance-level once set, so one agent's skills never leak into a sibling.
     _skill_manager: Optional[Any] = None
     _loaded_skills: Optional[Dict[str, Any]] = None
+    # loads_with tool -> skill name, and how each skill came to be loaded.
+    _loads_with_index: Optional[Dict[str, str]] = None
+    _skill_origins: Optional[Dict[str, str]] = None
+    # Skills already announced to the console, and the turn they belong to.
+    _skills_announced: Optional[set] = None
+    _skills_announced_turn: Optional[int] = None
     # ``shell:execute:<binary>`` grants held by the currently loaded skills.
     _granted_binaries: Optional[Any] = None
 
@@ -2357,7 +2751,6 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        use_chatgpt: bool = False,
         claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
@@ -2382,13 +2775,13 @@ Do NOT wrap conversational replies in JSON.
         context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,
         context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,
         context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,
+        tool_scope: Optional[Sequence[str]] = None,
     ):
         """
         Initialize the Agent with LLM client.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -2426,6 +2819,10 @@ Do NOT wrap conversational replies in JSON.
                           ``conversation_history`` from earlier user requests
                           is sent back to the model. Within one request it is
                           always sent back (default: False).
+            tool_scope: Optional fixed set of tool names allowed to execute.
+                          ``None`` preserves unrestricted execution; an empty
+                          sequence permits no tools. Name resolution and
+                          "did you mean" candidates are restricted as well.
             max_output_tokens: Output-token cap for each LLM reply, thinking
                           included. None (default) picks per model:
                           CLOUD_MAX_OUTPUT_TOKENS for a Lemonade cloud model,
@@ -2447,10 +2844,6 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
-        if use_chatgpt:
-            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -2462,6 +2855,14 @@ Do NOT wrap conversational replies in JSON.
             )
         self.max_output_tokens = max_output_tokens
         self.device = device
+        if tool_scope is None:
+            self._tool_scope = None
+        else:
+            if isinstance(tool_scope, (str, bytes)):
+                raise TypeError(
+                    "tool_scope must be a sequence of tool names, not a string"
+                )
+            self._tool_scope = frozenset(str(name) for name in tool_scope)
         self.resend_reasoning_across_requests = resend_reasoning_across_requests
         # Stored before _register_tools so an agent's selector hook and the
         # post-registration skill-set load both see the explicit request.
@@ -2476,6 +2877,8 @@ Do NOT wrap conversational replies in JSON.
         self._tool_reported_usage: List[Dict[str, Any]] = []
         # Same rationale for the verification-scope log.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         # Whether a project root has tests, walked once per root per turn.
         self._has_tests_cache: Dict[Optional[str], bool] = {}
         # Same rationale for the per-turn record of edited files.
@@ -2485,6 +2888,10 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
+            # GAIA's own model server stopped under a call this turn.
+            "server_stopped": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -2552,13 +2959,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2567,9 +2982,31 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
+                # Ask the daemon for GAIA's engine, never probe the default port.
+                probe_client.current_base_url()
+                if resolve_after_start:
+                    base_url = probe_client.base_url
                 try:
                     probe_client.health_check()
                 except LemonadeUnresponsiveError:
@@ -2652,7 +3089,8 @@ Do NOT wrap conversational replies in JSON.
 
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
-        self._register_tools()
+        with tool_build():
+            self._register_tools()
         self._install_path_access_prompt()
         from gaia.agents.base.artifacts import ArtifactStore
 
@@ -2681,8 +3119,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -2693,7 +3129,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -2722,7 +3158,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
@@ -3061,7 +3497,11 @@ Do NOT wrap conversational replies in JSON.
         define ``mark_turn_failed`` still prints the answer, just unmarked.
         """
         hook = getattr(self.console, "mark_turn_failed", None)
-        if hook is not None:
+        if hook is None:
+            return
+        if self._turn_model_retries.get("server_down"):
+            hook(failure=MODEL_SERVER_DOWN)
+        else:
             hook()
 
     def _uses_native_tool_calls(self) -> bool:
@@ -3083,17 +3523,22 @@ Do NOT wrap conversational replies in JSON.
             or uses_native_tool_calls(model_id)
         )
 
-    def _hosted_native_tool_caller(self) -> bool:
-        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+    def _hosted_model(self) -> bool:
+        """True for Claude or any cloud-routed model, whatever its tool format."""
         if getattr(self, "_use_claude", False):
             return True
         from gaia.llm.lemonade_client import cloud_model_info, cloud_model_provider
 
         model_id = getattr(self, "model_id", None)
-        hosted = bool(cloud_model_provider(model_id)) or (
+        return bool(cloud_model_provider(model_id)) or (
             cloud_model_info(model_id) is not None
         )
-        return hosted and self._uses_native_tool_calls()
+
+    def _hosted_native_tool_caller(self) -> bool:
+        """True for Claude, or a cloud-routed model that takes ``tools=``."""
+        if getattr(self, "_use_claude", False):
+            return True
+        return self._hosted_model() and self._uses_native_tool_calls()
 
     @property
     def system_prompt(self) -> str:
@@ -3318,18 +3763,7 @@ Do NOT wrap conversational replies in JSON.
             return False
         if self._path_access_refusal_unasked(path):
             return True
-        console = self.console
-        # A background run or an unattended sidecar query denies every prompt.
-        if getattr(console, "background_mode", False) is True:
-            return True
-        if getattr(console, "nobody_answers", False) is True:
-            return True
-        if getattr(console, "blocking_confirmation", False):
-            return False
-        # A terminal console asks only on an interactive terminal; others deny.
-        return not (
-            isinstance(console, TerminalConfirmationMixin) and terminal_is_interactive()
-        )
+        return not someone_can_answer(self.console)
 
     def _path_access_without_asking(self, path: Path) -> Optional[bool]:
         """The answer to a path-access question no one needs to be asked, or None."""
@@ -3430,7 +3864,9 @@ Do NOT wrap conversational replies in JSON.
 
     def _register_extraction_tool(self):
         def extract_document_items(
-            file_path: str, fields: Optional[List[str]] = None
+            file_path: str,
+            fields: Optional[List[str]] = None,
+            terms: Optional[List[str]] = None,
         ) -> dict:
             """Extract EVERY requested item from a text document, page by page.
 
@@ -3442,12 +3878,33 @@ Do NOT wrap conversational replies in JSON.
             Args:
                 file_path: Source text file permitted in this session.
                 fields: Requested field names; each entry must include every field.
+                terms: Words every wanted item must contain, with their variants
+                    (["code", "error"] for "sections that mention a code").
+                    Only pages containing one are read, which is far faster.
+                    Omit when an item could be worded without any of them.
             """
             from gaia.agents.base.tools import raise_if_cancelled
 
             ledger = self._extraction_ledger
+            if not ledger.offered:
+                return {
+                    "status": "error",
+                    "error": "extract_document_items is only for requests to list "
+                    "every item in a document. Read the document instead.",
+                }
             extraction_chat = self._make_extraction_chat()
             usage_sink = self._tool_reported_usage
+            page_line = []
+
+            def progress(page, total):
+                page_line[:] = [f"Reading page {page} of {total}…"]
+                self.console.report_phase("reading", page_line[0])
+
+            def back_on_page():
+                if page_line:
+                    self.console.report_phase("reading", page_line[0])
+
+            self._watch_tool_model_calls(extraction_chat, back_on_page)
 
             def check():
                 raise_if_cancelled()
@@ -3459,20 +3916,24 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     raise ValueError("Extraction cancelled or superseded")
 
-            from gaia.llm.lemonade_client import cloud_model_provider
+            from gaia.llm.lemonade_client import (
+                cloud_lowest_reasoning_effort,
+                cloud_model_provider,
+            )
 
-            # A cloud reasoning model can spend its whole budget thinking about
-            # one dense page; copying quotes out of it needs little reasoning.
-            # Local anti-repetition penalties fight verbatim quote copying.
-            sampling = (
-                {"reasoning_effort": EXTRACTION_REASONING}
-                if cloud_model_provider(getattr(self, "model_id", None))
-                else {
+            model_id = getattr(self, "model_id", None)
+            if cloud_model_provider(model_id):
+                # A cloud reasoning model can spend its whole budget thinking
+                # about one dense page; copying quotes needs little reasoning.
+                effort = cloud_lowest_reasoning_effort(model_id)
+                sampling = {"reasoning_effort": effort} if effort else {}
+            else:
+                # Local anti-repetition penalties fight verbatim quote copying.
+                sampling = {
                     "frequency_penalty": 0.0,
                     "presence_penalty": 0.0,
                     "repeat_penalty": 1.0,
                 }
-            )
 
             def send(system, prompt, options):
                 check()
@@ -3500,16 +3961,6 @@ Do NOT wrap conversational replies in JSON.
 
             def ask(system, prompt):
                 response, exhausted = send(system, prompt, sampling)
-                if exhausted and sampling.get("reasoning_effort") not in (None, "none"):
-                    # Copying quotes needs no reasoning; retry this page without it.
-                    logger.warning(
-                        "Extraction page used its %d-token budget reasoning; "
-                        "retrying the page with reasoning_effort=none",
-                        EXTRACTION_MAX_TOKENS,
-                    )
-                    response, exhausted = send(
-                        system, prompt, {**sampling, "reasoning_effort": "none"}
-                    )
                 if exhausted:
                     raise ValueError(
                         f"Extraction reply used its whole {EXTRACTION_MAX_TOKENS}-token "
@@ -3529,6 +3980,8 @@ Do NOT wrap conversational replies in JSON.
                     ask,
                     check,
                     fields,
+                    progress,
+                    terms,
                 )
             finally:
                 ledger.lock.release()
@@ -3558,7 +4011,8 @@ Do NOT wrap conversational replies in JSON.
                     "status": "error",
                     "error": "Extract every source successfully before saving the inventory",
                 }
-            writer = self._tools_registry.get("write_file")
+            registry = self._execution_tool_registry()
+            writer = registry.get("write_file")
             if writer is None:
                 return {
                     "status": "error",
@@ -3586,11 +4040,12 @@ Do NOT wrap conversational replies in JSON.
                 "requires_confirmation": gated,
             }
             if name == "extract_document_items":
-                entry["parameters"]["fields"] = {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "required": False,
-                }
+                for parameter in ("fields", "terms"):
+                    entry["parameters"][parameter] = {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "required": False,
+                    }
             self._tool_overrides[name] = entry
             if self._instance_tools is not None:
                 self._instance_tools[name] = entry
@@ -3659,6 +4114,20 @@ Do NOT wrap conversational replies in JSON.
             }
         self.model_features = features
 
+    def _execution_tool_registry(self) -> MutableMapping[str, Any]:
+        """Return the registry this agent is permitted to execute.
+
+        Lightweight Agent test doubles and older subclasses may not initialize
+        the optional scope field.  Treat a missing field like the constructor's
+        legacy ``None`` default so adding tool scopes does not break those
+        callers.
+        """
+        registry = self._tools_registry
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return registry
+        return {name: entry for name, entry in registry.items() if name in scope}
+
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
 
@@ -3675,6 +4144,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -3704,15 +4176,34 @@ Do NOT wrap conversational replies in JSON.
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
             )
+            if schemas and self._thin_tool_schemas():
+                from gaia.agents.base.tool_loader import thin_tool_schema
+
+                schemas = [thin_tool_schema(schema) for schema in schemas]
         else:
             schemas = None
         # The trace reports the object that went out as ``tools=``, never a
-        # re-render — a mid-loop load_tools expansion must show up there.
+        # re-render — a mid-loop search_tools jump must show up there.
         self._last_tool_schemas = schemas
         self._last_tool_filter = (
             None if self._active_tool_filter is None else list(self._active_tool_filter)
         )
         return schemas
+
+    def _thin_tool_schemas(self) -> bool:
+        """True when ``tools=`` carries thin schemas, with full docs on request.
+
+        Must not change while a model is loaded: changing it changes ``tools=``,
+        which makes a local model re-read the whole conversation. Default off.
+        """
+        return False
+
+    def _conversation_request_kwargs(self) -> Dict[str, Any]:
+        """Extra request kwargs for this conversation's own model calls.
+
+        Default: none, which keeps the provider's conversation slot.
+        """
+        return {}
 
     def _trace_tool_schema(self) -> Dict[str, Any]:
         """The ``tool_schema`` block of a ``--trace`` artifact.
@@ -3756,8 +4247,8 @@ Do NOT wrap conversational replies in JSON.
         """Return the tool-name subset to surface this turn, or ``None``.
 
         Default: ``None`` — render the full registry (legacy behavior). Agents
-        with a dynamic tool loader override this to return a selection, in
-        admission order (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
+        with a dynamic tool loader override this to return the session's list
+        (see :class:`~gaia.agents.base.tool_loader.ToolLoader`).
         """
         return None
 
@@ -3772,19 +4263,54 @@ Do NOT wrap conversational replies in JSON.
         behind a once-per-session guard inside the override, not here.
         """
 
-    def _on_tool_invoked(self, tool_name: str) -> None:
-        """Hook called when a tool is about to execute (after registry lookup).
+    def _admit_skill_tools(  # pylint: disable=unused-argument
+        self, names: List[str]
+    ) -> bool:
+        """Put a just-loaded skill's *names* on the tool list; True if handled.
 
-        Default: no-op. Agents with a dynamic tool loader override this to
-        record tool-use recency. Execution itself always uses the full registry,
-        so this never gates execution.
+        Default: ``False`` — without a tool loader, nothing else owns the list.
+        """
+        return False
+
+    def _drop_skill_tools(self, names: List[str]) -> None:
+        """Take an unloaded skill's *names* off the tool list.
+
+        Default: rebuild the filter without them, when there is one.
+        """
+        current = getattr(self, "_active_tool_filter", None)
+        if current is None:
+            return
+        kept = [tool for tool in current if tool not in names]
+        if kept != current:
+            self._apply_tool_filter(kept)
+
+    def _warm_tool_filter(self) -> Optional[List[str]]:
+        """The tool list a warm-up primes: what a new session's first turn sends.
+
+        Default: the active filter, unchanged.
+        """
+        return self._active_tool_filter
+
+    def _prime_second_prefix(  # pylint: disable=unused-argument
+        self, say: Callable[[str], None], cancel: Optional[threading.Event]
+    ) -> None:
+        """Prime anything a warm-up keeps ready beside the first turn's prompt.
+
+        Default: nothing.
         """
 
-    def _admit_skill_tools(self, names: List[str]) -> None:
-        """Tell the dynamic tool loader a loaded skill needs *names*.
+    def _tool_list_notice(self) -> bool:
+        """True once, when the next request re-reads for a changed tool list.
 
-        Default: no-op — an agent without a loader has no second owner of the
-        turn's tool set to keep in sync. ChatAgent overrides it.
+        Default: never — without a loader the list does not change.
+        """
+        return False
+
+    def _before_model_call(self, messages: List[Dict[str, Any]]) -> None:
+        """Hook run before each model call of a turn, with the messages to send.
+
+        Default: no-op. Raises like the model call it precedes, and may run
+        again if that call is retried.
         """
 
     def _refresh_active_tool_filter(self, user_input: str) -> None:
@@ -3811,8 +4337,8 @@ Do NOT wrap conversational replies in JSON.
 
         The single place the "filter and prompt move together" invariant lives.
         Called from :meth:`_refresh_active_tool_filter` (per user turn) and from
-        the ``load_tools`` escape-hatch handler (mid-loop), so a mid-query
-        expansion is visible to the very next model step — both render paths
+        ``search_tools`` and skill loading (mid-loop), so a mid-query change is
+        visible to the very next model step — both render paths
         (``system_prompt`` and ``_openai_tools``) read these live.
         """
         extraction = getattr(self, "_extraction_ledger", None)
@@ -3955,7 +4481,7 @@ Do NOT wrap conversational replies in JSON.
         loaded skill's body already renders unconditionally). This is the
         explicit escape hatch: calling ``load_skill`` on an already-loaded
         skill always brings its instructions back, even when the per-turn
-        selector missed it — mirrors the ``load_tools`` escape hatch for tools.
+        selector missed it — mirrors ``search_tools`` for tools.
         Callers still need to call :meth:`rebuild_system_prompt` themselves.
         """
         current = self._active_skill_filter
@@ -4086,6 +4612,86 @@ Do NOT wrap conversational replies in JSON.
             self._loaded_skills = {}
         return self._loaded_skills
 
+    def _skill_loaded_by(self, tool_name: str) -> Optional[str]:
+        """The bundled skill whose ``loads_with`` names *tool_name*, if any.
+
+        Only skills GAIA ships with the agent, and that bring no code of their
+        own, load this way: nobody chose them, so anything else waits for the
+        model's ``load_skill`` and the checks that call makes.
+        """
+        from gaia.skills.manager import ROOT_AGENT_BUNDLED
+
+        index = self._loads_with_index
+        if index is None:
+            index = {}
+            for skill in self.skill_manager.discover().values():
+                if skill.root != ROOT_AGENT_BUNDLED or skill.gaia.tools:
+                    continue
+                for tool in skill.gaia.loads_with:
+                    index.setdefault(tool, skill.name)
+            self._loads_with_index = index
+        return index.get(tool_name)
+
+    def _announce_skill(self, name: str, how: str) -> None:
+        """Tell the console a turn runs on *name*, once per skill per turn.
+
+        *how* is ``"model"`` (the model called ``load_skill``), ``"auto"`` (GAIA
+        loaded it for a ``loads_with`` tool) or ``"loaded"`` (already loaded).
+        """
+        seq = getattr(self, "_turn_seq", 0)
+        if self._skills_announced is None or self._skills_announced_turn != seq:
+            self._skills_announced_turn = seq
+            self._skills_announced = set()
+        if how != "loaded":
+            if self._skill_origins is None:
+                self._skill_origins = {}
+            self._skill_origins.setdefault(name, how)
+        if name in self._skills_announced:
+            return
+        self._skills_announced.add(name)
+        self.console.print_skill_use(name, list(self.loaded_skills), how)
+
+    def describe_skills(self) -> List[Dict[str, str]]:
+        """``[{"name", "how"}]`` for each loaded skill, in load order.
+
+        *how* is ``"model"`` or ``"auto"`` as in :meth:`_announce_skill`, or
+        ``"always"`` for a skill the agent loads on its own at startup.
+        """
+        origins = self._skill_origins or {}
+        return [
+            {"name": name, "how": origins.get(name, "always")}
+            for name in self.loaded_skills
+        ]
+
+    def _note_skill_tool_use(self, tool_name: str) -> None:
+        """Load and announce the skill a ``loads_with`` tool belongs to."""
+        name = self._skill_loaded_by(tool_name)
+        if name is None:
+            return
+        how = "loaded" if name in self.loaded_skills else "auto"
+        if how == "auto":
+            from gaia.skills.errors import SkillError
+
+            try:
+                self.load_skill(name)
+            except SkillError as e:
+                # The tool still runs; only the skill's instructions are missing.
+                logger.warning(
+                    "%s belongs to skill '%s', which could not be loaded: %s",
+                    tool_name,
+                    name,
+                    e,
+                )
+                return
+            # Tools the framework supplies for a skill, as load_skill registers them.
+            activate = getattr(self, "_activate_extraction_skills", None)
+            if callable(activate):
+                activate(name)
+            logger.info(
+                "Loaded skill '%s' because the model called %s", name, tool_name
+            )
+        self._announce_skill(name, how)
+
     #: The tool a ``shell:execute:<binary>`` grant is exercised through.
     _SKILL_SHELL_TOOL: ClassVar[str] = "run_shell_command"
 
@@ -4095,11 +4701,11 @@ Do NOT wrap conversational replies in JSON.
         Each active skill's ``tools_required``, plus the shell tool when it holds
         a ``shell:execute:<binary>`` grant — a granted binary is useless without
         the tool that runs it. Tools a skill *provides* through its own
-        ``tools.py`` are not included; they still reach the prompt by semantic
-        match. Only skills whose body renders this turn count (see
+        ``tools.py`` are not included; ChatAgent lists those for every loaded
+        skill. Only skills whose body renders this turn count (see
         :meth:`_active_skill_names`), so a loaded skill the turn is not about
         holds no tool slots. Feeds the tool loader's SKILL signal, so an active
-        skill's tools arrive without a separate ``load_tools`` round trip.
+        skill's tools arrive without a separate ``search_tools`` round trip.
         """
         skills = getattr(self, "_loaded_skills", None)
         if not skills:
@@ -4425,6 +5031,21 @@ Do NOT wrap conversational replies in JSON.
         revoked = self.granted_binaries.revoke_skill(name)
         skill = self.loaded_skills.pop(name, None)
         _skill_folder_access(self, skill, grant=False)
+        still_needed = {
+            tool
+            for other in self.loaded_skills.values()
+            for tool in _skill_tool_names(other)
+        }
+        unneeded = [
+            tool for tool in _skill_tool_names(skill) if tool not in still_needed
+        ]
+        if (
+            revoked
+            and not self.granted_binaries.holders()
+            and self._SKILL_SHELL_TOOL not in still_needed
+        ):
+            unneeded.append(self._SKILL_SHELL_TOOL)
+        self._drop_skill_tools(unneeded)
         if self._active_skill_filter is not None:
             self._active_skill_filter = [
                 n for n in self._active_skill_filter if n != name
@@ -4830,12 +5451,19 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def get_tools_info(self) -> Dict[str, Any]:
-        """Get information about all registered tools."""
-        return self._tools_registry
+        """Get information about tools available to this agent."""
+        scope = getattr(self, "_tool_scope", None)
+        if scope is None:
+            return self._tools_registry
+        return {
+            name: self._tools_registry[name]
+            for name in scope
+            if name in self._tools_registry
+        }
 
     def get_tools(self) -> List[Dict[str, Any]]:
-        """Get a list of registered tools for the agent."""
-        return list(self._tools_registry.values())
+        """Get a list of tools available to this agent."""
+        return list(self.get_tools_info().values())
 
     def describe_tools(self) -> List[Dict[str, str]]:
         """The tools this agent can call, for showing them to a user.
@@ -4858,6 +5486,9 @@ Do NOT wrap conversational replies in JSON.
         those is reported as it actually starts, never on a timer.
         """
         reading = "Reading the tool results" if after_tools else "Reading your request"
+        phase = "reading"
+        if self._tool_list_notice():
+            phase, reading = "loading_tools", "Loading more tools"
         provider = getattr(getattr(self, "chat", None), "llm_client", None)
         if provider is not None and hasattr(provider, "tool_call_progress"):
             provider.tool_call_progress = self._report_tool_call_progress
@@ -4865,23 +5496,53 @@ Do NOT wrap conversational replies in JSON.
             provider.reasoning_progress = self._report_reasoning_progress
         backend = getattr(provider, "_backend", None)
         if backend is not None and hasattr(backend, "model_load_listener"):
+            backend.model_load_listener = self._model_load_listener(
+                lambda: self.console.report_phase(phase, reading),
+                lambda: self._turn_model_retries.get("server_stopped"),
+            )
+        self.console.report_phase(phase, reading)
 
-            def _on_load(model: str, state: str) -> None:
-                if state == "loaded":
-                    self.console.report_phase("reading", reading)
-                elif state == "downloading":
+    def _model_load_listener(
+        self, on_loaded: Callable[[], None], server_stopped: Callable[[], Any]
+    ) -> Callable[[str, str], None]:
+        """A ``LemonadeClient.model_load_listener`` that puts each wait on the live line.
+
+        *server_stopped* says whether GAIA's own server is known to have
+        stopped under a call, which turns a reconnect into the restart status.
+        """
+
+        def _on_load(model: str, state: str) -> None:
+            if state == "loaded":
+                on_loaded()
+            elif state == "downloading":
+                self.console.report_phase("downloading_model", f"Downloading {model}")
+            elif state in ("reconnecting", "starting_server"):
+                if server_stopped():
                     self.console.report_phase(
-                        "downloading_model", f"Downloading {model}"
+                        "model_restart", SERVER_RESTARTING_MESSAGE
                     )
                 elif state == "reconnecting":
                     self.console.report_phase("reconnecting", RECONNECTING_MESSAGE)
                 else:
-                    self.console.report_phase(
-                        "loading_model", f"Loading {model} into memory"
-                    )
+                    self.console.report_phase("model_restart", SERVER_STARTING_MESSAGE)
+            else:
+                self.console.report_phase(
+                    "loading_model", f"Loading {model} into memory"
+                )
 
-            backend.model_load_listener = _on_load
-        self.console.report_phase("reading", reading)
+        return _on_load
+
+    def _watch_tool_model_calls(self, chat: Any, on_loaded: Callable[[], None]) -> None:
+        """Put a tool's own model calls (its private *chat*) on the live line.
+
+        The server answered this turn before the tool ran, so a reconnect
+        inside the tool means GAIA's server stopped under it.
+        """
+        backend = getattr(getattr(chat, "llm_client", None), "_backend", None)
+        if backend is not None and hasattr(backend, "model_load_listener"):
+            backend.model_load_listener = self._model_load_listener(
+                on_loaded, lambda: True
+            )
 
     def _report_tool_call_progress(self, tool: str, chars: int) -> None:
         self.console.report_phase(
@@ -5625,6 +6286,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
+        scope = getattr(self, "_tool_scope", None)
+        if scope is not None:
+            items = [(n, info) for n, info in items if n in scope]
 
         schemas = []
         for name, tool_info in items:
@@ -5661,6 +6325,12 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
         return schemas
+
+    def _user_asked_to_index(self, user_input: str) -> bool:
+        """True when this turn's message tells the agent to index something."""
+        return _requests_indexing(
+            getattr(self, "_original_user_input", None) or user_input
+        )
 
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """Decode a reply and reject tool arguments that cannot be executed."""
@@ -5942,6 +6612,7 @@ Do NOT wrap conversational replies in JSON.
                 "thought": "LLM returned empty response",
                 "goal": "Handle empty response error",
                 "answer": answer,
+                "empty_response": True,
             }
 
         response = response.strip()
@@ -6278,7 +6949,7 @@ Do NOT wrap conversational replies in JSON.
         """
         lower = tool_name.lower()
         suffix = f"_{lower}"
-        registry = self._tools_registry
+        registry = self._execution_tool_registry()
         matches = [n for n in registry if n.lower().endswith(suffix)]
         if len(matches) == 1:
             return matches[0]
@@ -6393,9 +7064,18 @@ Do NOT wrap conversational replies in JSON.
         # Time spent on a question the body raised (e.g. path access) is the
         # user's, not the tool's: abandoning there strands a live prompt. Time
         # the PC sleeps is nobody's: the awake clock leaves it out.
+        stop = getattr(self, "_cancel_event", None)
+        console = getattr(self, "console", None)
+        console_stop = getattr(console, "cancelled", None)
         try:
             started = awake_clock.monotonic()
             while worker.is_alive():
+                # The user's Stop reaches a tool that polls for cancellation.
+                if any(
+                    isinstance(e, threading.Event) and e.is_set()
+                    for e in (stop, console_stop)
+                ):
+                    cancel.set()
                 remaining = (
                     started + timeout + user_wait.waited() - awake_clock.monotonic()
                 )
@@ -6458,6 +7138,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _skill_tool_scope(self, tool_name: str) -> Any:
+        """Bind a loaded skill's tool to this agent, as its body is when it runs.
+
+        A skill's preflight and approval prompt need the agent too, and a skill
+        tool has no ``self``; any other tool gets a no-op context.
+        """
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill is None:
+            return contextlib.nullcontext()
+        from gaia.skills.context import bind
+
+        return bind(self, skill)
+
     def _policy_refusal(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -6486,7 +7180,8 @@ Do NOT wrap conversational replies in JSON.
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args or {})
+            with self._skill_tool_scope(tool_name):
+                refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -6514,6 +7209,30 @@ Do NOT wrap conversational replies in JSON.
             return None, False
         denial, effect = conflict
         command = render_call(tool_name, tool_args)
+        if denial.refused:
+            # No person said no, so no person is asked to lift it.
+            logger.info(
+                "Refused %s: it %s, refused earlier as %s",
+                tool_name,
+                effect.describe(),
+                denial.rendered,
+            )
+            return (
+                {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "blocked_effect": effect.describe(),
+                    "declined_call": denial.rendered,
+                    "error": (
+                        f"Not run: this {effect.describe()}, and `{denial.rendered}` "
+                        "was refused earlier in this request. No approval can lift "
+                        "that refusal, so do not reach it with another tool, "
+                        "command, or script. Tell the user it was not done and "
+                        "that they can do it themselves."
+                    ),
+                },
+                False,
+            )
         answer = self._ask_to_lift_denial(denial, effect, command)
         if answer is True:
             # Once: the denial stands for any other route this turn.
@@ -6795,9 +7514,12 @@ Do NOT wrap conversational replies in JSON.
         if (recorder is None and step_timer is None) or not outermost:
             result = self._execute_tool(tool_name, tool_args)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            if outermost:
+                result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
         started = time.perf_counter()
@@ -6810,10 +7532,11 @@ Do NOT wrap conversational replies in JSON.
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             self._note_verification_signal(tool_name, tool_args, result, before=before)
+            result = self._with_computation_note(tool_name, result)
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
-            return result
+            return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
             elapsed = time.perf_counter() - started
@@ -6836,6 +7559,70 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _flag_planted_instructions(
+        self, tool_name: str, tool_args: Any, result: Any
+    ) -> Any:
+        """Lead a result with a flag when its content instructs an AI."""
+        flagged, findings = flag_tool_result(tool_name, result)
+        sources = getattr(self, "_turn_planted_sources", None)
+        if findings and sources is not None:
+            logger.warning(
+                "Planted instructions in %s result: %s",
+                tool_name,
+                [f["excerpt"] for f in findings],
+            )
+            executions = getattr(self, "_turn_tool_executions", None) or []
+            sources.append((source_label(tool_name, tool_args), len(executions)))
+        return flagged
+
+    def _planted_instructions_note(self, answer: str) -> str:
+        """The heads-up line for this turn's flagged content, or ``""``."""
+        sources = getattr(self, "_turn_planted_sources", None)
+        if not sources:
+            return ""
+        executions = getattr(self, "_turn_tool_executions", None) or []
+        first = min(index for _, index in sources)
+        acted = acted_after(
+            (record.get("tool", ""), record.get("args"))
+            for record in executions[first:]
+            if record.get("ran")
+        )
+        return planted_instructions_note(
+            answer, [source for source, _ in sources], acted=acted
+        )
+
+    @staticmethod
+    def _with_computation_note(tool_name: str, result: Any) -> Any:
+        """A denied computation, or a script that failed before printing
+        anything, says plainly that nothing was computed.
+
+        A failed shell command (a failing test or git run) or a script that
+        crashed after printing results is for the model to fix and re-run, so
+        it gets no note.
+        """
+        if tool_name not in COMPUTATION_TOOLS:
+            return result
+        if isinstance(result, str):
+            # query_data reports its errors as "Error: ..." text.
+            failed = tool_name in SCRIPT_COMPUTATION_TOOLS and tool_result_failed(
+                result
+            )
+            return f"{result}\n\n{COMPUTATION_FAILED}" if failed else result
+        if not isinstance(result, dict):
+            return result
+        if str(result.get("status", "")).lower() == "denied":
+            return {**result, "computation": COMPUTATION_NOT_RUN}
+        printed = any(
+            str(result.get(key) or "").strip() for key in ("stdout", "result", "rows")
+        )
+        if (
+            tool_name in SCRIPT_COMPUTATION_TOOLS
+            and tool_result_failed(result)
+            and not printed
+        ):
+            return {**result, "computation": COMPUTATION_FAILED}
+        return result
 
     def _with_task_lessons(self, tool_name: str, tool_args: Any, result: Any) -> Any:
         """A failed result carries what this task has already learned."""
@@ -6874,15 +7661,29 @@ Do NOT wrap conversational replies in JSON.
         # Exact name first — skill tools register with a literal hyphen
         # (``rss-digest/fetch_rss``); the normalization below is only a typo rescue.
         tool_name = tool_name.strip().removesuffix("()").strip()
-        if tool_name not in self._tools_registry:
+        execution_registry = self._execution_tool_registry()
+        # Dynamic tool loading records recency; it never widens this agent's
+        # execution registry. Scope checks therefore remain authoritative even
+        # when a tool name was registered globally but not shown here.
+        if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
+        if (
+            getattr(self, "_tool_scope", None) is not None
+            and tool_name in self._tools_registry
+            and tool_name not in execution_registry
+        ):
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": "Tool is not available to this agent. Use only the tools you were given.",
+            }
 
         logger.debug(f"Executing tool {tool_name} with args: {tool_args}")
 
         if not tool_name:
             return {**NOT_EXECUTED, "status": "error", "error": "No tool name provided"}
 
-        if tool_name not in self._tools_registry:
+        if tool_name not in execution_registry:
             # Try to resolve unprefixed MCP tool names (e.g. "get_current_time"
             # when registry has "mcp_time_get_current_time"). Local LLMs often
             # strip the mcp_<server>_ prefix.
@@ -6897,7 +7698,7 @@ Do NOT wrap conversational replies in JSON.
                 # the bare server prefix some local models produce.
                 lower = tool_name.lower()
                 candidates = sorted(
-                    n for n in self._tools_registry if n.lower().startswith(lower + "_")
+                    n for n in execution_registry if n.lower().startswith(lower + "_")
                 )[:10]
                 # Bare-prefix detection: EVERY candidate begins with the
                 # requested name + "_". Tells us the model emitted a strict
@@ -6955,7 +7756,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -6982,7 +7790,12 @@ Do NOT wrap conversational replies in JSON.
                     tool_args,
                     str(refusal.get("error") if isinstance(refusal, dict) else refusal),
                     kinds={NETWORK, PATH},
+                    # Only a refuse-tier no is final; a shape refusal ("use
+                    # write_file") points at a route the user may still allow.
+                    refused=isinstance(refusal, dict)
+                    and refusal.get("tier") == "refuse",
                 )
+            _record_refused_write(self, tool_name, tool_args, refusal)
             return {**refusal, **NOT_EXECUTED} if isinstance(refusal, dict) else refusal
 
         # A "no" covers the effect, not the tool: another route to it is asked
@@ -7003,9 +7816,21 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        prompt_args = _with_resolved_target(
-            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
-        )
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        prompt_args = _with_resolved_target(prompt_args, preflight)
+        # A tool whose arguments don't say what will happen shows what will,
+        # on top of whatever the host already added to the prompt.
+        prompt_args_of = getattr(preflight, "prompt_args_of", None)
+        if callable(prompt_args_of):
+            with self._skill_tool_scope(tool_name):
+                shown = prompt_args_of(tool_args)
+            prompt_args = (
+                {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
+            )
+        if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
+            resolved_path = prompt_args.get("file_path")
+            if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
+                prompt_args = {**prompt_args, RESOLVED_PATH_ARG: resolved_path}
         # Scratch writes never ask, so code run from there is asked about on
         # every run — the marker keeps "always" (and any broader grant) off it.
         scratch = _scratch_reached_by(self, tool_name, prompt_args)
@@ -7015,6 +7840,7 @@ Do NOT wrap conversational replies in JSON.
         # prompt says so, and a person's yes to it grants that one file.
         outside = self._write_target_outside_scope(tool_name, prompt_args)
         if isinstance(outside, dict):
+            _record_refused_write(self, tool_name, tool_args, outside)
             return outside
         auto_approves = None
         if outside is not None:
@@ -7041,9 +7867,11 @@ Do NOT wrap conversational replies in JSON.
             }
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above. So is a call
-        # only a person may approve.
+        # only a person may approve, or one approved on its exact text.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
+            prompt_args.get(RISK_NOTE_ARG)
+            or prompt_args.get(NEEDS_PERSON_ARG)
+            or prompt_args.get(EXACT_TEXT_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
@@ -7064,7 +7892,21 @@ Do NOT wrap conversational replies in JSON.
                 self._confirmation_wait_s = (
                     getattr(self, "_confirmation_wait_s", 0.0) or 0.0
                 ) + (time.perf_counter() - _confirm_started)
+            # Only a prompt a person answered is an outcome for memory.
+            prompt_answered = getattr(self.console, "take_prompt_answered", None)
+            note_decision = getattr(self, "_note_person_decision", None)
+            if (
+                callable(prompt_answered)
+                and prompt_answered(tool_name)
+                and callable(note_decision)
+            ):
+                note_decision(tool_name, bool(approved))
             if not approved:
+                # What a preflight prepared for this prompt must not outlive a no.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:
@@ -7088,14 +7930,13 @@ Do NOT wrap conversational replies in JSON.
                 self._read_validator().add_allowed_path(str(outside))
                 logger.info("User allowed writing %s for this session", outside)
 
-        # Dynamic tool loader: record use for LRU recency. The name is
-        # fully resolved and confirmed in the registry here. Execution stays on
-        # the full registry — recording never gates it — so a model that names
-        # an unlisted tool still runs it (free non-tool-calling recovery), and
-        # the loader logs that as an escape-hatch signal.
-        self._on_tool_invoked(tool_name)
+        # A loads_with tool loads its skill, which also puts the skill's tools
+        # on the dynamic tool list. getattr: test stubs copy _execute_tool.
+        note_skill = getattr(self, "_note_skill_tool_use", None)
+        if note_skill is not None:
+            note_skill(tool_name)
 
-        tool = self._tools_registry[tool_name]["function"]
+        tool = execution_registry[tool_name]["function"]
         sig = inspect.signature(tool)
 
         # Get required parameters (those without defaults)
@@ -7202,6 +8043,7 @@ Do NOT wrap conversational replies in JSON.
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:
@@ -7403,14 +8245,16 @@ Do NOT wrap conversational replies in JSON.
         # Before the closing call, whose stats must not be taken for this step's.
         self._record_unrecorded_step(conversation)
         try:
-            return self._closing_answer_once(messages, conversation, instruction, step)
+            return self._closing_answer_recovering_overflow(
+                messages, conversation, instruction, step
+            )
         except _NotAnAnswer as first:
             logger.info(
                 "Closing reply was not an answer (%s); retrying without tools", first
             )
             try:
-                return self._closing_answer_once(
-                    messages,
+                return self._closing_answer_recovering_overflow(
+                    first.sent if first.sent is not None else messages,
                     conversation,
                     f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
                     step,
@@ -7419,11 +8263,88 @@ Do NOT wrap conversational replies in JSON.
             except _NotAnAnswer:
                 raise first from None
             except Exception as second:  # noqa: BLE001 - report the first reason
+                if isinstance(second, _ClosingOverflow):
+                    raise
                 cancel_event = getattr(self, "_cancel_event", None)
                 if cancel_event is not None and cancel_event.is_set():
                     raise
                 logger.warning("Closing retry without tools failed: %s", second)
                 raise first from None
+
+    def _closing_answer_recovering_overflow(
+        self,
+        messages: List[Dict[str, Any]],
+        conversation: List[Dict[str, Any]],
+        instruction: str,
+        step: int,
+        offer_tools: bool = True,
+    ) -> Optional[str]:
+        """One closing request, with the loop's own overflow recovery.
+
+        This request carries the whole conversation and is the turn's biggest,
+        so it is the likeliest to overflow (#5064). It gets what a loop step
+        gets: a model loaded with a too-small window is re-raised for the chat
+        helper to reload, and a full conversation is trimmed once and asked
+        again. Anything still refused as too long reaches the caller as
+        ``_CONTEXT_STILL_OVERFLOWING_MESSAGE``, so the answer names the limit
+        instead of repeating the backend's status code and JSON body.
+        """
+        try:
+            return self._closing_answer_once(
+                messages, conversation, instruction, step, offer_tools
+            )
+        except _NotAnAnswer:
+            raise
+        except Exception as exc:  # noqa: BLE001 - overflow or a real failure
+            # Classified, not string-matched: only a length refusal earns a
+            # trim and retry; a network failure whose words happen to include
+            # "context size" would be retried against a full history.
+            if not isinstance(
+                classify_lemonade_exception(exc), LemonadeContextOverflowError
+            ):
+                raise
+            if self._is_loaded_ctx_too_small():
+                self.error_history.append(
+                    {
+                        "step": step,
+                        "error": str(exc),
+                        "type": "llm_wrong_ctx_loaded_reraise",
+                    }
+                )
+                logger.warning(
+                    "Wrong ctx_size loaded at the closing call — re-raising so "
+                    "the chat helper can reload the model: %s",
+                    exc,
+                )
+                raise
+            shrunk, report = self._shrink_for_overflow_retry(messages, str(exc))
+            if not report["fits"]:
+                raise _ClosingOverflow() from exc
+            logger.warning(
+                "Context overflow at the closing call: putting older results "
+                "away freed enough room; asking once more"
+            )
+            # Only the closing request is trimmed; the caller's list is shared
+            # with the turn record and the saved history.
+            try:
+                return self._closing_answer_once(
+                    shrunk, conversation, instruction, step, offer_tools
+                )
+            except _NotAnAnswer as not_answer:
+                not_answer.sent = shrunk
+                raise
+            except Exception as retried:  # noqa: BLE001 - given up outside
+                logger.warning(
+                    "The closing call failed again after trimming: %s", retried
+                )
+                # Only a second overflow means the trimmed request is still too
+                # long; anything else is a real failure and is reported as such.
+                if not isinstance(
+                    classify_lemonade_exception(retried),
+                    LemonadeContextOverflowError,
+                ):
+                    raise
+                raise _ClosingOverflow() from retried
 
     def _closing_answer_once(
         self,
@@ -7449,6 +8370,7 @@ Do NOT wrap conversational replies in JSON.
         tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools else {}
         # The same effort as the loop: a change rewrites the prompt's start.
+        no_calls.update(self._conversation_request_kwargs())
         no_calls.update(self._reasoning_request_kwargs())
         stats = None
         if self.streaming:
@@ -7496,9 +8418,7 @@ Do NOT wrap conversational replies in JSON.
                 }
             )
 
-        response = re.sub(
-            r"<think>.*?</think>", "", response or "", flags=re.DOTALL
-        ).strip()
+        response = strip_reasoning(response or "")
         if not response:
             raise _NotAnAnswer("the model returned an empty reply")
         try:
@@ -7518,6 +8438,7 @@ Do NOT wrap conversational replies in JSON.
             )
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
+        self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
 
@@ -7949,9 +8870,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -7983,6 +8906,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8019,7 +8948,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -8041,10 +8976,9 @@ Do NOT wrap conversational replies in JSON.
         Returns ``None`` for unrelated exceptions so the caller falls
         through to its normal generic copy.
         """
-        from gaia.llm.providers.lemonade import (
-            LemonadeError,
-            classify_lemonade_exception,
-        )
+        from gaia.llm.providers.lemonade import LemonadeError, wording_for_model
+
+        model = getattr(self, "model_id", None)
 
         # 1. Direct match anywhere in the cause chain.
         cur: Optional[BaseException] = exc
@@ -8058,7 +8992,7 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(cur, LemonadeError):
                 msg = getattr(cur, "user_message", None)
                 if msg:
-                    return str(msg)
+                    return wording_for_model(str(msg), model)
             prev = cur
             cur = cur.__cause__ or cur.__context__
 
@@ -8070,7 +9004,7 @@ Do NOT wrap conversational replies in JSON.
         if classified is not None:
             msg = getattr(classified, "user_message", None)
             if msg:
-                return str(msg)
+                return wording_for_model(str(msg), model)
         return None
 
     def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
@@ -8082,13 +9016,18 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.llm.providers.lemonade import (
             LemonadeCloudAccountError,
+            LemonadeCloudDisconnectedError,
             LemonadeCloudModelUnavailableError,
-            classify_lemonade_exception,
         )
 
         classified = classify_lemonade_exception(exc)
         if isinstance(
-            classified, (LemonadeCloudAccountError, LemonadeCloudModelUnavailableError)
+            classified,
+            (
+                LemonadeCloudAccountError,
+                LemonadeCloudDisconnectedError,
+                LemonadeCloudModelUnavailableError,
+            ),
         ):
             return classified.user_message
         return None
@@ -8208,11 +9147,26 @@ Do NOT wrap conversational replies in JSON.
         if self._console_cancelled():
             # Stop pressed during the client's backoff: it gave up on purpose.
             return "cancelled", None
+        tally = self._turn_model_retries
+        # A stop seen mid-turn keeps its restart path; this is a failed first start.
+        if not tally["server_stopped"]:
+            engine = self._engine_start_failure(exc)
+            if engine is not None:
+                logger.error("GAIA's model server could not be started: %s", exc)
+                self.error_history.append(
+                    {"step": steps_taken, "error": str(exc), "type": "llm_engine_start"}
+                )
+                tally["failed"] = True
+                return "unreachable", self._engine_start_failed_answer(
+                    conversation, steps_taken, engine
+                )
         state = self._transient_model_failure(exc)
         if state is None:
             return None, None
-        tally = self._turn_model_retries
         tally["request_retries"] += state.retries
+        stopped = self._gaia_server_stopped()
+        if stopped:
+            tally["server_stopped"] = True
         wait = self._model_step_retry_wait(exc, retries_used)
         if partial_output:
             # Close the cut-off line before saying anything else.
@@ -8228,11 +9182,19 @@ Do NOT wrap conversational replies in JSON.
                 retries_used + 1,
                 model_step_retries(),
             )
-            self.console.print_warning(
+            retry_line = (
                 f"{self._model_trouble(state.last_reason)} — retrying this step "
                 f"in {wait:.0f}s ({retries_used + 1}/{model_step_retries()}); "
                 "the work so far is kept"
             )
+            if partial_output:
+                self._restart_answer()
+            # The phase goes first: a relay drops the same line repeated after it.
+            if stopped:
+                self.console.report_phase("model_restart", SERVER_RESTARTING_MESSAGE)
+            else:
+                self.console.report_phase("model_retry", retry_line)
+            self.console.print_warning(retry_line)
             if not self._cool_down_for_model(wait):
                 return "cancelled", None
             return "retry", None
@@ -8248,8 +9210,79 @@ Do NOT wrap conversational replies in JSON.
         )
         tally["unreachable"] = True
         tally["failed"] = True
+        if stopped:
+            return "unreachable", self._server_not_back_answer(
+                conversation, steps_taken, self._save_failure_record(exc)
+            )
         return "unreachable", self._model_unreachable_answer(
-            conversation, steps_taken, state, retries_used
+            conversation,
+            steps_taken,
+            state,
+            retries_used,
+            record_id=self._save_failure_record(exc),
+        )
+
+    def _gaia_server_stopped(self) -> bool:
+        """Whether the chat model's server is GAIA's own and is not answering."""
+        provider = getattr(getattr(self, "chat", None), "llm_client", None)
+        check = getattr(provider, "gaia_lemonade_stopped", None)
+        return callable(check) and check() is True
+
+    def _restart_answer(self) -> None:
+        """Take back the cut-off reply on screen before the step starts over."""
+        hook = getattr(self.console, "restart_answer", None)
+        if hook is not None:
+            hook(ANSWER_RESTART_MESSAGE)
+
+    def _server_not_back_answer(
+        self,
+        conversation: List[Dict[str, Any]],
+        steps_taken: int,
+        record_id: Optional[str] = None,
+    ) -> str:
+        """The final answer when GAIA's own model server stopped mid-turn and
+        the daemon did not bring it back. Marked server-down, so a front-end
+        can offer to start it."""
+        self._turn_model_retries["server_down"] = True
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=True,
+            cause="",
+            advice=SERVER_RESTART_HINT,
+            record_id=record_id,
+            name_service=False,
+            headline=(
+                "The model server stopped while answering, and GAIA could not "
+                "restart it"
+            ),
+        )
+
+    @staticmethod
+    def _engine_start_failure(exc: BaseException):
+        """The typed error when *exc* is GAIA's server failing to start, else None."""
+        from gaia.llm.providers.lemonade import LemonadeEngineStartError
+
+        typed = classify_lemonade_exception(exc)
+        return typed if isinstance(typed, LemonadeEngineStartError) else None
+
+    def _engine_start_failed_answer(
+        self, conversation: List[Dict[str, Any]], steps_taken: int, engine
+    ) -> str:
+        """The final answer when GAIA's own model server could not be started.
+
+        *engine* is the :class:`LemonadeEngineStartError`. Not marked
+        server-down: the front-end's start button would only repeat the start
+        that just failed.
+        """
+        return self._model_failure_answer(
+            conversation,
+            steps_taken,
+            stopped_responding=False,
+            cause=engine.reason or "",
+            advice=engine.advice,
+            name_service=False,
+            headline=engine.headline,
         )
 
     def _model_unreachable_answer(
@@ -8258,6 +9291,7 @@ Do NOT wrap conversational replies in JSON.
         steps_taken: int,
         state: RetryState,
         step_retries: int,
+        record_id: Optional[str] = None,
     ) -> str:
         """The final answer when the model stayed unreachable through every
         retry: one sentence saying the task is unfinished and what was kept,
@@ -8273,6 +9307,7 @@ Do NOT wrap conversational replies in JSON.
             stopped_responding=True,
             cause=f"{describe_retry_state(state)}{tries}",
             advice=None,
+            record_id=record_id,
         )
 
     def _model_service_label(self) -> Optional[str]:
@@ -8281,6 +9316,33 @@ Do NOT wrap conversational replies in JSON.
         ``None`` when this agent cannot tell; subclasses that know override it.
         """
         return None
+
+    def _save_failure_record(self, exc: BaseException) -> Optional[str]:
+        """Save a local fault record for *exc*; its id, or None when not one.
+
+        Only for calls through Lemonade: the record describes that server (its
+        health, devices, processes and log) and nothing else.
+        """
+        from gaia.llm.failure_record import (
+            is_model_call_failure,
+            is_recordable,
+            record_failure,
+        )
+
+        llm = getattr(getattr(self, "chat", None), "llm_client", None)
+        backend = getattr(llm, "_backend", None)
+        if not isinstance(getattr(backend, "base_url", None), str):
+            return None
+        if not is_model_call_failure(exc) or not is_recordable(exc):
+            return None
+        return record_failure(
+            exc,
+            where="agent_turn",
+            model=getattr(self, "model_id", None),
+            base_url=backend.base_url,
+            api_key=getattr(backend, "api_key", None),
+            agent=type(self).__name__,
+        )
 
     def _model_call_failed_answer(
         self,
@@ -8292,8 +9354,19 @@ Do NOT wrap conversational replies in JSON.
         """The final answer when a model call failed for good mid-turn.
 
         Built from the real failure: the provider's own message when it gave
-        one (split into what happened and what to do), else the raw error.
+        one (split into what happened and what to do), else the raw error;
+        either way followed by the fault record it saved, when it saved one.
         """
+        if (
+            self._turn_model_retries.get("server_stopped")
+            and self._gaia_server_stopped()
+        ):
+            # The raw error names CLI checks; the front-end offers the restart.
+            logger.error("GAIA's model server did not come back: %s", exc)
+            return self._server_not_back_answer(
+                conversation, steps_taken, self._save_failure_record(exc)
+            )
+        record_id = self._save_failure_record(exc)
         stalled = False
         cur: Optional[BaseException] = exc
         seen: set = set()
@@ -8307,12 +9380,27 @@ Do NOT wrap conversational replies in JSON.
             cause, advice = _split_cause_and_advice(typed_msg)
         else:
             cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+        server_down = self._model_server_down(exc)
+        if server_down:
+            self._turn_model_retries["server_down"] = True
         return self._model_failure_answer(
             conversation,
             steps_taken,
             stopped_responding=stalled or retry_state_of(exc) is not None,
             cause=cause,
             advice=advice,
+            record_id=record_id,
+            # The cloud provider behind a down server was never reached.
+            name_service=not server_down,
+        )
+
+    @staticmethod
+    def _model_server_down(exc: BaseException) -> bool:
+        """Whether *exc* is the model server accepting no connection at all."""
+        from gaia.llm.providers.lemonade import LemonadeServerUnreachableError
+
+        return isinstance(
+            classify_lemonade_exception(exc), LemonadeServerUnreachableError
         )
 
     def _model_failure_answer(
@@ -8323,21 +9411,29 @@ Do NOT wrap conversational replies in JSON.
         stopped_responding: bool,
         cause: str,
         advice: Optional[str],
+        record_id: Optional[str] = None,
+        name_service: bool = True,
+        headline: Optional[str] = None,
     ) -> str:
-        """Say the turn is unfinished, why, what already ran, and what next."""
+        """Say the turn is unfinished, why, what already ran, and what next.
+
+        *headline* replaces the opening "The model stopped responding at step
+        N" when the caller knows better what happened.
+        """
         from collections import Counter
+
+        from gaia.llm.failure_record import record_note
 
         what = "stopped responding" if stopped_responding else "call failed"
         cause = cause.strip().rstrip(".")
         cause = cause[:1].upper() + cause[1:]
         # pylint: disable-next=assignment-from-none
-        label = self._model_service_label()
+        label = self._model_service_label() if name_service else None
         if label and label.lower() in cause.lower():
             label = None  # the cause already names it
-        lines = [
-            f"The model {what} at step {steps_taken}, so this request is "
-            f"unfinished. {label + ': ' if label else ''}{cause}."
-        ]
+        opening = headline or f"The model {what} at step {steps_taken}"
+        detail = f" {label + ': ' if label else ''}{cause}." if cause else ""
+        lines = [f"{opening}, so this request is unfinished.{detail}"]
         tools_used = Counter(
             msg["name"]
             for msg in conversation
@@ -8367,6 +9463,8 @@ Do NOT wrap conversational replies in JSON.
             )
         else:
             lines.append("Send the message again once the service is back.")
+        if record_id:
+            lines.append(record_note(record_id))
         return "\n\n".join(lines)
 
     def _shrink_messages_for_overflow(
@@ -8489,12 +9587,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 
@@ -9313,6 +10406,9 @@ Do NOT wrap conversational replies in JSON.
         if not body.strip():
             # Never surface the stale echo as this turn's answer.
             return statement or self.ECHO_ONLY_ANSWER
+        note = self._planted_instructions_note(body)
+        if note:
+            body = f"{body.rstrip()}\n\n{note}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -9371,16 +10467,22 @@ Do NOT wrap conversational replies in JSON.
     WARM_UP_PROMPT = "Reply with OK."
 
     def warm_up(
-        self, progress: Optional[Callable[[str], None]] = None
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+        cancel: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """Do the first turn's one-time work now, before anyone is waiting on it.
 
-        Builds the tool embeddings and narrows the tools to the ones every turn
-        starts with, then sends one request carrying the real system prompt and
-        those tool schemas with a one-token budget. That loads the model at its
+        Sends one request carrying the real system prompt and tool schemas with
+        a one-token budget. That loads the model at its
         context size and leaves the prompt prefix in the server's cache, so the
         first real question starts answering instead of reading ~10K tokens of
         instructions. Only worth it for a local model; the caller decides.
+        An NPU (FastFlowLM) model is only loaded: that server keeps no prompt
+        cache a different next request can reuse.
+
+        Setting *cancel* abandons the warm-up, even mid-prompt, and raises
+        ``LLMCallCancelled``: a turn on another model must not wait behind it.
 
         Raises whatever the embedder or LLM client raises: a warm-up that failed
         must say so, or the slow first turn it was meant to prevent looks
@@ -9392,19 +10494,17 @@ Do NOT wrap conversational replies in JSON.
         # has to as well, or it diverges from the first turn's at the skills
         # heading and everything after it — tools included — is re-read.
         self._refresh_active_skill_filter(self.WARM_UP_PROMPT)
-        loader = getattr(self, "tool_loader", None)
-        if loader is not None:
-            say("Indexing tools")
-            core = loader.warm(self._tools_registry)
-            if core:
-                self._apply_tool_filter(core)
+        warm_filter = self._warm_tool_filter()
+        if warm_filter != self._active_tool_filter:
+            self._apply_tool_filter(warm_filter)
+        if runs_on_npu(self.model_id):
+            # FastFlowLM reuses a prompt only when the next request continues it,
+            # so a primed prefix would be re-read by the first turn anyway.
+            say(f"Loading {self.model_id}")
+            self._warm_up_cancellable(self._load_warm_up_model, cancel)
+            return {"seconds": round(time.perf_counter() - started, 1), "primed": False}
         say(f"Loading {self.model_id} and reading its instructions")
-        self.chat.send_messages(
-            [{"role": "user", "content": self.WARM_UP_PROMPT}],
-            system_prompt=self.system_prompt,
-            tools=self._openai_tools,
-            max_tokens=1,
-        )
+        self._send_warm_up(cancel)
         result: Dict[str, Any] = {"seconds": round(time.perf_counter() - started, 1)}
         client = getattr(self.chat, "llm_client", None)
         usage_of = getattr(client, "get_last_usage", None)
@@ -9412,7 +10512,80 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(usage, dict):
             result["prompt_tokens"] = usage.get("prompt_tokens")
             result["cached_tokens"] = usage.get("cached_tokens")
+        self._prime_second_prefix(say, cancel)
+        result["seconds"] = round(time.perf_counter() - started, 1)
         return result
+
+    def _send_warm_up(self, cancel: Optional[threading.Event], **request: Any) -> None:
+        """One warm-up request with the live prompt and tools; *request* adds kwargs."""
+        if cancel is None:
+            self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+                **request,
+            )
+        else:
+            self._send_warm_up_cancellable(cancel, **request)
+
+    def _send_warm_up_cancellable(
+        self, cancel: threading.Event, **request: Any
+    ) -> None:
+        """The warm-up request, abandoned the moment *cancel* is set.
+
+        Streamed, with *cancel* as the Stop hook, so it also ends during the
+        silent prompt read and while queued for the model slot.
+        """
+        self._warm_up_cancellable(
+            lambda: self.chat.send_messages(
+                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                system_prompt=self.system_prompt,
+                tools=self._openai_tools,
+                max_tokens=1,
+                cancel=cancel,
+                **request,
+            ),
+            cancel,
+        )
+
+    @staticmethod
+    def _warm_up_cancellable(
+        step: Callable[[], Any], cancel: Optional[threading.Event]
+    ) -> None:
+        """Run *step*, abandoned the moment *cancel* is set (also mid-wait for
+        the model slot); a failure caused by that stop raises
+        ``LLMCallCancelled``."""
+        if cancel is None:
+            step()
+            return
+        if cancel.is_set():
+            raise LLMCallCancelled("warm-up stopped before the model was reached")
+        try:
+            with (
+                model_retry_notices(lambda _notice: None, cancel.is_set),
+                lease_cancel_scope(cancel),
+            ):
+                step()
+        except LLMCallCancelled:
+            raise
+        except Exception as e:
+            if cancel.is_set():
+                raise LLMCallCancelled(f"warm-up stopped: {e}") from e
+            raise
+
+    def _load_warm_up_model(self) -> None:
+        """Load the model at the window a turn loads it with, sending no prompt."""
+        client = getattr(self.chat, "llm_client", None)
+        ensure_loaded = getattr(client, "ensure_model_loaded", None)
+        if not callable(ensure_loaded):
+            raise RuntimeError(
+                f"Can't warm up {self.model_id}: its client "
+                f"({type(client).__name__}) is not a Lemonade client, and only "
+                "Lemonade serves FastFlowLM models. Check the agent's provider "
+                "settings."
+            )
+        ensure_loaded(self.model_id)
 
     def process_query(
         self,
@@ -9598,7 +10771,12 @@ Do NOT wrap conversational replies in JSON.
             framed = self.FOLLOWUP_PREAMBLE + text
             # Two dicts, not one shared object: every other append in this loop
             # builds its own, and downstream code edits entries in place.
-            messages.append({"role": "user", "content": framed})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._with_long_message_file(framed, raw=text),
+                }
+            )
             conversation.append({"role": "user", "content": framed})
             taken += 1
             # The user is owed visible proof their message landed — silence here
@@ -9606,6 +10784,44 @@ Do NOT wrap conversational replies in JSON.
             self.console.print_info(f"Picked up your follow-up: {text}")
             logger.info("Folded a mid-turn follow-up into the running turn")
         return taken
+
+    def _with_long_message_file(
+        self, user_input: str, raw: Optional[str] = None
+    ) -> str:
+        """*user_input*, led by where its full text is saved when it is huge.
+
+        A model asked to count or search a long paste otherwise tries to copy
+        it into a tool call, which no output budget fits. *raw* is the user's
+        own words when *user_input* is framed; it defaults to this turn's query.
+        """
+        if raw is None:
+            raw = getattr(self, "_original_user_input", None) or user_input
+        if not isinstance(raw, str) or len(raw) < LONG_MESSAGE_CHARS:
+            return user_input
+        scratch = getattr(self._read_validator(), "scratch_dir", None)
+        if not scratch:
+            logger.warning(
+                "A %d-character message was not saved to a file: this agent "
+                "has no scratch folder",
+                len(raw),
+            )
+            return user_input
+        digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:12]
+        path = Path(scratch) / f"message-{digest}.txt"
+        try:
+            from gaia.security import ensure_scratch_dir
+
+            ensure_scratch_dir(path.parent)
+            path.write_text(raw, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not save a long message to %s: %s", path, e)
+            return user_input
+        note = (
+            f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
+            f"text is saved at {path}. To count, search or process it, read that "
+            "file with a tool; never copy the message into a tool call.]"
+        )
+        return f"{note}\n\n{user_input}"
 
     def _process_query_impl(
         self,
@@ -9671,7 +10887,8 @@ Do NOT wrap conversational replies in JSON.
         had_extraction_tools = "extract_document_items" in self._tools_registry
         if self._extraction_ledger.offered:
             self._register_extraction_tool()
-        else:
+        # Thin tool lists keep them once offered: removing them changes tools=.
+        elif not self._thin_tool_schemas():
             getattr(self, "_tool_overrides", {}).pop("extract_document_items", None)
             getattr(self, "_tool_overrides", {}).pop("save_extracted_items", None)
             if self._instance_tools is not None:
@@ -9683,7 +10900,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -9696,7 +10913,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -9733,6 +10952,7 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        stopped_on_announced_step = False
         look_first_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
@@ -9773,6 +10993,8 @@ Do NOT wrap conversational replies in JSON.
         # Executed tool calls this turn, classified for the verification-scope
         # statement. Per-turn: an instance persists across queries.
         self._turn_tool_executions: List[Dict[str, Any]] = []
+        # (source, tool-log index) per result that carried planted instructions.
+        self._turn_planted_sources: List[Tuple[str, int]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
         self._deliverable_cache = {}
@@ -9807,6 +11029,10 @@ Do NOT wrap conversational replies in JSON.
             "request_retries": 0,
             "step_retries": 0,
             "unreachable": False,
+            # The model server itself accepted no connection.
+            "server_down": False,
+            # GAIA's own model server stopped under a call this turn.
+            "server_stopped": False,
             # The turn ended because a model call failed (any cause).
             "failed": False,
         }
@@ -9817,7 +11043,9 @@ Do NOT wrap conversational replies in JSON.
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
         messages.recorded.clear()
-        messages.append({"role": "user", "content": user_input})
+        messages.append(
+            {"role": "user", "content": self._with_long_message_file(user_input)}
+        )
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -10306,11 +11534,13 @@ Do NOT wrap conversational replies in JSON.
                 self._announce_model_call(after_tools=bool(tool_call_history))
                 while True:
                     try:
+                        self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
                             **self._reasoning_request_kwargs(),
                         )
 
@@ -10384,6 +11614,8 @@ Do NOT wrap conversational replies in JSON.
                             stream_cut_offs,
                             _MAX_STREAM_CUT_OFF_RETRIES,
                         )
+                        if full_response:
+                            self._restart_answer()
                         continue
                     except ConnectionError as e:
                         # A transient endpoint failure the client already
@@ -10554,11 +11786,13 @@ Do NOT wrap conversational replies in JSON.
                 _model_step_retries = 0
                 while True:
                     try:
+                        self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
                             messages=messages,
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
+                            **self._conversation_request_kwargs(),
                             **self._reasoning_request_kwargs(),
                         )
                         response = chat_response.text
@@ -10752,6 +11986,7 @@ Do NOT wrap conversational replies in JSON.
                         steps_taken,
                         steps_limit,
                     )
+                    self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
                     break
                 cut_off_continuations += 1
@@ -10935,6 +12170,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
                         **self._reasoning_request_kwargs(),
                     )
 
@@ -10980,6 +12216,7 @@ Do NOT wrap conversational replies in JSON.
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
+                        **self._conversation_request_kwargs(),
                         **self._reasoning_request_kwargs(),
                     )
                     plan_response = chat_response.text
@@ -11679,6 +12916,50 @@ Do NOT wrap conversational replies in JSON.
                 answer_candidate = _with_answer_beside_tool_calls(
                     parsed["answer"], answer_beside_tool_calls
                 )
+                # FastFlowLM occasionally ends a long prefill with zero tokens.
+                if (
+                    parsed.get("empty_response")
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Empty model reply at step %d; asking again",
+                        steps_taken,
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your last reply was empty. Make the next tool "
+                                "call, or answer the user from the results above."
+                            ),
+                        }
+                    )
+                    continue
+                if (
+                    _asks_permission_to_index(answer_candidate)
+                    and self._user_asked_to_index(user_input)
+                    and any(name in self._tools_registry for name in _INDEX_TOOL_NAMES)
+                    and steps_taken < steps_limit - 1
+                    and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
+                ):
+                    unfinished_answer_reprompts += 1
+                    logger.warning(
+                        "[WORKFLOW] Asked permission to index what the user said "
+                        "to index; asking it to index"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The user already told you to index it. Call "
+                                "index_directory or index_document on that path "
+                                "now, then answer their question."
+                            ),
+                        }
+                    )
+                    continue
                 completion_gaps = []
                 # Guard against incomplete workflows: detect when the LLM outputs
                 # planning text ("Let me now search...") as a final answer after
@@ -11841,6 +13122,12 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                         answer_candidate[-120:],
                     )
+                stopped_on_announced_step = (
+                    unfinished_kind == "narration" and not can_reprompt_unfinished
+                )
+                if stopped_on_announced_step:
+                    # Never hand over the announcement as if it were the answer.
+                    answer_candidate = _unfinished_step_answer(answer_candidate)
                 if unfinished_kind == "tool_markup" and can_reprompt_unfinished:
                     unfinished_answer_reprompts += 1
                     logger.debug(
@@ -11897,10 +13184,19 @@ Do NOT wrap conversational replies in JSON.
                 #   1. post-index planning (index_document → "Let me now search...")
                 #   2. no-tool planning on follow-up turns ("I'll check the remote work policy")
                 #   3. post-tool planning after getting results ("I need more info... Let me query")
-                is_planning_text = len(answer_candidate) < 500 and any(
-                    phrase in answer_candidate.lower() for phrase in _PLANNING_PHRASES
+                # The honest ending quotes the announcement; it is final, not planning.
+                is_planning_text = (
+                    not stopped_on_announced_step
+                    and len(answer_candidate) < 500
+                    and any(
+                        phrase in answer_candidate.lower()
+                        for phrase in _PLANNING_PHRASES
+                    )
                 )
                 if is_planning_text and steps_taken < steps_limit - 1:
+                    if unfinished_kind == "narration":
+                        # Same budget as the narration re-prompt, so the turn can end.
+                        unfinished_answer_reprompts += 1
                     # Inject a correction message and continue the loop to force the answer
                     logger.debug(
                         "[WORKFLOW] Blocking planning-only response as final answer: %s",
@@ -11936,11 +13232,7 @@ Do NOT wrap conversational replies in JSON.
                     messages.append(
                         {
                             "role": "user",
-                            "content": (
-                                "You described your next step instead of doing it. "
-                                "Do it now with a tool call, or give the final "
-                                "answer if the task is complete."
-                            ),
+                            "content": _narration_reprompt(answer_candidate),
                         }
                     )
                     continue
@@ -12231,7 +13523,7 @@ Do NOT wrap conversational replies in JSON.
                                 "edit_file",
                                 "read_file",
                                 "run_python",
-                                "load_tools",
+                                "search_tools",
                             )
                         )
                     ):
@@ -12335,6 +13627,8 @@ Do NOT wrap conversational replies in JSON.
                 _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
                     conversation, self._tool_reported_usage
                 )
+                if stopped_on_announced_step:
+                    self._announce_turn_failed()
                 # Sealed before the answer prints: total_s must mean "until it
                 # was on screen", and the console folds the record into that
                 # same event.
@@ -12419,7 +13713,7 @@ Do NOT wrap conversational replies in JSON.
                     self._generate_max_steps_message(
                         conversation, tool_steps, steps_limit, findings=True
                     ).rstrip()
-                    + f"\n\nThe summary of what I found couldn't be written: {e}"
+                    + f"\n\n{self._closing_failure_note(e, 'The summary of what I found')}"
                 )
             else:
                 if cap_answer is None:
@@ -12596,6 +13890,7 @@ Do NOT wrap conversational replies in JSON.
                 "step_retries": self._turn_model_retries["step_retries"],
             },
             "model_unreachable": self._turn_model_retries["unreachable"],
+            "model_server_down": self._turn_model_retries["server_down"],
             # Any model-call failure ended the turn; front-ends report it failed.
             "model_failed": self._turn_model_retries["failed"],
             "extraction_sources": sorted(self._extraction_ledger.results),
@@ -12657,7 +13952,8 @@ Do NOT wrap conversational replies in JSON.
 
     _DENIAL_RE = re.compile(
         r"\bwas denied\b|\bdeclined\b|\bdenied by\b|execution denied"
-        r"|with no user response|requires (?:explicit|live) user approval",
+        r"|with no user response|requires (?:explicit|live) user approval"
+        r"|\bneeds your approval\b",
         re.IGNORECASE,
     )
 
@@ -12820,8 +14116,8 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - the reason goes in the answer
             logger.warning("Could not write the loop-break summary: %s", e)
             return (
-                f"{summary.rstrip()}\n\nThe summary of what I did couldn't be "
-                f"written: {e}",
+                f"{summary.rstrip()}\n\n"
+                f"{self._closing_failure_note(e, 'The summary of what I did')}",
                 steps_taken,
             )
         # Raw, like the summary branches above — the caller finalizes once.
@@ -12873,10 +14169,36 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Could not write the closing answer: %s", e)
             return (
                 "I stopped because I had started work this request did not ask "
-                f"for, and the closing answer couldn't be written: {e}",
+                f"for, and {self._closing_failure_note(e, 'the closing answer')}",
                 steps_taken,
             )
         return answer, steps_taken
+
+    def _closing_failure_note(self, exc: BaseException, subject: str) -> str:
+        """Why *subject* couldn't be written, in words the user can act on.
+
+        The raw exception went into the answer before this, so a refused
+        closing call put ``status 400`` and a JSON body in front of the reader
+        (#5064). A trim that could not free enough room says so; any other
+        failure of the model service is reported in the provider's own words.
+        """
+        classified = classify_lemonade_exception(exc)
+        if isinstance(exc, _ClosingOverflow) or isinstance(
+            classified, LemonadeContextOverflowError
+        ):
+            return (
+                f"{subject} couldn't be written. "
+                f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+            )
+        reason = self._extract_lemonade_user_message(exc)
+        if reason:
+            return f"{subject} couldn't be written. {reason}"
+        if classified is not None:
+            return f"{subject} couldn't be written. {classified.user_message}"
+        return (
+            f"{subject} couldn't be written: "
+            f"{(str(exc).strip()[:300] or type(exc).__name__)}"
+        )
 
     def _dedup_mutation_call(
         self,

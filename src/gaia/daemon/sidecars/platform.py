@@ -82,8 +82,8 @@ def default_lock_path(agent_id: str = "email") -> Path:
     return agent_binary_lock_path(repo_root, agent_id)
 
 
-def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
-    path = Path(lock_path) if lock_path is not None else default_lock_path()
+def load_lock(lock_path: Optional[Path] = None, agent_id: str = "email") -> BinaryLock:
+    path = Path(lock_path) if lock_path is not None else default_lock_path(agent_id)
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -100,9 +100,29 @@ def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
         raise PlatformError(
             f"binaries.lock.json at {path} is not valid JSON: {e}"
         ) from e
-    binaries = parsed.get("binaries")
-    if not isinstance(binaries, dict):
-        raise PlatformError(f'binaries.lock.json at {path} is missing a "binaries" map')
+    agent_version = parsed.get("agentVersion", "")
+    base_url = parsed.get("baseUrl", "")
+    if "components" in parsed:
+        # Schema 3.0 ships several executables per agent; the daemon spawns the sidecar.
+        sidecar = (parsed.get("components") or {}).get("sidecar")
+        if not isinstance(sidecar, dict):
+            raise PlatformError(
+                f'binaries.lock.json at {path} has no "components.sidecar" entry'
+            )
+        agent_version = sidecar.get("componentVersion", "")
+        base_url = sidecar.get("baseUrl", "")
+        binaries = sidecar.get("platforms")
+        if not isinstance(binaries, dict):
+            raise PlatformError(
+                f'binaries.lock.json at {path} is missing a "components.sidecar.'
+                'platforms" map'
+            )
+    else:
+        binaries = parsed.get("binaries")
+        if not isinstance(binaries, dict):
+            raise PlatformError(
+                f'binaries.lock.json at {path} is missing a "binaries" map'
+            )
     entries = {
         k: LockEntry(
             filename=v.get("filename", ""),
@@ -114,8 +134,8 @@ def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
     }
     return BinaryLock(
         schema_version=parsed.get("schemaVersion", ""),
-        agent_version=parsed.get("agentVersion", ""),
-        base_url=parsed.get("baseUrl", ""),
+        agent_version=agent_version,
+        base_url=base_url,
         binaries=entries,
     )
 

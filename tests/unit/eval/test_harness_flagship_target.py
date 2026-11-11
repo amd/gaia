@@ -34,8 +34,8 @@ def test_the_default_report_measures_the_flagship_with_the_new_mail_tools():
     assert {"get_thread", "list_waiting_on_you", "list_connected_mailboxes"} <= set(
         agent._tools_registry
     )
-    # Unfiltered, like the doc baseline: no load_tools meta-tool.
-    assert "load_tools" not in agent._tools_registry
+    # Unfiltered, like the doc baseline: no search_tools meta-tool.
+    assert "search_tools" not in agent._tools_registry
 
 
 def test_the_flagship_report_is_deterministic():

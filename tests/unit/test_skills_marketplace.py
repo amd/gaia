@@ -900,7 +900,7 @@ def _word_search_hub(tmp_path):
 
     hub = fake_hub(tmp_path)
     skills = {
-        "document-brief": "Brief a long document in one page",
+        "document-brief": "Brief a long document or file in one page",
         "inbox-triage": "Triage an email inbox and draft replies",
         "rss-digest": "Summarize new posts from feeds",
         "summarize": "Summarize a document, meeting transcript, or email",
@@ -937,7 +937,11 @@ def test_search_matches_any_word_of_a_multi_word_query(tmp_path):
     """The whole phrase never appears verbatim, but each word does somewhere."""
     search = _word_search_hub(tmp_path)
 
-    assert search("summarize documents") == ["rss-digest", "summarize"]
+    assert search("summarize documents") == [
+        "summarize",
+        "document-brief",
+        "rss-digest",
+    ]
     assert search("meeting notes") == ["transcribe-meeting", "summarize"]
     assert search("email triage") == ["inbox-triage", "summarize"]
 
@@ -954,6 +958,24 @@ def test_search_ranks_by_distinct_words_matched(tmp_path):
     ]
     # A repeated word counts once, so it cannot outrank a two-word match.
     assert search("brief brief brief document") == ["document-brief", "summarize"]
+
+
+def test_search_uses_conservative_word_stems_after_exact_match(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarization") == ["rss-digest", "summarize"]
+    assert search("summarizing") == ["rss-digest", "summarize"]
+    assert search("summaries") == ["rss-digest", "summarize"]
+
+
+def test_search_stems_plural_e_words_and_still_rejects_short_words(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("files") == ["document-brief"]
+    assert search("notes") == ["transcribe-meeting"]
+    assert search("pages") == ["document-brief"]
+    assert search("pdf") == []
+    assert search("pr") == []
 
 
 def test_search_ties_keep_catalog_order(tmp_path):
@@ -982,7 +1004,7 @@ def test_search_with_no_matching_word_is_empty(tmp_path):
     search = _word_search_hub(tmp_path)
 
     assert search("kubernetes helm chart") == []
-    assert search("summarization") == []  # substring per word, no stemming
+    assert search("summarization") == ["rss-digest", "summarize"]
     assert search("!!! ??? ...") == []
 
 
@@ -1088,3 +1110,58 @@ def test_publish_request_parts_match_the_worker_contract():
         audit_json='{"verdict":"ALLOW"}',
     )
     assert set(full.parts()) == {"skill", "artifact", "changelog", "audit"}
+
+
+# ----------------------------------------------------------------------
+# Hub errors name commands that exist
+# ----------------------------------------------------------------------
+
+
+def _parse_quoted_gaia_commands(message: str) -> list:
+    """Parse every single-quoted ``gaia skill ...`` command in *message*."""
+    import argparse
+    import re
+    import shlex
+
+    from gaia.skills import cli as skills_cli
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    skills_cli.add_subparser(parser.add_subparsers(dest="action"))
+    commands = re.findall(r"'(gaia skill [^']+)'", message)
+    assert commands, message
+    return [parser.parse_args(shlex.split(c)[1:]) for c in commands]
+
+
+def test_an_unsatisfiable_pin_names_a_command_that_runs():
+    from gaia.skills.errors import SkillNotFoundError
+    from gaia.skills.hub import RemoteSkill
+
+    remote = RemoteSkill(name="demo", latest_version="1.0.0", versions={"1.0.0": {}})
+    with pytest.raises(SkillNotFoundError) as excinfo:
+        remote.resolve("^9.0")
+
+    message = str(excinfo.value)
+    assert "--remote" not in message
+    assert "1.0.0" in message
+    (parsed,) = _parse_quoted_gaia_commands(message)
+    assert (parsed.skill_action, parsed.reference) == ("install", "demo")
+
+
+def test_a_missing_manifest_names_commands_that_run():
+    from gaia.skills.hub import SkillHubError, fetch_skill_doc
+
+    def _unreachable(_url):
+        raise OSError("connection refused")
+
+    with pytest.raises(SkillHubError) as excinfo:
+        fetch_skill_doc(
+            "demo", "1.0.0", base_url="https://hub.invalid", fetcher=_unreachable
+        )
+
+    message = str(excinfo.value).replace("<version>", "1.0.0")
+    assert "--remote" not in message
+    actions = [
+        (p.skill_action, getattr(p, "reference", None) or p.query)
+        for p in _parse_quoted_gaia_commands(message)
+    ]
+    assert actions == [("install", "demo@1.0.0"), ("search", "demo")]

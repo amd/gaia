@@ -14,6 +14,8 @@ GAIA never writes tokens or API keys to plaintext files. All secrets live exclus
 | Linux | gnome-keyring or kwallet |
 | Windows | Credential Locker |
 
+On macOS, the GAIA daemon reads the keychain for the flagship agent, using a credential only that agent receives. The keychain ties approval to the exact build asking, so this keeps agent updates from prompting again. The trade-off: when macOS asks, **Always Allow** now approves the daemon's Python interpreter, not the agent, and any script that same interpreter runs can then read these items without a prompt. An agent started without the daemon reads the keychain itself.
+
 Each connector occupies a dedicated keyring slot keyed by `gaia.connections:<connector-id>:<secret-name>`. MCP server tokens use `$keyring:<slot>` references in `~/.gaia/mcp_servers.json` — the JSON file itself contains no actual secrets.
 
 OAuth refresh tokens and MCP server API keys are AES-256 encrypted by the OS keyring at rest and decrypted in memory only when a tool call needs them.

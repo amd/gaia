@@ -1,13 +1,2 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-
-from gaia.logger import get_logger
-
-logger = get_logger(__name__)
-
-# Optional imports for other agents
-try:
-    from gaia.apps.llm.app import LlmApp as llm
-except ImportError:
-    logger.debug("llm app not available")
-    llm = None

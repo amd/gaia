@@ -36,6 +36,11 @@ from gaia.skills.permissions import Permission, parse_permissions
 
 log = get_logger(__name__)
 
+# Mintlify keeps the heading's em dash in the slug.
+_TOOLS_DOCS_URL = (
+    f"{FORMAT_DOCS_URL}#tools-vs-tools_required-%E2%80%94-never-conflate-them"
+)
+
 #: The one required file in a skill directory.
 SKILL_FILENAME = "SKILL.md"
 
@@ -110,7 +115,7 @@ class SkillRequirements:
                 f"Skill '{skill_name}': metadata.gaia.requirements must be a mapping, "
                 f"got {type(data).__name__}. Example: "
                 "'requirements: {python: \">=3.10\"}'. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         known = {
@@ -128,14 +133,14 @@ class SkillRequirements:
                 raise SkillValidationError(
                     f"Skill '{skill_name}': metadata.gaia.requirements.{key} must be a "
                     f"list, got {type(value).__name__}. "
-                    f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                    f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
                 )
         hardware = data.get("hardware") or {}
         if not isinstance(hardware, dict):
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.requirements.hardware must be a "
                 f"mapping, got {type(hardware).__name__}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         return cls(
@@ -164,6 +169,8 @@ class SkillTool:
     parameters: dict[str, dict[str, Any]] = field(default_factory=dict)
     returns: Optional[dict[str, Any]] = None
     atomic: bool = False
+    #: Every call waits for the user's approval; no grant pre-authorizes it.
+    requires_confirmation: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to the frontmatter shape."""
@@ -175,6 +182,8 @@ class SkillTool:
             out["returns"] = dict(self.returns)
         if self.atomic:
             out["atomic"] = self.atomic
+        if self.requires_confirmation:
+            out["requires_confirmation"] = self.requires_confirmation
         return out
 
     @classmethod
@@ -184,7 +193,7 @@ class SkillTool:
             raise SkillValidationError(
                 f"Skill '{skill_name}': each metadata.gaia.tools entry must be a "
                 f"mapping with a 'name', got {type(data).__name__}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
         name = data.get("name")
         if not name or not isinstance(name, str):
@@ -201,7 +210,7 @@ class SkillTool:
                 f"Skill '{skill_name}': tool '{name}' has 'parameters' of type "
                 f"{type(raw_params).__name__}; it must be a mapping of "
                 "parameter name to {type, required, default}. "
-                f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
         parameters: dict[str, dict[str, Any]] = {}
         for param_name, spec in raw_params.items():
@@ -211,7 +220,7 @@ class SkillTool:
                     f"'{param_name}' must be a mapping like "
                     "'{type: string, required: true}', got "
                     f"{type(spec).__name__}. "
-                    f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                    f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
                 )
             parameters[param_name] = dict(spec)
 
@@ -220,7 +229,7 @@ class SkillTool:
             raise SkillValidationError(
                 f"Skill '{skill_name}': tool '{name}' has 'returns' of type "
                 f"{type(returns).__name__}; it must be a mapping like "
-                f"'{{type: object}}'. See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"'{{type: object}}'. See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         return cls(
@@ -229,6 +238,7 @@ class SkillTool:
             parameters=parameters,
             returns=dict(returns) if returns is not None else None,
             atomic=bool(data.get("atomic", False)),
+            requires_confirmation=bool(data.get("requires_confirmation", False)),
         )
 
 
@@ -244,6 +254,9 @@ class GaiaMetadata:
     #: Skills this one combines with on a single request. Names that are not
     #: installed are ignored where the list is used, never an error here.
     pairs_with: list[str] = field(default_factory=list)
+    #: Tools from ``tools_required`` that only this skill drives. Calling one
+    #: means the skill is in use, so the agent loads it if the model did not.
+    loads_with: list[str] = field(default_factory=list)
     #: ``metadata.gaia`` keys GAIA does not model, preserved for round-trip.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -266,6 +279,8 @@ class GaiaMetadata:
             out["tools_required"] = list(self.tools_required)
         if self.pairs_with:
             out["pairs_with"] = list(self.pairs_with)
+        if self.loads_with:
+            out["loads_with"] = list(self.loads_with)
         out.update(self.extra)
         return out
 
@@ -278,7 +293,7 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia must be a mapping, got "
                 f"{type(data).__name__}. Omit it entirely for an instruction-only "
-                f"skill. See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+                f"skill. See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
             )
 
         tier = data.get("security_tier", DEFAULT_SECURITY_TIER)
@@ -303,7 +318,7 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.tools must be a list, got "
                 f"{type(tools).__name__}. Each entry declares one @tool function this "
-                f"skill provides. See {FORMAT_DOCS_URL}#tools-vs-tools_required"
+                f"skill provides. See {_TOOLS_DOCS_URL}"
             )
 
         tools_required = data.get("tools_required") or []
@@ -311,7 +326,7 @@ class GaiaMetadata:
             raise SkillValidationError(
                 f"Skill '{skill_name}': metadata.gaia.tools_required must be a list of "
                 f"registry tool names, got {type(tools_required).__name__}. "
-                f"See {FORMAT_DOCS_URL}#tools-vs-tools_required"
+                f"See {_TOOLS_DOCS_URL}"
             )
 
         pairs_with = data.get("pairs_with") or []
@@ -322,6 +337,22 @@ class GaiaMetadata:
                 f"See {FORMAT_DOCS_URL}#field-reference"
             )
 
+        loads_with = data.get("loads_with") or []
+        if not isinstance(loads_with, list):
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with must be a list of "
+                f"tool names from tools_required, got {type(loads_with).__name__}. "
+                f"See {FORMAT_DOCS_URL}#field-reference"
+            )
+        stray = sorted({str(t) for t in loads_with} - {str(t) for t in tools_required})
+        if stray:
+            raise SkillValidationError(
+                f"Skill '{skill_name}': metadata.gaia.loads_with names "
+                f"{', '.join(stray)}, which tools_required does not list. A tool "
+                "that loads the skill must be one its procedure uses; add it to "
+                f"tools_required or drop it. See {FORMAT_DOCS_URL}#field-reference"
+            )
+
         known = {
             "security_tier",
             "permissions",
@@ -329,6 +360,7 @@ class GaiaMetadata:
             "tools",
             "tools_required",
             "pairs_with",
+            "loads_with",
         }
         return cls(
             security_tier=tier,
@@ -339,6 +371,7 @@ class GaiaMetadata:
             tools=[SkillTool.from_dict(t, skill_name=skill_name) for t in tools],
             tools_required=[str(t) for t in tools_required],
             pairs_with=[str(p) for p in pairs_with],
+            loads_with=[str(t) for t in loads_with],
             extra={k: v for k, v in data.items() if k not in known},
         )
 
@@ -566,7 +599,7 @@ def parse_skill(text: str, *, source: str = "<string>") -> Skill:
         raise SkillValidationError(
             f"{source}: field 'metadata' must be a mapping of vendor namespaces "
             f"(e.g. 'metadata: {{gaia: {{...}}}}'), got {type(raw_metadata).__name__}. "
-            f"See {FORMAT_DOCS_URL}#the-metadatagaia-namespace"
+            f"See {FORMAT_DOCS_URL}#the-metadata-gaia-namespace"
         )
 
     present_ignored = [k for k in IGNORED_STANDARD_KEYS if k in frontmatter]

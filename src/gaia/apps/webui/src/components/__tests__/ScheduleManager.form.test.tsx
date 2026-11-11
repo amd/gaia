@@ -26,6 +26,7 @@ const schedule: Schedule = {
     session_id: null,
     schedule_config: null,
     description: 'Every day',
+    description_parts: { kind: 'every', count: 1, unit: 'day', days: null, time: null, start_hour: null, end_hour: null },
     last_error: null,
 };
 
@@ -83,10 +84,14 @@ describe('New schedule form', () => {
 describe('Schedule card', () => {
     it('says when a weekday schedule runs instead of its raw interval', () => {
         useScheduleStore.setState({
-            schedules: [{ ...schedule, description: 'Weekdays at 8:00 AM' }],
+            schedules: [{
+                ...schedule,
+                description: 'Weekdays at 8:00 AM',
+                description_parts: { kind: 'days', count: null, unit: null, days: [0, 1, 2, 3, 4], time: '08:00', start_hour: null, end_hour: null },
+            }],
         });
         render(<ScheduleManager />);
-        expect(screen.getByTitle('Weekdays at 8:00 AM')).toHaveTextContent('Weekdays at 8:00 AM');
+        expect(screen.getByTitle(/^Weekdays at 8:00\sAM$/)).toHaveTextContent(/Weekdays at 8:00\sAM/);
         expect(screen.queryByText('1d')).not.toBeInTheDocument();
     });
 });

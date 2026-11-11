@@ -4,6 +4,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { EngineInstallScreen } from './components/EngineInstallScreen';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { isInstallScreen } from './utils/engineInstall';
 import { purgeLegacyAlwaysAllow } from './stores/notificationStore';
 import { applyTheme, markTitleBar, resolveTheme, syncTitleBar, watchTitleBarScrim } from './utils/theme';
 import { applyPalette } from './utils/palette';
@@ -34,7 +37,9 @@ watchTitleBarScrim();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
-        <App />
+        <ErrorBoundary area="app" variant="window">
+            {isInstallScreen() ? <EngineInstallScreen /> : <App />}
+        </ErrorBoundary>
     </React.StrictMode>,
 );
 

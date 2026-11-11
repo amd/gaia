@@ -11,6 +11,12 @@ Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
 
+The `gaia` command that setup runs is not in the package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet. A postinstall script can't do it: the release workflow
+installs the `.pkg` on a clean runner before that release's Python package is on
+PyPI.
+
 No directory entry for `/usr`, `/usr/local`, `/usr/local/bin` or
 `/usr/local/share` is shipped. Installing one would reset that directory to
 `root:wheel`, which breaks `brew` on an Intel Mac where Homebrew owns
@@ -57,9 +63,13 @@ All four arguments are required.
 
 - `--arch` is `arm64` or `x64`.
 - `--payload` is a directory that already contains two executables named
-  `gaia-tui` and `gaia-agent` (no extension) plus `LICENSE.md`. The script copies
-  them; it does not build them. A missing `LICENSE.md` is a hard error — every
-  package GAIA ships carries the licence.
+  `gaia-tui` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
+  `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
+  them. The core is its own component, installed to `/usr/local/lib/gaia` and
+  linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
+  package GAIA ships carries the licence. `--without-core` leaves the core out, as
+  packages before it shipped one did; CI uses it only to rebuild such a release's
+  package.
 - `--out` is created if it does not exist. The result is
   `<out>/gaia-<version>-darwin-<arch>.pkg`.
 

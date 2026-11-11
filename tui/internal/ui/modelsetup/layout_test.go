@@ -107,12 +107,12 @@ func TestSmallTerminalsDegradeCleanly(t *testing.T) {
 	}
 }
 
-// Below 60 columns the purpose column becomes letters with a legend.
-func TestNarrowWindowShortensThePurposeColumn(t *testing.T) {
+// Below 60 columns the support label moves from its column into the note.
+func TestNarrowWindowMovesTheLabelIntoTheNote(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
 	h.send(tea.WindowSizeMsg{Width: 56, Height: 24})
-	h.expect("C chat · V vision · D documents")
-	h.expectNot("Documents  ")
+	h.expect("Verified. Answers your chats.")
+	h.expectNot("Verified 23.3")
 }
 
 // Too short: one line, and only esc does anything.

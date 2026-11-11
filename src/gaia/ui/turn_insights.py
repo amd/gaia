@@ -358,9 +358,14 @@ def _cost(model_id: Optional[str], tokens_in, cached, tokens_out) -> Dict[str, A
     where = where_model_runs(model_id)
     if where == "local":
         return {"kind": "local", "usd": 0.0}
-    if where is None or tokens_in is None or tokens_out is None:
+    if where is None:
         return {"kind": "unknown", "usd": None}
-    from gaia.eval.bench.metering import price
+    from gaia.eval.bench.metering import price, rate_card
+
+    if tokens_in is None or tokens_out is None:
+        # A stopped stream ends before the provider reports its usage.
+        kind = "unreported" if rate_card(model_id) else "unknown"
+        return {"kind": kind, "usd": None}
 
     usd = price(model_id, int(tokens_in), int(cached or 0), int(tokens_out))
     if usd is None:
@@ -629,7 +634,9 @@ def chat_totals(turns: List[Dict[str, Any]]) -> Dict[str, Any]:
             what="chat model-load time",
         ),
         "usd": None if usd is None else round(usd, 6),
-        "unpriced_turns": sum(1 for c in costs if c.get("kind") == "unknown"),
+        "unpriced_turns": sum(
+            1 for c in costs if c.get("kind") in ("unknown", "unreported")
+        ),
     }
 
 

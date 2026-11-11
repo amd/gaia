@@ -37,7 +37,8 @@ interface SetupDownloadsState {
 export function isMoving(status: SetupRunStatus | null): boolean {
     if (!status) return false;
     if (status.state === 'running' || status.state === 'verifying') return true;
-    return !!status.models?.some((m) => m.state === 'downloading');
+    // A row verifying outside a run is Retry testing it again.
+    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'verifying');
 }
 
 /**

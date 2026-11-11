@@ -286,7 +286,7 @@ jobs:
           $embedCode = $LASTEXITCODE
           $embedOut | ForEach-Object { Write-Host "$_" }
           if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in test_eval_agent_gemma_consolidation.yml."
+            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in eval_flagship.yml."
             exit 1
           }
 
@@ -301,6 +301,9 @@ jobs:
         timeout-minutes: 1980
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # An empty Claude config, so a login left on this runner can't win
+          # over the key (the eval tries the subscription first).
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}\claude-key-only
         run: |
           $ErrorActionPreference = "Continue"
           $ProgressPreference = "SilentlyContinue"

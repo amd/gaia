@@ -40,8 +40,8 @@ def list_skills() -> Dict[str, Any]:
 
 def _skills_from_agent() -> Dict[str, Any]:
     """Ask the installed GAIA agent, through the daemon, which skills it has."""
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, skills_supported
 
     try:
@@ -90,19 +90,35 @@ def _preference_schema(name: str) -> Any:
 
     try:
         from gaia_agent.agent import GaiaAgent
-    except ImportError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The GAIA agent package is not installed beside the UI, so the "
-                f"preference schema of '{name}' cannot be read to check the change."
-            ),
-        ) from e
+    except ImportError:
+        return _preference_schema_beside_the_agent_binary(name)
     try:
         skill = SkillManager(agent_skill_dirs=GaiaAgent.SKILL_DIRS).load(name)
         return load_schema(skill.directory)
     except SkillError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+def _preference_schema_beside_the_agent_binary(name: str) -> Any:
+    """The schema where the agent runs as its own binary, as the apps ship it.
+
+    A skill the user installed is on disk here. One bundled in the binary is
+    not, and none of those ships a schema (tests/unit/test_skill_preferences_router.py
+    holds that), so a skill the agent lists takes no schema.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.manager import SkillManager
+    from gaia.skills.preferences import load_schema
+
+    try:
+        return load_schema(SkillManager().load(name).directory)
+    except SkillError as local_error:
+        bundled = {s.get("name") for s in _skills_from_agent().get("skills", [])}
+        if name not in bundled:
+            raise HTTPException(status_code=404, detail=str(local_error)) from (
+                local_error
+            )
+        return None
 
 
 @router.get("/api/skills/preferences")

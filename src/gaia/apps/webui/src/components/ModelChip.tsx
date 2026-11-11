@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { AlertCircle, Check, ChevronDown, Cloud, Cpu, Download, HelpCircle, KeyRound, Link2, Loader2 } from 'lucide-react';
 import { Popover } from './Popover';
 import './ModelPicker.css';
 import * as api from '../services/api';
+import { requestErrorText } from '../utils/requestErrors';
 import { useChatStore } from '../stores/chatStore';
 import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
@@ -13,6 +14,7 @@ import {
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
+import { useT } from '../i18n/useT';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -74,9 +76,11 @@ function StateMark({ m, onDownload, busy }: { m: ProviderModel; onDownload: () =
 
 /** The model the open chat runs on, where it runs, and a picker to change it. */
 export function ModelChip() {
+    const t = useT();
     const active = useModelStore((s) => s.active);
     const select = useModelStore((s) => s.select);
     const queued = useModelStore((s) => s.queued);
+    const currentModel = queued ?? active?.model;
     const queue = useModelStore((s) => s.queue);
     const queueError = useModelStore((s) => s.queueError);
     const rememberNames = useModelStore((s) => s.rememberNames);
@@ -88,6 +92,7 @@ export function ModelChip() {
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [groups, setGroups] = useState<ProviderModels[] | null>(null);
+    const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
@@ -104,6 +109,7 @@ export function ModelChip() {
     const lastCountedList = useRef<ProviderModels[] | null>(null);
     const listId = useId();
     const list = useRef<HTMLDivElement>(null);
+    const consent = useRef<HTMLDivElement>(null);
     // The row holding the list's one Tab stop, and the row whose info bubble a key opened.
     const [activeRow, setActiveRow] = useState<string | null>(null);
     const [infoRow, setInfoRow] = useState<string | null>(null);
@@ -112,6 +118,8 @@ export function ModelChip() {
     const close = useCallback(() => setOpen(false), []);
     // Set when a fresh list lands after opening, so focus moves to the current model once.
     const focusOnLoad = useRef(false);
+    // Set when the Fireworks list expands, so focus moves to its first newly visible model.
+    const focusFirstShown = useRef<string | null>(null);
 
     const load = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -125,11 +133,13 @@ export function ModelChip() {
             // Fireworks is always offered (with "Add your key"); the gateway once registered.
             const shown = providers.filter((p) => !p.remote || p.models_discovered || p.id === 'fireworks' || p.registered);
             const lists = await Promise.all(shown.map(async (provider) => {
+                if (provider.blocked) return { provider, models: [], error: t('settings.privacy.localOnlyBlocked') };
                 if (provider.remote && !provider.models_discovered) return { provider, models: [] };
                 try {
-                    return { provider, models: (await api.listProviderModels(provider.id)).models };
+                    const response = await api.listProviderModels(provider.id);
+                    return { provider, models: response.models, error: response.blocked ? t('settings.privacy.localOnlyBlocked') : undefined };
                 } catch (err) {
-                    return { provider, models: [], error: err instanceof Error ? err.message : String(err) };
+                    return { provider, models: [], error: requestErrorText(err) };
                 }
             }));
             rememberNames(lists.flatMap((g) => g.models));
@@ -137,13 +147,14 @@ export function ModelChip() {
             if (!quiet) focusOnLoad.current = true;
             setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false) })));
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         }
-    }, [rememberNames]);
+    }, [rememberNames, t]);
 
     useEffect(() => {
         if (open) {
             setPendingCloud(null);
+            setShowAllFireworksModels(false);
             setActiveRow(null);
             setInfoRow(null);
             void load();
@@ -158,6 +169,25 @@ export function ModelChip() {
         row.focus();
         row.scrollIntoView?.({ block: 'nearest' });
     }, [open, groups]);
+
+    useEffect(() => {
+        const providerId = focusFirstShown.current;
+        if (!open || !groups || !providerId || !showAllFireworksModels) return;
+        const group = groups.find((g) => g.provider.id === providerId);
+        const firstShown = group?.models.find((m) => m.rank === null && !sameModelId(currentModel, m.id));
+        if (!firstShown) return;
+        const row = Array.from(list.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])
+            .find((candidate) => candidate.dataset.row === firstShown.id);
+        if (!row) return;
+        focusFirstShown.current = null;
+        setActiveRow(firstShown.id);
+        row.focus();
+        row.scrollIntoView?.({ block: 'nearest' });
+    }, [open, groups, showAllFireworksModels, currentModel]);
+
+    useEffect(() => {
+        if (pendingCloud) consent.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [pendingCloud]);
 
     const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
         if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -207,7 +237,7 @@ export function ModelChip() {
             await load(true);
         } catch (err) {
             setPickAfterDownload((p) => (p?.model === model ? null : p));
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
         } finally {
             setDownloading(null);
             setRequestsPending((n) => n - 1);
@@ -235,7 +265,7 @@ export function ModelChip() {
             setOpen(false);
             return null;
         } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = requestErrorText(err);
             setError(message);
             return message;
         } finally {
@@ -286,11 +316,22 @@ export function ModelChip() {
     }, [groups, pickAfterDownload, requestsPending, choose]);
 
     // The row Tab lands on: the last one focused, else the current model, else the first.
+    const fireworksCollapsed = (provider: ProviderInfo, models: ProviderModel[]) =>
+        provider.id === 'fireworks' && !showAllFireworksModels && models.some((m) => m.rank !== null);
+    const fireworksVisibleModels = (provider: ProviderInfo, models: ProviderModel[]) =>
+        fireworksCollapsed(provider, models)
+            ? models.filter((m) => m.rank !== null || sameModelId(currentModel, m.id))
+            : models;
+    const fireworksHasHiddenModels = (provider: ProviderInfo, models: ProviderModel[]) =>
+        fireworksCollapsed(provider, models)
+        && models.some((m) => m.rank === null && !sameModelId(currentModel, m.id));
     const pickable = groups?.flatMap(({ provider, models }) => [
         ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
-        ...models.filter((m) => switching === null && !isDownloading(m)).map((m) => m.id),
+        ...fireworksVisibleModels(provider, models)
+            .filter((m) => switching === null && !isDownloading(m))
+            .map((m) => m.id),
+        ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
     ]) ?? [];
-    const currentModel = queued ?? active?.model;
     const tabRow = activeRow && pickable.includes(activeRow)
         ? activeRow
         : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
@@ -382,81 +423,101 @@ export function ModelChip() {
                         {!groupError && models.length === 0 && provider.models_discovered !== false && (
                             <div className="popover-message">No models yet.</div>
                         )}
-                        {models.map((m) => {
+                        {fireworksVisibleModels(provider, models).map((m) => {
                             const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
                             const details = modelDetails(m, provider.remote);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
-                                <div key={m.id} className="popover-row">
-                                    <button
-                                        type="button"
-                                        className="popover-item"
-                                        onClick={() => {
-                                            if (!needsDownload) {
-                                                // A pick made since outranks one waiting on a download.
-                                                setPickAfterDownload(null);
-                                                return void choose(m.id, provider);
-                                            }
-                                            pollsWithoutProgress.current = 0;
-                                            setAutoSwitchError(null);
-                                            setPickAfterDownload({ model: m.id, provider });
-                                            void download(m.id);
-                                        }}
-                                        disabled={switching !== null || isDownloading(m)}
-                                        {...rowProps(m.id)}
-                                        aria-selected={current}
-                                        aria-describedby={infoRow === m.id ? infoId : undefined}
-                                    >
-                                        <span className="popover-item-check" aria-hidden="true">
-                                            {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
+                                <Fragment key={m.id}>
+                                    <div className="popover-row">
+                                        <button
+                                            type="button"
+                                            className="popover-item"
+                                            onClick={() => {
+                                                if (!needsDownload) {
+                                                    // A pick made since outranks one waiting on a download.
+                                                    setPickAfterDownload(null);
+                                                    return void choose(m.id, provider);
+                                                }
+                                                pollsWithoutProgress.current = 0;
+                                                setAutoSwitchError(null);
+                                                setPickAfterDownload({ model: m.id, provider });
+                                                void download(m.id);
+                                            }}
+                                            disabled={switching !== null || isDownloading(m)}
+                                            {...rowProps(m.id)}
+                                            aria-selected={current}
+                                            aria-describedby={infoRow === m.id ? infoId : undefined}
+                                        >
+                                            <span className="popover-item-check" aria-hidden="true">
+                                                {switching === m.id ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
+                                            </span>
+                                            <span className="popover-item-body">
+                                                <span className="popover-item-title is-model">{modelName}</span>
+                                            </span>
+                                        </button>
+                                        <InfoBubble
+                                            label={`About ${modelName}`}
+                                            warning={!!m.placement?.warning}
+                                            id={infoId}
+                                            pinned={infoRow === m.id}
+                                            onUnpin={closeInfo}
+                                            // The row's ArrowRight opens it, so the icon needs no Tab stop.
+                                            tabIndex={-1}
+                                        >
+                                            <div className="info-bubble-title">{modelName}</div>
+                                            {details.length > 0 && (
+                                                <ul className="info-bubble-lines">
+                                                    {details.map((d) => <li key={d}>{d}</li>)}
+                                                </ul>
+                                            )}
+                                            {m.placement?.warning && (
+                                                <ul className="info-bubble-lines">
+                                                    <li className="is-warning">{m.placement.warning}</li>
+                                                </ul>
+                                            )}
+                                            <div className="info-bubble-id">{m.id}</div>
+                                        </InfoBubble>
+                                        <span className="popover-row-state">
+                                            {!provider.remote && (
+                                                <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
+                                            )}
                                         </span>
-                                        <span className="popover-item-body">
-                                            <span className="popover-item-title">{modelName}</span>
-                                        </span>
-                                    </button>
-                                    <InfoBubble
-                                        label={`About ${modelName}`}
-                                        warning={!!m.placement?.warning}
-                                        id={infoId}
-                                        pinned={infoRow === m.id}
-                                        onUnpin={closeInfo}
-                                        // The row's ArrowRight opens it, so the icon needs no Tab stop.
-                                        tabIndex={-1}
-                                    >
-                                        <div className="info-bubble-title">{modelName}</div>
-                                        {details.length > 0 && (
-                                            <ul className="info-bubble-lines">
-                                                {details.map((d) => <li key={d}>{d}</li>)}
-                                            </ul>
-                                        )}
-                                        {m.placement?.warning && (
-                                            <ul className="info-bubble-lines">
-                                                <li className="is-warning">{m.placement.warning}</li>
-                                            </ul>
-                                        )}
-                                        <div className="info-bubble-id">{m.id}</div>
-                                    </InfoBubble>
-                                    <span className="popover-row-state">
-                                        {!provider.remote && (
-                                            <StateMark m={m} busy={downloading !== null} onDownload={() => void download(m.id)} />
-                                        )}
-                                    </span>
-                                </div>
+                                    </div>
+                                    {pendingCloud?.model === m.id && pendingCloud.provider.id === provider.id && (
+                                        // Next to the clicked row, so a long list can't hide it.
+                                        <div ref={consent} className="popover-message" role="alert">
+                                            {pendingCloud.provider.privacy_notice}{' '}
+                                            <button type="button" className="link-btn" onClick={() => choose(pendingCloud.model, pendingCloud.provider)}>
+                                                Use {displayModelName(pendingCloud.model)}
+                                            </button>
+                                        </div>
+                                    )}
+                                </Fragment>
                             );
                         })}
+                        {fireworksHasHiddenModels(provider, models) && (
+                            <button
+                                type="button"
+                                className="popover-item"
+                                {...rowProps(`showall:${provider.id}`)}
+                                aria-selected={false}
+                                onClick={() => {
+                                    focusFirstShown.current = provider.id;
+                                    setShowAllFireworksModels(true);
+                                }}
+                            >
+                                <span className="popover-item-check" />
+                                <span className="popover-item-body">
+                                    <span className="popover-item-title">{t('settings.model.showAll')}</span>
+                                </span>
+                            </button>
+                        )}
                     </div>
                 ))}
                 </div>
-                )}
-                {pendingCloud && (
-                    <div className="popover-message" role="alert">
-                        {pendingCloud.provider.privacy_notice}{' '}
-                        <button type="button" className="link-btn" onClick={() => choose(pendingCloud.model, pendingCloud.provider)}>
-                            Use {displayModelName(pendingCloud.model)}
-                        </button>
-                    </div>
                 )}
                 {unavailable > 0 && (
                     <button
