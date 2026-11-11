@@ -285,6 +285,7 @@ def _run_turn(
         return _relay_turn(
             text,
             model=model,
+            verbose=verbose,
             max_steps=max_steps,
             skip_permissions=skip_permissions,
             full_access=full_access,
@@ -329,6 +330,7 @@ def _relay_turn(
     text: str,
     *,
     model: Optional[str],
+    verbose: bool,
     max_steps: Optional[int],
     skip_permissions: bool,
     full_access: bool,
@@ -369,11 +371,18 @@ def _relay_turn(
         renderer=renderer,
         working_directory=cwd,
         allowed_paths=[cwd, *(extra_paths or [])],
+        # Sent, even empty, it makes the final carry the turn's model messages.
+        **({"turns": []} if verbose else {}),
     )
     succeeded = outcome.terminal_type == "final" and not outcome.failed
+    usage = outcome.usage or {}
     result: Dict[str, Any] = {
         "status": "success" if succeeded else "error",
         "result": outcome.final_answer or "",
+        "steps_taken": usage.get("steps"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("tokens"),
+        "conversation": outcome.model_messages or [],
     }
     if not succeeded:
         result["error"] = (
@@ -381,4 +390,8 @@ def _relay_turn(
             or (outcome.final_answer if outcome.failed else "")
             or "the GAIA agent's reply ended without an answer"
         )
-    return summarize(result, model, time.time() - started)
+    record = summarize(result, model, time.time() - started, verbose=verbose)
+    # The agent counted these itself; its model messages carry no token stats.
+    record["num_tool_calls"] = int(usage.get("tools_used") or 0)
+    record["cached_tokens"] = int(usage.get("cached_tokens") or 0)
+    return record

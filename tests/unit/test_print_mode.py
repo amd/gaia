@@ -671,12 +671,20 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
 
 class _Outcome:
     def __init__(
-        self, terminal_type, final_answer=None, error_detail=None, failed=False
+        self,
+        terminal_type,
+        final_answer=None,
+        error_detail=None,
+        failed=False,
+        usage=None,
+        model_messages=None,
     ):
         self.terminal_type = terminal_type
         self.final_answer = final_answer
         self.error_detail = error_detail
         self.failed = failed
+        self.usage = usage
+        self.model_messages = model_messages
 
 
 @pytest.fixture
@@ -709,6 +717,54 @@ def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
     # The agent works in the caller's folder, as an in-process -p would.
     assert kwargs["working_directory"] == str(tmp_path)
     assert kwargs["allowed_paths"] == [str(tmp_path)]
+
+
+_RELAY_USAGE = {
+    "steps": 2,
+    "tools_used": 1,
+    "tokens": 12,
+    "input_tokens": 4000,
+    "cached_tokens": 3500,
+}
+_RELAY_MESSAGES = [
+    {"role": "assistant", "tool_calls": [{"function": {"name": "read_file"}}]},
+    {"role": "tool", "name": "read_file", "content": "amber-lynx-47"},
+    {"role": "assistant", "content": "The second code is amber-lynx-47."},
+]
+
+
+def test_a_relayed_json_record_counts_steps_tools_and_tokens(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber", usage=_RELAY_USAGE)
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_steps"] == 2
+    assert record["num_tool_calls"] == 1
+    assert record["input_tokens"] == 4000
+    assert record["cached_tokens"] == 3500
+    assert record["output_tokens"] == 12
+    assert "conversation" not in record
+    [(_, _, kwargs)] = relay
+    assert "turns" not in kwargs
+
+
+def test_a_relayed_verbose_record_carries_the_conversation(relay, capsys):
+    relay.outcome = _Outcome(
+        "final",
+        final_answer="amber",
+        usage=_RELAY_USAGE,
+        model_messages=_RELAY_MESSAGES,
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["conversation"] == _RELAY_MESSAGES
+    assert record["num_tool_calls"] == 1
+    # Sending turns, even empty, is how the agent is asked for model_messages.
+    [(_, _, kwargs)] = relay
+    assert kwargs["turns"] == []
 
 
 def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
