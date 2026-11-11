@@ -197,3 +197,29 @@ async def test_a_bare_yes_counts_when_a_question_is_open(fake_lemonade):  # noqa
     await _until(lambda: any(e["type"] in ("final", "ignored") for e in events))
     await s.close()
     assert {"type": "final", "text": "Okay."} in events
+
+
+def test_one_sentence_over_and_over_is_noise():
+    from gaia.voice.noise import is_loop
+
+    assert is_loop("I'm going to get some more.\n" * 5)
+    assert is_loop("Okay. Okay. Okay.")
+    assert not is_loop("Check my email. Then check my calendar. Then stop.")
+    assert not is_loop("No. No.")
+
+
+def test_a_doubled_sentence_is_said_once():
+    from gaia.voice.noise import tidy
+
+    assert tidy("but you can speak\nSpanish\nSpanish") == "but you can speak Spanish"
+    assert tidy("Okay.\n Okay.") == "Okay."
+    assert tidy("Is it 3.5 GB? Yes!") == "Is it 3.5 GB? Yes!"
+
+
+async def test_a_looped_sentence_is_ignored_even_when_voiced(
+    fake_lemonade,
+):  # noqa: F811
+    events, _ = await heard(
+        fake_lemonade, "Get some more.\nGet some more.\nGet some more.", vowel(1000)
+    )
+    assert {"type": "ignored", "reason": "not_words"} in events

@@ -80,6 +80,29 @@ def is_noise_text(text: str, *, english: bool = True) -> bool:
     return False
 
 
+#: Where one sentence ends: a line break, or end punctuation before a space.
+_BREAK = re.compile(r"\n+|(?<=[.!?])\s+")
+
+
+def _sentences(text: str):
+    return [s.strip() for s in _BREAK.split(text or "") if s.strip()]
+
+
+def tidy(text: str) -> str:
+    """One line, without a sentence the recognizer wrote twice in a row."""
+    kept = []
+    for sentence in _sentences(text):
+        if not kept or sentence.lower() != kept[-1].lower():
+            kept.append(sentence)
+    return " ".join(kept)
+
+
+def is_loop(text: str) -> bool:
+    """Whether *text* is one sentence over and over, as recognizers do with noise."""
+    sentences = [s.lower() for s in _sentences(text)]
+    return len(sentences) >= 3 and len(set(sentences)) == 1
+
+
 def is_filler(text: str) -> bool:
     """Whether *text* is what a recognizer invents for a noise; alone it is no turn."""
     cleaned = re.sub(r"[^a-z' ]", "", (text or "").lower()).strip()
@@ -96,14 +119,18 @@ class SpeechMeter:
         self._run = 0
         self._recent: Deque[bool] = deque(maxlen=LOOKBACK_MS // SUBFRAME_MS)
         self._active = False
+        self._total = 0
         self.voiced_ms = 0
 
-    def feed(self, samples: np.ndarray) -> None:
+    def feed(self, samples: np.ndarray) -> int:
+        """Take audio in; returns the voiced milliseconds it added."""
+        before = self._total
         data = np.concatenate([self._rest, samples.astype(np.float32, copy=False)])
         count = data.size // self._step
         for i in range(count):
             self._subframe(data[i * self._step : (i + 1) * self._step])
         self._rest = data[count * self._step :]
+        return self._total - before
 
     def begin(self) -> None:
         """The recognizer heard speech start; count from a little before now."""
@@ -128,6 +155,8 @@ class SpeechMeter:
         run_ms = self._run * SUBFRAME_MS
         counts = run_ms >= MIN_RUN_MS
         self._recent.append(counts)
+        if counts:
+            self._total += SUBFRAME_MS
         if self._active and counts:
             # The frames that built the run count once it qualifies.
             self.voiced_ms += MIN_RUN_MS if run_ms == MIN_RUN_MS else SUBFRAME_MS
