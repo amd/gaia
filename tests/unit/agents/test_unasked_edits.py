@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """A "change nothing else" edit that also removed a line is called out."""
 
+import os
+import time
+
 import pytest
 
 from gaia.agents.base.agent import Agent
@@ -60,6 +63,9 @@ def test_the_note_names_the_line_unless_the_answer_already_does():
     assert removal_note(removals, "I replaced eggs with apples.") == ""
 
 
+TODO_PATH = os.path.abspath("C:/x/todo.txt")
+
+
 class _Bare(Agent):
     def _register_tools(self):
         pass
@@ -81,7 +87,7 @@ def test_the_agent_keeps_unasked_removals_only_for_limited_requests():
 
     limited = _agent(REQUEST)
     limited._note_edit_removals(edit, {"status": "success"})
-    assert limited._turn_unasked_removals == [("todo.txt", "- eggs")]
+    assert limited._turn_unasked_removals == [(TODO_PATH, "- eggs")]
 
     open_ended = _agent("Tidy up todo.txt however you like.")
     open_ended._note_edit_removals(edit, {"status": "success"})
@@ -90,7 +96,7 @@ def test_the_agent_keeps_unasked_removals_only_for_limited_requests():
     twice = _agent(REQUEST)
     twice._note_edit_removals(edit, {"status": "success"})
     twice._note_edit_removals(edit, {"status": "success"})
-    assert twice._turn_unasked_removals == [("todo.txt", "- eggs")]
+    assert twice._turn_unasked_removals == [(TODO_PATH, "- eggs")]
 
     failed = _agent(REQUEST)
     failed._note_edit_removals(edit, {"status": "error", "error": "no match"})
@@ -401,7 +407,7 @@ def test_the_gemma_replacement_is_still_called_out_next_to_in_place_edits():
         },
         {"status": "success"},
     )
-    assert agent._turn_unasked_removals == [("todo.txt", "- eggs")]
+    assert agent._turn_unasked_removals == [(TODO_PATH, "- eggs")]
 
 
 def test_a_deleted_line_with_a_near_twin_left_behind_is_still_caught():
@@ -414,4 +420,163 @@ def test_a_deleted_line_with_a_near_twin_left_behind_is_still_caught():
         },
         {"status": "success"},
     )
-    assert agent._turn_unasked_removals == [("todo.txt", "- egg box 1")]
+    assert agent._turn_unasked_removals == [(TODO_PATH, "- egg box 1")]
+
+
+ASKED_DELETIONS = [
+    (
+        "Delete line 3." + LIMIT,
+        "alpha one\nbeta two\ngamma three",
+        "alpha one\nbeta two",
+    ),
+    ("Remove the last item. Don't touch anything else.", "- milk\n- eggs", "- milk"),
+    ("Remove the second item." + LIMIT, "- milk\n- eggs\n- bread", "- milk\n- bread"),
+    (
+        "Remove all comments." + LIMIT,
+        "x = 1  # set x\n# helper\ny = 2",
+        "x = 1\ny = 2",
+    ),
+    (
+        "Delete the completed tasks, leave the rest as is.",
+        "- [x] laundry\n- [ ] dishes",
+        "- [ ] dishes",
+    ),
+    (
+        "Get rid of the duplicates." + LIMIT,
+        "- milk\n- eggs\n- milk again",
+        "- milk\n- eggs",
+    ),
+]
+
+
+@pytest.mark.parametrize("request_text,old,new", ASKED_DELETIONS)
+def test_a_deletion_the_request_asked_for_gets_no_note(request_text, old, new):
+    assert _recorded(request_text, old, new) == []
+
+
+def test_a_deletion_request_still_catches_a_line_swapped_for_new_text():
+    assert _recorded(
+        "Delete line 3." + LIMIT, "- milk\n- eggs", "- milk\n- apples"
+    ) == ["- eggs"]
+
+
+RESHAPED_EDITS = [
+    (
+        "Merge the two lines into one." + LIMIT,
+        "first half of\nthe sentence",
+        "first half of the sentence",
+    ),
+    (
+        "Split the line at the comma." + LIMIT,
+        "alpha beta, gamma delta",
+        "alpha beta,\ngamma delta",
+    ),
+    (
+        "Wrap the paragraph at 40 columns." + LIMIT,
+        "The quick brown fox jumps over the lazy dog and keeps running far away",
+        "The quick brown fox jumps over the lazy\ndog and keeps running far away",
+    ),
+    (
+        "Fix the off-by-one bug." + LIMIT,
+        "for i in range(1, n):",
+        "for i in range(0, n):",
+    ),
+    (
+        "Change the loop to use enumerate." + LIMIT,
+        "for i in range(len(xs)):\n    print(i, xs[i])",
+        "for i, x in enumerate(xs):\n    print(i, x)",
+    ),
+]
+
+
+@pytest.mark.parametrize("request_text,old,new", RESHAPED_EDITS)
+def test_a_line_reshaped_or_fixed_in_place_gets_no_note(request_text, old, new):
+    assert _recorded(request_text, old, new) == []
+
+
+def test_a_large_edit_is_skipped_quickly():
+    old = "\n".join(f"row {i} alpha{i} beta{i * 7}" for i in range(2000))
+    new = "\n".join(f"line {i} gamma{i} delta{i * 3}" for i in range(2000))
+    start = time.perf_counter()
+    assert _recorded(PORT, old, new) == []
+    assert time.perf_counter() - start < 1.0
+
+
+def test_naming_the_line_without_owning_up_keeps_the_note():
+    removals = [("todo.txt", "- eggs")]
+    assert removal_note(removals, "I appended apples; eggs is still there.")
+    assert removal_note([("todo.txt", "- tea")], "I updated the steam settings.")
+    assert removal_note(removals, "Done. I took out eggs.") == ""
+    assert removal_note(removals, "I overwrote the eggs line.") == ""
+
+
+def test_removals_are_kept_per_file_not_per_name():
+    agent = _agent(PORT)
+    agent._note_edit_removals(
+        {
+            "file_path": "C:/a/config.ini",
+            "old_content": "port=8080\nhost=example",
+            "new_content": "port=9090",
+        },
+        {"status": "success"},
+    )
+    agent._note_edit_removals(
+        {
+            "file_path": "C:/b/config.ini",
+            "old_content": "[x]",
+            "new_content": "[x]\nhost=example",
+        },
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == [
+        (os.path.abspath("C:/a/config.ini"), "host=example")
+    ]
+
+
+def test_a_restore_that_differs_in_case_or_spacing_clears_the_removal():
+    agent = _agent(PORT)
+    path = "C:/a/config.ini"
+    agent._note_edit_removals(
+        {
+            "file_path": path,
+            "old_content": "port=8080\nhost=example",
+            "new_content": "port=9090",
+        },
+        {"status": "success"},
+    )
+    agent._note_edit_removals(
+        {
+            "file_path": path,
+            "old_content": "port=9090",
+            "new_content": "port=9090\n  Host=Example ",
+        },
+        {"status": "success"},
+    )
+    assert agent._turn_unasked_removals == []
+
+
+def test_more_phrasings_limit_an_edit():
+    assert limits_edit("Set the port, don\u2019t change anything else.")
+    assert limits_edit("Only change the port, keep everything else the same.")
+    assert limits_edit("Set the port; nothing else should change.")
+    assert limits_edit("Set the port. Don't change other lines.")
+    assert limits_edit("Set the port and don't change any other line.")
+
+
+def test_the_note_is_short_grouped_and_counts_what_it_leaves_out():
+    removals = [("C:/x/todo.txt", "- eggs"), ("C:/x/todo.txt", "x" * 300)]
+    removals += [("C:/x/a.txt", "`code` here")]
+    removals += [("C:/x/b.txt", f"line {i} stuff") for i in range(4)]
+    note = removal_note(removals, "Done.")
+    assert "`- eggs`, `" + "x" * 79 + "\u2026` from todo.txt" in note
+    assert "`` `code` here `` from a.txt" in note
+    assert note.endswith("and 2 more lines, which the request did not ask to change.")
+    assert note.count("\n") == 0
+
+
+def test_the_note_tells_apart_files_that_share_a_name():
+    note = removal_note(
+        [("C:/a/config.ini", "host=example"), ("C:/b/config.ini", "port=1")], "Done."
+    )
+    assert f"from a{os.sep}config.ini" in note
+    assert f"from b{os.sep}config.ini" in note

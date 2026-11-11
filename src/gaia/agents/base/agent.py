@@ -7581,19 +7581,26 @@ Do NOT wrap conversational replies in JSON.
         )
         if not limits_edit(str(request or "")):
             return
-        name = os.path.basename(str(args.get("file_path") or "the file"))
         removals = getattr(self, "_turn_unasked_removals", None)
         if removals is None:
             return
-        restored = {line.strip() for line in new.splitlines()}
+        raw_path = str(args.get("file_path") or "")
+        path = os.path.abspath(raw_path) if raw_path else ""
+        key = os.path.normcase(path)
+        path = next((p for p, _ in removals if os.path.normcase(p) == key), path)
+
+        def _fold(line: str) -> str:
+            return " ".join(line.split()).lower()
+
+        restored = {_fold(line) for line in new.splitlines()}
         removals[:] = [
-            (path, line)
-            for path, line in removals
-            if path != name or line not in restored
+            (p, line)
+            for p, line in removals
+            if os.path.normcase(p) != key or _fold(line) not in restored
         ]
         for line in unasked_removals(old, new, str(request)):
-            if (name, line) not in removals:
-                removals.append((name, line))
+            if (path, line) not in removals:
+                removals.append((path, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
