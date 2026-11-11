@@ -592,6 +592,7 @@ def status(detect: bool = True) -> Dict[str, Any]:
         "bot_name": config.bot_name,
         "owner_name": config.owner_name,
         "autostart": config.autostart,
+        "always_allowed": sorted(set(state.always_labels())) if config.paired else [],
         "model": config.model,
         "portal_url": PORTAL_URL,
         "bot_page_url": (

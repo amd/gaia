@@ -99,6 +99,39 @@ def discord_stop() -> Dict[str, Any]:
     return _status()
 
 
+@router.post("/discord/restart", dependencies=[Depends(require_ui_header)])
+def discord_restart() -> Dict[str, Any]:
+    cli = _cli()
+    if not cli.stop():
+        raise HTTPException(
+            status_code=500,
+            detail="The Discord bridge did not stop, so it was not restarted. "
+            + cli.stop_failed_hint(),
+        )
+    cli.start_detached(emit=lambda _line: None)
+    return _status()
+
+
+@router.post("/discord/forget-always", dependencies=[Depends(require_ui_header)])
+def discord_forget_always() -> Dict[str, Any]:
+    """Forget every "Always allow"; GAIA asks again from the next request."""
+    from gaia.messaging.discord import state
+
+    cli = _cli()
+    # The running agent holds its own copy of the answers, so it is restarted.
+    was_running = state.is_running()
+    if was_running and not cli.stop():
+        raise HTTPException(
+            status_code=500,
+            detail="The Discord bridge did not stop, so nothing was forgotten. "
+            + cli.stop_failed_hint(),
+        )
+    state.forget_always()
+    if was_running:
+        cli.start_detached(emit=lambda _line: None)
+    return _status()
+
+
 @router.post("/discord/pair", dependencies=[Depends(require_ui_header)])
 def discord_pair() -> Dict[str, Any]:
     """Forget the paired account and show a new code."""

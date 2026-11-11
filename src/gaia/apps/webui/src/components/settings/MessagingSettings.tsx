@@ -12,6 +12,8 @@ import {
     pairDiscordAgain,
     startDiscord,
     stopDiscord,
+    restartDiscord,
+    forgetDiscordAlways,
     type DiscordStatus,
 } from '../../services/messagingApi';
 import { setVisibleInterval } from '../../utils/visibleInterval';
@@ -38,7 +40,7 @@ const PORTAL = {
     forFriends: 'For me and my friends',
 };
 
-type Action = 'connect' | 'start' | 'takeOver' | 'stop' | 'pair' | 'disconnect';
+type Action = 'connect' | 'start' | 'takeOver' | 'stop' | 'restart' | 'forget' | 'pair' | 'disconnect';
 
 function errorText(err: unknown): string {
     if (err instanceof ApiError) return err.detail || err.message;
@@ -332,9 +334,22 @@ export function MessagingSettings() {
                         <div className="settings-row">
                             {s.bot_profile_url && <LinkButton href={s.bot_profile_url} primary>{t('settings.messaging.openInDiscord')}</LinkButton>}
                             <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('stop', stopDiscord)}>{spinner('stop')}{t('settings.messaging.stop')}</button>
+                            <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('restart', restartDiscord)}>{spinner('restart')}{t('settings.messaging.restart')}</button>
                             <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('pair', pairDiscordAgain)}>{spinner('pair')}{t('settings.messaging.pairOther')}</button>
                         </div>
                     </>
+                )}
+
+                {s.connected && (s.always_allowed?.length ?? 0) > 0 && (
+                    <div className="messaging-status">
+                        <p>{t('settings.messaging.alwaysAllowed')}</p>
+                        <ul className="settings-hint messaging-always-list">
+                            {s.always_allowed.map((label) => <li key={label}><bdi dir="auto">{label}</bdi></li>)}
+                        </ul>
+                        <div className="settings-row">
+                            <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('forget', forgetDiscordAlways)}>{spinner('forget')}{t('settings.messaging.forgetAlways')}</button>
+                        </div>
+                    </div>
                 )}
 
                 {actionError && <p className="settings-error" role="alert"><bdi dir="auto">{actionError}</bdi></p>}
