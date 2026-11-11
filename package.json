@@ -13,7 +13,7 @@
     "src/gaia/apps/*/webui"
   ],
   "devDependencies": {
-    "electron": "^45.0.0"
+    "electron": "^45.2.3"
   },
   "overrides": {
     "tar": ">=7.5.8",

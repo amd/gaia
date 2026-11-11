@@ -1032,7 +1032,6 @@ export const enMessages = {
     'setup.pc.step': 'This PC',
     'setup.pc.backend.installed': 'Installed',
     'setup.pc.backend.available': 'Downloads when needed',
-    'setup.pc.backend.unsupported': 'Not supported here',
     'setup.gpu.title': 'GPU memory',
     'setup.gpu.lede': 'Optional. GAIA changes nothing unless you pick a new size.',
     'setup.models.step': 'Models',
@@ -1522,7 +1521,6 @@ export const enMessages = {
     'engine.openLog': 'Open log file',
 
     // The GPU memory step and Settings section
-    'gpu.title': 'Give the GPU more memory',
     'gpu.settingsTitle': 'GPU memory',
     'gpu.body': 'This PC shares {total} between the processor (CPU) and graphics (GPU). The GPU has {gpu} now. AI models run on the GPU, so more here means bigger models.',
     'gpu.split.aria': 'Memory split: CPU {cpu}, GPU {gpu}',
@@ -2128,6 +2126,7 @@ export const enMessages = {
     'update.status.noChannel': 'No GAIA release publishes a desktop update for this platform yet.',
     'update.status.disabled': 'Updates are turned off for this install (GAIA_DISABLE_UPDATE=1).',
     'update.status.upToDate': 'GAIA is up to date.',
+    'update.status.readFailed': "Couldn't read the update status. Press Try again, or restart GAIA if it keeps happening.",
     'update.settings.title': 'Updates',
     'update.settings.running': 'Running GAIA {version}.',
     'update.settings.unknownVersion': 'unknown',
@@ -2141,6 +2140,7 @@ export const enMessages = {
     'update.settings.updateTo': 'Update to {version}',
     'update.settings.restart': 'Restart to install',
     'update.settings.check': 'Check for updates',
+    'update.settings.retryRead': 'Try again',
     'update.settings.pick': 'Install a specific version…',
     'update.settings.goBack': 'Go back to GAIA {version}',
     'update.settings.goBackHint': 'If this update causes problems, go back to the version you had before. Updates pause until you unpin it.',

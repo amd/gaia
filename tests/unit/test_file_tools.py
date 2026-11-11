@@ -1075,6 +1075,10 @@ class TestParseDateRange:
             ("Q1'98", ("1998-01", "1998-03")),
             ("first quarter 2025", ("2025-01", "2025-03")),
             ("4th quarter of 2024", ("2024-10", "2024-12")),
+            ("Quarter 3 2025", ("2025-07", "2025-09")),
+            ("Qtr 3 2025", ("2025-07", "2025-09")),
+            ("3Q 2025", ("2025-07", "2025-09")),
+            ("3Q25", ("2025-07", "2025-09")),
             ("2025", ("2025-01", "2025-12")),
             ("2025-03", ("2025-03", "2025-03")),
             ("2025-03-15", ("2025-03", "2025-03")),
@@ -1861,3 +1865,109 @@ class TestContentSearchFilePathAndText:
         result = _guarded_search(tmp_path, "needle")
         assert result["status"] == "success" and result["truncated"] is True
         assert result["files_searched"] < 5
+
+
+def _analyze_breakdowns(tmp_path, text):
+    f = tmp_path / "ledger.csv"
+    f.write_text(text, encoding="utf-8")
+    _StubMixin().register_file_search_tools()
+    return _TOOL_REGISTRY["analyze_data_file"]["function"](str(f), analysis_type="full")
+
+
+class TestAnalyzeDataFileBreakdownPeriods:
+    """Quarter cells are reported by quarter, never filed under a month (#7127)."""
+
+    def test_quarter_cells_go_to_their_quarter(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\nQ3 2025,-10\n2025-Q1,-5\nQ1'25,-2\n"
+        )
+
+        spending = result["spending_analysis"]
+        trends = result["trends_analysis"]
+        assert "monthly_breakdown" not in spending
+        assert spending["quarterly_breakdown"] == [
+            {"quarter": "2025-Q1", "net": -7, "spending": 7, "income": 0},
+            {"quarter": "2025-Q3", "net": -10, "spending": 10, "income": 0},
+        ]
+        assert "monthly" not in trends and "weekly" not in trends
+        assert [(q["period"], q["total"]) for q in trends["quarterly"]] == [
+            ("2025-Q1", -7),
+            ("2025-Q3", -10),
+        ]
+        assert "date_rows_unplaced" not in spending
+        assert "date_rows_unplaced" not in trends
+
+    def test_dates_and_quarters_are_kept_apart(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\n2025-03-15,-4\n2025-03-20,6\nQ1 2025,-1\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-03", "net": 2, "spending": 4, "income": 6}
+        ]
+        assert [q["quarter"] for q in spending["quarterly_breakdown"]] == ["2025-Q1"]
+        assert [m["period"] for m in result["trends_analysis"]["monthly"]] == [
+            "2025-03"
+        ]
+
+    def test_unplaceable_dates_are_counted(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\n2025-01-10,-3\nsoon,-1\n,-2\nQ2,-8\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-01", "net": -3, "spending": 3, "income": 0}
+        ]
+        assert "quarterly_breakdown" not in spending
+        assert spending["date_rows_unplaced"] == 3
+        assert result["trends_analysis"]["date_rows_unplaced"] == 3
+
+    @pytest.mark.parametrize(
+        "cell",
+        [
+            "Quarter 3 2025",
+            "Qtr 3 2025",
+            "Qtr. 3 2025",
+            "3Q 2025",
+            "3Q2025",
+            "3Q25",
+            "3Q'25",
+            "Q3/2025",
+            "2025/Q3",
+            "third quarter 2025",
+        ],
+    )
+    def test_quarter_spellings_go_to_their_quarter(self, tmp_path, cell):
+        result = _analyze_breakdowns(tmp_path, f"Date,Amount\n{cell},-10\n")
+
+        spending = result["spending_analysis"]
+        assert "monthly_breakdown" not in spending
+        assert spending["quarterly_breakdown"] == [
+            {"quarter": "2025-Q3", "net": -10, "spending": 10, "income": 0}
+        ]
+        assert [q["period"] for q in result["trends_analysis"]["quarterly"]] == [
+            "2025-Q3"
+        ]
+
+    @pytest.mark.parametrize("cell", ["Q3 FY25", "FY25 Q3", "Q3 25", "3Q", "2025"])
+    def test_ambiguous_periods_are_counted_not_misplaced(self, tmp_path, cell):
+        result = _analyze_breakdowns(
+            tmp_path, f"Date,Amount\n2025-01-10,-3\n{cell},-10\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-01", "net": -3, "spending": 3, "income": 0}
+        ]
+        assert "quarterly_breakdown" not in spending
+        assert spending["date_rows_unplaced"] == 1
+        assert result["trends_analysis"]["date_rows_unplaced"] == 1
+
+    def test_a_month_cell_has_no_week(self, tmp_path):
+        result = _analyze_breakdowns(tmp_path, "Date,Amount\n2025-03,-4\n")
+
+        trends = result["trends_analysis"]
+        assert [m["period"] for m in trends["monthly"]] == ["2025-03"]
+        assert "weekly" not in trends

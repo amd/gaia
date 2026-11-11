@@ -165,6 +165,90 @@ def test_asking_while_a_finished_index_is_recorded_does_not_index_again(
     assert not rag_tools._INDEX_JOBS.get(rag)
 
 
+class _StaleSet(set):
+    """A set whose next *stale* membership checks answer from before *finish* ran."""
+
+    finish = None
+    stale = 0
+    before = None
+
+    def __contains__(self, item):
+        if not self.stale:
+            return super().__contains__(item)
+        self.stale -= 1
+        if self.before is None:
+            self.before = set(self)
+            self.finish()
+        return item in self.before
+
+
+def test_an_index_finishing_right_after_the_guard_is_not_run_again(tmp_path, slow_rag):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    host = _RagHost(rag)
+    host.indexed_files = _StaleSet()
+    host.register_rag_tools()
+    assert _call("index_document", file_path=str(doc))["status"] == "in_progress"
+    (job,) = rag_tools._INDEX_JOBS[rag].values()
+
+    def finish_and_leave_the_map():
+        release.set()
+        deadline = time.monotonic() + CALL_DEADLINE_S
+        while job.ended is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert job.ended is not None
+
+    # The guard sees the file unindexed, then the job records it and ends.
+    host.indexed_files.finish = finish_and_leave_the_map
+    host.indexed_files.stale = 2  # the guard checks the path and its real path
+    done = _call("index_document", file_path=str(doc))
+
+    assert done["status"] == "success", done
+    assert rag.index_document.call_count == 1
+    assert str(doc) in host.indexed_files
+
+
+def test_a_reused_index_clears_its_unattended_attach_failure(tmp_path, slow_rag):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    asked = time.perf_counter()
+
+    def attach_fails(_result):
+        raise OSError("session store is read-only")
+
+    first, job = rag_tools._index_within_budget(
+        rag, str(doc), budget=0, on_indexed=attach_fails
+    )
+    assert first is None
+    release.set()
+    assert job.done.wait(CALL_DEADLINE_S)
+    assert rag_tools.documents_failed_indexing(rag)
+
+    reused, _ = rag_tools._index_within_budget(rag, str(doc), since=asked)
+
+    assert reused["success"]
+    assert rag.index_document.call_count == 1
+    assert rag_tools.documents_failed_indexing(rag) == []
+
+
+def test_an_index_that_ended_before_the_ask_does_not_count(tmp_path, slow_rag):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    release.set()
+    result, job = rag_tools._index_within_budget(rag, str(doc), budget=CALL_DEADLINE_S)
+    assert result["success"] and job.ended is not None
+
+    # The file changed after that index: asking now must index it again.
+    again, _ = rag_tools._index_within_budget(
+        rag, str(doc), budget=CALL_DEADLINE_S, since=time.perf_counter()
+    )
+    assert again["success"]
+    assert rag.index_document.call_count == 2
+
+
 def test_still_indexing_lists_a_document_only_until_it_is_searchable(
     tmp_path, slow_rag
 ):

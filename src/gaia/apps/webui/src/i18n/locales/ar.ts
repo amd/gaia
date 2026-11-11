@@ -1032,7 +1032,6 @@ const messages: Messages = {
     'setup.pc.step': 'هذا الجهاز',
     'setup.pc.backend.installed': 'مثبتة',
     'setup.pc.backend.available': 'تُنزَّل عند الحاجة',
-    'setup.pc.backend.unsupported': 'غير مدعومة هنا',
     'setup.gpu.title': 'ذاكرة GPU',
     'setup.gpu.lede': 'اختياري. لا يغيّر GAIA شيئًا ما لم تختر حجمًا جديدًا.',
     'setup.models.step': 'النماذج',
@@ -1522,7 +1521,6 @@ const messages: Messages = {
     'engine.openLog': 'فتح ملف السجل',
 
     // The GPU memory step and Settings section
-    'gpu.title': 'امنح GPU ذاكرة أكبر',
     'gpu.settingsTitle': 'ذاكرة GPU',
     'gpu.body': 'يتشارك هذا الجهاز {total} بين المعالج (CPU) والرسومات (GPU). لدى الـGPU الآن {gpu}. تعمل نماذج الذكاء الاصطناعي على الـGPU، لذا فالمزيد هنا يعني نماذج أكبر.',
     'gpu.split.aria': 'تقسيم الذاكرة: المعالج {cpu}، GPU {gpu}',
@@ -2129,6 +2127,7 @@ const messages: Messages = {
     'update.status.noChannel': 'لا يوجد بعد إصدار من GAIA ينشر تحديثًا لسطح المكتب على هذا النظام.',
     'update.status.disabled': 'التحديثات متوقفة في هذا التثبيت (GAIA_DISABLE_UPDATE=1).',
     'update.status.upToDate': 'GAIA محدّث.',
+    'update.status.readFailed': 'تعذّرت قراءة حالة التحديث. اضغط «إعادة المحاولة»، أو أعد تشغيل GAIA إذا تكرر ذلك.',
     'update.settings.title': 'التحديثات',
     'update.settings.running': 'الإصدار قيد التشغيل: \u2066GAIA {version}\u2069.',
     'update.settings.unknownVersion': 'غير معروف',
@@ -2142,6 +2141,7 @@ const messages: Messages = {
     'update.settings.updateTo': 'التحديث إلى {version}',
     'update.settings.restart': 'إعادة التشغيل للتثبيت',
     'update.settings.check': 'التحقق من التحديثات',
+    'update.settings.retryRead': 'إعادة المحاولة',
     'update.settings.pick': 'تثبيت إصدار محدد…',
     'update.settings.goBack': 'الرجوع إلى \u2066GAIA {version}\u2069',
     'update.settings.goBackHint': 'إذا سبّب هذا التحديث مشكلات، فارجع إلى الإصدار السابق. تتوقف التحديثات مؤقتًا حتى تلغي تثبيته.',

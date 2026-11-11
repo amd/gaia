@@ -447,76 +447,6 @@ button.setup-rail-step:hover {
     font-size: 14px;
 }
 
-.setup-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    list-style: none;
-}
-
-.setup-step {
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.setup-step-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.setup-step-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: 1px solid var(--border-light);
-    border-radius: var(--radius-full);
-    color: var(--text-muted);
-    font-size: 12px;
-    flex-shrink: 0;
-}
-
-.setup-step-label {
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-.setup-step-detail {
-    color: var(--text-muted);
-}
-
-.setup-step.is-current .setup-step-label,
-.setup-step.is-active .setup-step-label {
-    color: var(--text-primary);
-    font-weight: 600;
-}
-
-.setup-step.is-done .setup-step-num {
-    border-color: var(--accent-green);
-    color: var(--accent-green);
-}
-
-.setup-step.is-active .setup-step-num {
-    border-color: var(--accent-light);
-    color: var(--accent);
-}
-
-.setup-step.is-failed .setup-step-num,
-.setup-step.is-cancelled .setup-step-num {
-    border-color: var(--danger);
-    color: var(--danger);
-}
-
-.setup-step-body {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-block: 10px 4px;
-    margin-inline: 34px 0;
-}
-
 .setup-choices {
     display: flex;
     flex-direction: column;
@@ -703,45 +633,6 @@ button.setup-rail-step:hover {
     color: var(--text-primary);
 }
 
-.setup-check {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    list-style: none;
-}
-
-.setup-check-row {
-    display: grid;
-    grid-template-columns: 16px 64px 1fr;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-}
-
-.setup-check-row svg {
-    color: var(--text-muted);
-}
-
-.setup-check-row.is-ok svg {
-    color: var(--accent-green);
-}
-
-.setup-check-label {
-    color: var(--text-muted);
-}
-
-.setup-check-value {
-    color: var(--text-primary);
-    overflow-wrap: anywhere;
-}
-
-.setup-step-action {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 14px 0 4px;
-    list-style: none;
-}
 
 .setup-done-head {
     display: flex;
@@ -788,10 +679,6 @@ button.setup-rail-step:hover {
 
 .setup-report-button > span {
     min-inline-size: 0;
-}
-
-.setup-stepnav {
-    margin-top: 20px;
 }
 
 /* What setup found: the facts that decide setup, where things are kept, then the rest. */

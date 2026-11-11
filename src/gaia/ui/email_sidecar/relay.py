@@ -795,8 +795,13 @@ def relay_query(
                 # The user answered or the sidecar's wait ended. A last event
                 # needs no model, so the turn ends without waiting in line.
                 if event.get("type") not in ("final", "error"):
-                    handler.come_back_to_model()
-                    if handler.cancelled.is_set():
+                    retake = handler.come_back_to_model()
+                    if retake is not True:
+                        # ``False`` means the handler emitted the named fatal
+                        # retake error; ``None`` is an ordinary user Stop. Keep
+                        # those terminal paths distinct (#6019).
+                        if retake is False:
+                            terminated = True
                         break
             if _dispatch_one(
                 handler, event, profile, answers_confirmations, offers_always

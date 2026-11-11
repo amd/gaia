@@ -51,10 +51,11 @@ PHASES = [
     "upgrade",
     "launch",
     "health",
-    "engine",
     "setup",
     "preflight",
     "quit",
+    # After quit: the app's own Lemonade must not stand in for a fresh start.
+    "engine",
     "uninstall",
     "leftovers",
 ]

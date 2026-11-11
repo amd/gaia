@@ -5,11 +5,11 @@ Tests the agent's capabilities, long conversations, concurrency limits,
 and edge cases by interacting with the running UI server via HTTP.
 
 Usage:
-    uv run python tests/stress/test_agent_ui_stress.py
+    uv run python tests/stress/stress_agent_ui.py
 
 Requirements:
     - GAIA UI server running on http://localhost:4200
-    - Lemonade server running on http://localhost:8000
+    - Lemonade server running on http://localhost:13305
 """
 
 import asyncio

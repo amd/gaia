@@ -1200,7 +1200,7 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 // MCP server configuration moved to the connectors framework (#927):
 //   - Catalog tiles  → POST /api/connectors/{id}/configure
-//   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
+//   - Custom servers → an entry in ~/.gaia/mcp_servers.json; CLI and UI in #977
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
 

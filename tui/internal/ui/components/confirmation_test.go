@@ -610,8 +610,8 @@ func TestAgentRiskReplacesTheToolNameGuess(t *testing.T) {
 // An unknown risk word never softens the label.
 func TestUnknownRiskKeepsTheCautiousTier(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").WithRisk("harmless")
-	if m.Tier() != RiskDestructive {
-		t.Errorf("tier = %v, want the cautious default", m.Tier())
+	if m.tier != RiskDestructive {
+		t.Errorf("tier = %v, want the cautious default", m.tier)
 	}
 }
 
