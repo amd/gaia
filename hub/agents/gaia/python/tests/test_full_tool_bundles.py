@@ -125,6 +125,7 @@ def test_core_is_the_list_every_session_starts_on():
         "request_user_input",
         "run_python",
         "run_shell_command",
+        "schedule_follow_up",
         "search_file",
         "search_past_conversations",
         "search_tools",
