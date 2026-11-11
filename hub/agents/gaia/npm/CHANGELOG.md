@@ -14,6 +14,16 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Added
 
+- **The agent can change its own voice settings.** A new tool,
+  `set_voice_setting`, changes the voice, speed, volume, captions or wake
+  word when the user asks ("use a different voice", "speak slower"). It
+  refuses every other setting and tells the agent to point the user to
+  Settings. The registered tool count goes from 105 to 106.
+- **Spoken replies sound like talk.** A voice turn now asks for a short,
+  conversational spoken summary in English, tells the agent the words came
+  from speech recognition so it asks again instead of guessing at a
+  misheard request, and never has it tell the user to type a command.
+
 - **The agent can draft, reply, forward and send mail.** A new bundled skill,
   `send-email`, works on Gmail and Outlook through the mailbox the reading tools
   use. The agent loads it when asked to send, reply to, forward or draft an
