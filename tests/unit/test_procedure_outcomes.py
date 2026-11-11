@@ -53,7 +53,10 @@ def store(tmp_path):
     db.close()
 
 
-def _procedure(store, successes: int = 9, attempts: int = 9, **kw) -> str:
+def _procedure(
+    store, successes: int = 9, attempts: int = 9, sessions: int = 1, **kw
+) -> str:
+    """A procedure learned from *sessions* runs with these birth tool-call counts."""
     return store.put_skill(
         name=kw.pop("name", "triage-support-ticket"),
         when_to_use=kw.pop("when_to_use", "Triage an inbound support ticket."),
@@ -62,7 +65,11 @@ def _procedure(store, successes: int = 9, attempts: int = 9, **kw) -> str:
         success_count=successes,
         attempt_count=attempts,
         provenance=kw.pop(
-            "provenance", {"source": "synthesized", "from_sessions": ["s1"]}
+            "provenance",
+            {
+                "source": "synthesized",
+                "from_sessions": [f"s{i}" for i in range(1, sessions + 1)],
+            },
         ),
         **kw,
     )
@@ -82,18 +89,30 @@ def _enabled(store, skill_id) -> bool:
 class TestRecordSkillOutcome:
     def test_a_success_adds_one_to_both_counters(self, store):
         sid = _procedure(store)
-        assert store.record_skill_outcome([sid], success=True) == {sid: (10, 10, 1)}
+        assert store.record_skill_outcome([sid], success=True) == {
+            sid: (10, 10, 1, 1, 1)
+        }
         assert _record(store, sid) == (10, 10)
 
     def test_a_failure_adds_an_attempt_only(self, store):
         sid = _procedure(store)
-        assert store.record_skill_outcome([sid], success=False) == {sid: (9, 10, 1)}
+        assert store.record_skill_outcome([sid], success=False) == {
+            sid: (9, 10, 1, 0, 1)
+        }
         assert _record(store, sid) == (9, 10)
 
     def test_the_birth_record_is_kept_and_added_to(self, store):
         sid = _procedure(store, successes=4, attempts=5)
         store.record_skill_outcome([sid], success=True)
-        assert store.record_skill_outcome([sid], success=False) == {sid: (5, 7, 2)}
+        assert store.record_skill_outcome([sid], success=False) == {
+            sid: (5, 7, 2, 1, 1)
+        }
+
+    def test_the_record_names_the_sessions_it_was_learned_from(self, store):
+        sid = _procedure(store, sessions=3)
+        record = store.record_skill_outcome([sid], success=False)[sid]
+        assert (record.outcomes, record.outcome_successes) == (1, 0)
+        assert record.learned_from == 3
 
     def test_outcomes_since_learning_live_beside_the_provenance(self, store):
         sid = _procedure(store)
@@ -106,17 +125,20 @@ class TestRecordSkillOutcome:
             "source": "synthesized",
             "from_sessions": ["s1"],
             "outcomes": 1,
+            "outcome_successes": 1,
         }
 
     def test_a_row_without_provenance_starts_counting(self, store):
         sid = _procedure(store, provenance=None)
-        assert store.record_skill_outcome([sid], success=False) == {sid: (9, 10, 1)}
+        assert store.record_skill_outcome([sid], success=False) == {
+            sid: (9, 10, 1, 0, 0)
+        }
 
     def test_each_recalled_procedure_is_counted(self, store):
         first = _procedure(store)
         second = _procedure(store, name="label-a-ticket", when_to_use="Label it.")
         counts = store.record_skill_outcome([first, second], success=False)
-        assert counts == {first: (9, 10, 1), second: (9, 10, 1)}
+        assert counts == {first: (9, 10, 1, 0, 1), second: (9, 10, 1, 0, 1)}
 
     def test_a_procedure_listed_twice_is_counted_once(self, store):
         sid = _procedure(store)
@@ -126,7 +148,7 @@ class TestRecordSkillOutcome:
     def test_a_procedure_forgotten_since_recall_is_skipped(self, store):
         sid = _procedure(store)
         assert store.record_skill_outcome(["proc_gone", sid], success=True) == {
-            sid: (10, 10, 1)
+            sid: (10, 10, 1, 1, 1)
         }
 
     def test_nothing_is_written_after_an_erase(self, store):
@@ -328,16 +350,24 @@ class TestInContext:
 class TestDemotion:
     def test_a_new_procedure_survives_one_decline(self, host, store):
         """3/3 then one decline is 3/4, under the bar, but one outcome is not a record."""
-        sid = _procedure(store, successes=3, attempts=3)
+        sid = _procedure(store, successes=3, attempts=3, sessions=3)
         host.recall(sid)
         host.turn(False)
         assert _record(store, sid) == (3, 4)
         assert _enabled(store, sid)
 
+    def test_birth_tool_calls_do_not_outweigh_three_declines(self, host, store):
+        """Three runs of five calls each: three declines retire it, as for 3/3."""
+        sid = _procedure(store, successes=15, attempts=15, sessions=3)
+        host.recall(sid)
+        for _ in range(MIN_OUTCOMES_TO_RETIRE):
+            host.turn(False)
+        assert not _enabled(store, sid)
+
     def test_a_new_procedure_declined_three_times_is_disabled(
         self, host, store, caplog
     ):
-        sid = _procedure(store, successes=3, attempts=3)
+        sid = _procedure(store, successes=3, attempts=3, sessions=3)
         host.recall(sid)
         with caplog.at_level(logging.WARNING, logger="gaia.agents.base"):
             for _ in range(MIN_OUTCOMES_TO_RETIRE - 1):
@@ -349,7 +379,7 @@ class TestDemotion:
         assert any("disabled" in r.getMessage() for r in caplog.records)
 
     def test_a_proven_procedure_survives_one_decline(self, host, store):
-        sid = _procedure(store, successes=9, attempts=9)
+        sid = _procedure(store, successes=9, attempts=9, sessions=9)
         host.recall(sid)
         host.turn(False)
         assert _record(store, sid) == (9, 10)
@@ -358,7 +388,7 @@ class TestDemotion:
     def test_a_proven_procedure_is_disabled_once_it_falls_below_the_bar(
         self, host, store
     ):
-        sid = _procedure(store, successes=9, attempts=9)
+        sid = _procedure(store, successes=9, attempts=9, sessions=9)
         host.recall(sid)
         declines = 0
         while _enabled(store, sid):
@@ -371,7 +401,7 @@ class TestDemotion:
         assert declines == 3
 
     def test_approvals_after_learning_count_toward_the_floor(self, host, store):
-        sid = _procedure(store, successes=3, attempts=3)
+        sid = _procedure(store, successes=3, attempts=3, sessions=3)
         host.recall(sid)
         host.turn(True)
         host.turn(True)
@@ -386,9 +416,14 @@ class TestDemotion:
         assert _enabled(store, sid)
 
     def test_only_the_failing_procedure_is_disabled(self, host, store):
-        weak = _procedure(store, successes=8, attempts=10)
+        weak = _procedure(store, successes=8, attempts=10, sessions=3)
         strong = _procedure(
-            store, successes=40, attempts=40, name="label-it", when_to_use="Label."
+            store,
+            successes=40,
+            attempts=40,
+            sessions=40,
+            name="label-it",
+            when_to_use="Label.",
         )
         host.recall(weak, strong)
         for _ in range(MIN_OUTCOMES_TO_RETIRE):

@@ -39,6 +39,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    NamedTuple,
     Optional,
     Sequence,
     Tuple,
@@ -50,6 +51,22 @@ from uuid import uuid4
 from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
+
+
+class SkillOutcomeRecord(NamedTuple):
+    """A procedure's record after ``MemoryStore.record_skill_outcome``.
+
+    ``success_count`` / ``attempt_count`` are the row's totals: birth counts in
+    tool calls plus one per outcome.  ``outcomes`` / ``outcome_successes`` count
+    turns since the lineage was learned, and ``learned_from`` the sessions it
+    was distilled from — the two numbers in the same unit.
+    """
+
+    success_count: int
+    attempt_count: int
+    outcomes: int
+    outcome_successes: int
+    learned_from: int
 
 
 # ============================================================================
@@ -3985,12 +4002,13 @@ class MemoryStore:
         success: bool,
         *,
         erase_count: int | None = None,
-    ) -> dict[str, tuple[int, int, int]]:
+    ) -> dict[str, SkillOutcomeRecord]:
         """Count one outcome on each procedure that was in context for it.
 
         Adds one to ``attempt_count``, and to ``success_count`` when *success*,
         on top of the counts the row was born with, and one to
-        ``provenance.outcomes``, the outcomes recorded since it was learned.
+        ``provenance.outcomes`` (and ``provenance.outcome_successes`` when
+        *success*), the outcomes recorded since it was learned.
         What makes an outcome is the caller's definition
         (``ProceduralMemoryMixin._record_procedure_outcome``).
 
@@ -4001,9 +4019,8 @@ class MemoryStore:
                 was erased since, nothing is written.
 
         Returns:
-            ``{skill_id: (success_count, attempt_count, outcomes)}`` after the
-            update, for the ids that still exist (one forgotten since recall is
-            skipped).
+            ``{skill_id: SkillOutcomeRecord}`` after the update, for the ids
+            that still exist (one forgotten since recall is skipped).
         """
         ids = list(dict.fromkeys(skill_ids))
         if not ids:
@@ -4020,22 +4037,27 @@ class MemoryStore:
                 self._conn.execute(
                     "UPDATE procedures SET attempt_count = attempt_count + 1, "
                     "success_count = success_count + ?, "
-                    "provenance = json_set(COALESCE(provenance, '{}'), '$.outcomes', "
-                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1) "
+                    "provenance = json_set(COALESCE(provenance, '{}'), "
+                    "'$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1, "
+                    "'$.outcome_successes', "
+                    "COALESCE(json_extract(provenance, '$.outcome_successes'), 0) + ?) "
                     f"WHERE id IN ({placeholders})",
-                    (int(bool(success)), *ids),
+                    (int(bool(success)), int(bool(success)), *ids),
                 )
                 rows = self._conn.execute(
                     "SELECT id, success_count, attempt_count, "
-                    "json_extract(provenance, '$.outcomes') FROM procedures "
-                    f"WHERE id IN ({placeholders})",
+                    "json_extract(provenance, '$.outcomes'), "
+                    "json_extract(provenance, '$.outcome_successes'), "
+                    "COALESCE(json_array_length(provenance, '$.from_sessions'), 0) "
+                    f"FROM procedures WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
-        return {row[0]: (int(row[1]), int(row[2]), int(row[3])) for row in rows}
+        return {row[0]: SkillOutcomeRecord(*(int(v) for v in row[1:])) for row in rows}
 
     def disable_skill(self, skill_id: str) -> bool:
         """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
@@ -4384,8 +4406,11 @@ class MemoryStore:
         Returns:
             A list of dicts, oldest session first, each shaped
             ``{session_id, goal, tools, tool_sequence, success_count,
-            attempt_count, started_at, last_at}``.  ``goal`` is None when the
-            session has no user turn.
+            attempt_count, declined_count, started_at, last_at}``.  ``goal`` is
+            None when the session has no user turn.  ``declined_count`` counts
+            the calls in the window denied before they ran (a declined or
+            unanswered prompt, or an effect declined earlier in the request);
+            they are in neither count.
         """
         sql = """
             WITH eligible AS (
@@ -4395,11 +4420,21 @@ class MemoryStore:
                   AND executed = 1
                 GROUP BY session_id
                 HAVING SUM(success) >= :min_steps
+            ),
+            declined AS (
+                SELECT session_id, COUNT(*) AS n
+                FROM tool_history
+                WHERE (:since IS NULL OR timestamp > :since)
+                  AND executed = 0
+                  AND (result_summary LIKE '%"status": "denied%'
+                       OR result_summary LIKE '%''status'': ''denied''%')
+                GROUP BY session_id
             )
             SELECT th.session_id, th.tool_name, th.args, th.success, th.timestamp,
-                   g.content AS goal
+                   g.content AS goal, COALESCE(d.n, 0) AS declined
             FROM tool_history th
             JOIN eligible e ON e.session_id = th.session_id
+            LEFT JOIN declined d ON d.session_id = th.session_id
             LEFT JOIN (
                 SELECT session_id, content
                 FROM conversations
@@ -4422,7 +4457,7 @@ class MemoryStore:
         # pass is cheap (no further DB reads).
         sessions: Dict[str, Dict] = {}
         order: List[str] = []
-        for session_id, tool_name, args, success, timestamp, goal in rows:
+        for session_id, tool_name, args, success, timestamp, goal, declined in rows:
             sess = sessions.get(session_id)
             if sess is None:
                 sess = {
@@ -4432,6 +4467,7 @@ class MemoryStore:
                     "tool_sequence": [],
                     "success_count": 0,
                     "attempt_count": 0,
+                    "declined_count": int(declined),
                     "started_at": timestamp,
                     "last_at": timestamp,
                 }

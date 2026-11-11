@@ -250,15 +250,25 @@ an *empirical* outcome for procedures:
   Consoles report an answered prompt through `note_prompt_answered`; one that never
   reports it records nothing.
 - **A procedure is kept only while it clears the bar it was learned at,** judged once
-  it has a record of its own. After `MIN_OUTCOMES_TO_RETIRE` (3) outcomes since it
-  was learned (`provenance.outcomes`), a failure that takes
-  `success_count / attempt_count` below `MIN_SUCCESS_RATE` disables the row
-  (`enabled = 0`), logged at WARNING. So a 3/3 procedure survives one decline (3/4)
-  and is retired after three (3/6). It is no longer recalled, and since reconcile
-  matches only enabled rows, the next qualifying cluster for the goal is stored
-  fresh instead of folding into it. The row is kept, not deleted.
-- Existing rows keep their birth counts; outcomes add to them, and no migration
-  rewrites them.
+  it has a record of its own and counted in runs, not tool calls: each session it was
+  learned from (`provenance.from_sessions`) is one success, each outcome one attempt
+  (`provenance.outcomes`, `provenance.outcome_successes`). After
+  `MIN_OUTCOMES_TO_RETIRE` (3) outcomes since it was learned, a failure that takes
+  that rate below `MIN_SUCCESS_RATE` disables the row (`enabled = 0`), logged at
+  WARNING. So a procedure learned from three runs survives one decline (3/4) and is
+  retired after three (3/6), however many tool calls those runs made. It is no longer
+  recalled, and since reconcile matches only enabled rows, the next qualifying
+  cluster for the goal is stored fresh instead of folding into it. The row is kept,
+  not deleted.
+- **A run where a step was declined is not learned from.** The declined call never
+  ran, so the rest of the run would look like a clean success; synthesis marks such
+  a session `unusable` instead of clustering it. Otherwise runs that refused a
+  procedure's step would relearn it without that step and supersede it.
+- **A supersede keeps the record.** The successor row carries the prior row's
+  `outcomes` and `outcome_successes`, so re-synthesis does not reset the count a
+  retirement is judged on.
+- Existing rows keep their birth counts; outcomes add to `success_count` /
+  `attempt_count`, and no migration rewrites them.
 
 ### Thresholds
 
