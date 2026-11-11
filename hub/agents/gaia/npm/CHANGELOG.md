@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
+
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

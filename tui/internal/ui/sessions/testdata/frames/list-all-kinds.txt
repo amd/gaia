@@ -1,0 +1,14 @@
+
+  Sessions
+  Every kind, eval and scheduled runs included.
+
+  › ! waiting on you    Morning briefing               open in another window · scheduled · 5m ago
+    ! waiting on you    Clean up ~/Downloads and archive old in…  open in another window · 12m ago
+    ● running           Draft the release notes for v0.25.0                this session · just now
+    ✓ done              Nightly eval: rag_quality                                    eval · 1h ago
+    ✓ done              Summarise the Q3 board pack into five bullets                       3h ago
+    ✗ failed            Triage my inbox                                                     1d ago
+    ✗ stopped mid-turn  Find every contract that renews in November                         2d ago
+
+  ↑/↓ choose · enter reopen · a all kinds · r refresh · esc close
+
