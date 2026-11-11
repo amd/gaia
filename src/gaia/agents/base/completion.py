@@ -507,6 +507,9 @@ class CompletionEvidence:
         self.compared: dict[str, int] = {}
         # key -> the path as the write tool reported it, for showing the user.
         self.written_as: dict[str, str] = {}
+        # Backups write tools made before changing a file: keys and file names.
+        self.backups: set[str] = set()
+        self.backup_names: set[str] = set()
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -654,6 +657,10 @@ class CompletionEvidence:
                         by_script=tool in _EXEC_TOOLS,
                     )
         data = _payload(result)
+        backup = data.get("backup_path")
+        if tool in WRITE_TOOLS and isinstance(backup, str) and "\x00" not in backup:
+            self.backups.add(self.key(backup))
+            self.backup_names.add(os.path.normcase(ntpath.basename(backup)))
         paths = []
         if tool in WRITE_TOOLS:
             path = (
@@ -936,7 +943,11 @@ class CompletionEvidence:
             sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
             if not claims_file_write(sentence):
                 continue
-            paths = destination_paths(sentence)
+            named = destination_paths(sentence)
+            # A write tool's own backup is its by-product, not a claimed output.
+            paths = [path for path in named if not self._is_backup(path)]
+            if named and not paths:
+                continue
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(
@@ -1069,6 +1080,16 @@ class CompletionEvidence:
                     f"`{item.path}` has not been read back completely after its latest write."
                 )
         return gaps
+
+    def _is_backup(self, path: str) -> bool:
+        """Whether *path* names a backup a write tool reported this turn.
+
+        By file name too: answers shorten the backup folder ("backups\\...\\").
+        """
+        return (
+            self.key(path) in self.backups
+            or os.path.normcase(ntpath.basename(path)) in self.backup_names
+        )
 
     def _large_and_checked(self, item: FileEvidence) -> bool:
         """A large script output shown in part counts; a small one is read whole."""
