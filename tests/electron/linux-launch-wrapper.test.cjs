@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { launchWrapper, X11_OPENED_BY_NAME, HELP_URL } = require("../../installer/scripts/linux-launch-wrapper.cjs");
+const { launchWrapper, X11_OPENED_BY_NAME, HELP_URL } = require("../../src/gaia/apps/webui/scripts/linux-launch-wrapper.cjs");
 
 const REAL = ".gaia-desktop-bin";
 const onPosix = process.platform !== "win32";
@@ -124,7 +124,7 @@ suite("the Linux launch wrapper", () => {
 });
 
 test("after-pack.cjs writes this wrapper", () => {
-  const afterPack = fs.readFileSync(path.join(__dirname, "../../installer/scripts/after-pack.cjs"), "utf8");
+  const afterPack = fs.readFileSync(path.join(__dirname, "../../src/gaia/apps/webui/scripts/after-pack.cjs"), "utf8");
   expect(afterPack).toContain("launchWrapper(realBinaryName)");
   expect(launchWrapper(REAL)).toMatch(/^#!\/bin\/sh\n/);
   expect(launchWrapper(REAL)).toContain(`exec "$bin" --no-sandbox "$@"`);
