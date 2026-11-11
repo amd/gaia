@@ -157,18 +157,24 @@ Phase 6, for every confirmed finding, unless the user said report-only.
 
 1. **Group by root cause.** Two symptoms of one cause are one finding. Rank them: a bug
    that blocks a user (setup stops, no way forward) comes first.
-2. **File one issue per root cause** on `amd/gaia`. Search first
+2. **Show the user the list (titles and severity) and get one go-ahead** for filing the
+   issues and for the fix sessions to push branches and open PRs. Both are public, and
+   CLAUDE.md never lets a session push without the user's say-so.
+3. **File one issue per root cause** on `amd/gaia`. Search first
    (`gh issue list -R amd/gaia --state all --search "<2-3 key terms>"`); if one matches,
    comment there instead. Write it per [Filing issues](../../../CLAUDE.md#filing-issues)
    and the `github-issue-response` skill: what the user sees, the repro from the cold
    state, the evidence (log lines, screenshot), the ref it was found on. A security
    finding never gets a public issue: use the private advisory path in CLAUDE.md.
-3. **Start one fix session per issue, in parallel**, each in its own worktree
-   (`start_session`, `use_worktree: true`). The brief names the issue, the repro, the
+4. **Start one fix session per issue, in parallel**, each in its own worktree
+   (`start_session`, `use_worktree: true`). An issue filed with the `bug` label also
+   starts the repo's auto-fix workflow (`gh pr list -R amd/gaia --search "autofix/issue-<N> in:head"`):
+   leave that issue to its draft, or fix it here and say so on the draft, never both
+   silently. The brief names the issue, the repro, the
    evidence path on this machine, and what done looks like. Done means: a test that fails
    before the fix, the fix, the repro passing, and a PR that says `Closes #N`. Sessions
    that would touch the same files run one after another, not in parallel.
-4. **Code and unit tests run in parallel; anything that loads a model takes turns.**
+5. **Code and unit tests run in parallel; anything that loads a model takes turns.**
    One Lemonade and one GPU serve the whole machine. Two sessions reproducing at once
    evict each other's models and both results are wrong. So each session wraps every
    repro, real-world check and eval that loads a model in the machine's lock:
@@ -180,13 +186,13 @@ Phase 6, for every confirmed finding, unless the user said report-only.
    It waits for whoever holds the lock (including a `gaia eval` from another session),
    then runs the command alone. Never set `GAIA_EVAL_NO_LOCK` yourself to skip the queue.
    Unit tests, lint and code review need no turn.
-5. **Each session proves its own fix the way this skill does.** That means the repro
+6. **Each session proves its own fix the way this skill does.** That means the repro
    from the user's cold state, and evidence matched to the surface (an Agent UI
    screenshot for a UI bug). When the bug sits in a packaged artifact (the frozen
    `gaia`, an installer), the proof runs on that artifact, never on a source checkout.
-6. **Close the gap that let it through.** Each fix PR also adds or changes the test or
+7. **Close the gap that let it through.** Each fix PR also adds or changes the test or
    CI step that would have caught it, and the PR says which one.
-7. **Track them here.** List each issue, its session and its PR in this run's report.
+8. **Track them here.** List each issue, its session and its PR in this run's report.
    When the sessions finish, check each PR's diff and evidence yourself: a session's
    report is a claim. The run is done when every finding has a merged fix, or an open PR
    the user knows about.
