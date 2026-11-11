@@ -71,6 +71,8 @@ JUDGE_CREDENTIALS = (
     "ANTHROPIC_API_KEY",
 )
 SERVE_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "gaia" / "serve_fixtures.py"
+#: Staging builds git fixtures and signs a hub; minutes on a slow box, never this long.
+STAGE_TIMEOUT_S = 1800
 MCP_STUB = "tests/fixtures/gaia/mcp_stub/stage_mcp_stub.py"
 #: Modules whose origin proves which checkout the backend and eval run.
 ANCHOR_MODULES = ("gaia", "gaia_agent")
@@ -244,6 +246,7 @@ def stage_fixtures(stage_home: Path, staged_home: Path, env: dict) -> None:
         cwd=REPO_ROOT,
         env=env,
         check=True,
+        timeout=STAGE_TIMEOUT_S,
     )
 
 
