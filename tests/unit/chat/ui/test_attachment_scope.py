@@ -130,6 +130,11 @@ def test_a_relayed_sidecar_is_sent_documents_but_not_images(home):
     ]
 
 
+def test_a_relayed_sidecar_is_not_sent_recordings_to_index(home):
+    attached = [str(home / "talk.wav"), str(home / "clip.MP4"), str(home / "a.pdf")]
+    assert _relayed_documents([], attached) == [str(home / "a.pdf")]
+
+
 # --- the chat turn itself grants it (cached agent, both transports) ----------
 
 

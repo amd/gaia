@@ -1959,16 +1959,18 @@ def _with_attachments(allowed: list, attached: list) -> list:
 def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     """Documents a relayed sidecar should grant: its only way to grant a file.
 
-    Images are left out: the sidecar indexes what it is sent, and an image is
-    read by vision, not indexed.
+    Images and recordings are left out: the sidecar indexes what it is sent,
+    and an image is read by vision and a recording transcribed, not indexed.
     """
+    from gaia.audio.media import MEDIA_EXTENSIONS
+
     from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
+    not_indexed = PREVIEWABLE_IMAGE_EXTENSIONS | MEDIA_EXTENSIONS
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths
-        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
+        if p not in rag_file_paths and Path(p).suffix.lower() not in not_indexed
     ]
     return list(rag_file_paths) + extra
 
