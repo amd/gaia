@@ -579,6 +579,25 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
 
 
+def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
+    flm_box, monkeypatch
+):
+    fake = flm_box()
+    listed = fake.list_models
+    cloud = {
+        "id": "fireworks.deepseek-v4p1-flash",
+        "downloaded": True,
+        "recipe": "cloud",
+        "labels": ["chat", "cloud"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [cloud]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert FLM in ids
+    assert cloud["id"] not in ids
+
+
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     flm_box()
     plan = sp.build_plan()
