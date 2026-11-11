@@ -753,6 +753,43 @@ def test_a_failed_cloud_restore_is_checked_again_and_clears(client, lemonade, ke
     assert again["model"] == model
 
 
+def test_restore_waits_while_lemonade_is_still_listing_the_key_s_models(
+    client, lemonade, keys, db, monkeypatch
+):
+    """Lemonade holds a key for about half a second before it has listed the models."""
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    keys["ensure_result"] = False
+    clock = {"now": 100.0}
+    monkeypatch.setattr(providers.time, "monotonic", lambda: clock["now"])
+
+    first = client.get("/api/providers/active").json()
+    assert first["restore"] == {"status": "pending", "message": None}
+
+    lemonade.cloud["fireworks"]["models_discovered"] = True
+    keys["ensure_result"] = True
+    second = client.get("/api/providers/active").json()
+    assert second["restore"]["status"] == "restored", second["restore"]
+
+
+def test_restore_stops_waiting_for_a_key_that_never_lists_models(
+    client, lemonade, keys, db, monkeypatch
+):
+    _write_config({"last_model": "fireworks.glm-5p3-flash"})
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    keys["ensure_result"] = False
+    clock = {"now": 100.0}
+    monkeypatch.setattr(providers.time, "monotonic", lambda: clock["now"])
+    assert client.get("/api/providers/active").json()["restore"]["status"] == "pending"
+
+    clock["now"] += providers.KEY_SETTLE_SECONDS + 1
+    late = client.get("/api/providers/active").json()["restore"]
+    assert late["status"] == "failed"
+    assert "Fireworks AI has no working key" in late["message"]
+
+
 def test_a_failed_local_restore_is_not_checked_again(client, lemonade, keys, db):
     _write_config({"last_model": "Llama-3-8B-GGUF"})
     lemonade.models = _CATALOG
