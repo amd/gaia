@@ -3782,6 +3782,10 @@ class LoadedModelMissingError(LemonadeClientError):
     """A load returned, but ``/health`` does not list the model it loaded."""
 
 
+class ContextReloadUnverifiedError(LemonadeClientError):
+    """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
+
+
 class UsersServerUnchangedError(LemonadeClientError):
     """A request would change the setup of the user's own Lemonade Server.
 

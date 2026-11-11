@@ -1760,11 +1760,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(
+                            # Not waited on: xdg-open can run the viewer itself.
+                            subprocess.Popen(
                                 ["xdg-open", str(path)],
                                 env=child_env(),
-                                check=False,
-                                timeout=30,
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True,
                             )
                 except (KeyboardInterrupt, EOFError):
                     pass  # User cancelled
@@ -1784,11 +1785,12 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                         elif sys.platform == "darwin":
                             subprocess.run(["open", str(path)], check=False)
                         else:
-                            subprocess.run(
+                            # Not waited on: xdg-open can run the viewer itself.
+                            subprocess.Popen(
                                 ["xdg-open", str(path)],
                                 env=child_env(),
-                                check=False,
-                                timeout=30,
+                                stdin=subprocess.DEVNULL,
+                                start_new_session=True,
                             )
                 except (KeyboardInterrupt, EOFError):
                     pass
