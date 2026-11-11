@@ -440,7 +440,12 @@ def test_history_is_budgeted_against_the_tools_the_agent_reserves(monkeypatch):
     monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
     agent = _budget_agent()
     plain = history.history_budget(agent, "next question")
-    agent._history_tool_schemas = lambda: [{"name": "tool"}] * 200
+
+    class _Reserving(type(agent)):
+        def _history_tool_schemas(self):
+            return [{"name": "tool"}] * 200
+
+    agent = _Reserving(**vars(agent))
 
     assert history.history_budget(agent, "next question") < plain - 500
 
