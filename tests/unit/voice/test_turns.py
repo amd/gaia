@@ -85,6 +85,19 @@ def test_a_hold_that_runs_out_sends_what_was_said():
     assert t.timeout().turn is None  # nothing left
 
 
+def test_um_and_then_nothing_is_not_a_turn():
+    t = TurnTaker()
+    assert t.final("um", speaking=False).turn is None
+    assert t.timeout().turn is None
+    assert t.final("Check my email.", speaking=False).turn == "Check my email."
+
+
+def test_um_followed_by_words_keeps_them():
+    t = TurnTaker()
+    t.final("Um,", speaking=False)
+    assert t.final("check my email.", speaking=False).turn == "Um, check my email."
+
+
 def test_a_sound_ducks_and_words_interrupt():
     t = TurnTaker()
     d = t.speech_started(speaking=True)

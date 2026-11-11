@@ -62,7 +62,7 @@ vi.mock('../../services/voiceApi', () => ({
     downloadVoiceModel: vi.fn(async (model: string) => ({ model, downloaded: true })),
 }));
 
-import { afterStopWord, closeVoice, imageIn, openVoice, primaryAction, type VoiceHost } from '../controller';
+import { afterName, afterStopWord, asksForQuiet, closeVoice, imageIn, openVoice, primaryAction, type VoiceHost } from '../controller';
 
 const state = () => useVoiceStore.getState();
 const socket = () => fx.sockets[fx.sockets.length - 1];
@@ -324,6 +324,42 @@ describe('voice mode turn loop', () => {
         tap!.done({ type: 'done' } as StreamEvent);
         expect(h.sendTurn).toHaveBeenCalledTimes(2);
         expect(h.sendTurn.mock.calls[1][0]).toBe('she is making a picture for you');
+    });
+
+    it('"we are not talking to you" quiets GAIA until someone says her name', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: "Don't respond, we're talking to each other, okay?" });
+        expect(h.sendTurn).not.toHaveBeenCalled();
+        expect(state().standby).toBe(true);
+        expect(socket().speak).toHaveBeenLastCalledWith("Okay. Say 'Hey GAIA' when you want me.", 'status');
+        serve({ type: 'final', text: 'I see the vision, this is impressive.' });
+        serve({ type: 'final', text: 'Thank you.' });
+        expect(h.sendTurn).not.toHaveBeenCalled();
+        expect(state().log.filter((r) => r.kind === 'user')).toHaveLength(1);
+        serve({ type: 'final', text: 'Hey, Gaia. Can you change your voice?' });
+        expect(state().standby).toBe(false);
+        expect(h.sendTurn).toHaveBeenCalledWith('Can you change your voice?', expect.anything());
+    });
+
+    it('her name alone wakes her and she says she is listening', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'Be quiet for a minute.' });
+        serve({ type: 'final', text: 'Hey Gaia.' });
+        expect(state().standby).toBe(false);
+        expect(socket().speak).toHaveBeenLastCalledWith("I'm listening.", 'status');
+        expect(h.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it('tells a request for quiet from ordinary talk', () => {
+        expect(asksForQuiet("We're not talking to you.")).toBe(true);
+        expect(asksForQuiet('Just avoid speaking.')).toBe(true);
+        expect(asksForQuiet('Stop listening.')).toBe(true);
+        expect(asksForQuiet('Did Anna respond to my email?')).toBe(false);
+        expect(asksForQuiet('Stop the music.')).toBe(false);
+        expect(afterName('okay Gaia, what time is it')).toBe('what time is it');
+        expect(afterName('what a gala')).toBeNull();
     });
 
     it('a bare "stop" only stops', async () => {

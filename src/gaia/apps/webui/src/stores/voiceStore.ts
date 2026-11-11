@@ -44,6 +44,8 @@ export interface VoiceState {
     downloading: string | null;
     downloadError: string | null;
     captions: boolean;
+    /** Asked to stay quiet: nothing is sent until someone says "Hey GAIA". */
+    standby: boolean;
     /** Your words, live while `heardPartial`. */
     heard: string;
     heardPartial: boolean;
@@ -68,6 +70,7 @@ export const VOICE_IDLE: VoiceState = {
     downloadError: null,
     captions: true,
     heard: '',
+    standby: false,
     heardPartial: false,
     caption: null,
     log: [],
