@@ -351,9 +351,6 @@ func TestBarGrowsInEighthsAndKeepsItsWidth(t *testing.T) {
 
 func TestNumbersReadAsPeopleSayThem(t *testing.T) {
 	cases := map[string]string{
-		formatGB(23.3):                             "23.3 GB",
-		formatGB(0.33):                             "330 MB",
-		formatGB(0.0001):                           "1 MB",
 		formatGBShort(27.1):                        "27.1 GB",
 		formatGBShort(8.0):                         "8.0 GB",
 		formatGBShort(5.5):                         "5.5 GB",

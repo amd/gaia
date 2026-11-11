@@ -272,8 +272,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release `
                 -DGAIA_BUILD_INTEGRATION_TESTS=ON `
                 -DGAIA_BUILD_TESTS=OFF `
-                -DGAIA_BUILD_EXAMPLES=OFF `
-                -DGAIA_ENABLE_SSL=OFF
+                -DGAIA_BUILD_EXAMPLES=OFF
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
