@@ -514,6 +514,22 @@ def _probe_ok(probe: str) -> None:
     _last_probe_warning.pop(probe, None)
 
 
+def _catalog_entries(body: Any) -> List[Dict[str, Any]]:
+    """The model entries of a Lemonade ``/models`` answer.
+
+    Raises:
+        ValueError: The answer is not a list of model objects.
+    """
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list) or not all(isinstance(m, dict) for m in data):
+        raise ValueError(
+            "Lemonade's model list came back in an unexpected shape (it answers, "
+            "but not with a list of models). Check that the model server URL in "
+            "Settings > Advanced > Model server points at Lemonade."
+        )
+    return data
+
+
 def _loaded_chat_entry(
     health: Dict[str, Any],
     loaded: List[Dict[str, Any]],
@@ -636,14 +652,27 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
                 # Catalog for size and labels; its ctx_size is the saved option,
                 # not the loaded window.
-                models_resp = await client.get(f"{base_url}/models", headers=_auth)
-                if models_resp.status_code == 200:
-                    for m in models_resp.json().get("data", []):
-                        if m.get("id") == status.model_loaded:
-                            status.model_size_gb = m.get("size")
-                            status.model_labels = m.get("labels")
-                        if "embed" in m.get("id", "").lower():
-                            status.embedding_model_loaded = True
+                try:
+                    models_resp = await client.get(f"{base_url}/models", headers=_auth)
+                    if models_resp.status_code == 200:
+                        for m in _catalog_entries(models_resp.json()):
+                            if m.get("id") == status.model_loaded:
+                                status.model_size_gb = m.get("size")
+                                status.model_labels = m.get("labels")
+                            if "embed" in (m.get("id") or "").lower():
+                                status.embedding_model_loaded = True
+                        _probe_ok("models")
+                    else:
+                        _probe_failed(
+                            status,
+                            "models",
+                            "Could not read Lemonade's model list: it returned "
+                            f"HTTP {models_resp.status_code}.",
+                        )
+                except probe_errors as exc:
+                    _probe_failed(
+                        status, "models", f"Could not read Lemonade's model list: {exc}"
+                    )
 
                 # Validate that the loaded model matches what GAIA Chat (or any
                 # registered agent) expects. A custom_model override wins over
@@ -702,8 +731,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             )
                         else:
                             default_lower = _norm_model_id(_target)
-                            for m in catalog_resp.json().get("data", []):
-                                if _norm_model_id(m.get("id", "")) == default_lower:
+                            for m in _catalog_entries(catalog_resp.json()):
+                                if _norm_model_id(m.get("id") or "") == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
                                     # Capture the catalog size so the
                                     # "not downloaded" banner can show an

@@ -1024,6 +1024,41 @@ class TestSystemStatus:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_httpx_cls.return_value = mock_client
 
+    @pytest.mark.parametrize("data", ["x", ["x"], {"id": "a"}])
+    @patch("httpx.AsyncClient")
+    def test_a_malformed_model_list_is_named_not_reported_as_down(
+        self, mock_httpx_cls, client, data
+    ):
+        """#7219: /health answers and chats work; only /models is malformed."""
+        mock_client = AsyncMock()
+
+        async def mock_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/health" in url:
+                resp.json.return_value = {"status": "ok", "all_models_loaded": []}
+            elif "/models" in url:
+                resp.json.return_value = {"object": "list", "data": data}
+            else:
+                resp.json.return_value = {}
+            return resp
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        status = client.get("/api/system/status").json()
+
+        assert status["lemonade_running"] is True
+        assert status["lemonade_probe"] == "ok"
+        assert status["lemonade_error"] is None
+        assert any(
+            "model list came back in an unexpected shape" in w
+            for w in status["probe_warnings"]
+        )
+        assert not any("gaia init" in w for w in status["probe_warnings"])
+
     _EMBEDDER = {
         "model_name": "nomic-embed-text-v2-moe-GGUF",
         "type": "embedding",
