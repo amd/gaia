@@ -20,17 +20,10 @@
 }
 
 /* ── Step enter ─────────────────────────────────────────────────── */
-.setup-step.is-current > .setup-step-body,
-.setup-step.is-active > .setup-step-body {
-    animation: setupStepIn var(--duration) var(--ease);
-}
-
 @keyframes setupStepIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
-
-.setup-step.is-pending .setup-step-label { color: var(--text-muted); }
 
 .setup-nav { justify-content: flex-end; margin-block-start: 4px; }
 
@@ -608,7 +601,6 @@
     .setup-models-footer .mc-summary-stats { flex-direction: row; gap: 2px 14px; }
     .setup-models-footer .mc-disk-warn { font-size: 12px; }
     .setup-models-footer .setup-keep-trying { font-size: 12.5px; }
-    .setup-step-body { margin-inline-start: 0; }
     .mc-row-top { flex-wrap: wrap; }
     .mc-actions { padding: 0 12px 10px; padding-inline-start: 40px; }
     .mc-summary-stats { flex-direction: column; gap: 2px; }
@@ -631,8 +623,6 @@
     }
     .mc-skeleton { animation: none; }
     .dl-fill, .gpu-seg, .gpu-marker, .mc-disk-fill, .download-chip-bar > span { transition: none; }
-    .setup-step.is-current > .setup-step-body,
-    .setup-step.is-active > .setup-step-body,
     .dl-row.is-failed, .dl-row.is-ready .dl-icon, .setup-done { animation: none; }
 }
 

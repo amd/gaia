@@ -44,7 +44,7 @@ logger = get_logger(__name__)
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 #: Connect fast (a dead daemon should fail quickly); read generously — a single
-#: upstream chunk spans a whole agent-loop step (matches the relay's READ_TIMEOUT).
+#: upstream chunk spans a whole agent-loop step (matches the relay's read timeout).
 _CONNECT_TIMEOUT = 10.0
 # Historical floor retained for callers that inspect this module; run_query()
 # resolves the effective value at request time with agent_read_timeout().

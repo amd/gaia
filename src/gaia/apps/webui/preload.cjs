@@ -8,12 +8,10 @@
  * Required because main.cjs uses `contextIsolation: true`.
  *
  * Channels:
- *   agent:*          — Agent process management (T2)
  *   tray:*           — Tray icon/config (T1)
  *   notification:*   — Desktop notifications & permission prompts (T5)
  *   install:*        — Backend install status, retry and log (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
- *   system:*         — System metrics for the observability dashboard (#2007)
  *   power:*          — Keep the PC awake while a chat turn runs (#5226)
  *   dialog:*         — The OS folder picker
  *   backend:*        — Backend restarts after a crash (services/backend-supervisor.cjs)
@@ -29,29 +27,6 @@ function onEvent(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld("gaiaAPI", {
-  // ── Agent process management (T2) ─────────────────────────────────────
-  agent: {
-    start: (id) => ipcRenderer.invoke("agent:start", id),
-    stop: (id) => ipcRenderer.invoke("agent:stop", id),
-    restart: (id) => ipcRenderer.invoke("agent:restart", id),
-    status: (id) => ipcRenderer.invoke("agent:status", id),
-    statusAll: () => ipcRenderer.invoke("agent:status-all"),
-    sendRpc: (id, method, params) =>
-      ipcRenderer.invoke("agent:send-rpc", id, method, params),
-    getManifest: () => ipcRenderer.invoke("agent:get-manifest"),
-    // install(id, opts?) — opts: { trustNative?, version? }. Proxies to the
-    // backend install runtime; progress arrives via onInstallProgress (#1721).
-    install: (id, opts) => ipcRenderer.invoke("agent:install", id, opts),
-    uninstall: (id) => ipcRenderer.invoke("agent:uninstall", id),
-
-    // Event streams (return unsubscribe functions)
-    onStdout: (cb) => onEvent("agent:stdout", cb),
-    onStderr: (cb) => onEvent("agent:stderr", cb),
-    onStatusChange: (cb) => onEvent("agent:status-change", cb),
-    onCrashed: (cb) => onEvent("agent:crashed", cb),
-    onInstallProgress: (cb) => onEvent("agent:install-progress", cb),
-  },
-
   // ── Tray configuration (T1) ───────────────────────────────────────────
   tray: {
     getConfig: () => ipcRenderer.invoke("tray:get-config"),
@@ -82,9 +57,7 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
   },
 
-  // ── System metrics for the observability dashboard (#2007) ────────────
   system: {
-    getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
     // Opens the OS microphone privacy pane; resolves false where there is none.
     openMicSettings: () => ipcRenderer.invoke("system:open-mic-settings"),
   },

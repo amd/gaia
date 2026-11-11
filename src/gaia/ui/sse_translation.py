@@ -812,9 +812,7 @@ def render_labelled_summary(
 
 #: Tools whose confirmation shows a command or code, rendered by
 #: :func:`render_command_summary` instead of as a ``key="value"`` clause.
-COMMAND_SUMMARY_TOOLS = frozenset(
-    {"run_shell_command", "run_cli_command", "wait_for_condition"}
-)
+COMMAND_SUMMARY_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
 #: The bundled calendar skill's writes, as they register once it loads.
 CALENDAR_WRITE_TOOLS = frozenset(
