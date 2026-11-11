@@ -366,6 +366,11 @@ describe('voice mode turn loop', () => {
         expect(asksForQuiet('Stop the music.')).toBe(false);
         expect(afterName('okay Gaia, what time is it')).toBe('what time is it');
         expect(afterName('what a gala')).toBeNull();
+        // How recognizers have actually written it.
+        expect(afterName('Hegaya, what time is it?')).toBe('what time is it?');
+        expect(afterName('hey Gaia what time is it')).toBe('what time is it');
+        expect(afterName('Hey, Gaya. Stop.')).toBe('Stop.');
+        expect(afterName('he gave it away')).toBeNull();
     });
 
     describe('wake word', () => {
