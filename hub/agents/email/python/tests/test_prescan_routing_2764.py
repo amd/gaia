@@ -67,9 +67,9 @@ from gaia_agent_email.agent import _SYSTEM_PROMPT  # noqa: E402
 _PKG_DIR = Path(__file__).resolve().parents[1] / "gaia_agent_email"
 _ROUTING_MD = _PKG_DIR / "tools" / "ROUTING.md"
 _READ_TOOLS_SRC = (_PKG_DIR / "tools" / "read_tools.py").read_text(encoding="utf-8")
-_WAITING_ON_YOU_SRC = (
-    _PKG_DIR / "tools" / "waiting_on_you_tools.py"
-).read_text(encoding="utf-8")
+_WAITING_ON_YOU_SRC = (_PKG_DIR / "tools" / "waiting_on_you_tools.py").read_text(
+    encoding="utf-8"
+)
 _FOLLOWUP_SRC = (_PKG_DIR / "tools" / "followup_tools.py").read_text(encoding="utf-8")
 
 # Every routing-relevant prompt surface a model actually reads, concatenated —

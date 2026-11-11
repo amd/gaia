@@ -19,6 +19,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import GaiaConfig, gaia_home
 from gaia.utils.process_owner import current_owner, owner_is_gone
+from gaia.utils.sqlite_wal import enable_wal
+
+from .chat_search import fold, snippet
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,8 @@ def resolved_default_model() -> str:
 # Auto-generated placeholder titles the auto-retitler may replace (#2165).
 # Anything else is treated as explicitly chosen and pinned via title_is_custom.
 SESSION_KINDS = ("chat", "eval", "scheduled")
+#: Kinds the sidebar hides until "Show background runs" is on.
+AUTOMATED_SESSION_KINDS = ("eval", "scheduled")
 
 
 def session_kind_for_title(title: str | None) -> str:
@@ -231,6 +236,60 @@ CREATE INDEX IF NOT EXISTS idx_schedule_results_task
     ON schedule_results(task_id, executed_at DESC);
 """
 
+_CHAT_SCHEMA_OBJECTS = frozenset(
+    {
+        "cloud_spend",
+        "documents",
+        "idx_cloud_spend_month",
+        "idx_documents_hash",
+        "idx_messages_session",
+        "idx_messages_unfolded",
+        "idx_schedule_results_task",
+        "idx_session_docs",
+        "idx_unfinished_turns_owner",
+        "messages",
+        "messages_search_stale",
+        "schedule_results",
+        "scheduled_tasks",
+        "session_documents",
+        "session_environment",
+        "sessions",
+        "settings",
+        "unfinished_turns",
+    }
+)
+
+_CHAT_SCHEMA_COLUMNS = {
+    "documents": {
+        "error_kind",
+        "file_mtime",
+        "indexing_owner",
+        "indexing_status",
+        "last_error",
+    },
+    "messages": {
+        "agent_steps",
+        "inference_stats",
+        "library_notices",
+        "model_messages",
+        "search_text",
+        "stopped",
+        "turn_summary",
+    },
+    "scheduled_tasks": {"last_error"},
+    "sessions": {
+        "agent_type",
+        "device",
+        "kind",
+        "mail_provider",
+        "pinned",
+        "private",
+        "title_is_custom",
+        "unread",
+        "last_run_status",
+    },
+}
+
 
 class ChatDatabase:
     """SQLite database for Agent UI sessions, messages, and documents."""
@@ -254,15 +313,54 @@ class ChatDatabase:
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA journal_mode = WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
+        enable_wal(self._conn)
+        self._schema_migration_active = False
         self._init_schema()
+        self._migrate_legacy_agent_mode()
         logger.info("Chat database initialized: %s", db_path)
 
+    def _schema_is_current(self) -> bool:
+        """True when every current schema object and migrated column exists."""
+        names = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if not _CHAT_SCHEMA_OBJECTS <= names:
+            return False
+        message_schema = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+        ).fetchone()[0]
+        if "'autonomous'" not in message_schema:
+            return False
+        for table, expected_columns in _CHAT_SCHEMA_COLUMNS.items():
+            columns = {
+                row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            if not expected_columns <= columns:
+                return False
+        return True
+
     def _init_schema(self):
-        """Create tables if they don't exist and run migrations."""
-        self._conn.executescript(SCHEMA_SQL)
-        self._migrate()
-        self._migrate_autonomous_role()
+        """Create or upgrade the database under one cross-process write lock."""
+        if self._schema_is_current():
+            return
+        try:
+            # Schema creation and all legacy migrations must share one lock.
+            # Otherwise two fresh openers can both observe the old schema and
+            # race on the first ALTER TABLE.
+            self._conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA_SQL)
+            self._schema_migration_active = True
+            self._migrate()
+            self._migrate_autonomous_role()
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        finally:
+            self._schema_migration_active = False
 
     def _migrate_autonomous_role(self) -> None:
         """Allow background turns while preserving the existing message table."""
@@ -297,8 +395,8 @@ class ChatDatabase:
                 "Dropping leftover messages_history_migration table before "
                 "re-running the messages role migration"
             )
-        with self._transaction():
-            self._conn.execute("BEGIN")
+
+        def migrate_messages_table() -> None:
             self._conn.execute("DROP TABLE IF EXISTS messages_history_migration")
             self._conn.execute(migrated)
             self._conn.execute(
@@ -315,7 +413,39 @@ class ChatDatabase:
                     "UPDATE sqlite_sequence SET seq = ? WHERE name = 'messages'",
                     (sequence[0],),
                 )
+
+        if getattr(self, "_schema_migration_active", False):
+            migrate_messages_table()
+        else:
+            with self._transaction():
+                self._conn.execute("BEGIN")
+                migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
+
+    def _migrate_legacy_agent_mode(self) -> None:
+        """Rewrite a stored agent_mode 'autonomous' to 'goal_driven', once.
+
+        'autonomous' never had its own behaviour (#2005) and is refused on
+        write, so 'goal_driven' is what such a database already ran as.
+        """
+        # Read first: reopening a current database must take no write lock.
+        legacy = self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'agent_mode' AND value = 'autonomous'"
+        ).fetchone()
+        if legacy is None:
+            return
+        with self._transaction():
+            changed = self._conn.execute(
+                "UPDATE settings SET value = 'goal_driven' "
+                "WHERE key = 'agent_mode' AND value = 'autonomous'"
+            ).rowcount
+        if changed:
+            logger.warning(
+                "Migrated stored agent_mode 'autonomous' to 'goal_driven': "
+                "'autonomous' is not implemented "
+                "(https://github.com/amd/gaia/issues/2005) and always ran as "
+                "'goal_driven'."
+            )
 
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""
@@ -323,7 +453,8 @@ class ChatDatabase:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )""")
-        self._conn.commit()
+        if not getattr(self, "_schema_migration_active", False):
+            self._conn.commit()
 
     def _add_column(
         self,
@@ -337,13 +468,20 @@ class ChatDatabase:
         cols = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
         if column in cols:
             return
+
+        def add_column() -> None:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            if backfill:
+                self._conn.execute(backfill, params)
+
         try:
-            with self._transaction():
-                # Explicit BEGIN so the ALTER and its backfill commit together.
-                self._conn.execute("BEGIN")
-                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-                if backfill:
-                    self._conn.execute(backfill, params)
+            if getattr(self, "_schema_migration_active", False):
+                add_column()
+            else:
+                with self._transaction():
+                    # Explicit BEGIN so the ALTER and its backfill commit together.
+                    self._conn.execute("BEGIN")
+                    add_column()
         except sqlite3.Error as e:
             raise RuntimeError(
                 f"Could not upgrade the chat database at {self._db_path}: adding "
@@ -359,6 +497,9 @@ class ChatDatabase:
         self._add_column("messages", "agent_steps", "TEXT")
         self._add_column("messages", "inference_stats", "TEXT")
         self._add_column("messages", "turn_summary", "TEXT")
+        self._add_column("messages", "library_notices", "TEXT")
+        # 1 when the user's Stop ended this reply, so a reload still says so.
+        self._add_column("messages", "stopped", "INTEGER NOT NULL DEFAULT 0")
         self._add_column("documents", "indexing_status", "TEXT DEFAULT 'complete'")
         self._add_column("documents", "file_mtime", "REAL")
         self._add_column("documents", "last_error", "TEXT")
@@ -415,6 +556,28 @@ class ChatDatabase:
             "WHEN title LIKE 'Schedule:%' THEN 'scheduled' "
             "ELSE 'chat' END",
         )
+
+        # Chat search: content folded for case and accents, filled lazily by
+        # search_sessions. Any writer that edits content marks it stale.
+        self._add_column("messages", "search_text", "TEXT")
+
+        def create_search_objects() -> None:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_unfolded "
+                "ON messages(id) WHERE search_text IS NULL"
+            )
+            self._conn.execute(
+                "CREATE TRIGGER IF NOT EXISTS messages_search_stale "
+                "AFTER UPDATE OF content ON messages "
+                "WHEN NEW.search_text IS OLD.search_text "
+                "BEGIN UPDATE messages SET search_text = NULL WHERE id = NEW.id; END"
+            )
+
+        if getattr(self, "_schema_migration_active", False):
+            create_search_objects()
+        else:
+            with self._transaction():
+                create_search_objects()
 
     @property
     def db_path(self) -> str:
@@ -550,7 +713,7 @@ class ChatDatabase:
                 """SELECT s.*,
                           (SELECT COUNT(*) FROM messages WHERE session_id = s.id AND role != 'autonomous') as message_count
                    FROM sessions s
-                   ORDER BY s.updated_at DESC
+                   ORDER BY s.updated_at DESC, s.rowid DESC
                    LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -566,6 +729,86 @@ class ChatDatabase:
                 sessions.append(session)
 
             return sessions
+
+    def search_sessions(
+        self, query: str, limit: int = 20, include_automated: bool = False
+    ) -> tuple[List[Dict[str, Any]], bool]:
+        """Chats whose title or messages contain *query*, newest first.
+
+        Matching ignores case and accents. Each result carries a snippet
+        around its first hit: the earliest message, else the title. Eval and
+        scheduled chats count only with *include_automated*, so they never
+        push a chat the sidebar shows past *limit*.
+
+        Returns:
+            The results, and whether more chats matched than *limit*.
+        """
+        needle = fold(query.strip())
+        if not needle:
+            return [], False
+        # One batch per transaction, so a large first backfill lets other
+        # writers in between batches.
+        while True:
+            with self._transaction():
+                unfolded = self._conn.execute(
+                    "SELECT id, content FROM messages "
+                    "WHERE search_text IS NULL LIMIT 2000"
+                ).fetchall()
+                self._conn.executemany(
+                    "UPDATE messages SET search_text = ? WHERE id = ?",
+                    [(fold(r["content"] or ""), r["id"]) for r in unfolded],
+                )
+            if not unfolded:
+                break
+        automated = "" if include_automated else " WHERE kind NOT IN (?, ?)"
+        with self._transaction():
+            sessions = self._conn.execute(
+                f"SELECT id, title FROM sessions{automated} ORDER BY updated_at DESC, rowid DESC",
+                () if include_automated else AUTOMATED_SESSION_KINDS,
+            ).fetchall()
+            first_hit = {
+                r["session_id"]: r["first_id"]
+                for r in self._conn.execute(
+                    "SELECT session_id, MIN(id) AS first_id FROM messages "
+                    "WHERE role IN ('user', 'assistant') "
+                    "AND instr(search_text, ?) > 0 GROUP BY session_id",
+                    (needle,),
+                )
+            }
+            matched = [
+                s
+                for s in sessions
+                if s["id"] in first_hit or needle in fold(s["title"])
+            ]
+            truncated = len(matched) > limit
+            matched = matched[:limit]
+            hit_ids = [first_hit[s["id"]] for s in matched if s["id"] in first_hit]
+            content = {}
+            if hit_ids:
+                marks = ", ".join("?" for _ in hit_ids)
+                content = {
+                    r["id"]: r["content"]
+                    for r in self._conn.execute(
+                        f"SELECT id, content FROM messages WHERE id IN ({marks})",
+                        hit_ids,
+                    )
+                }
+
+        results: List[Dict[str, Any]] = []
+        for s in matched:
+            if s["id"] in first_hit:
+                field, text = "message", content[first_hit[s["id"]]]
+            else:
+                field, text = "title", s["title"]
+            results.append(
+                {
+                    "session_id": s["id"],
+                    "title": s["title"],
+                    "field": field,
+                    "snippet": snippet(text, needle),
+                }
+            )
+        return results, truncated
 
     def set_session_pinned(self, session_id: str, pinned: bool) -> bool:
         """Pin or unpin a chat. Leaves ``updated_at`` alone so it keeps its place."""
@@ -740,7 +983,9 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Add a message to a session. Returns message ID.
 
@@ -752,14 +997,15 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             cursor = self._conn.execute(
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -772,6 +1018,8 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
+                    int(stopped),
                 ),
             )
 
@@ -799,7 +1047,9 @@ class ChatDatabase:
         inference_stats: Dict | None = None,
         model_messages: List[Dict] | None = None,
         turn_summary: Dict | None = None,
+        library_notices: List[str] | None = None,
         ends_turn: bool = False,
+        stopped: bool = False,
     ) -> int:
         """Atomically replace a message with a fresh row. Returns the new ID.
 
@@ -817,6 +1067,7 @@ class ChatDatabase:
         stats_json = json.dumps(inference_stats) if inference_stats else None
         model_json = json.dumps(model_messages) if model_messages is not None else None
         summary_json = json.dumps(turn_summary) if turn_summary else None
+        notices_json = json.dumps(library_notices) if library_notices else None
 
         with self._transaction():
             if msg_id is not None:
@@ -829,8 +1080,8 @@ class ChatDatabase:
                 """INSERT INTO messages
                    (session_id, role, content, created_at, rag_sources,
                     agent_steps, tokens_prompt, tokens_completion, inference_stats, model_messages,
-                    turn_summary)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    turn_summary, library_notices, stopped)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -843,6 +1094,8 @@ class ChatDatabase:
                     stats_json,
                     model_json,
                     summary_json,
+                    notices_json,
+                    int(stopped),
                 ),
             )
 
@@ -907,6 +1160,11 @@ class ChatDatabase:
                     msg["inference_stats"] = json.loads(msg["inference_stats"])
                 except (json.JSONDecodeError, TypeError):
                     msg["inference_stats"] = None
+            if msg.get("library_notices"):
+                try:
+                    msg["library_notices"] = json.loads(msg["library_notices"])
+                except (json.JSONDecodeError, TypeError):
+                    msg["library_notices"] = None
             if msg.get("turn_summary"):
                 try:
                     msg["turn_summary"] = json.loads(msg["turn_summary"])
@@ -941,6 +1199,54 @@ class ChatDatabase:
                 ) from e
             out.append(
                 {"id": row["id"], "created_at": row["created_at"], "summary": summary}
+            )
+        return out
+
+    def answer_costs(
+        self, session_id: Optional[str] = None, since_day: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Each answer's saved cost, oldest first, for one chat or from *since_day* on.
+
+        *since_day* is a ``YYYY-MM-DD`` prefix compared as text, so it must sit at
+        or before the day wanted; callers trim the rows to the exact instant.
+        """
+        where = ["role = 'assistant'", "turn_summary IS NOT NULL"]
+        args: List[Any] = []
+        if session_id is not None:
+            where.append("session_id = ?")
+            args.append(session_id)
+        if since_day is not None:
+            where.append("created_at >= ?")
+            args.append(since_day)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, session_id, created_at, turn_summary FROM messages "
+                f"WHERE {' AND '.join(where)} ORDER BY created_at ASC, id ASC",
+                args,
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                summary = json.loads(row["turn_summary"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {row['session_id']} has an "
+                    f"unreadable turn summary ({e}); inspect the messages table "
+                    "in the chat database."
+                ) from e
+            cost = summary.get("cost") if isinstance(summary, dict) else None
+            model = summary.get("model") if isinstance(summary, dict) else None
+            out.append(
+                {
+                    "message_id": row["id"],
+                    "session_id": row["session_id"],
+                    "created_at": row["created_at"],
+                    "cost": cost if isinstance(cost, dict) else {"kind": "unknown"},
+                    "model": model.get("name") if isinstance(model, dict) else None,
+                    "remote": (
+                        bool(model.get("remote")) if isinstance(model, dict) else None
+                    ),
+                }
             )
         return out
 
@@ -1308,9 +1614,29 @@ class ChatDatabase:
                 # Update last_accessed_at and chunk_count (if newly indexed
                 # count is higher, e.g. fixing a previous 0-chunk bug)
                 new_chunk_count = max(chunk_count, doc.get("chunk_count", 0))
+                # The file moved: follow it instead of keeping a dead path.
+                if (
+                    filepath != doc["filepath"]
+                    and not Path(doc["filepath"] or "").is_file()
+                    and Path(filepath).is_file()
+                ):
+                    doc["filename"], doc["filepath"] = filename, filepath
+                    if doc["indexing_status"] == "missing":
+                        doc["indexing_status"] = "complete"
                 self._conn.execute(
-                    "UPDATE documents SET last_accessed_at = ?, chunk_count = ?, file_mtime = ? WHERE id = ?",
-                    (now, new_chunk_count, file_mtime, doc["id"]),
+                    """UPDATE documents
+                       SET last_accessed_at = ?, chunk_count = ?, file_mtime = ?,
+                           filename = ?, filepath = ?, indexing_status = ?
+                       WHERE id = ?""",
+                    (
+                        now,
+                        new_chunk_count,
+                        file_mtime,
+                        doc["filename"],
+                        doc["filepath"],
+                        doc["indexing_status"],
+                        doc["id"],
+                    ),
                 )
                 self._conn.commit()
                 doc["chunk_count"] = new_chunk_count

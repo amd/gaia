@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillsSettings } from '../SkillsSettings';
 import * as api from '../../../services/api';
+import { useChatStore } from '../../../stores/chatStore';
 import type { SkillInfo, SkillSource } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -22,6 +23,8 @@ beforeEach(() => {
         invalid: {},
     });
 });
+
+afterEach(() => useChatStore.setState({ locale: 'en' }));
 
 describe('SkillsSettings', () => {
     it('lists the installed skills', async () => {
@@ -87,6 +90,36 @@ describe('SkillsSettings', () => {
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
     });
 
+    it('shows every skill, flat, when one comes from a source it has no group for', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('web-research', 'Research', null, 'agent-bundled'),
+                skill('future-helper', 'From a newer agent', null, 'some-future-root' as SkillSource),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        expect(await screen.findByText('future-helper')).toBeInTheDocument();
+        expect(screen.getByText('web-research')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Built into GAIA' })).not.toBeInTheDocument();
+    });
+
+    it("shows the project's own skills apart from other Claude Code skills", async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('deploy-helper', 'Deploys the app', null, 'claude-project'),
+                skill('old-helper', 'Imported', null, 'claude-import'),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const project = await screen.findByRole('region', { name: 'From this project' });
+        expect(within(project).getByText('deploy-helper')).toBeInTheDocument();
+        expect(within(project).queryByText('old-helper')).not.toBeInTheDocument();
+        const imported = screen.getByRole('region', { name: 'From Claude Code' });
+        expect(within(imported).queryByText('deploy-helper')).not.toBeInTheDocument();
+    });
+
     it('says how to add your own skills when there are none', async () => {
         mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
         render(<SkillsSettings onUseSkill={vi.fn()} />);
@@ -99,5 +132,29 @@ describe('SkillsSettings', () => {
         render(<SkillsSettings onUseSkill={vi.fn()} />);
         expect(await screen.findByText('legacy')).toBeInTheDocument();
         expect(screen.queryByRole('region')).not.toBeInTheDocument();
+    });
+
+    it('keeps the skills folder left to right in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
+        const { container } = render(<SkillsSettings onUseSkill={vi.fn()} />);
+        await screen.findByRole('region', { name: /مهاراتك/ });
+        const text = container.textContent ?? '';
+        const raw = text.split('~/.gaia/skills').length - 1;
+        const isolated = text.split('\u2068~/.gaia/skills\u2069').length - 1;
+        expect(raw).toBeGreaterThanOrEqual(3);
+        expect(isolated).toBe(raw);
+    });
+
+    it('keeps the project skills folder left to right in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('deploy-helper', 'Deploy', null, 'claude-project')], invalid: {} });
+        const { container } = render(<SkillsSettings onUseSkill={vi.fn()} />);
+        await screen.findByText('deploy-helper');
+        const text = container.textContent ?? '';
+        const raw = text.split('.claude/skills').length - 1;
+        const isolated = text.split('\u2068.claude/skills\u2069').length - 1;
+        expect(raw).toBe(2);
+        expect(isolated).toBe(raw);
     });
 });

@@ -23,6 +23,9 @@ mailbox, no LLM.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
@@ -33,6 +36,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import __version__ as package_version  # noqa: E402
 from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
+from gaia_agent_email import query_routes  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
     BatchTriageRequest,
@@ -89,6 +93,25 @@ _EXPECTED_RESPONSE_MODELS = {
 # checked by ``test_query_route_streams_event_stream`` instead.
 _EXPECTED_STREAMING_ROUTES = {
     ("post", "/v1/email/query"),
+}
+
+# Stateful Agent UI routes (/v1/email/agent/*) are part of the published
+# sidecar contract too (#6043). Some return intentionally open-ended dicts and
+# the session query is an SSE stream, so this set guards route presence while
+# the typed routes above keep their component-schema assertions.
+_EXPECTED_AGENT_ROUTES = {
+    ("post", "/v1/email/agent/session"),
+    ("delete", "/v1/email/agent/session/{session_id}"),
+    ("get", "/v1/email/agent/session/{session_id}/history"),
+    ("post", "/v1/email/agent/memory"),
+    ("get", "/v1/email/agent/memory/{session_id}"),
+    ("get", "/v1/email/agent/autonomy/{session_id}"),
+    ("post", "/v1/email/agent/autonomy"),
+    ("post", "/v1/email/agent/autonomy/run"),
+    ("post", "/v1/email/agent/autonomy/undo"),
+    ("post", "/v1/email/agent/confirm-tool"),
+    ("post", "/v1/email/agent/cancel"),
+    ("post", "/v1/email/agent/query"),
 }
 
 
@@ -176,7 +199,17 @@ def test_documented_routes_match_expected_set(spec):
     documented = {
         (method, path) for path, ops in spec["paths"].items() for method in ops
     }
-    assert documented == set(_EXPECTED_RESPONSE_MODELS) | _EXPECTED_STREAMING_ROUTES
+    assert documented == (
+        set(_EXPECTED_RESPONSE_MODELS)
+        | _EXPECTED_STREAMING_ROUTES
+        | _EXPECTED_AGENT_ROUTES
+    )
+
+
+def test_agent_query_route_is_documented_as_an_sse_stream(spec):
+    """The stateful Agent UI endpoint must not degrade to a JSON placeholder."""
+    responses = spec["paths"]["/v1/email/agent/query"]["post"]["responses"]
+    assert "text/event-stream" in responses["200"]["content"]
 
 
 def test_query_route_streams_event_stream(spec):
@@ -189,6 +222,51 @@ def test_query_route_streams_event_stream(spec):
         "application/json"
     ]["schema"]
     assert req == {"$ref": "#/components/schemas/QueryRequest"}
+
+
+def _statuses_raised_by_query_routes() -> dict:
+    """Map each ``query_routes`` POST path to the HTTP statuses its handler raises."""
+    tree = ast.parse(Path(query_routes.__file__).read_text(encoding="utf-8"))
+    raised = {}
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.AsyncFunctionDef):
+            continue
+        paths = [
+            dec.args[0].value
+            for dec in func.decorator_list
+            if isinstance(dec, ast.Call)
+            and isinstance(dec.func, ast.Attribute)
+            and dec.func.attr == "post"
+            and dec.args
+            and isinstance(dec.args[0], ast.Constant)
+        ]
+        statuses = {
+            str(kw.value.value)
+            for call in ast.walk(func)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "HTTPException"
+            for kw in call.keywords
+            if kw.arg == "status_code" and isinstance(kw.value, ast.Constant)
+        }
+        for path in paths:
+            raised[path] = statuses
+    return raised
+
+
+def test_query_routes_document_every_status_they_raise(spec):
+    """A generated client only knows the statuses the spec lists, so every
+    ``HTTPException`` a /query route raises must appear in its responses (#4429)."""
+    raised = _statuses_raised_by_query_routes()
+    assert set(raised) == {
+        "/query",
+        "/query/{run_id}/cancel",
+        "/query/{run_id}/respond",
+    }
+    for route, statuses in raised.items():
+        documented = set(spec["paths"]["/v1/email" + route]["post"]["responses"])
+        missing = sorted(statuses - documented)
+        assert not missing, f"POST /v1/email{route} raises {missing} undocumented"
 
 
 @pytest.mark.parametrize(
@@ -896,9 +974,7 @@ def test_calendar_view_returns_truncation_signal(client, fake_calendar, monkeypa
             "nextPageToken": "page-2",
         },
     )
-    monkeypatch.setattr(
-        email_routes, "resolve_calendar_backend", lambda: fake_calendar
-    )
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: fake_calendar)
 
     resp = client.get("/v1/email/calendar/events")
 
@@ -1965,6 +2041,7 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
 #     conditional posture: bearer OR none, since the gate no-ops when the
 #     sidecar has no token configured (local dev).
 # ---------------------------------------------------------------------------
+
 
 def test_spec_declares_bearer_security_scheme(spec):
     schemes = spec["components"]["securitySchemes"]

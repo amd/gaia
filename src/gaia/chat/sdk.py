@@ -8,6 +8,7 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
@@ -66,9 +68,8 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
-        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+        True  # Use local LLM (computed as not use_claude if not explicitly set)
     )
     claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
@@ -139,7 +140,6 @@ class AgentSDK:
         # Initialize LLM client - factory auto-detects provider and validates
         self.llm_client = create_client(
             use_claude=self.config.use_claude,
-            use_openai=self.config.use_chatgpt,
             model=(
                 self.config.claude_model
                 if self.config.use_claude
@@ -505,8 +505,8 @@ class AgentSDK:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
             cancel: When given, the reply is streamed and the call is abandoned
-                as soon as the event is set — the connection is closed so the
-                server stops generating, and ``LLMCallCancelled`` is raised.
+                as soon as the event is set, also while it waits for the model
+                slot, and ``LLMCallCancelled`` is raised.
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -613,16 +613,20 @@ class AgentSDK:
             messages, system_prompt=system_prompt, tools=tools, **kwargs
         )
         try:
-            for chunk in stream:
-                if cancel.is_set():
-                    raise LLMCallCancelled("model call cancelled mid-reply")
-                if chunk.is_complete:
-                    final = chunk
-                else:
-                    parts.append(chunk.text)
+            # A call cancelled while queued for the model must never be sent:
+            # on the NPU, hanging up on it once it streams restarts the engine.
+            with lease_cancel_scope(cancel):
+                for chunk in stream:
+                    if cancel.is_set():
+                        raise LLMCallCancelled("model call cancelled mid-reply")
+                    if chunk.is_complete:
+                        final = chunk
+                    else:
+                        parts.append(chunk.text)
+        except LeaseWaitCancelled as e:
+            raise LLMCallCancelled(str(e)) from e
         finally:
-            # Closing the generator closes the HTTP stream, which is what
-            # makes the server stop generating and free the model.
+            # Ends the HTTP stream: cut off on a GPU, read to its end on the NPU.
             stream.close()
         if final is None:
             raise RuntimeError("model stream ended without a final chunk")
@@ -730,6 +734,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
+        except LeaseWaitCancelled:
+            raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")
@@ -1206,7 +1212,7 @@ class AgentSDK:
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
-                result = self.rag.index_document(doc_path)
+                result = self._index_named_document(doc_path)
 
                 if isinstance(result, dict) and result.get("success") is True:
                     indexed_count += 1
@@ -1245,7 +1251,14 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return bool(self.rag.index_document(document_path).get("success"))
+        return bool(self._index_named_document(document_path).get("success"))
+
+    def _index_named_document(self, document_path: str) -> dict:
+        """Index a file the caller named, granting read access to that file only."""
+        # The RAG validator defaults to the working directory; naming the file is the grant.
+        if os.path.isfile(document_path):
+            self.rag.path_validator.add_allowed_path(document_path)
+        return self.rag.index_document(document_path)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -1588,6 +1601,20 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
+_SESSION_OVERRIDE_KEYS = frozenset(
+    {
+        "model",
+        "max_tokens",
+        "system_prompt",
+        "max_history_length",
+        "show_stats",
+        "logging_level",
+        "use_claude",
+        "assistant_name",
+    }
+)
+
+
 class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
@@ -1633,6 +1660,18 @@ class AgentSession:
         Returns:
             AgentSDK instance for the session
         """
+        unknown = sorted(set(config_kwargs) - _SESSION_OVERRIDE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"create_session() got unexpected keyword argument(s): "
+                f"{', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
+            )
+        if config is not None and config_kwargs:
+            raise TypeError(
+                "create_session() takes either config or keyword overrides, "
+                f"not both (got config and {', '.join(sorted(config_kwargs))})."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(
@@ -1654,9 +1693,6 @@ class AgentSession:
                 ),
                 use_claude=config_kwargs.get(
                     "use_claude", self.default_config.use_claude
-                ),
-                use_chatgpt=config_kwargs.get(
-                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name

@@ -980,7 +980,7 @@ class _RunProbe(scratch_mod._Probe):
             agent.ran.append(("run_shell_command", command, working_directory))
             return {"status": "success", "return_code": 0}
 
-        @register_tool
+        @register_tool(override=True)
         def execute_python_file(file_path: str, args: str = "") -> dict:
             """Probe runner with arguments."""
             agent.ran.append(("execute_python_file", file_path, args))

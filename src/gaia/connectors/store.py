@@ -182,7 +182,12 @@ def _wrap_keyring_call(operation: str):
 # ``None`` ("reconnect") on any mismatch — a torn state can never surface as a
 # truncated-but-valid-looking token.
 _CHUNK_CHARS = 1024
-_CHUNK_SENTINEL = "\x00gaia-chunked\x00"  # cannot occur inside a JSON blob
+# No NUL: the macOS backend cuts a stored value at the first one. A JSON blob
+# starts with "{", and no credential format starts with this.
+_CHUNK_SENTINEL = "gaia-chunked-v2:"
+# Earlier releases wrote this. It still reads back whole on Windows and Linux.
+_LEGACY_CHUNK_SENTINEL = "\x00gaia-chunked\x00"
+_CHUNK_SENTINELS = (_CHUNK_SENTINEL, _LEGACY_CHUNK_SENTINEL)
 
 
 def _payload_crc(payload: str) -> str:
@@ -258,7 +263,10 @@ def _kr_set(username: str, payload: str) -> None:
 def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
     """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
     manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
-    body = raw[len(_CHUNK_SENTINEL) :]
+    sentinel = (
+        _CHUNK_SENTINEL if raw.startswith(_CHUNK_SENTINEL) else _LEGACY_CHUNK_SENTINEL
+    )
+    body = raw[len(sentinel) :]
     count_str, _, crc = body.partition(":")
     try:
         return int(count_str), (crc or None)
@@ -273,7 +281,15 @@ def _kr_get(username: str) -> Optional[str]:
     mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
     value."""
     raw = _kr_raw_get(username)
-    if raw is None or not raw.startswith(_CHUNK_SENTINEL):
+    if raw == "":
+        # An earlier release's manifest as macOS kept it; nothing stores an empty value.
+        logger.warning(
+            "Keychain entry %s lost its chunk manifest; treating it as not stored. "
+            "Save or reconnect it to replace it.",
+            username,
+        )
+        return None
+    if raw is None or not raw.startswith(_CHUNK_SENTINELS):
         return raw
     parsed = _parse_manifest(raw)
     if parsed is None:
@@ -298,7 +314,7 @@ def _kr_delete(username: str) -> None:
     """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
     raw = _kr_raw_get(username)
     _kr_raw_delete(username)
-    if raw is not None and raw.startswith(_CHUNK_SENTINEL):
+    if raw is not None and raw.startswith(_CHUNK_SENTINELS):
         parsed = _parse_manifest(raw)
         count = parsed[0] if parsed else 0
         for idx in range(count):
@@ -385,6 +401,8 @@ def save_connection(
     username = _connection_username(provider, DEFAULT_ACCOUNT)
 
     _kr_set(username, payload)
+    # A completed write supersedes an interrupted forward's recovery record.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def load_connection(
@@ -512,6 +530,65 @@ def peek_connection(
         return None
 
 
+def _forward_recovery_username(provider: str) -> str:
+    """Keyring slot for an interrupted forwarded-connection save."""
+    return f"recovery:forward:{provider}"
+
+
+def has_forward_recovery(provider: str) -> bool:
+    """Whether a previous forwarded save left a recovery marker."""
+    verify_keyring_backend()
+    return _kr_get(_forward_recovery_username(provider)) is not None
+
+
+def write_forward_recovery(provider: str, snapshot: dict) -> None:
+    """Record the old pair before a forwarded save changes either slot.
+
+    The marker is itself stored through the torn-write-safe keyring helper. It
+    contains encrypted credential values and is never logged.
+    """
+    verify_keyring_backend()
+    payload = json.dumps({"version": 1, "slots": snapshot}, sort_keys=True)
+    _kr_set(_forward_recovery_username(provider), payload)
+
+
+def clear_forward_recovery(provider: str) -> None:
+    """Remove the recovery marker after a forwarded save is complete."""
+    verify_keyring_backend()
+    _kr_delete(_forward_recovery_username(provider))
+
+
+def recover_forward_recovery(provider: str) -> bool:
+    """Restore an interrupted forwarded save; return whether one existed."""
+    verify_keyring_backend()
+    username = _forward_recovery_username(provider)
+    raw = _kr_get(username)
+    if raw is None:
+        return False
+    expected = {
+        _provider_credentials_username(provider),
+        _connection_username(provider, DEFAULT_ACCOUNT),
+    }
+    try:
+        marker = json.loads(raw)
+        if marker.get("version") != 1 or not isinstance(marker.get("slots"), dict):
+            raise ValueError("unsupported marker")
+        slots = marker["slots"]
+        # Restore only this provider's two slots, never a slot the marker names.
+        if set(slots) != expected or not all(
+            v is None or isinstance(v, str) for v in slots.values()
+        ):
+            raise ValueError("unexpected marker slots")
+    except (json.JSONDecodeError, AttributeError, ValueError) as exc:
+        raise ConnectorsError(
+            f"The recovery record for the {provider} connection is corrupt. "
+            "Reconnect from Settings → Connectors before using it again."
+        ) from exc
+    restore_connection_slots(slots)
+    _kr_delete(username)
+    return True
+
+
 def snapshot_connection_slots(provider: str) -> dict:
     """The stored client config and connection values for ``provider``.
 
@@ -545,6 +622,8 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
     _kr_delete(username)
+    # Otherwise the next read would restore the connection just removed.
+    _kr_delete(_forward_recovery_username(provider))
 
 
 def _secret_username(name: str) -> str:

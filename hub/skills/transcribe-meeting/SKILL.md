@@ -1,8 +1,8 @@
 ---
 name: transcribe-meeting
-description: Transcribe and summarize a meeting recording — speaker-attributed transcript, corrected mis-hearings, then a brief with decisions and action items. Use whenever the user points at an audio or video file (.mp4, .mkv, .mov, .m4a, .mp3, .wav) or a Teams/Zoom transcript export and asks to transcribe it, summarize it, take notes, write minutes, say what was discussed, who said what, what was decided, or what the action items and follow-ups are.
+description: Transcribe and summarize a meeting recording — timestamped, speaker-attributed transcript, then a brief with decisions and action items. Use whenever the user points at an audio or video file (.mp4, .mkv, .mov, .m4a, .mp3, .wav) or a Teams/Zoom transcript export and asks to transcribe it, summarize it, take notes, write minutes, say what was discussed, who said what, what was decided, or what the action items and follow-ups are.
 license: MIT
-version: 1.1.1
+version: 1.2.1
 metadata:
   gaia:
     security_tier: community
@@ -46,7 +46,7 @@ built from the truncated half looks finished rather than truncated.
 
    `preview` is the first 1200 characters, for identifying the recording only.
    `low_confidence_spans` and `low_confidence_span_count` are informational —
-   step 3 does the correcting. Do not repair them yourself.
+   the transcript keeps the words as heard. Do not repair them yourself.
 
 3. **Refine — one call, and it is not your work to redo.**
    `refine_transcript(transcript_path)` groups the transcript by the voices
@@ -141,9 +141,13 @@ Source: C:\recordings\staff-meeting.mp4
 
 ## Transcript
 
-Priya Raman: Thanks everyone for joining...
-Dan Okafor: The migration finished Tuesday...
+[00:04] Priya Raman: Thanks everyone for joining...
+
+[00:31] Dan Okafor: The migration finished Tuesday...
 ```
+
+Every paragraph starts with its time, so quote it when answering a question
+about what was said.
 
 ## Brief shape
 

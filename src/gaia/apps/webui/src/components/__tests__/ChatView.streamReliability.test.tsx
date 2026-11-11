@@ -164,6 +164,20 @@ describe('ChatView stream reliability', () => {
         expect(useChatStore.getState().isStreaming).toBe(false);
     });
 
+    it('says GAIA stopped and offers Try again when no reconnect could reach it (#6588)', async () => {
+        await driveSend();
+        act(() => capturedCallbacks!.onChunk({ type: 'chunk', content: 'Partial answer' }));
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        for (let i = 0; i < 3; i++) {
+            await waitFor(() => expect(attachCallbacks.length).toBe(i + 1), { timeout: 12_000 });
+            act(() => attachCallbacks[i].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'), true)));
+        }
+        await waitFor(() => expect(document.body.textContent).toContain('GAIA stopped before it finished this answer'));
+        expect(document.body.textContent).not.toContain('may still finish');
+        expect(document.body.textContent).not.toContain('Failed to fetch');
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    }, 20_000);
+
     it('explains a busy server in plain words instead of showing the raw response', async () => {
         await driveSend();
         const body = JSON.stringify({ detail: 'The server is busy processing other chat requests. Please try again in a few moments.' });
@@ -327,6 +341,24 @@ describe('ChatView stream reliability', () => {
         view.rerender(<ChatView sessionId="other" />);
         act(() => useChatStore.setState({ currentSessionId: SESSION.id }));
         view.rerender(<ChatView sessionId={SESSION.id} />);
+        await new Promise((r) => setTimeout(r, 3_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops a pending reconnect when the chat view unmounts during the wait', async () => {
+        const view = await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
+        view.unmount();
+        await new Promise((r) => setTimeout(r, 3_500));
+        expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-attach a stream that drops after the chat view unmounted', async () => {
+        const view = await driveSend();
+        act(() => capturedCallbacks!.onError(new api.StreamDroppedError(new TypeError('network error'))));
+        view.unmount();
+        act(() => attachCallbacks[0].onError(new api.StreamDroppedError(new TypeError('Failed to fetch'))));
         await new Promise((r) => setTimeout(r, 3_500));
         expect(mockedApi.attachToRun).toHaveBeenCalledTimes(1);
     });

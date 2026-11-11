@@ -776,8 +776,9 @@ def render_endpoint_spec_html() -> str:
     )
 
     # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
-    # tables) because the request/response shapes live in agent_routes.py — not
-    # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    # tables) because its request/response shapes live in agent_routes.py;
+    # the published OpenAPI contract includes the routes, while /query still
+    # returns an SSE stream rather than a JSON body.
     query_block = """
 <div class="endpoint-block">
   <span class="method-badge">POST</span>
@@ -792,7 +793,7 @@ def render_endpoint_spec_html() -> str:
     stays stateless).</p>
   <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
     <code>type</code>, one of the <b>eight canonical event types</b>:
-    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>status</code> {message, phase?, queue?} &middot; <code>token</code> {delta} &middot;
     <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
     {tool, render?, data} &middot; <code>needs_confirmation</code>
     {run_id, action, summary} &middot; <code>needs_input</code>
@@ -800,7 +801,12 @@ def render_endpoint_spec_html() -> str:
     <code>final</code> {answer, usage?} &middot;
     <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
     <code>final</code> or <code>error</code></b>. Lines beginning <code>:</code>
-    are heartbeat comments and carry no payload.</p>
+    are heartbeat comments and carry no payload. When <code>phase</code> is
+    <code>model_queue</code>, <code>queue</code> reports <code>event</code>
+    (<code>queued</code>, then <code>granted</code>), <code>scope</code>,
+    <code>position</code>, <code>queue_length</code>, <code>holder</code>,
+    <code>holder_model</code>, <code>held_for_s</code>, <code>waited_s</code>,
+    and <code>model</code>; a field the wait cannot know is omitted.</p>
   <p class="desc"><b>Mid-run questions (#2469):</b> the agent can ask the user
     something <i>while it runs</i> — most importantly to set up or repair mailbox
     access instead of printing a shell command. It emits <code>needs_input</code>
@@ -819,6 +825,12 @@ def render_endpoint_spec_html() -> str:
     (<code>POST /v1/email/draft</code> to mint a single-use token, then
     <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
     <code>confirm_url</code> is omitted.</p>
+  <p class="desc"><b>Errors before the stream opens:</b> <b>400</b> if
+    <code>provider</code> is anything but <code>lemonade</code>; <b>409</b> if the
+    session already has a turn in progress or <code>run_id</code> is already in
+    flight; <b>502</b> if the agent cannot be built or switched to the requested
+    <code>model</code>; <b>500</b> if the run fails to start after that. Once the
+    stream is open, a failure arrives as an <code>error</code> event instead.</p>
 </div>
 
 <div class="endpoint-block">
@@ -926,7 +938,13 @@ def render_endpoint_spec_html() -> str:
     thresholds, and the earned-trust ledger:
     <code>{ level, enabled, trust_min_samples, trust_threshold,
     trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
-    total, score, trusted }] }</code>. This is the read-model
+    total, score, trusted }], last_cycle }</code>. <code>last_cycle</code> is
+    <code>null</code> until a cycle has run, then the most recent one (REST,
+    CLI or scheduler) as counts only — <code>{ outcome: "completed",
+    started_at, finished_at, level, executed, proposals, decisions, skipped,
+    already_proposed, errors, stopped }</code>, or <code>{ outcome: "failed",
+    started_at, finished_at, level, error }</code> with the error redacted.
+    This is the read-model
     <code>gaia email autonomy status</code> / <code>trust</code> render, so
     autonomy behavior is always explainable. 404 if the session is unknown.</p>
 </div>
@@ -957,6 +975,49 @@ def render_endpoint_spec_html() -> str:
     (missing/expired/under-scoped credential) — the response <code>detail</code>
     carries the actionable message and the exact <code>gaia connectors
     connect ...</code> command to fix it (#2617), never a bare status code.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy/undo</span>
+  <p class="desc">Reverse one auto-executed action and record the correction
+    against its trust scope (#2529). Body:
+    <code>{ "session_id": str, "action_id": str }</code> where
+    <code>action_id</code> comes from a prior <code>autonomy/run</code>
+    <code>executed[]</code> entry. Returns
+    <code>{ action_id, action_type, message_id, undone, correction_captured }</code>;
+    <code>correction_captured</code> is <code>false</code> (the mutation is still
+    reversed) when the id was not an autonomy-executed action. <b>409</b> for an
+    unknown, expired, or already-undone id; <b>400</b> for an action type with
+    no reversal implemented; 404 if the session is unknown. <b>501</b> if this
+    agent build does not expose autonomy undo.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/connections/{provider}</span>
+  <p class="desc">Daemon-to-sidecar OAuth forward-out (contract 2.5, #2154):
+    accept a short-lived access token for <code>provider</code>, held in memory
+    only; the sidecar never receives the refresh token. Returns
+    <code>{ provider, scopes, account_email, expires_at }</code>. <b>400</b> for
+    a malformed forward (empty token or non-positive expiry); <b>404</b> for an
+    unknown provider.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/connections</span>
+  <p class="desc">Metadata-only list of forwarded connections:
+    <code>{ connections:[{ provider, scopes, account_email, expires_at }] }</code>.
+    Never returns tokens.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">DELETE</span>
+  <span class="path">/v1/connections/{provider}</span>
+  <p class="desc">Withdraw a forwarded credential (revoke or uninstall).
+    Idempotent. Returns <code>{ provider, withdrawn }</code>. <b>404</b> for an
+    unknown provider.</p>
 </div>
 """
 

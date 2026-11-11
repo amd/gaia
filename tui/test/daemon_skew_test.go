@@ -34,7 +34,7 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	// The remedy has to be able to fix the cause. The missing route comes from
 	// the installed core, so a restart relaunches the same one — a core this old
 	// may not even have a `daemon` subcommand to restart with.
-	if !strings.Contains(text, "pip install --upgrade amd-gaia") {
+	if !strings.Contains(text, "https://amd-gaia.ai/#install") {
 		t.Errorf("the error gives no way to fix it:\n%s", text)
 	}
 	if !strings.Contains(text, "brings the same one back") {
@@ -47,7 +47,7 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	// The way through that needs no daemon at all. It used to be
 	// `gaia tui list --installed`; that subcommand is gone, and `status` is what
 	// reads the install sentinels straight off disk now.
-	if !strings.Contains(text, "gaia tui status") {
+	if !strings.Contains(text, "gaia-tui status") {
 		t.Errorf("the error does not mention the offline way through:\n%s", text)
 	}
 	// And it must NOT send the user to the Agent Hub.
@@ -84,9 +84,6 @@ func TestEveryDaemonRouteReportsSkewTheSameWay(t *testing.T) {
 			_, err := f.client().Agents(context.Background(), false)
 			return err
 		}},
-		{"uninstall", daemon.APIPrefix + "/agents/email", func(f *fakeDaemon) error {
-			return f.client().Uninstall(context.Background(), "email")
-		}},
 	}
 
 	for _, tc := range cases {
@@ -110,16 +107,15 @@ func TestEveryDaemonRouteReportsSkewTheSameWay(t *testing.T) {
 }
 
 // A 404 the route ITSELF sends is a refusal about the thing asked for, not
-// version skew, and must keep its own explanation. Installing an unknown agent
-// is the live example: the daemon names the agent and what is missing.
+// version skew, and must keep its own explanation.
 func TestARouteThatAnswersKeepsItsOwnExplanation(t *testing.T) {
-	const detail = "'nope' is not installed (no .installed at ~/.gaia/agents/nope)"
+	const detail = "no agent sidecars are registered (none installed under ~/.gaia/agents)"
 	fake := newFakeDaemon(t)
-	fake.refuseRoute(daemon.APIPrefix+"/agents/nope", http.StatusNotFound, detail)
+	fake.refuseRoute(daemon.APIPrefix+"/agents", http.StatusNotFound, detail)
 
-	err := fake.client().Uninstall(context.Background(), "nope")
+	_, err := fake.client().Agents(context.Background(), false)
 	if err == nil {
-		t.Fatal("a refused uninstall reported success")
+		t.Fatal("a refused agents list reported success")
 	}
 
 	var missing *daemon.RouteMissingError

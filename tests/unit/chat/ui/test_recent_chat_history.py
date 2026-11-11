@@ -163,7 +163,7 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
     loop._db = db
     module = SimpleNamespace(ChatAgent=Agent, ChatAgentConfig=object)
     with (
-        patch.dict(sys.modules, {"gaia_agent_chat.agent": module}),
+        patch.dict(sys.modules, {"gaia_agent.chat_agent": module}),
         patch.object(helpers, "_get_cached_agent", return_value=Agent()),
         patch.object(loop, "_get_actionable_goals", return_value=[]),
     ):

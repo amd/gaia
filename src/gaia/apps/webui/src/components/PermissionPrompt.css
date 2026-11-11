@@ -47,6 +47,12 @@
     font-size: 12.5px;
 }
 
+/* Paths and commands keep their spaces exactly: "Team Docs  -  AMD" is not "Team Docs - AMD". */
+.perm-card code,
+.perm-card bdi[dir="ltr"] {
+    white-space: pre-wrap;
+}
+
 .perm-card-timer {
     flex-shrink: 0;
     color: var(--text-muted);
@@ -83,11 +89,55 @@
     font-size: 12px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    /* Code reads as it runs, even in a right-to-left UI. */
+    text-align: left;
+}
+
+/* What a calendar change does, shown without a click. */
+.perm-card-facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 4px 12px;
+    margin-top: 6px;
+    font-size: 13px;
+}
+
+.perm-card-facts dt {
+    color: var(--text-secondary);
+}
+
+.perm-card-facts dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .perm-card-facts {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .perm-card-facts dd {
+        margin-block-end: 6px;
+    }
+}
+
+/* Everyone stays visible by scrolling, and the buttons stay on screen. */
+.perm-card-people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    max-height: 96px;
+    overflow-y: auto;
 }
 
 /* The exact line a one-time approval runs: never clipped, never collapsed. */
 .perm-card-exact {
     max-height: none;
+    /* Each line of the email takes its own direction, whatever the app's language. */
+    unicode-bidi: plaintext;
+    text-align: start;
 }
 
 /* Collapsed code is already capped by line count; expanded, it scrolls. */

@@ -196,6 +196,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             full_content += event.get("content", "")
 
         elif etype == "thinking":
+            if event.get("retracts_answer"):
+                full_content = ""
             event_log.append(f"[thinking] {event.get('content', '')[:150]}")
 
         elif etype == "tool_start":
@@ -278,6 +280,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
                 full_content = done_content
 
         elif etype == "status":
+            if event.get("retracts_answer"):
+                full_content = ""
             msg = event.get("message", "")
             if msg:
                 event_log.append(f"[status] {msg}")
@@ -368,8 +372,12 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     # ── Messages ───────────────────────────────────────────────────
 
     @mcp.tool()
-    def get_messages(session_id: str) -> Dict[str, Any]:
-        """Get all messages in a session (with agent steps and tool outputs)."""
+    def get_messages(session_id: str, full_replies: bool = False) -> Dict[str, Any]:
+        """Get all messages in a session (with agent steps and tool outputs).
+
+        Message text is cut to 2000 characters. Pass full_replies=True to get
+        assistant replies whole, e.g. to judge a long answer.
+        """
         raw_messages = []
         total = None
         while total is None or len(raw_messages) < total:
@@ -405,7 +413,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         for m in raw_messages:
             msg = {
                 "role": m["role"],
-                "content": m["content"][:2000],
+                "content": (
+                    m["content"]
+                    if full_replies and m["role"] == "assistant"
+                    else m["content"][:2000]
+                ),
             }
             steps = m.get("agent_steps") or []
             if steps:
@@ -1115,6 +1127,9 @@ def run_http(
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description="GAIA Agent UI MCP Server")
     parser.add_argument(
         "--port",

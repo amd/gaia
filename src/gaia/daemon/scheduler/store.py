@@ -118,6 +118,7 @@ def _row_to_job(row: Dict[str, Any]) -> Dict[str, Any]:
         "run_count": row["run_count"],
         "claimed_at": row["claimed_at"],
         "claim_id": row["claim_id"],
+        "superseded_claim": row["superseded_claim"],
     }
 
 

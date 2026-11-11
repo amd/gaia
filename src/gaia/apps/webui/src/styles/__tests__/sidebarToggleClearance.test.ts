@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 /**
  * At <= 768px the sidebar collapses to a floating "Open sidebar" button pinned
- * to the top-left of the window. Every row that can sit at the top of the main
- * area must start to the right of that button, or its first characters are
- * hidden ("Restored your last model." read as "ored your last model.").
+ * to the top-start corner of the window (top-left, or top-right in Arabic).
+ * Every row that can sit at the top of the main area must start after that
+ * button, or its first characters are hidden ("Restored your last model." read
+ * as "ored your last model."). Logical properties keep both sides in step.
  *
  * jsdom does no layout, so this reads the shipped stylesheets directly.
  */
@@ -67,19 +68,19 @@ const indexCss = CSS_SOURCES['/src/styles/index.css'];
 describe('sidebar toggle clearance at narrow widths', () => {
     it('reserves at least the floating button footprint', () => {
         const toggle = topLevelDecls(indexCss, '.sidebar-toggle');
-        const footprint = px(toggle, 'left') + px(toggle, 'width');
+        const footprint = px(toggle, 'inset-inline-start') + px(toggle, 'width');
         const clearance = indexCss.match(/--sidebar-toggle-clearance:\s*(\d+)px/);
         expect(clearance, '--sidebar-toggle-clearance is not defined').not.toBeNull();
         expect(Number(clearance![1])).toBeGreaterThan(footprint);
     });
 
-    it.each(TOP_ROWS)('%s starts to the right of the button', (selector) => {
+    it.each(TOP_ROWS)('%s starts after the button', (selector) => {
         const escaped = selector.replace('.', '\\.');
         const rule = new RegExp(`(?:^|[},])\\s*${escaped}\\s*\\{([^}]*)\\}`);
         const decls = narrowBlocks()
             .map((block) => block.match(rule)?.[1])
             .filter((d): d is string => d !== undefined)
             .join(';');
-        expect(decls).toMatch(/padding-left:\s*var\(--sidebar-toggle-clearance\)/);
+        expect(decls).toMatch(/padding-inline-start:\s*var\(--sidebar-toggle-clearance\)/);
     });
 });

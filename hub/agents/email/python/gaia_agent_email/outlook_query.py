@@ -85,6 +85,11 @@ _QUOTED_SPAN_RE = re.compile(r'"[^"]*"')
 # reading makes, and precise enough for a recency window, not a ledger.
 _DURATION_UNIT_DAYS = {"d": 1, "m": 30, "y": 365}
 
+# Every filter-based mailbox query is sorted newest-first. Graph requires the
+# ordered property to appear first in $filter, so an unread/read-only query
+# needs a broad received-date bound before its isRead clause.
+_RECEIVED_DATE_FLOOR_FILTER = "receivedDateTime ge 1900-01-01T00:00:00Z"
+
 
 def _graph_search_param(query: str) -> str:
     """Wrap KQL for Graph ``$search``.
@@ -198,6 +203,16 @@ def translate_query(query: str, *, now: Optional[datetime] = None) -> GraphQuery
             "two separate searches."
         )
     if filters:
-        return GraphQuery(filter=" and ".join(filters))
+        received_date_filters = [
+            value for value in filters if value.startswith("receivedDateTime ")
+        ]
+        other_filters = [
+            value for value in filters if not value.startswith("receivedDateTime ")
+        ]
+        # Microsoft Graph rejects $filter + $orderby=receivedDateTime when the
+        # date predicate is absent or follows another property (#4806).
+        if not received_date_filters:
+            received_date_filters.append(_RECEIVED_DATE_FLOOR_FILTER)
+        return GraphQuery(filter=" and ".join(received_date_filters + other_filters))
 
     return GraphQuery(search=_graph_search_param(query))

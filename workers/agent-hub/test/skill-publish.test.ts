@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
+import { VALID_LANGUAGES, VALID_TYPES } from "../src/manifest";
 import type { CatalogIndex, IndexEntry, SkillManifest } from "../src/types";
 import {
   allowAudit,
@@ -652,8 +653,8 @@ describe("catalog backward compatibility", () => {
 describe("published index.json matches schemas/index.schema.json", () => {
   // The schema declares additionalProperties: false, so a field the Worker emits
   // but the schema never declared would make the published catalog invalid
-  // against its own contract. Checked structurally rather than with a full
-  // validator so the Worker keeps its zero-runtime-dependency footprint.
+  // against its own contract. These top-level checks complement the full
+  // validator run in schema-conformance.test.ts.
   const schema = JSON.parse(
     readFileSync(new URL("../schemas/index.schema.json", import.meta.url), "utf8")
   ) as {
@@ -663,6 +664,8 @@ describe("published index.json matches schemas/index.schema.json", () => {
         properties: {
           id: { pattern: string; maxLength: number };
           type: { enum: string[] };
+          language: { enum: string[] };
+          eval_score: { minimum: number; maximum: number };
           skill_metadata: {
             required: string[];
             properties: { audit: { properties: { verdict: { enum: string[] } } } };
@@ -700,8 +703,7 @@ describe("published index.json matches schemas/index.schema.json", () => {
     expect(missing).toEqual([]);
   });
 
-  // The Worker ships no JSON-Schema validator (zero runtime deps), so the
-  // schema's own discriminating constraints are asserted directly. Without
+  // The schema's own discriminating constraints are asserted directly. Without
   // these the schema could silently drift from the publish validator and
   // legitimately-published entries would be invalid against their own contract.
   describe("the schema's constraints agree with what publish enforces", () => {
@@ -735,6 +737,25 @@ describe("published index.json matches schemas/index.schema.json", () => {
         "component",
         "skill",
       ]);
+    });
+
+    // Skills are validated in skill-manifest.ts, not manifest.ts, and add one
+    // value to each enum: the "skill" lane and the "markdown" instruction-only language.
+    it("declares exactly the types the agent publish validator accepts, plus skill", () => {
+      expect([...schema.definitions.indexEntry.properties.type.enum].sort()).toEqual(
+        [...VALID_TYPES, "skill"].sort()
+      );
+    });
+
+    it("declares exactly the languages the agent publish validator accepts, plus markdown", () => {
+      expect([...schema.definitions.indexEntry.properties.language.enum].sort()).toEqual(
+        [...VALID_LANGUAGES, "markdown"].sort()
+      );
+    });
+
+    it("bounds eval_score to the 0-100 range publish enforces", () => {
+      expect(schema.definitions.indexEntry.properties.eval_score.minimum).toBe(0);
+      expect(schema.definitions.indexEntry.properties.eval_score.maximum).toBe(100);
     });
 
     it("admits only verdicts that can actually reach the catalog", () => {

@@ -88,6 +88,18 @@ class Run:
             self.emit({"type": "done", "message_id": 7, "content": "Hello there"})
             self.end()
             return
+        if self.scenario == "failed":
+            self.emit({"type": "chunk", "content": "Partial answer"})
+            self.emit(
+                {
+                    "type": "done",
+                    "message_id": 11,
+                    "content": "The model rejected this request.",
+                    "failed": True,
+                }
+            )
+            self.end()
+            return
         self.emit({"type": "status", "status": "working", "message": "Planning"})
         self.emit({"type": "status", "status": "working", "message": "Writing"})
         self.emit({"type": "tool_start", "tool": "write_file", "detail": "Write file"})
@@ -677,6 +689,20 @@ def test_finished_turn_is_not_replaced_by_a_replay_of_itself(backend, turns):
     assert backend.attaches == 0
 
 
+def test_failed_done_is_not_replaced_by_a_replay_of_itself(backend, turns):
+    """A failed backend terminal event gets the same short attach grace."""
+    backend.sessions["s1"] = "failed"
+    turns.start("s1", "hi")
+    assert turns.wait("s1", until="idle", timeout_ms=5000)["matched"]
+    backend.lingering.add("s1")
+
+    status = turns.status("s1")
+    assert status["origin"] == "mcp" and status["outcome"] == "error"
+    assert status["error"] == "The model rejected this request."
+    assert turns.wait("s1", until="idle", timeout_ms=1000)["matched"]
+    assert backend.attaches == 0
+
+
 def test_stream_that_closes_without_done_is_not_a_success(backend, turns):
     backend.sessions["s1"] = "drop"
     turns.start("s1", "hi")
@@ -692,7 +718,7 @@ def test_reads_before_any_turn_are_explicit(turns):
     assert turns.metrics("s1")["status"] == "error"
 
 
-# ── Folding rules (mirror ChatView.tsx) ────────────────────────────────────
+# ── Folding rules (mirror ChatView.tsx, streamSteps.ts, chatStream.ts) ──
 
 
 def test_fold_matches_the_ui():
@@ -716,6 +742,76 @@ def test_fold_matches_the_ui():
         assert t.content() == "Before\n\nAfter"
         t.apply({"type": "answer", "content": "Final"})
         assert t.content() == "Final"
+
+
+def test_reasoning_a_lone_close_tag_ended_leaves_the_answer():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "Check the file first."})
+    t.apply(
+        {
+            "type": "thinking",
+            "content": "Check the file first.",
+            "retracts_answer": True,
+        }
+    )
+    t.apply({"type": "chunk", "content": "It says hi."})
+    with t.cond:
+        assert t.content() == "It says hi."
+        assert t.steps[-1]["detail"] == "Check the file first."
+
+
+def test_a_reply_cut_off_by_a_server_restart_is_dropped():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "The ledger bal"})
+    t.apply(
+        {
+            "type": "status",
+            "status": "warning",
+            "phase": "answer_restart",
+            "message": "The answer so far was cut off.",
+            "retracts_answer": True,
+        }
+    )
+    t.apply({"type": "chunk", "content": "The ledger balances."})
+    with t.cond:
+        assert t.content() == "The ledger balances."
+
+
+def test_fatal_agent_error_and_failed_done_are_reported_as_error():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "chunk", "content": "Partial answer"})
+    t.apply({"type": "agent_error", "content": "Policy blocked", "fatal": True})
+    t.apply({"type": "done", "content": "Partial answer", "failed": True})
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == "Policy blocked"
+    assert view["content"] == "Partial answer"
+    assert [s for s in view["steps"] if s["type"] == "error"][0]["success"] is False
+
+
+def test_failed_done_without_fatal_event_keeps_the_failure_reason():
+    t = TurnTracker("s", "mcp")
+    t.apply(
+        {
+            "type": "done",
+            "failed": True,
+            "content": "The model stopped before it could finish.",
+        }
+    )
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == "The model stopped before it could finish."
+
+
+def test_nonfatal_agent_error_does_not_fail_the_turn():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "agent_error", "content": "Retrying"})
+    t.apply({"type": "done", "content": "Recovered"})
+    with t.cond:
+        assert t.outcome == "completed"
+        assert t.error is None
 
 
 def test_metrics_never_invent_zeros():

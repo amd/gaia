@@ -5,10 +5,8 @@
 ``FULL_CORE_TOOLS`` union all ``FULL_BUNDLES`` members must equal the live
 flagship registry **exactly**, in both directions:
 
-* a registry tool covered by neither would still be semantically selectable but
-  could never be pulled in with its cohort, nor recovered through
-  ``load_tools`` — the escape hatch resolves bundle *and* tool names through the
-  bundle reverse index, so an unbundled tool has no way back;
+* a registry tool covered by neither shipped without anyone deciding whether
+  every session should pay for it;
 * a configured name absent from the registry is dead config (or a typo) that
   ``ToolLoader.validate_registry`` rejects at runtime, unless it is declared in
   ``FULL_OPTIONAL_TOOLS``.
@@ -24,22 +22,18 @@ from __future__ import annotations
 import contextlib
 import json
 
-import numpy as np
 import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-from gaia_agent_chat.tool_bundles import (
+from gaia_agent.tool_bundles import (
     FULL_BUNDLES,
     FULL_CORE_TOOLS,
     FULL_OPTIONAL_TOOLS,
     PROFILE_TOOL_CONFIGS,
 )
 
+from gaia.agents.base.tool_loader import thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
-
-#: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max=29 minus 16 CORE leaves 13).
-MAX_BUNDLE_MEMBERS = 6
 
 
 @contextlib.contextmanager
@@ -77,7 +71,7 @@ def flagship_registry():
         )
         assert agent.tool_loader is not None, (
             "the flagship builds no tool loader with dynamic_tools=True — 'full' "
-            "must be in PROFILE_TOOL_CONFIGS, or load_tools never registers."
+            "must be in PROFILE_TOOL_CONFIGS, or search_tools never registers."
         )
         agent._memory_store = object()
         agent._register_tools()
@@ -100,8 +94,8 @@ def test_core_and_bundles_cover_the_flagship_registry_exactly(flagship_registry)
     assert not uncovered, (
         f"flagship tools covered by neither FULL_CORE_TOOLS nor a bundle: "
         f"{uncovered}. Add each to a bundle (or CORE) in "
-        "hub/agents/chat/python/gaia_agent_chat/tool_bundles.py — an uncovered "
-        "tool can never be pulled in with its cohort or recovered via load_tools."
+        "hub/agents/gaia/python/gaia_agent/tool_bundles.py — every registered "
+        "tool must be accounted for."
     )
     assert not dangling, (
         f"FULL_CORE_TOOLS/FULL_BUNDLES names absent from the flagship registry: "
@@ -110,10 +104,43 @@ def test_core_and_bundles_cover_the_flagship_registry_exactly(flagship_registry)
     )
 
 
-def test_escape_hatch_is_registered_and_core(flagship_registry):
-    """Without load_tools in the registry a semantic miss is unrecoverable."""
-    assert "load_tools" in FULL_CORE_TOOLS
-    assert "load_tools" in flagship_registry
+def test_core_is_the_list_every_session_starts_on():
+    """A change here moves the first-turn cost of every session."""
+    assert FULL_CORE_TOOLS == {
+        "analyze_data_file",
+        "browse_directory",
+        "edit_file",
+        "fetch_page",
+        "find_files",
+        "forget",
+        "forget_everything",
+        "index_document",
+        "load_skill",
+        "query_documents",
+        "query_specific_file",
+        "read_file",
+        "read_tool_output",
+        "recall",
+        "remember",
+        "request_user_input",
+        "run_python",
+        "run_shell_command",
+        "search_file",
+        "search_past_conversations",
+        "search_tools",
+        "search_web",
+        "set_loop_state",
+        "sleep",
+        "summarize_document",
+        "update_memory",
+        "write_file",
+    }
+
+
+def test_search_tools_is_registered_and_core(flagship_registry):
+    """Without search_tools a retrieval miss is unrecoverable."""
+    assert "search_tools" in FULL_CORE_TOOLS
+    assert "search_tools" in flagship_registry
 
 
 def test_load_skill_is_registered_and_core(flagship_registry):
@@ -123,7 +150,7 @@ def test_load_skill_is_registered_and_core(flagship_registry):
 
 
 def test_file_edit_tools_are_core(flagship_registry):
-    """Semantic selection cannot rank editing (#3752) — it must be always-on."""
+    """Retrieval cannot rank editing (#3752) — it must be always-on."""
     assert {"write_file", "edit_file"} <= set(FULL_CORE_TOOLS)
     assert {"write_file", "edit_file"} <= flagship_registry
 
@@ -132,71 +159,6 @@ def test_run_python_is_core(flagship_registry):
     """Without it the model guesses a number or leaves a script in the repo."""
     assert "run_python" in FULL_CORE_TOOLS
     assert "run_python" in flagship_registry
-
-
-def test_sleep_is_offered_on_a_turn_that_never_mentions_waiting(monkeypatch):
-    """A rate limit arrives mid-turn, so the wait has to be on offer already.
-
-    The request below says nothing about waiting. Were ``sleep`` left to
-    semantic selection, it would be missing exactly when GitHub answers with
-    "rate limit exceeded, resets at 19:43". The stub embedder matches no tool
-    at all, so only the always-on set is offered: the worst case.
-    """
-    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
-    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
-    monkeypatch.setattr(
-        GaiaAgent, "_embed_text", lambda _self, _t: np.zeros(8, dtype=np.float32)
-    )
-    monkeypatch.setattr(
-        GaiaAgent,
-        "_embed_texts_batch",
-        lambda _self, texts: np.zeros((len(texts), 8), dtype=np.float32),
-    )
-    with _isolated_registry():
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
-        # A non-None store is all the loader gates on; see flagship_registry.
-        agent._memory_store = object()
-        registry = set(agent._tools_registry)
-        selected = agent._select_tools_for_turn(
-            "Issue #4 in kovtcharov/toybox asks a question. Draft the reply."
-        )
-
-    assert "sleep" in registry
-    assert selected is not None, "dynamic selection fell back to the full registry"
-    assert len(selected) < len(registry), "nothing was trimmed; the test proves nothing"
-    assert "sleep" in selected
-
-
-def test_shell_is_offered_when_the_user_asks_for_it(monkeypatch):
-    """Asking for the shell by name must put the shell on offer.
-
-    The stub embedder scores every tool the same, so all of them clear the
-    threshold and the cap decides. That is the real-embedder failure: about 90
-    tools matched "use your shell tool to run pwd" and run_shell_command was
-    skipped at the cap, so the agent guessed the directory.
-    """
-    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
-    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
-    monkeypatch.setattr(
-        GaiaAgent, "_embed_text", lambda _self, _t: np.ones(8, dtype=np.float32)
-    )
-    monkeypatch.setattr(
-        GaiaAgent,
-        "_embed_texts_batch",
-        lambda _self, texts: np.ones((len(texts), 8), dtype=np.float32),
-    )
-    with _isolated_registry():
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
-        agent._memory_store = object()
-        unrelated = agent._select_tools_for_turn("Summarize my meeting notes.")
-        agent.tool_loader.reset_session()
-        asked = agent._select_tools_for_turn(
-            "Use your shell tool to run pwd and tell me the directory."
-        )
-
-    assert unrelated is not None and asked is not None
-    assert "run_shell_command" not in unrelated, "the cap is not full; proves nothing"
-    assert {"run_shell_command", "get_shell_state"} <= set(asked)
 
 
 def test_skill_catalogue_renders_for_the_flagship():
@@ -208,17 +170,6 @@ def test_skill_catalogue_renders_for_the_flagship():
         prompt = agent.system_prompt
     assert "==== SKILLS ====" in prompt
     assert "- github-triage: " in prompt
-
-
-def test_bundle_menu_renders_for_the_flagship():
-    """An undiscoverable escape hatch is the same as no escape hatch."""
-    with _isolated_registry(), pytest.MonkeyPatch.context() as mp:
-        mp.setenv("GAIA_MEMORY_DISABLED", "1")
-        agent = GaiaAgent(config=GaiaAgentConfig(silent_mode=True, dynamic_tools=True))
-        prompt = agent.system_prompt
-    assert "==== LOADABLE TOOL BUNDLES ====" in prompt
-    for bundle in FULL_BUNDLES:
-        assert f"- {bundle.name}:" in prompt
 
 
 def test_optional_tools_are_present_on_a_full_install(flagship_registry):
@@ -236,9 +187,9 @@ def test_optional_tools_are_present_on_a_full_install(flagship_registry):
 
 
 def test_core_is_subset_of_bundle_union():
-    """Every CORE tool is in a bundle too, except the CORE-only load_tools."""
+    """Every CORE tool is in a bundle too, except the CORE-only search_tools."""
     assert set(FULL_CORE_TOOLS) - _bundle_members() == {
-        "load_tools",
+        "search_tools",
         "read_tool_output",
     }
 
@@ -246,24 +197,6 @@ def test_core_is_subset_of_bundle_union():
 def test_bundles_have_unique_names():
     names = [b.name for b in FULL_BUNDLES]
     assert len(names) == len(set(names)), f"duplicate bundle names: {names}"
-
-
-def test_bundles_stay_small():
-    oversized = {
-        b.name: len(b.members)
-        for b in FULL_BUNDLES
-        if len(b.members) > MAX_BUNDLE_MEMBERS
-    }
-    assert not oversized, (
-        f"bundles over {MAX_BUNDLE_MEMBERS} members: {oversized}. One pull-in "
-        "must not be able to exhaust the dynamic slots — split the group."
-    )
-
-
-def test_bundles_carry_a_description():
-    """The description IS the menu line the model picks a bundle from."""
-    missing = [b.name for b in FULL_BUNDLES if not b.description.strip()]
-    assert not missing, f"bundles with no menu description: {missing}"
 
 
 def test_full_profile_is_wired_to_the_full_config():
@@ -276,7 +209,7 @@ def test_full_profile_is_wired_to_the_full_config():
 def test_trimming_actually_saves_most_of_the_tool_payload():
     """The point of the whole change, pinned so a regression is visible.
 
-    Measured on the real renderers with tiktoken (cl100k) as a tokenizer-agnostic
+    Measured on the real renderer with tiktoken (cl100k) as a tokenizer-agnostic
     proxy — Gemma's own counts differ, but the ratio is what this guards. Uses
     the offline skeleton: constructing a live GaiaAgent preloads a model.
     """
@@ -287,39 +220,19 @@ def test_trimming_actually_saves_most_of_the_tool_payload():
     agent = build_full_agent_skeleton()
     registry = agent._tools_registry
 
-    def cost(names):
-        schemas = json.dumps(agent._build_openai_tool_schemas(filter_to=names))
-        return len(enc.encode(schemas)) + len(
-            enc.encode(agent._format_tools_for_prompt(filter_to=names))
-        )
+    def thin_cost(names):
+        schemas = agent._build_openai_tool_schemas(filter_to=names)
+        return len(enc.encode(json.dumps([thin_tool_schema(s) for s in schemas])))
 
-    everything = cost(None)
-    core_only = cost(sorted(n for n in FULL_CORE_TOOLS if n in registry))
-    # A saturated session: CORE plus enough dynamic slots to reach the cap.
-    cap = GaiaAgentConfig().dynamic_tools_max
-    saturated_names = sorted(registry)[:cap]
-    saturated = cost(saturated_names)
+    everything = len(enc.encode(json.dumps(agent._build_openai_tool_schemas())))
+    core = thin_cost(agent.tool_loader.offered(registry))
+    full = thin_cost(list(registry))
 
-    assert core_only < everything * 0.30, (
-        f"CORE-only tool prompt is {core_only} tokens against {everything} for "
-        "the whole registry — the always-on set has grown too expensive."
+    assert core < everything * 0.20, (
+        f"the list a session starts on is {core} tokens against {everything} for "
+        "every tool in full — the always-on set has grown too expensive."
     )
-    assert saturated < everything * 0.55, (
-        f"a capped-out session costs {saturated} tokens against {everything} "
-        f"unfiltered (cap={cap}). Either the cap or CORE has drifted up."
-    )
-
-
-def test_cap_leaves_room_for_two_whole_bundles():
-    """CORE plus the two largest bundles must fit under the cap.
-
-    Otherwise the flagship LRU-evicts mid-turn on a perfectly ordinary
-    two-capability question instead of loading both cohorts.
-    """
-    cap = GaiaAgentConfig().dynamic_tools_max
-    two_largest = sorted((len(b.members) for b in FULL_BUNDLES), reverse=True)[:2]
-    need = len(FULL_CORE_TOOLS) + sum(two_largest)
-    assert cap >= need, (
-        f"dynamic_tools_max={cap} but CORE ({len(FULL_CORE_TOOLS)}) plus the two "
-        f"largest bundles ({two_largest}) needs {need}."
+    assert full < everything * 0.50, (
+        f"the full thin list is {full} tokens against {everything} in full — a "
+        "jump is meant to stay cheap."
     )

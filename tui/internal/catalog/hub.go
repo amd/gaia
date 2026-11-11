@@ -13,23 +13,6 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
-// Security tiers published in the hub index. Anything that is not
-// TierVerified runs unaudited third-party code, so installing it needs the
-// user's explicit opt-in (the daemon answers 403 until it gets one).
-const (
-	TierVerified     = "verified"
-	TierCommunity    = "community"
-	TierExperimental = "experimental"
-)
-
-// Install status values reported by GET /daemon/v1/agents/{id}/install-status.
-const (
-	InstallQueued    = "queued"
-	InstallRunning   = "running"
-	InstallCompleted = "completed"
-	InstallFailed    = "failed"
-)
-
 // HubEntry is one agent row of GET /daemon/v1/catalog: the hub index entry
 // (schema workers/agent-hub/schemas/index.schema.json) merged with the local
 // install state the daemon reads from the ~/.gaia/agents/*/.installed
@@ -55,12 +38,6 @@ type HubEntry struct {
 	Supervised       bool   `json:"supervised"`
 }
 
-// RequiresTrust reports whether installing this agent needs the user's explicit
-// opt-in. It mirrors gaia.hub.catalog._requires_trust — the daemon's catalog
-// route does not compute the flag, so the client derives it from the same rule
-// rather than assuming "no flag" means "safe".
-func (e HubEntry) RequiresTrust() bool { return e.SecurityTier != TierVerified }
-
 // HubCatalog is the body of GET /daemon/v1/catalog.
 type HubCatalog struct {
 	Agents      []HubEntry `json:"agents"`
@@ -74,21 +51,6 @@ type HubCatalog struct {
 	UnsupervisedFiltered []string `json:"unsupervised_filtered"`
 }
 
-// InstallProgress is the body of GET /daemon/v1/agents/{id}/install-status.
-type InstallProgress struct {
-	AgentID string  `json:"agent_id"`
-	Status  string  `json:"status"`
-	Phase   string  `json:"phase"`
-	Percent float64 `json:"percent"`
-	Version string  `json:"version"`
-	Error   string  `json:"error"`
-}
-
-// Terminal reports whether polling can stop.
-func (p InstallProgress) Terminal() bool {
-	return p.Status == InstallCompleted || p.Status == InstallFailed
-}
-
 // AgentRuntime is one entry of GET /daemon/v1/agents — a registered sidecar and
 // whether it is currently running. Never carries a token.
 type AgentRuntime struct {
@@ -98,22 +60,6 @@ type AgentRuntime struct {
 	PID          int    `json:"pid"`
 	Port         int    `json:"port"`
 	AgentVersion string `json:"agent_version"`
-}
-
-// TrustRequiredError is the daemon's 403 refusal to install a non-verified
-// agent without an explicit opt-in.
-//
-// It is a distinct type on purpose: the ONLY correct response is to show the
-// user what they would be trusting and retry after they say yes. A caller that
-// re-sends with trusted=true on its own has defeated the gate, so this error
-// never carries the retry itself.
-type TrustRequiredError struct {
-	AgentID string
-	Detail  string
-}
-
-func (e *TrustRequiredError) Error() string {
-	return fmt.Sprintf("installing '%s' needs an explicit trust opt-in: %s", e.AgentID, e.Detail)
 }
 
 // HubError is any other actionable failure from a hub route.
@@ -137,9 +83,7 @@ func (e *HubError) Error() string {
 // HubClient drives the daemon's Agent Hub control plane.
 //
 // It holds the daemon Instance whose token last authorized a call, because that
-// token rotates on every daemon restart. Safe for concurrent use — the hub
-// screen polls install-status from a Bubble Tea command while the user keeps
-// typing.
+// token rotates on every daemon restart. Safe for concurrent use.
 type HubClient struct {
 	dc *daemon.Client
 
@@ -161,12 +105,11 @@ func NewHubClientWith(dc *daemon.Client) *HubClient { return &HubClient{dc: dc} 
 
 // connect resolves a daemon instance. start=false only attaches to a daemon
 // that is already running (the hub's background catalog load must not spawn one
-// behind the user's back); start=true starts one, which is what an explicit
-// install/uninstall/list asks for.
+// behind the user's back); start=true starts one.
 func (h *HubClient) connect(ctx context.Context, start bool) (*daemon.Instance, error) {
 	// Held across the whole discovery, not just the cache read: a check-then-act
-	// would let two concurrent callers (the install poll and a refresh) each
-	// decide no daemon was running and each start one.
+	// would let two concurrent callers each decide no daemon was running and
+	// each start one.
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
 
@@ -209,8 +152,7 @@ func (h *HubClient) forget() {
 
 // call performs one authenticated request. out (when non-nil) receives the
 // decoded 2xx body. A non-2xx status is returned with the daemon's actionable
-// `detail` so the caller can branch on the code (403 → trust gate) without
-// re-reading the body.
+// `detail` so the caller can branch on the code without re-reading the body.
 func (h *HubClient) call(
 	ctx context.Context,
 	start bool,
@@ -279,7 +221,7 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 		// This one call has a way through that needs no daemon at all.
 		var missing *daemon.RouteMissingError
 		if errors.As(err, &missing) {
-			missing.Alternative = "`gaia tui status` still works meanwhile — " +
+			missing.Alternative = "`gaia-tui status` still works meanwhile — " +
 				"it reads what is installed straight from disk"
 		}
 		return nil, err
@@ -288,81 +230,6 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 		return nil, &HubError{Op: "read the agent catalog", Status: code, Detail: detail}
 	}
 	return &out, nil
-}
-
-// Install queues an install of agentID.
-//
-// trusted is the user's explicit opt-in to run a non-verified agent's code. It
-// MUST come from a real confirmation the user answered — never from a retry
-// this client decided to make. A refusal comes back as *TrustRequiredError.
-func (h *HubClient) Install(ctx context.Context, agentID, version string, trusted bool) error {
-	payload := map[string]any{"trusted": trusted}
-	if version != "" {
-		payload["version"] = version
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return &HubError{Op: fmt.Sprintf("build the install request for '%s'", agentID), Detail: err.Error()}
-	}
-
-	code, detail, err := h.call(ctx, true, daemon.Request{
-		Method: http.MethodPost,
-		Path:   daemon.APIPrefix + "/agents/" + agentID + "/install",
-		Body:   body,
-		Header: http.Header{"Content-Type": []string{"application/json"}},
-		Op:     fmt.Sprintf("install '%s' via the daemon", agentID),
-	}, nil)
-	if err != nil {
-		return err
-	}
-	switch code {
-	case http.StatusAccepted, http.StatusOK:
-		return nil
-	case http.StatusForbidden:
-		return &TrustRequiredError{AgentID: agentID, Detail: detail}
-	default:
-		return &HubError{Op: fmt.Sprintf("install '%s'", agentID), Status: code, Detail: detail}
-	}
-}
-
-// InstallStatus polls the progress of an install.
-func (h *HubClient) InstallStatus(ctx context.Context, agentID string) (*InstallProgress, error) {
-	var out InstallProgress
-	code, detail, err := h.call(ctx, false, daemon.Request{
-		Method: http.MethodGet,
-		Path:   daemon.APIPrefix + "/agents/" + agentID + "/install-status",
-		Op:     fmt.Sprintf("read the install status of '%s'", agentID),
-	}, &out)
-	if err != nil {
-		return nil, err
-	}
-	if code != http.StatusOK {
-		return nil, &HubError{
-			Op:     fmt.Sprintf("read the install status of '%s'", agentID),
-			Status: code,
-			Detail: detail,
-		}
-	}
-	if out.AgentID == "" {
-		out.AgentID = agentID
-	}
-	return &out, nil
-}
-
-// Uninstall stops the sidecar and removes its install directory.
-func (h *HubClient) Uninstall(ctx context.Context, agentID string) error {
-	code, detail, err := h.call(ctx, true, daemon.Request{
-		Method: http.MethodDelete,
-		Path:   daemon.APIPrefix + "/agents/" + agentID,
-		Op:     fmt.Sprintf("uninstall '%s' via the daemon", agentID),
-	}, nil)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusOK {
-		return &HubError{Op: fmt.Sprintf("uninstall '%s'", agentID), Status: code, Detail: detail}
-	}
-	return nil
 }
 
 // Agents lists the sidecars the daemon knows about and whether they run.
@@ -393,9 +260,8 @@ func (h *HubClient) Instance() *daemon.Instance {
 	return h.inst
 }
 
-// stripStatusPrefix drops the "HTTP 403: " that ErrorDetail prepends. The trust
-// gate quotes the daemon's sentence to the user; a status line in the middle of
-// a security prompt is noise, and the code is already implied by the prompt.
+// stripStatusPrefix drops the "HTTP 503: " that ErrorDetail prepends; callers
+// wrap the detail in a message that already names the status.
 func stripStatusPrefix(detail string) string {
 	if !strings.HasPrefix(detail, "HTTP ") {
 		return detail
@@ -404,34 +270,4 @@ func stripStatusPrefix(detail string) string {
 		return detail[i+2:]
 	}
 	return detail
-}
-
-// WithoutCLIHint drops the daemon's trailing "From the CLI: `…`." sentence.
-//
-// The daemon appends it for callers that have no prompt of their own. A client
-// that DOES show its own next step must not print both — two different
-// commands four lines apart is worse than one.
-func WithoutCLIHint(detail string) string {
-	if i := strings.Index(detail, "From the CLI:"); i >= 0 {
-		return strings.TrimSpace(detail[:i])
-	}
-	return detail
-}
-
-// FormatSize renders a download size the way a person reads it. 0 means the
-// catalog entry carried no size, which is reported as "unknown" rather than
-// "0 B" — a confident wrong number is worse than an honest gap.
-func FormatSize(bytes int64) string {
-	switch {
-	case bytes <= 0:
-		return "unknown size"
-	case bytes < 1024:
-		return fmt.Sprintf("%d B", bytes)
-	case bytes < 1024*1024:
-		return fmt.Sprintf("%.0f KB", float64(bytes)/1024)
-	case bytes < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
-	default:
-		return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
-	}
 }

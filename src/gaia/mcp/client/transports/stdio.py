@@ -713,6 +713,32 @@ class StdioTransport(MCPTransport):
             self._request_lock.release()
             self._track_children()
 
+    def send_notification(self, method: str, params: Dict[str, Any] = None) -> None:
+        """Write a JSON-RPC notification to stdin; servers never answer one.
+
+        Raises:
+            RuntimeError: If not connected or the process died
+            TimeoutError: If the server stops reading its input
+        """
+        proc = self._process
+        if proc is None:
+            raise RuntimeError("Transport not connected")
+        if proc.poll() is not None:
+            raise self._process_died_error()
+
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params:
+            message["params"] = params
+        deadline = time.monotonic() + self.timeout
+        # A write racing a request's write would interleave the two lines.
+        self._take_request_lock(method, self.timeout, deadline)
+        try:
+            if self.debug:
+                logger.debug(f"Sending notification: {json.dumps(message, indent=2)}")
+            self._write(proc, message, deadline)
+        finally:
+            self._request_lock.release()
+
     def _take_request_lock(self, method: str, wait_s: float, deadline: float) -> None:
         """Wait for the request in flight to finish, honouring Stop and the deadline."""
         while not self._request_lock.acquire(timeout=_POLL_INTERVAL_S):

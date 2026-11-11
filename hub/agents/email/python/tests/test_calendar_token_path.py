@@ -18,11 +18,12 @@ import pytest
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia.connectors.errors import AuthRequiredError  # noqa: E402
 from gaia_agent_email.scopes import (  # noqa: E402
     AGENT_NAMESPACED_ID,
     CALENDAR_SCOPES,
 )
+
+from gaia.connectors.errors import AuthRequiredError  # noqa: E402
 
 
 def test_get_calendar_token_happy_path():
