@@ -91,6 +91,23 @@ class TestRedact:
         assert reader.redact(line, ["lemonade"]) == line
         assert reader.redact_lines(line.encode(), ["lemonade"]) == line.encode()
 
+    @pytest.mark.parametrize(
+        "key", ["lemonade1", "lemonades", "mylemonade", "lemonade-prod", "Sunshine"]
+    )
+    def test_a_key_that_only_contains_a_placeholder_word_is_still_scrubbed(self, key):
+        line = f"connecting with {key} now"
+        assert key not in reader.redact(line, [key])
+        assert key.encode() not in reader.redact_lines(line.encode(), [key])
+
+    @pytest.mark.parametrize("key", ["LEMONADE", "Ollama", "ChangeMe"])
+    def test_a_placeholder_is_matched_whatever_its_case(self, key, monkeypatch):
+        monkeypatch.setenv("SOME_LOCAL_API_KEY", f"  {key}  ")
+        assert key not in reader.env_secrets()
+
+    def test_a_placeholder_after_a_password_label_is_still_scrubbed(self):
+        out = reader.redact("password=changeme", ["changeme"])
+        assert "changeme" not in out
+
     def test_ordinary_lines_and_schemas_stay_readable(self):
         line = "2026-11-04 10:06:05.218 [Info] (Server) Starting HTTP server on localhost:56150"
         assert reader.redact(line) == line
