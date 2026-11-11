@@ -39,6 +39,9 @@ _BACKCHANNELS = frozenset(
     cool nice great wow oh ah""".split()
 )
 
+#: Sounds of someone thinking; alone they ask for nothing.
+_HESITATIONS = frozenset("um uh er erm hmm mm ah oh so well and".split())
+
 #: Short words that do take the floor.
 _STOP_WORDS = frozenset("stop wait no hold cancel pause quiet enough".split())
 
@@ -160,6 +163,10 @@ class TurnTaker:
     def timeout(self) -> Decision:
         """The hold ran out with nothing more said."""
         if not self._segments:
+            return Decision()
+        if all(w in _HESITATIONS for w in words(" ".join(self._segments))):
+            # "Um…" and then nothing is not a request.
+            self._segments = []
             return Decision()
         return Decision(turn=self._take())
 

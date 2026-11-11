@@ -153,6 +153,20 @@ export function yesOrNo(text: string): boolean | null {
     return null;
 }
 
+const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk|speak|listen)(ing)?\b|\bnot talking to you\b|\b(be|stay|keep) quiet\b|\bignore (us|me|this|that)\b|\bgo to sleep\b|\bstand ?by\b|\bavoid speaking\b/i;
+const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:gaia|gaya|gaea|gaiya|kaia|guya)\b[\s,.!?:-]*/i;
+
+/** Whether `text` asks GAIA to stay out of the conversation. */
+export function asksForQuiet(text: string): boolean {
+    return QUIET.test(text) && !NAME.test(text.replace(QUIET, ''));
+}
+
+/** What follows GAIA's name (maybe nothing); null when she was not addressed. */
+export function afterName(text: string): string | null {
+    const hit = NAME.exec(text);
+    return hit ? text.slice(hit.index + hit[0].length).trim() : null;
+}
+
 const STOP_LEAD = /^\W*(stop|wait|cancel|never ?mind|hold on|hang on|actually|no)\b[\s,.!-]*/i;
 
 /** What follows a leading "stop" or "wait" (maybe nothing); null when `text` is not telling GAIA to stop. */
@@ -379,8 +393,31 @@ function onEvent(event: ServerEvent): void {
                 }
                 return;
             }
-            addRow({ kind: 'user', text });
-            startTurn(text);
+            let said = text;
+            if (get().standby) {
+                // Asked to stay out of it: only her name brings her back.
+                const rest = afterName(text);
+                if (rest === null) {
+                    set({ heard: '', heardPartial: false, phase: resting() });
+                    return;
+                }
+                set({ standby: false });
+                if (!rest) {
+                    addRow({ kind: 'user', text });
+                    say('voice.standbyOff');
+                    set({ phase: resting() });
+                    return;
+                }
+                said = rest;
+            } else if (asksForQuiet(text)) {
+                addRow({ kind: 'user', text });
+                set({ standby: true, phase: resting() });
+                note('voice.standbyOn');
+                say('voice.standbyOn');
+                return;
+            }
+            addRow({ kind: 'user', text: said });
+            startTurn(said);
             return;
         }
         case 'speaking':

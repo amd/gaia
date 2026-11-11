@@ -156,6 +156,8 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
 
     const failed = !!error;
     const shownPhase: VoicePhase = failed ? 'paused' : phase;
+    const standby = useVoiceStore((s) => s.standby);
+    const stateKey = `voice.state.${standby && shownPhase === 'listening' ? 'standby' : shownPhase}` as const;
     const level = shownPhase === 'speaking' ? voiceLevels.speech : voiceLevels.mic;
     const englishOnly = !!status && !status.speaks;
     const holdable = pushToTalk && !failed && (phase === 'ptt_idle' || phase === 'listening');
@@ -215,10 +217,10 @@ export function VoiceScreen({ phone, prompt }: { phone: boolean; prompt?: ReactN
                     <VoiceViz className="vs-viz" state={vizState(phase, failed)} level={level} />
                     <div
                         className={`vs-state is-${shownPhase}${SHIMMERS.has(shownPhase) ? ' is-live' : ''}`}
-                        data-word={t.bare(`voice.state.${shownPhase}`)}
+                        data-word={t.bare(stateKey)}
                         aria-live="polite"
                     >
-                        {t.bare(`voice.state.${shownPhase}`)}
+                        {t.bare(stateKey)}
                     </div>
                 </div>
                 <div className="vs-lower">
