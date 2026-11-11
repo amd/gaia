@@ -363,6 +363,8 @@ let downloadEpoch = 0;
 const prefetching = new Map();
 // The user asked for this download, so it may install on quit with auto-update off.
 let installRequested = false;
+// The user chose to restart into the update: the quit runs its installer.
+let installingNow = false;
 // The file was unreadable at launch, so a pin it holds was never loaded.
 let pinUnknown = false;
 let scheduledTimeout = null;
@@ -1434,6 +1436,7 @@ async function restartToInstall() {
   }
   log("info", "User chose to restart — calling quitAndInstall");
   _recordInstallAttempt();
+  installingNow = true;
   // Silent: the installer wizard would otherwise wait for clicks. Force-run
   // brings the app straight back.
   autoUpdaterRef.quitAndInstall(!wizardNextInstall, true);
@@ -1883,6 +1886,12 @@ function _onBeforeQuit(event) {
   _recordInstallAttempt();
 }
 
+/** Whether this quit hands over to an update's installer, which replaces the app's files. */
+function installsOnQuit() {
+  if (!autoUpdaterRef || state.status !== STATES.DOWNLOADED) return false;
+  return installingNow || Boolean(autoUpdaterRef.autoInstallOnAppQuit);
+}
+
 /** Tear down timers and IPC handlers. Safe to call multiple times. */
 function destroy() {
   if (initialCheckTimeout) {
@@ -1917,6 +1926,7 @@ module.exports = {
   setIncludePrereleases,
   downloadUpdate,
   restartToInstall,
+  installsOnQuit,
   STATES,
   // For tests: init() runs it on a timer.
   _seedInstalledBlockmap,

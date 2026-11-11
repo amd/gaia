@@ -198,6 +198,41 @@ class TestMailProviderMigration:
             database.close()
 
 
+class TestLegacyAgentModeMigration:
+    """A stored agent_mode 'autonomous' (#2005) is rewritten on open."""
+
+    def test_autonomous_is_rewritten_to_goal_driven_on_open(self, tmp_path, caplog):
+        path = str(tmp_path / "chat.db")
+        ChatDatabase(path).close()
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) "
+            "VALUES ('agent_mode', 'autonomous')"
+        )
+        conn.commit()
+        conn.close()
+
+        with caplog.at_level("WARNING", logger="gaia.ui.database"):
+            database = ChatDatabase(path)
+        try:
+            assert database.get_setting("agent_mode") == "goal_driven"
+            assert any("2005" in r.getMessage() for r in caplog.records)
+        finally:
+            database.close()
+
+    @pytest.mark.parametrize("mode", ["manual", "goal_driven"])
+    def test_other_modes_are_left_alone(self, tmp_path, mode):
+        path = str(tmp_path / "chat.db")
+        database = ChatDatabase(path)
+        database.set_setting("agent_mode", mode)
+        database.close()
+        database = ChatDatabase(path)
+        try:
+            assert database.get_setting("agent_mode") == mode
+        finally:
+            database.close()
+
+
 class TestTitleIsCustom:
     """Sessions must record whether their title was explicitly set (#2165)
     so the auto-retitler never overwrites a user/API-chosen title."""
@@ -976,6 +1011,7 @@ class TestSchemaCurrentCheck:
         "table, column",
         [
             ("sessions", "device"),
+            ("messages", "library_notices"),
             ("messages", "search_text"),
             ("messages", "stopped"),
             ("documents", "error_kind"),

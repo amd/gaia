@@ -68,6 +68,8 @@ class Rule:
     field: str
     # A required target that is absent fails instead of skipping.
     required: bool = False
+    # Written before the version on stamp; never compared in --check.
+    version_prefix: str = ""
 
 
 @dataclass
@@ -167,12 +169,15 @@ def build_rules() -> list[Rule]:
         # rendered copy instead of the mutable GitHub main blob. The tag is created
         # at release time on the stamped commit, so the links resolve once the
         # release that ships them is published.
+        # Matches either tag form (0.6.0 shipped as agent-pkg-email-0.6.0), but a
+        # stamp always writes the v-form that release_agent_email.yml documents.
         *(
             Rule(
                 f"npm {name} pinned doc links",
                 NPM_ROOT / name,
-                re.compile(r"(/amd/gaia/blob/agent-pkg-email-v)([^\"/\s)]+)(/)"),
+                re.compile(r"(/amd/gaia/blob/agent-pkg-email-)v?([^\"/\s)]+)(/)"),
                 "pinned doc link version",
+                version_prefix="v",
             )
             for name in ("README.md", "CHANGELOG.md", "EVALUATION.md")
         ),
@@ -210,7 +215,8 @@ def process(version: str, check_only: bool) -> Result:
             result.already_ok.append(rule.label)
             continue
         new_text = rule.pattern.sub(
-            lambda m: f"{m.group(1)}{version}{m.group(3)}", text
+            lambda m: f"{m.group(1)}{rule.version_prefix}{version}{m.group(3)}",
+            text,
         )
         rule.path.write_text(new_text, encoding="utf-8")
         old = ", ".join(sorted(current_values))

@@ -18,4 +18,8 @@ class MailboxAuthError(MailboxError):
     """The mailbox rejected our credentials or refused the requested scope."""
 
 
-__all__ = ["MailboxAuthError", "MailboxError"]
+class MailboxOutcomeUnknown(MailboxError):
+    """A write went out and no clear answer came back, so it may have taken effect."""
+
+
+__all__ = ["MailboxAuthError", "MailboxError", "MailboxOutcomeUnknown"]

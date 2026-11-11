@@ -125,12 +125,26 @@ def test_hand_added_plain_env_value_is_kept(gaia_home):
 
 
 @pytest.mark.asyncio
-async def test_connector_test_passes_for_a_token_saved_before_rename(gaia_home):
+async def test_connector_test_passes_for_a_token_saved_before_rename(
+    gaia_home, monkeypatch
+):
     _save_github_before_rename(gaia_home)
+    # Test starts the server; a unit test stands in for the real npx process.
+    started = []
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server._start_once",
+        lambda name, entry: started.append((name, entry))
+        or {"ok": True, "detail": "started"},
+    )
 
     result = await McpServerHandler().test(_GITHUB)
 
     assert result["ok"] is True
+    [(name, entry)] = started
+    assert name == _GITHUB.id
+    assert entry["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"] == {
+        "$keyring": f"{SERVICE_NAME}:{OLD_GITHUB_SLOT}"
+    }
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,8 @@ import { AudioCard } from './AudioCard';
 import { DiffCard } from './DiffCard';
 import { ConfirmationCard } from './ConfirmationCard';
 import { NeedsInputCard } from './NeedsInputCard';
+import { GuideCard } from './guide/GuideCard';
+import { CalculatorCard } from './calculator/CalculatorCard';
 
 export type CardComponent = ComponentType<{ data: unknown }>;
 
@@ -60,4 +62,6 @@ export const CARD_REGISTRY: Record<string, CardComponent> = {
     diff: DiffCard,
     needs_confirmation: ConfirmationCard,
     needs_input: NeedsInputCard,
+    guide: GuideCard,
+    calculator: CalculatorCard,
 };

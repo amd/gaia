@@ -36,7 +36,7 @@ const session = (id: string, title: string, minutesAgo: number, messages: number
     inference_description: 'Using Gemma-4-E4B-it-GGUF on this machine.',
 });
 
-const SESSIONS = [
+export const SESSIONS = [
     session(ANSWER_SESSION, 'Rainier weather and Aug 28 action items', 2, 2),
     session('a1b2c3d4-0000-4000-8000-000000000002', 'Draft volunteer email to the Kestrel trail crew', 20, 4),
     session('a1b2c3d4-0000-4000-8000-000000000003', 'kestrel: fix flaky upload test in CI', 95, 6),
@@ -75,6 +75,10 @@ export const MESSAGES = {
                 { id: 3, type: 'tool', label: 'Using tool', tool: 'write_file', detail: 'C:\\Users\\me\\Documents\\action-items.md', result: 'Wrote 412 bytes', active: false, success: true, latencyMs: 40 },
             ],
             inference_stats: { tokens_per_second: 41.2, time_to_first_token: 0.9, output_tokens: 142, input_tokens: 2810 },
+            library_notices: [
+                'schedule-fall.xlsx was kept in your documents library for this chat.',
+                'run.exe couldn\'t be added to your documents (.exe files are not supported).',
+            ],
         },
     ],
     total: 2,
@@ -108,6 +112,30 @@ const DOCUMENTS = {
     total: 2,
     total_size_bytes: 3_264_336,
     total_chunks: 108,
+};
+
+/** A Strix Halo mid-answer: the GPU busy with the model, the NPU idle. */
+const GIB = 1024 ** 3;
+/** A minute of jagged, seeded readings around `base`, like a real counter. */
+const noisy = (base: number, jitter: number, seed: number) => {
+    let x = seed;
+    return Array.from({ length: 60 }, () => {
+        x = (x * 1103515245 + 12345) % 2 ** 31;
+        return Math.max(0, Math.round((base + ((x / 2 ** 31) * 2 - 1) * jitter) * 10) / 10);
+    });
+};
+export const RESOURCES = {
+    interval_ms: 1000,
+    ready: true,
+    cpu: { percent: 20.4, ghz: 4.7, history: noisy(16, 9, 7) },
+    memory: { used_bytes: 45 * GIB, total_bytes: 63.6 * GIB, percent: 70.8, history: noisy(70.6, 0.4, 3) },
+    devices: [
+        { id: '0x00000000_0x0000d938', name: 'AMD Radeon(TM) 8060S Graphics', kind: 'gpu', percent: 14, memory_used_bytes: 30 * GIB, history: noisy(12, 8, 11) },
+        { id: '0x00000000_0x0000f994', name: 'NPU Compute Accelerator Device', kind: 'npu', percent: 0, memory_used_bytes: null, history: noisy(0, 0, 1) },
+    ],
+    networks: [
+        { id: 'net_0006008007000000', name: 'Ethernet 3', description: 'Realtek Gaming 2.5GbE Family Controller', kind: 'ethernet', send_bps: 0, recv_bps: 8000, send_history: noisy(20e3, 20e3, 5), recv_history: noisy(60e3, 55e3, 9) },
+    ],
 };
 
 export const SYSTEM_STATUS = {
@@ -160,22 +188,49 @@ const ROUTES: Record<string, unknown> = {
         error: null, base_url: 'http://127.0.0.1:13305', owner: 'gaia', busy: false, restarting: false, restart_error: null,
     },
     [`GET /chat/context/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, context: null },
+    // A model on this PC: the composer shows no spending.
+    [`GET /spending/chat/${ANSWER_SESSION}`]: {
+        paid: false, model: 'Gemma-4-E4B-it-GGUF', price_source: 'list price',
+        chat: { usd: 0, answers: 0, unpriced_answers: 0, items: [] },
+        today: { usd: 0, answers: 0, unpriced_answers: 0, chats: 0, since: NOW.toISOString() },
+    },
     [`GET /sessions/${ANSWER_SESSION}/changes`]: { turns: [] },
     [`GET /sessions/${ANSWER_SESSION}/changes/total`]: {
         files: [], totals: { files: 0, additions: 0, deletions: 0, uncounted: 0 }, turns: 0, pending: false, untracked: [], incomplete: false,
     },
     [`GET /sessions/${ANSWER_SESSION}/outputs`]: { session_id: ANSWER_SESSION, items: [] },
+    [`GET /sessions/${ANSWER_SESSION}/capabilities`]: {
+        session_id: ANSWER_SESSION, agent_type: 'gaia', skills: [],
+        tools: [
+            { name: 'read_file', description: 'Read a file from disk.', category: 'file_io' },
+            { name: 'fetch_page', description: 'Fetch a web page.', category: 'browser' },
+        ],
+    },
     'GET /chat/permissions': { default_mode: 'ask', sessions: [] },
     [`GET /chat/permissions/${ANSWER_SESSION}`]: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] },
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
     'GET /documents': DOCUMENTS,
-    'GET /agents': { agents: [] },
+    // Installed, so no screen shows the "GAIA agent isn't installed" notice unless its test asks.
+    'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
+    'GET /speech/model': { downloaded: true, size_gb: 0.3 },
+    'GET /spending/prices/fireworks': { provider: 'fireworks', models: [], source: null, note: null },
+    'GET /speech/settings': {
+        voice: 'bf_emma', speed: 125, auto: true, min_speed: 50, max_speed: 200,
+        voices: [
+            { id: 'af_bella', name: 'Bella', accent: 'american', gender: 'female', quality: 'A-' },
+            { id: 'af_nicole', name: 'Nicole', accent: 'american', gender: 'female', quality: 'B-' },
+            { id: 'am_michael', name: 'Michael', accent: 'american', gender: 'male', quality: 'C+' },
+            { id: 'bf_emma', name: 'Emma', accent: 'british', gender: 'female', quality: 'B-' },
+            { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
+        ],
+    },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };
 
@@ -185,7 +240,18 @@ const ROUTES: Record<string, unknown> = {
  * its test by name instead of rendering whatever an empty body produces.
  */
 /** Server-sent event streams the app subscribes to; each opens quiet. */
-const STREAMS = new Set(['GET /sessions/events']);
+const STREAMS = new Set(['GET /sessions/events', 'GET /connectors/events']);
+
+/** A tenth of a second of silence: what POST /speech answers when a reply is read aloud. */
+function silentWav(): Buffer {
+    const rate = 8000, samples = 800;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVE', 8);
+    wav.write('fmt ', 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+    return wav;
+}
 
 export async function mockApi(page: Page): Promise<string[]> {
     const unhandled: string[] = [];
@@ -197,6 +263,10 @@ export async function mockApi(page: Page): Promise<string[]> {
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': no events\n\n' });
             return;
         }
+        if (key === 'POST /speech') {
+            await route.fulfill({ status: 200, contentType: 'audio/wav', body: silentWav() });
+            return;
+        }
         if (!(key in ROUTES)) {
             unhandled.push(key);
             await route.fulfill({ status: 501, contentType: 'application/json', body: JSON.stringify({ detail: `no fixture for ${key}` }) });
@@ -205,6 +275,11 @@ export async function mockApi(page: Page): Promise<string[]> {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ROUTES[key]) });
     });
     return unhandled;
+}
+
+/** No flagship agent installed, so the app shows its "GAIA agent isn't installed" notice. */
+export async function withoutFlagship(page: Page): Promise<void> {
+    await page.route('**/api/agents', (route) => route.fulfill({ json: { agents: [], total: 0 } }));
 }
 
 const modelRow = (id: string, over: Record<string, unknown>) => ({
@@ -267,7 +342,7 @@ export const FAILED_LINK_CHECK = {
 };
 
 /** Settings > Model with `models` on the Local tab; every other answer stays as in ROUTES. */
-export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }): Promise<void> {
+export async function withModelPage(page: Page, models: unknown[], plan: unknown, status: unknown = { state: 'idle' }, fireworks: Record<string, unknown> = {}, localOnly = false): Promise<void> {
     const answers: Record<string, unknown> = {
         'GET /providers/local/models': { provider: 'local', models, memory_gb: 96, memory_source: 'AMD iGPU', capacity_error: null },
         'GET /providers/local/context': MODEL_CONTEXT,
@@ -278,10 +353,12 @@ export async function withModelPage(page: Page, models: unknown[], plan: unknown
         'GET /providers': {
             providers: [
                 { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
-                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.' },
+                { id: 'fireworks', name: 'Fireworks AI', remote: true, models_discovered: true, key_source: 'stored', key_hint: 'a1b2', env_var: 'FIREWORKS_API_KEY', privacy_notice: 'Chat history is sent to Fireworks AI.', ...(localOnly ? { blocked: true, blocked_reason: 'Local only is on; turn it off in Settings to use cloud models.' } : {}), ...fireworks },
             ],
         },
-        'GET /providers/fireworks/models': { provider: 'fireworks', models: FIREWORKS_MODELS },
+        'GET /providers/fireworks/models': localOnly
+            ? { provider: 'fireworks', models: [], blocked: true, blocked_reason: 'Local only is on; turn it off in Settings to use cloud models.' }
+            : { provider: 'fireworks', models: FIREWORKS_MODELS },
         'GET /spending': { month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route: Route) => {
@@ -297,8 +374,14 @@ const skill = (name: string, source: string, description: string, over: Record<s
 });
 
 /** Busy answers for the other Settings panes: grants, many skills, a failed MCP server. */
-export async function withSettingsPanes(page: Page): Promise<void> {
+export async function withSettingsPanes(page: Page, options: { networkPolicy?: 'cloud_allowed' | 'local_ai_only'; policyNotices?: unknown[] } = {}): Promise<void> {
     const answers: Record<string, unknown> = {
+        'GET /settings': {
+            custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
+            dynamic_tools: false, dynamic_tools_locked: false,
+            network_policy: options.networkPolicy ?? 'cloud_allowed', policy_warnings: [],
+            policy_notices: options.policyNotices ?? [],
+        },
         'GET /memory/settings': { memory_enabled: true },
         'GET /skills': {
             skills: [
@@ -323,7 +406,13 @@ export async function withSettingsPanes(page: Page): Promise<void> {
     await page.route('**/api/**', async (route: Route) => {
         const url = new URL(route.request().url());
         const key = `${route.request().method()} ${url.pathname.replace(/^\/api/, '')}`;
-        if (key in answers) await route.fulfill({ json: answers[key] });
+        if (key === 'PUT /settings' && options.networkPolicy === 'cloud_allowed') {
+            await route.fulfill({ json: {
+                custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven',
+                dynamic_tools: false, dynamic_tools_locked: false, network_policy: 'local_ai_only',
+                policy_warnings: [], policy_notices: options.policyNotices ?? [],
+            } });
+        } else if (key in answers) await route.fulfill({ json: answers[key] });
         else await route.fallback();
     });
 }
@@ -335,10 +424,17 @@ const connector = (id: string, display_name: string, type: string, over: Record<
 });
 
 const CONNECTORS = [
-    connector('google', 'Google', 'oauth_pkce', { configured: true, account_id: 'someone.with.a.long.address@example.com' }),
+    connector('google', 'Google', 'oauth_pkce', {
+        configured: true, account_id: 'someone.with.a.long.address@example.com',
+        description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.',
+    }),
     connector('git', 'Git', 'mcp_server', { configured: true }),
     connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'] }),
-    connector('microsoft', 'Microsoft', 'oauth_pkce', { supports_device_code: true }),
+    // The catalog's own description, so the Arabic scenes show its translation.
+    connector('microsoft', 'Microsoft', 'oauth_pkce', {
+        supports_device_code: true,
+        description: 'Connect GAIA to your personal Microsoft account (Outlook.com, Hotmail, or Live) for Outlook mail, calendar, OneDrive, and more via Microsoft Graph. For a Microsoft 365 work or school account, use the Microsoft Work or School connector instead.',
+    }),
     connector('slack', 'Slack', 'oauth_pkce', {
         configurable: false, config_error: 'No client configured',
         oauth_setup_fields: [{ key: 'client_id', label: 'Client ID', kind: 'text', required: true, placeholder: '1234.5678', help_md: 'From your Slack app.' }],
@@ -348,8 +444,13 @@ const CONNECTORS = [
 ];
 
 /** Settings > Connectors with accounts and servers in each state, or the given rows. */
-export async function withConnectors(page: Page, connectors: unknown[] = CONNECTORS): Promise<void> {
+export async function withConnectors(
+    page: Page,
+    connectors: unknown[] = CONNECTORS,
+    extra: Record<string, unknown> = {},
+): Promise<void> {
     const answers: Record<string, unknown> = {
+        ...extra,
         'GET /connectors': { connectors },
         'GET /connectors/agent-mcps': {
             agent_mcps: [{ agent_id: 'reports', agent_name: 'Reports', server_name: 'warehouse', command: 'uvx', args: ['warehouse-mcp', '--read-only'], disabled: false, config_path: 'C:\\Users\\you\\.gaia\\agents\\reports\\mcp_servers.json' }],
@@ -365,13 +466,23 @@ export async function withConnectors(page: Page, connectors: unknown[] = CONNECT
     });
 }
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+/** The desktop app's backend as services/backend-supervisor.cjs reports it; no apiBase, so requests stay mocked. */
+export const BACKEND_RUNNING = {
+    status: 'running', port: null, since: null, attempt: 0, maxRestarts: 3,
+    nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
+};
+
+/**
+ * The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer.
+ * `statusReadError`: `getStatus` rejects with it, as when the updater's IPC handler is missing.
+ */
 export async function withDesktopBridges(
     page: Page,
     update: Record<string, unknown> = {},
     host: { available: boolean; reason: string | null } = { available: true, reason: null },
+    statusReadError?: string,
 ): Promise<void> {
-    await page.addInitScript(({ state, host }) => {
+    await page.addInitScript(({ state, host, running, readError }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -382,13 +493,27 @@ export async function withDesktopBridges(
         const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
         const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
         Object.assign(window, {
-            gaiaAPI: withStubs({ tray: withStubs({ getConfig: async () => ({ tray, host }), setConfig: async () => ({ tray, host }) }) }),
+            gaiaAPI: withStubs({
+                tray: withStubs({ getConfig: async () => ({ tray, host }), setConfig: async () => ({ tray, host }) }),
+                backend: { getState: async () => running, restart: async () => running, onState: () => () => {} },
+            }),
             gaiaUpdater: {
-                getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
+                getStatus: readError ? async () => { throw new Error(readError); } : same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, { state: update, host });
+    }, { state: update, host, running: BACKEND_RUNNING, readError: statusReadError ?? null });
+}
+
+/** A desktop app whose backend crashed: `restarting` or, once restarts ran out, `stopped`. */
+export async function withCrashedBackend(page: Page, status: 'restarting' | 'stopped', since: number): Promise<void> {
+    await page.addInitScript(({ state }) => {
+        const stub: unknown = new Proxy(function stub() {}, { get: (_, key) => (key === 'then' ? undefined : stub), apply: () => stub });
+        const withStubs = (real: object) => new Proxy(real, { get: (t, key) => (key in t ? t[key as keyof typeof t] : stub) });
+        Object.assign(window, {
+            gaiaAPI: withStubs({ backend: { getState: async () => state, restart: async () => state, onState: () => () => {} } }),
+        });
+    }, { state: { ...BACKEND_RUNNING, status, since, attempt: status === 'restarting' ? 2 : 0, lastExit: { code: 1, signal: null } } });
 }
 
 /** Pick the theme before the app's first paint, the way a returning user would. */
@@ -447,6 +572,8 @@ const MEMORY_ITEMS = [
     memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),
     memoryItem('k4', 'fact', 'Bank PIN hint', { sensitive: true }),
     memoryItem('k5', 'note', 'يفضّل الاجتماعات الصباحية', { source: 'consolidation' }),
+    memoryItem('k6', 'error', "load_skill: No skill named 'note-taker'.", { source: 'error_auto' }),
+    memoryItem('k7', 'error', 'The VPN drops on hotel wifi', { source: 'user' }),
 ];
 
 const GOAL = {

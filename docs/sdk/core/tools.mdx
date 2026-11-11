@@ -985,6 +985,12 @@ Notable implementation details:
   tools use this for their read-before-edit check.
 - Unsupported decorator keywords raise `TypeError` at decoration time and
   identify the invalid argument, tool name, and accepted keyword set.
+- Tool names are unique within an agent. While an agent registers its tools,
+  a second, different function claiming a name already taken raises
+  `DuplicateToolError`, naming both definitions. Re-registering the same
+  function is allowed, so rebuilding an agent's tools is safe. To replace a
+  tool deliberately, mark the replacement `@tool(override=True)`. A tool left
+  in the global registry by an earlier agent is not a collision.
 
 </Accordion>
 

@@ -168,3 +168,28 @@ def test_a_damaged_config_still_bundles_redacted_logs(install, monkeypatch):
     members = _bundle(tmp_path)
 
     assert members["gaia.log"] == b"sent Authorization: [redacted]\n"
+
+
+def test_bundles_failure_records_but_not_with_no_logs(install):
+    tmp_path, _ = install
+    failures = tmp_path / ".gaia" / "failures"
+    failures.mkdir()
+    (failures / "GF-20261104-192233-3f2a.json").write_text("{}", encoding="utf-8")
+    (failures / "notes.json").write_text("{}", encoding="utf-8")
+
+    assert "failures/GF-20261104-192233-3f2a.json" in _bundle(tmp_path)
+    assert "failures/notes.json" not in _bundle(tmp_path)
+    assert not any(n.startswith("failures/") for n in _bundle(tmp_path, no_logs=True))
+
+
+def test_failure_records_are_redacted_for_sharing(install):
+    tmp_path, _ = install
+    failures = tmp_path / ".gaia" / "failures"
+    failures.mkdir()
+    (failures / "GF-20261104-192233-3f2a.json").write_text(
+        '{"log_tail": "sent Authorization: Bearer abcdef1234567"}', encoding="utf-8"
+    )
+    record = _bundle(tmp_path)["failures/GF-20261104-192233-3f2a.json"]
+
+    assert b"abcdef1234567" not in record
+    assert b"[redacted]" in record

@@ -25,6 +25,7 @@ const os = require("os");
 const { drawStateIcon, drawOverlayIcon, STATES } = require("./tray-icons.cjs");
 const { validateActivity, deriveTrayView, buildMenuTemplate } = require("./tray-state.cjs");
 const { backendJson, fetchWorkInProgress } = require("./quit-guard.cjs");
+const { desktopExecArg } = require("./appimage-launcher.cjs");
 
 /** Why the model can't be freed right now, from the backend's work list; null when it can. */
 function describeBusy(work) {
@@ -138,16 +139,6 @@ function validateAgents(agents, where) {
     };
   }
   return out;
-}
-
-/**
- * A path as one quoted Exec= argument: the Desktop Entry spec escapes " ` $ \
- * inside the quotes, then escapes every backslash again as a string value.
- */
-function desktopExecArg(file) {
-  // "%" starts a field code (%f, %u…) anywhere in Exec=, so it is doubled.
-  const quoted = `"${file.replace(/%/g, "%%").replace(/["`$\\]/g, (c) => `\\${c}`)}"`;
-  return quoted.replace(/\\/g, "\\\\");
 }
 
 // ── TrayManager ──────────────────────────────────────────────────────────
@@ -338,6 +329,16 @@ class TrayManager {
     return this.config.tray.minimizeToTray && this.trayHost.available;
   }
 
+  /**
+   * What closing the window does. With no tray to find a hidden window in,
+   * GAIA minimizes instead, so the dock or overview still shows it and offers Quit.
+   * @returns {"hide" | "minimize" | "quit"}
+   */
+  get closeAction() {
+    if (!this.config.tray.minimizeToTray) return "quit";
+    return this.trayHost.available ? "hide" : "minimize";
+  }
+
   /** @returns {boolean} Whether app should start minimized, which also needs a tray. */
   get startMinimized() {
     return this.config.tray.startMinimized && this.trayHost.available;
@@ -356,7 +357,7 @@ class TrayManager {
     this._host = { available: host.available, reason: host.available ? null : host.reason };
     if (!host.available) {
       console.log(
-        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window quits GAIA`
+        `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
       );
     }
   }
@@ -373,7 +374,8 @@ class TrayManager {
 
   /** @returns {boolean} Whether the one-time "still running in the tray" notice is still due. */
   get closeNoticeDue() {
-    return !this.config.notices.firstClose;
+    // Held while the tray check runs, so a dock notice never uses up the tray one.
+    return !this.config.notices.firstClose && this.trayHost.reason !== "checking";
   }
 
   /**
@@ -386,18 +388,34 @@ class TrayManager {
     const next = { ...this.config, notices: { ...this.config.notices, firstClose: true } };
     this._saveConfig(next);
     this.config = next;
-    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    const { message, detail } = this.closeNoticeText();
     const { response } = await dialog.showMessageBox({
       type: "info",
       title: "GAIA is still running",
-      message: `GAIA is still running in the ${where}.`,
-      detail: `Quit from the ${where} menu to stop it. Closing the window keeps your model loaded, so the next chat starts quickly.`,
+      message,
+      detail,
       buttons: ["OK", "Quit GAIA"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
     });
     return response === 1;
+  }
+
+  /** @returns {{message: string, detail: string}} Where the closed window went and how to quit. */
+  closeNoticeText() {
+    const loaded = "Closing the window keeps your model loaded, so the next chat starts quickly.";
+    if (this.closeAction === "minimize") {
+      return {
+        message: "GAIA is still running, minimized.",
+        detail: `${loaded} Click GAIA in your dock or the Activities overview to bring it back. To stop it, right-click GAIA there and choose Quit.`,
+      };
+    }
+    const where = process.platform === "darwin" ? "menu bar" : "tray";
+    return {
+      message: `GAIA is still running in the ${where}.`,
+      detail: `Quit from the ${where} menu to stop it. ${loaded}`,
+    };
   }
 
   // ── Private: Rendering ───────────────────────────────────────────────
