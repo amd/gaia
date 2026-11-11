@@ -1234,7 +1234,7 @@ gaia talk [OPTIONS]
 | `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
 
-Speech recognition (Whisper) and voice output (Kokoro) run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
+Speech recognition (Whisper), voice output (Kokoro) and `--index` document indexing run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
 
 Document Q&A requires both extras: `uv pip install "amd-gaia[talk,rag]"`.
 With `--index`, the document must index successfully before voice chat starts.
