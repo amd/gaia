@@ -42,11 +42,17 @@ def _png() -> bytes:
     return out.getvalue()
 
 
-def _scan(path: Path, pages: int) -> Path:
-    """A PDF of *pages* pages holding only a picture, like a scan with no OCR layer."""
+def _scan(path: Path, pages: int, caption: str = "") -> Path:
+    """A PDF of *pages* pages holding a picture, like a scan with no OCR layer.
+
+    A short *caption* gives each page a little text, still short enough that
+    its picture goes to the vision model.
+    """
     c = canvas.Canvas(str(path), pagesize=(600, 800))
     picture = ImageReader(io.BytesIO(_png()))
     for _ in range(pages):
+        if caption:
+            c.drawString(40, 760, caption)
         c.drawImage(picture, 40, 80, width=400, height=300)
         c.showPage()
     c.save()
@@ -160,6 +166,21 @@ class TestAPdf:
 
         assert "read page 1" in text
         assert metadata["degraded_pages"] == [2, 3, 4]
+
+    def test_a_later_image_failing_still_counts_the_ones_read_before_it(self, tmp_path):
+        vlm = _vlm(False)
+
+        def second_image_fails(images, page_num):
+            raise VLMExtractionError(CRASH, page_num, 2)
+
+        vlm.extract_from_page_images.side_effect = second_image_fails
+
+        _text, _pages, metadata = _extract_pdf(
+            tmp_path, _scan(tmp_path / "scan.pdf", 4, caption="Figure"), vlm
+        )
+
+        assert metadata["degraded_pages"] == [1, 2, 3, 4]
+        assert vlm.extract_from_page_images.call_count == 4
 
 
 class TestIndexDocument:

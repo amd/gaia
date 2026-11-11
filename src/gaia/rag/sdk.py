@@ -267,6 +267,9 @@ class _VisionAttempts:
 
     def record_failure(self, error: Exception) -> None:
         """Count a failed image; raise once the model has failed with nothing read."""
+        if getattr(error, "image_num", 1) > 1:
+            # The page's earlier images were read before this one failed.
+            self.reads += 1
         self.failures += 1
         if self.reads == 0 and self.failures >= VISION_FAILURE_LIMIT:
             raise VisionModelFailedError(
