@@ -110,7 +110,11 @@ from gaia.agents.base.grounding import (
     ungrounded,
     unverified_reasons,
 )
-from gaia.agents.base.look_first import LOOK_FIRST_PROMPT, named_workspace_paths
+from gaia.agents.base.look_first import (
+    LOOK_FIRST_PROMPT,
+    forbids_tools,
+    named_workspace_paths,
+)
 from gaia.agents.base.model_features import (
     FULL,
     ModelFeatures,
@@ -13217,10 +13221,13 @@ Do NOT wrap conversational replies in JSON.
                     and steps_taken < steps_limit - 1
                     and any(name in self._tools_registry for name in _LOOK_TOOLS)
                 ):
-                    unlooked = named_workspace_paths(
-                        getattr(self, "_original_user_input", None) or user_input,
-                        os.getcwd(),
-                    )
+                    request = getattr(self, "_original_user_input", None) or user_input
+                    unlooked = []
+                    if forbids_tools(request):
+                        # The user said not to look; grounding must not ask either.
+                        grounding_fired.add(LOOK)
+                    else:
+                        unlooked = named_workspace_paths(request, os.getcwd())
                     if unlooked:
                         look_first_reprompted = True
                         # Grounding's look gate would ask the same thing again.

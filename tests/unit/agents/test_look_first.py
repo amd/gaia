@@ -16,7 +16,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.look_first import _PATH_TOKEN, named_workspace_paths
+from gaia.agents.base.look_first import (
+    _PATH_TOKEN,
+    forbids_tools,
+    named_workspace_paths,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
@@ -187,3 +191,35 @@ def test_a_question_about_no_file_is_answered_directly(agent, workspace):
 
     assert len(sent) == 1
     assert "391" in result["result"]
+
+
+@pytest.mark.parametrize(
+    "request_text,expected",
+    [
+        ("Do NOT run anything in this turn. Answer with a plan.", True),
+        ("Don’t open the files, just tell me what you'd check.", True),
+        ("Without running anything, how would you approach orders.csv?", True),
+        ("Plan only: how do I get revenue by region?", True),
+        ("Review toybox/dates.py", False),
+        ("Run the tests and tell me what fails.", False),
+        ("Don't run the migration on prod, but read config.py.", False),
+    ],
+)
+def test_forbids_tools(request_text, expected):
+    assert forbids_tools(request_text) is expected
+
+
+PLAN = "1. Load the CSV. 2. Group by region. 3. Sum net. 4. Sort. 5. Report."
+
+
+def test_a_request_that_forbids_tools_gets_its_plan_unchanged(agent, workspace):
+    request_text = (
+        "For toybox/dates.py I want a summary. Do NOT run anything in this "
+        "turn. Answer only with a five-step numbered plan."
+    )
+    sent = _script(agent, _answer(PLAN))
+
+    result = agent.process_query(request_text, max_steps=10)
+
+    assert len(sent) == 1
+    assert PLAN in result["result"]

@@ -21,11 +21,27 @@ _PATH_TOKEN = re.compile(
     r"(?<![\w@/\\])[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b"
 )
 
+#: A request that rules out tool use this turn: "do NOT run anything", "plan only".
+_NO_TOOLS = re.compile(
+    r"\b(?:do\s+not|don['\u2019]?t|never)\s+(?:run|execute|call|use|open|read)\s+"
+    r"(?:anything|any\s+(?:tools?|commands?|code|files?)|tools?|the\s+files?)\b"
+    r"|\bwithout\s+(?:running|executing|calling|using|opening|reading)\s+"
+    r"(?:anything|any\s+(?:tools?|commands?|code|files?)|tools?)\b"
+    r"|\bno\s+tool(?:\s+call)?s\b"
+    r"|\bplan\s+only\b",
+    re.IGNORECASE,
+)
+
 LOOK_FIRST_PROMPT = (
     "You answered without opening anything, but the request is about {paths} "
     "in the workspace. Look with your tools first (search for it if that exact "
     "path isn't there), then answer from what you find."
 )
+
+
+def forbids_tools(request: str) -> bool:
+    """Whether *request* tells the agent not to use tools this turn."""
+    return bool(_NO_TOOLS.search(request or ""))
 
 
 def named_workspace_paths(request: str, root: str) -> List[str]:
