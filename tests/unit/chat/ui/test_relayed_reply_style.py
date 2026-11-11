@@ -93,3 +93,15 @@ def test_a_voice_turn_stops_before_an_old_flagship(monkeypatch):
 def test_chat_request_refuses_unknown_style():
     with pytest.raises(ValueError):
         ChatRequest(session_id="s", message="x", reply_style="sung")
+
+
+def test_an_in_process_agent_gets_the_style_each_turn():
+    from types import SimpleNamespace
+
+    agent = SimpleNamespace()
+    helpers._apply_reply_style(
+        agent, ChatRequest(session_id="s", message="x", reply_style="voice")
+    )
+    assert agent.reply_style == "voice"
+    helpers._apply_reply_style(agent, ChatRequest(session_id="s", message="x"))
+    assert agent.reply_style == "text"

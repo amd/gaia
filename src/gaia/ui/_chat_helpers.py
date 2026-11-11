@@ -2034,6 +2034,12 @@ def _memory_mode(session: dict, db) -> str:
     return "on" if memory_enabled(db) else "off"
 
 
+def _apply_reply_style(agent, request) -> None:
+    """Set the in-process agent's reply style for this turn; a cached agent
+    must not carry a voice turn's note into a typed one."""
+    agent.reply_style = getattr(request, "reply_style", "text")
+
+
 def _apply_memory_state(agent, session: dict, db) -> None:
     """Set *agent*'s memory-off state for this turn from *session* and Settings.
 
@@ -4103,6 +4109,7 @@ async def _get_chat_response(
                 _register_agent_memory_ops(agent)
 
         _apply_memory_state(agent, session, db)
+        _apply_reply_style(agent, request)
         apply_environment(agent, session_id, db)
         message = request.message
         if index_failures:
@@ -4639,6 +4646,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 _apply_memory_state(agent, session, db)
+                _apply_reply_style(agent, request)
                 apply_environment(agent, request.session_id, db)
                 query = with_folder_note(
                     request.message, load_environment(db, session_id)["folders"]
