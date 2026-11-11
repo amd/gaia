@@ -218,6 +218,8 @@ PRODUCER_TOOLS = frozenset(
 PRODUCED_FILE_KEYS = ("file_path", "image_path", "audio_path")
 #: A reply line asking for a file on this PC to be attached.
 SEND_MARK = re.compile(r"^[ \t]*\[\[send:\s*(.+?)\s*\]\][ \t]*$", re.MULTILINE)
+#: Where the OS keeps app settings and sign-ins, directly under the home folder.
+APP_DATA_FOLDERS = frozenset({"appdata", "library"})
 #: Files sent from one reply, so a confused model cannot flood the DM.
 MAX_SENDS_PER_REPLY = 5
 _BUTTON_DECISIONS = {
@@ -1674,7 +1676,8 @@ class DiscordAdapter:
         if is_scratch_path(path) and not asked:
             # The agent's own working files (a smoke-test log), not a deliverable.
             return
-        if not any(path == root or root in path.parents for root in self.upload_roots):
+        roots = [r for r in self.upload_roots if path == r or r in path.parents]
+        if not roots:
             refuse(f"{name} is outside the folders GAIA may send files from.")
             return
         if (
@@ -1682,6 +1685,12 @@ class DiscordAdapter:
             or path.suffix.lower() in SENSITIVE_EXTENSIONS
         ):
             refuse(f"{name} looks like a key or password file, so it stays on your PC.")
+            return
+        if asked and _holds_settings(path, max(roots, key=lambda r: len(r.parts))):
+            refuse(
+                f"{name} is in a hidden or app-settings folder, where sign-ins are "
+                "kept, so it stays on your PC."
+            )
             return
         if path.stat().st_size > MAX_UPLOAD_BYTES:
             self._send(
@@ -1710,14 +1719,12 @@ class DiscordAdapter:
             return
         answer = answer or target.text
         asked: List[str] = []
+        only_files = False
         if not failed and SEND_MARK.search(answer):
             asked = [raw.strip("`\"' ") for raw in SEND_MARK.findall(answer)]
             answer = re.sub(r"\n{3,}", "\n\n", SEND_MARK.sub("", answer)).strip()
-            if not answer:
-                # Nothing else to say: the files are the answer.
-                for raw in asked:
-                    self._upload(target, raw, asked=True)
-                asked, answer = [], "-# Sent."
+            only_files = not answer
+            answer = answer or "-# Sent."
         # A failure is shown as it is: it is not an alert's news, nor silence.
         if target.answer_filter is not None and not failed:
             kept = target.answer_filter(answer)
@@ -1732,6 +1739,11 @@ class DiscordAdapter:
         if self._forgot_notice and target.question and target.answer_filter is None:
             self._forgot_notice = False
             answer = f"{answer}\n\n{FORGOT_NOTICE}"
+        if only_files:
+            # Nothing else to say: the files are the answer, then "Sent."
+            for raw in asked:
+                self._upload(target, raw, asked=True)
+            asked = []
         for chunk in split_message(untable(answer) or "-# (no answer)"):
             self._send(target.channel_id, chunk)
         # After the words, so a refusal is the last thing said about the file.
@@ -1777,6 +1789,23 @@ class DiscordAdapter:
             self._track(target.channel_id, target.reply_id, OPEN_PLACEHOLDER)
             return
         self._edit(target.channel_id, target.reply_id, text)
+
+
+def _holds_settings(path: Path, root: Path) -> bool:
+    """Whether *path*, somewhere below *root*, is where apps keep sign-ins.
+
+    A hidden file or folder anywhere on the way down, or the OS's app-data
+    folder directly under the home folder. A folder the user picked as a root
+    is theirs to send from, whatever it is called.
+    """
+    parts = path.relative_to(root).parts
+    if any(part.startswith(".") for part in parts):
+        return True
+    return (
+        root == Path.home().resolve()
+        and len(parts) > 1
+        and parts[0].lower() in APP_DATA_FOLDERS
+    )
 
 
 def _only_words(text: str) -> str:
