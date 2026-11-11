@@ -64,7 +64,12 @@ indexing an image fails with an error that says how to fix it. It never
 indexes empty text. Photos are turned upright using their EXIF orientation, and
 transparent backgrounds are read as white. A multi-page TIFF is read page by
 page, up to 50 pages; a larger one fails, naming its page count. An animated GIF
-is read from its first frame only.
+is read from its first frame only. In a PDF or PowerPoint, a vision model that
+fails twice in a row before reading any image stops indexing instead of
+storing the pages as blank: `index_document` returns `error_type:
+"vision_model_failed"` with an error naming the model and its last error. One that
+fails after reading some images still indexes, listing those pages in
+`degraded_pages`.
 `RAGConfig.vlm_model` is `None` while the chat model runs on the NPU: images in documents are then skipped with a note, and indexing an image file raises `ImageExtractionError` saying why. Otherwise the default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
 unless you set your own `default_model`; then run
 `lemonade pull Gemma-4-E4B-it-GGUF` to get it. The Agent UI's folder
