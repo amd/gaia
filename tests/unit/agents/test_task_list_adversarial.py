@@ -81,13 +81,13 @@ def test_a_bad_edit_is_refused_and_changes_nothing(edit, message):
 
 def test_control_and_bidi_characters_never_reach_the_step_text():
     tl = _list(
-        "Fix \x1b[31mred\x1b[0m bug", "Line\nbreak\ttab", "rtl‮evil", "zero​width"
+        "Fix \x1b[31mred\x1b[0m bug", "Line\nbreak\ttab", "rtl\u202eevil", "zero\u200bwidth"
     )
     for item in tl.items:
         assert not any(
             ord(ch) < 0x20 or 0x7F <= ord(ch) < 0xA0 for ch in item["content"]
         )
-        assert "‮" not in item["content"] and "​" not in item["content"]
+        assert "\u202e" not in item["content"] and "\u200b" not in item["content"]
     assert tl.items[1]["content"] == "Line break tab"
 
 

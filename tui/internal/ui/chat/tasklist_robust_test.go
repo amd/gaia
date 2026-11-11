@@ -26,12 +26,12 @@ func plain(m ChatModel) string { return ansi.Strip(m.renderTaskList(m.taskRows))
 func TestTaskListStripsEscapesFromStepText(t *testing.T) {
 	hostile := listOf(event.TaskInProgress, event.TaskPending)
 	hostile.Items[0].Content = "fix \x1b[2J\x1b[H\x1b]52;c;ZXZpbA==\x07bug"
-	hostile.Items[1].Content = "rtl‮evil​\r\nnext"
+	hostile.Items[1].Content = "rtl\u202eevil\u200b\r\nnext"
 	hostile.CurrentAction = "\x1b[31mred\x1b[0m"
 	m := feed(t, newTestChat(t), hostile)
 
 	raw := m.renderTaskList(m.taskRows)
-	for _, bad := range []string{"\x1b[2J", "\x1b[H", "\x1b]52", "\x07", "‮", "​", "\r"} {
+	for _, bad := range []string{"\x1b[2J", "\x1b[H", "\x1b]52", "\x07", "\u202e", "\u200b", "\r"} {
 		if strings.Contains(raw, bad) {
 			t.Errorf("card still carries %q", bad)
 		}
