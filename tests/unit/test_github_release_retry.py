@@ -42,6 +42,54 @@ def test_retry_waits_then_returns(monkeypatch):
     assert sleeps == [15]
 
 
+def test_release_lookup_checks_the_requested_repository_and_tag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        release_retry,
+        "_run",
+        lambda args: calls.append(list(args)) or '{"tagName": "v0.25.4"}',
+    )
+
+    assert release_retry._release_exists("amd/gaia", "v0.25.4") is True
+    assert calls == [
+        ["release", "view", "v0.25.4", "--repo", "amd/gaia", "--json", "tagName"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["release not found", "HTTP 404: Not Found", "Not Found"],
+)
+def test_release_lookup_recognizes_a_missing_release(monkeypatch, message):
+    def run(_args):
+        raise release_retry.ReleaseError(message)
+
+    monkeypatch.setattr(release_retry, "_run", run)
+
+    assert release_retry._release_exists("amd/gaia", "v0.25.4") is False
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        release_retry.RateLimited("API rate limit exceeded"),
+        release_retry.RateLimited("You have exceeded a secondary rate limit"),
+        release_retry.ReleaseError("HTTP 403: Resource not accessible by integration"),
+        release_retry.ReleaseError("could not resolve host: api.github.com"),
+    ],
+)
+def test_release_lookup_does_not_treat_other_failures_as_missing(monkeypatch, error):
+    def run(_args):
+        raise error
+
+    monkeypatch.setattr(release_retry, "_run", run)
+
+    with pytest.raises(type(error)) as raised:
+        release_retry._release_exists("amd/gaia", "v0.25.4")
+
+    assert raised.value is error
+
+
 def test_publish_recovers_a_partial_draft_and_does_not_reupload_assets(
     tmp_path, monkeypatch
 ):
