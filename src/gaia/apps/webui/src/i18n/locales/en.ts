@@ -2736,6 +2736,7 @@ export const enMessages = {
     'mem.goals.createFailed': "Couldn't create the goal",
     'mem.goals.cancelFailed': "Couldn't cancel the goal",
     'mem.goals.deleteFailed': "Couldn't delete the goal",
+    'mem.goals.storeError': "Approved goals aren't running",
     // The resource usage strip at the top of a chat
     'resources.region': 'Resource usage on this PC',
     'resources.toggle': 'Resource usage',
