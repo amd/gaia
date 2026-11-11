@@ -4605,6 +4605,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
     def _unsaved_memory_request(self, tools_called: Set[str]) -> Optional[str]:
         """The nudge to save, when the user asked to remember and nothing was saved."""
+        # A private chat saves nothing: remember would only refuse.
+        if getattr(self, "_incognito", False):
+            return None
         if "remember" not in getattr(self, "_tools_registry", {}):
             return None
         if tools_called & {"remember", "update_memory"}:

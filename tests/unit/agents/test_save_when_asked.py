@@ -53,10 +53,11 @@ def test_questions_files_and_reminders_are_not(text):
     assert not asks_to_keep_in_memory(text)
 
 
-def _memory(text, registry=("remember", "recall")):
+def _memory(text, registry=("remember", "recall"), incognito=False):
     host = SimpleNamespace(
         _tools_registry=dict.fromkeys(registry),
         _original_user_input=text,
+        _incognito=incognito,
         _looks_like_credential=MemoryMixin._looks_like_credential,
     )
     return lambda called: MemoryMixin._unsaved_memory_request(host, called)
@@ -74,6 +75,10 @@ def test_no_nudge_without_memory_or_for_a_secret():
     assert _memory(RC17, registry=("recall",))(set()) is None
     assert _memory("Please remember my password is hunter2-Xq9!")(set()) is None
     assert _memory("Summarize this report.")(set()) is None
+
+
+def test_no_nudge_in_a_private_chat():
+    assert _memory(RC17, incognito=True)(set()) is None
 
 
 # ---------------------------------------------------------------------------
