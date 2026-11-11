@@ -1247,6 +1247,9 @@ async function revertToLastWorking() {
         try {
           _savePin(userPin);
           setState({ pinnedVersion: userPin });
+          // clearPin() turned auto-download on and swapped to the forward feed.
+          autoUpdaterRef.setFeedURL(_releaseFeed(userPin));
+          _applyInstallPolicy();
         } catch (pinErr) {
           const reason = (pinErr && pinErr.message) || String(pinErr);
           log("error", `Couldn't put back the pin to ${userPin}:`, reason);

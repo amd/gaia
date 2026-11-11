@@ -1065,7 +1065,7 @@ describe("going back to the version that last finished setup", () => {
 
   test("a refused restart puts back a pin the user had", async () => {
     setupWorkedOn("0.25.0");
-    saveConfig({ pinnedVersion: "v0.26.0" });
+    saveConfig({ pinnedVersion: "v0.26.0", autoUpdate: true });
     electronMock.app.getVersion = () => "0.26.0";
     const statfs = jest.spyOn(fs.promises, "statfs").mockResolvedValue({ bavail: 100, bsize: 1024 * 1024 });
     const m = initUpdater({ confirmRestart: async () => true });
@@ -1073,6 +1073,9 @@ describe("going back to the version that last finished setup", () => {
     await expect(m.revertToLastWorking()).rejects.toThrow(/needs about 1 GB free/);
     expect(JSON.parse(fs.readFileSync(configFile(), "utf8")).pinnedVersion).toBe("v0.26.0");
     expect(m.getState()).toMatchObject({ status: "idle", pinnedVersion: "v0.26.0" });
+    // The restored pin is enforced, not just shown: its feed, and no background download.
+    expect(mockUpdater.setFeedURL.mock.calls.at(-1)[0].url).toMatch(/\/v0\.26\.0\/$/);
+    expect(mockUpdater.autoDownload).toBe(false);
     statfs.mockRestore();
   });
 
