@@ -917,7 +917,7 @@ def test_the_exemption_is_dropped_when_the_skill_unloads():
 def test_only_the_policy_enforcing_tool_can_be_exempt():
     """A grant must not wave through a tool that never runs the policy gate."""
     host = _Gated("gh")
-    for tool in ("run_cli_command", "write_file", "edit_file"):
+    for tool in ("wait_for_condition", "write_file", "edit_file"):
         assert host._tool_requires_confirmation(tool, {"command": "gh issue list"})
 
 

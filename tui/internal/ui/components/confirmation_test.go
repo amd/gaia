@@ -542,7 +542,7 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 		t.Errorf("shell warning must point at the command on screen: %q", shell)
 	}
 
-	if got := destructiveWarning("run_cli_command", false); got != shell {
+	if got := destructiveWarning("wait_for_condition", false); got != shell {
 		t.Errorf("both shell tools must share the wording, got %q", got)
 	}
 
@@ -610,8 +610,8 @@ func TestAgentRiskReplacesTheToolNameGuess(t *testing.T) {
 // An unknown risk word never softens the label.
 func TestUnknownRiskKeepsTheCautiousTier(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").WithRisk("harmless")
-	if m.Tier() != RiskDestructive {
-		t.Errorf("tier = %v, want the cautious default", m.Tier())
+	if m.tier != RiskDestructive {
+		t.Errorf("tier = %v, want the cautious default", m.tier)
 	}
 }
 

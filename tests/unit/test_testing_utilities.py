@@ -6,6 +6,7 @@
 import unittest
 
 from gaia.testing import (
+    AgentTestContext,
     MockLLMProvider,
     MockToolExecutor,
     MockVLMClient,
@@ -470,6 +471,31 @@ class TestAssertions(unittest.TestCase):
 
         with self.assertRaises(AssertionError):
             assert_no_errors(result)
+
+
+class TestAgentTestContextTeardown(unittest.TestCase):
+    """A failing agent cleanup is reported, and the rest of teardown still runs."""
+
+    def test_failed_cleanup_warns_and_keeps_going(self):
+        calls = []
+
+        class FlakyAgent:
+            def __init__(self, **_kwargs):
+                pass
+
+            def close(self):
+                calls.append("close")
+                raise OSError("db locked")
+
+            def stop_all_watchers(self):
+                calls.append("stop_all_watchers")
+
+        with self.assertWarnsRegex(RuntimeWarning, r"FlakyAgent\.close\(\) failed"):
+            with AgentTestContext(FlakyAgent) as ctx:
+                temp_dir = ctx.temp_dir
+
+        self.assertEqual(calls, ["close", "stop_all_watchers"])
+        self.assertFalse(temp_dir.exists())
 
 
 if __name__ == "__main__":
