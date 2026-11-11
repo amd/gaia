@@ -1087,6 +1087,69 @@ class TestSystemStatus:
         assert data["embedding_model_loaded"] is True
 
 
+class TestCustomModelIsTheChosenModel:
+    """Settings > Advanced's custom model is the model the sidecar warms (#7217)."""
+
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_saving_a_custom_model_records_it_as_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import resolve_chat_model
+
+        GaiaConfig.save_keys(
+            {
+                "last_model": "fireworks.deepseek-v4p1-flash",
+                "last_provider": "fireworks",
+            }
+        )
+        resp = client.put(
+            "/api/settings", json={"custom_model": " opencode.big-model "}
+        )
+
+        assert resp.status_code == 200
+        assert GaiaConfig.load().last_model == "opencode.big-model"
+        # The flagship sidecar's start-up warm-up loads resolve_chat_model().
+        assert resolve_chat_model() == "opencode.big-model"
+
+    def test_clearing_the_custom_model_clears_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+        client.put("/api/settings", json={"custom_model": ""})
+
+        cfg = GaiaConfig.load()
+        assert cfg.last_model is None
+        assert cfg.last_provider is None
+
+    def test_omitting_the_custom_model_leaves_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        client.put("/api/settings", json={"agent_mode": "manual"})
+
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_an_unwritable_config_fails_the_save_and_keeps_the_old_model(
+        self, client, db
+    ):
+        from gaia.config import GaiaConfigError
+
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        with patch(
+            "gaia.config.GaiaConfig.save_keys",
+            side_effect=GaiaConfigError("config.json is read-only."),
+        ):
+            resp = client.put(
+                "/api/settings", json={"custom_model": "opencode.big-model"}
+            )
+
+        assert resp.status_code == 500
+        assert "read-only" in resp.json()["detail"]
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+
 class TestDynamicToolsSetting:
     """/api/settings round-trip + env lock for dynamic tool loading."""
 

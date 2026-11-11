@@ -1125,6 +1125,23 @@ async def update_settings(
         else:
             logger.info("Custom model override cleared")
             value = None
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        from .providers import provider_of
+
+        # last_model is what the flagship sidecar warms and the next start restores.
+        try:
+            GaiaConfig.save_keys(
+                {
+                    "last_model": value,
+                    "last_provider": provider_of(value) if value else None,
+                }
+            )
+        except GaiaConfigError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"The custom model was not saved: {e} Then save it again.",
+            ) from e
         db.set_setting("custom_model", value)
 
     # Only touch context_size when the field was explicitly included in the request.
