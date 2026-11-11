@@ -1023,7 +1023,8 @@ def test_a_script_is_parsed_once_per_record():
 
 @pytest.mark.parametrize(
     "tail",
-    ["s = '\ud800'", "y = " + "-" * 5000 + "1", "y = " + "+".join(["1"] * 20000)],
+    # Past the parser's 6000-level stack on every OS; 5000 still parses on Linux.
+    ["s = '\ud800'", "y = " + "-" * 100_000 + "1", "y = " + "+".join(["1"] * 20000)],
     ids=["lone-surrogate", "deep-unary", "deep-binop"],
 )
 def test_a_script_that_cannot_be_parsed_is_not_credited(tail, caplog):
