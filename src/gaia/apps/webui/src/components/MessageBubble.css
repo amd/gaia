@@ -180,6 +180,7 @@
     font-size: 12.5px;
     cursor: pointer;
 }
+.msg-try-again + .msg-try-again { margin-inline-start: 8px; }
 .msg-try-again:hover { border-color: var(--text-muted); }
 .msg-try-again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -348,26 +349,6 @@
 }
 .file-path-link:hover .file-path-icon {
     opacity: 1;
-}
-
-/* ── Inline Images (generated / agent output) ───────────────── */
-.inline-image-wrap {
-    display: block;
-    margin: 8px 0;
-}
-.inline-image {
-    display: block;
-    max-width: 100%;
-    max-height: 400px;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border);
-    object-fit: contain;
-    background: var(--bg-secondary);
-}
-.inline-image-caption {
-    display: block;
-    margin-top: 4px;
-    font-size: 11px;
 }
 
 /* ── Blockquotes ──────────────────────────────────────────────── */

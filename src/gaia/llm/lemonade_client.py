@@ -2155,7 +2155,7 @@ MODELS = {
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3.5-35B-A3B-GGUF",
-        display_name="Qwen3 Coder 30B",
+        display_name="Qwen3.5 35B",
         min_ctx_size=32768,
         tool_calling=True,
     ),
@@ -4019,10 +4019,6 @@ class DownloadTask:
     def is_cancelled(self) -> bool:
         """Check if download was cancelled."""
         return self.cancel_event.is_set()
-
-    def elapsed_time(self) -> float:
-        """Get elapsed time in seconds."""
-        return time.time() - self.start_time
 
 
 def _supports_unicode() -> bool:

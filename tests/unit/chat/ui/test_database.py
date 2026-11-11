@@ -136,14 +136,6 @@ class TestSessions:
         db.create_session()
         assert db.count_sessions() == 2
 
-    def test_touch_session(self, db):
-        session = db.create_session()
-        original_updated = session["updated_at"]
-        time.sleep(0.01)
-        db.touch_session(session["id"])
-        refreshed = db.get_session(session["id"])
-        assert refreshed["updated_at"] >= original_updated
-
     def test_create_session_default_mail_provider_is_null(self, db):
         # #1596: mail_provider is a FILTER — no pick stays NULL ("every
         # connected mailbox"), never silently coerced to google.

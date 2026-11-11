@@ -11,13 +11,11 @@ import weakref
 from collections import Counter
 
 from gaia.rag import keyword_search
-from gaia.rag.keyword_search import KeywordIndex, keyword_index, rank_keyword_chunks
+from gaia.rag.keyword_search import KeywordIndex, keyword_index
 
 
 def _top(query, texts, limit=5):
-    return [
-        i for i, _score, _words in rank_keyword_chunks(query, enumerate(texts), limit)
-    ]
+    return [i for i, _score, _words in KeywordIndex(texts).rank(query, limit=limit)]
 
 
 def test_best_match_beats_earlier_chunks_sharing_one_common_word():
@@ -126,16 +124,16 @@ def test_missing_words_never_reorder_the_chunks_that_matched():
 
 
 def test_nothing_matching_returns_nothing():
-    assert rank_keyword_chunks("zebra", [(0, "contract"), (1, "terms")]) == []
-    assert rank_keyword_chunks("", [(0, "contract")]) == []
-    assert rank_keyword_chunks("?!", [(0, "contract")]) == []
-    assert rank_keyword_chunks("zebra", []) == []
+    assert KeywordIndex(["contract", "terms"]).rank("zebra") == []
+    assert KeywordIndex(["contract"]).rank("") == []
+    assert KeywordIndex(["contract"]).rank("?!") == []
+    assert KeywordIndex([]).rank("zebra") == []
 
 
-def test_chunk_keeps_its_own_index_and_matched_words():
-    index, score, words = rank_keyword_chunks("large fee", [(41, "a large fee")])[0]
+def test_match_reports_its_position_and_matched_words():
+    index, score, words = KeywordIndex(["other", "a large fee"]).rank("large fee")[0]
 
-    assert index == 41
+    assert index == 1
     assert words == ["large", "fee"]
     assert 0.6 <= score <= 0.9
 

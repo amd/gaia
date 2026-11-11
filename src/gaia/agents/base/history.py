@@ -554,7 +554,9 @@ def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
     ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
-    tools = getattr(agent, "_openai_tools", [])
+    # Looked up on the class so a test double's auto-attributes don't count.
+    budgeted = getattr(type(agent), "_history_tool_schemas", None)
+    tools = budgeted(agent) if budgeted else getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
     return _budget_in_window(ctx, overhead, _reply_reserve(agent))
 
@@ -632,7 +634,6 @@ DOCUMENT_TOOLS = frozenset(
         "summarize_document",
         "dump_document",
         "read_file",
-        "read_document",
     }
 )
 

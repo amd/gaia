@@ -259,6 +259,10 @@
     background: var(--bg-secondary);
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.doc-action-error { color: var(--danger); background: var(--danger-dim); }
+.doc-load-error { color: var(--danger); }
+.doc-load-error p { overflow-wrap: anywhere; }
+.doc-load-error button { margin-top: 12px; }
 
 /* The progress bar takes the row's width; the Cancel button stays beside it. */
 .doc-indexing-status .index-progress {
