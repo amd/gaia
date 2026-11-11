@@ -584,14 +584,19 @@ _STORAGE_REQUEST = re.compile(
 _KEEP_IN_MEMORY = re.compile(
     r"remember|memori[sz]e|don'?t\s+forget"
     r"|keep\s+(?:(?:it|this|that|them)\s+)?in\s+mind"
-    r"|make\s+a\s+note|note\s+(?:down|this|that|it)|learn\s+about\s+me",
+    r"|(?:save|store|add)\b[^.?!\n]{0,40}\bmemory\b"
+    r"|make\s+a\s+note(?![^.?!\n]{0,60}?(?:\w\.[a-z0-9]{2,5}\b"
+    r"|\b(?:files?|readme|folder|document)\b))|learn\s+about\s+me",
     re.IGNORECASE,
 )
-#: "Can you remember what I said?" asks to recall, and "remember to call" for a
-#: reminder; neither asks to keep a fact.
-_RECALL_QUESTION = re.compile(
-    r"\s+(?:what|which|when|where|who|whom|whether|if|how|why|to)\b", re.IGNORECASE
+#: After the verb, what makes it a recall question ("remember what I said"), a
+#: reminder ("remember to call") or a login option ("remember me"), not a fact.
+_NOT_A_FACT = re.compile(
+    r"\s+(?:what|which|when|where|who|whom|whether|if|how|why|to|me)\b",
+    re.IGNORECASE,
 )
+#: How much of a paragraph is read for a request; a long paste is material.
+_REQUEST_SCAN_CHARS = 500
 #: Sent once when a turn that was asked to keep something ends without saving it.
 SAVE_WHEN_ASKED_PROMPT = (
     "The user asked you to remember this, but no remember call ran, so nothing "
@@ -600,17 +605,36 @@ SAVE_WHEN_ASKED_PROMPT = (
 )
 
 
+def _own_words(text: str) -> List[str]:
+    """The paragraphs where a user gives instructions: the first, and the last
+    unless the first introduces what follows ("Translate this letter:")."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) > 1:
+        introduces = paragraphs[0].endswith(":")
+        paragraphs = paragraphs[:1] if introduces else [paragraphs[0], paragraphs[-1]]
+    return [p[:_REQUEST_SCAN_CHARS] for p in paragraphs]
+
+
+_SENTENCE_END = re.compile(r"[.?!\n]|$")
+
+
 def asks_to_keep_in_memory(text: str) -> bool:
     """True when *text* asks the agent to remember something it says."""
-    text = text or ""
-    for request in _STORAGE_REQUEST.finditer(text):
-        verb = _KEEP_IN_MEMORY.search(text, request.start(), request.end() + 16)
-        if (
-            verb
-            and verb.start() < request.end()
-            and not _RECALL_QUESTION.match(text, verb.end())
-        ):
-            return True
+    for part in _own_words(text or ""):
+        for request in _STORAGE_REQUEST.finditer(part):
+            end = _SENTENCE_END.search(part, request.end())
+            verb = _KEEP_IN_MEMORY.search(part, request.start())
+            if (
+                verb
+                and verb.start() < request.end()
+                and not _NOT_A_FACT.match(part, verb.end())
+                # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
+                and (
+                    part[end.start() : end.end()] != "?"
+                    or re.match(r"\s+(?:that|this)\b", part[verb.end() :], re.I)
+                )
+            ):
+                return True
     return False
 
 
@@ -4607,6 +4631,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         """The nudge to save, when the user asked to remember and nothing was saved."""
         # A private chat saves nothing: remember would only refuse.
         if getattr(self, "_incognito", False):
+            return None
+        # A scheduled or background prompt repeats: only a live request counts.
+        if getattr(getattr(self, "console", None), "background_mode", False):
             return None
         if "remember" not in getattr(self, "_tools_registry", {}):
             return None

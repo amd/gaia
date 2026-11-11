@@ -25,11 +25,15 @@ RC17 = "My name is Jordan and I'm a principal ML engineer at AMD. Please remembe
     [
         RC17,
         "Remember that my daughter's name is Mia.",
-        "Can you remember my flight is on the 14th?",
+        "Can you remember that my flight is on the 14th?",
         "Don't forget I'm allergic to peanuts.",
         "I prefer metric units, keep that in mind.",
         "Please make a note: the standup moved to 9:30.",
         "Memorize this: our office is on floor 7.",
+        "Save this to your memory: I like tea.",
+        "Add to your memory that I like tea.",
+        "I work at AMD, remember that.",
+        "Here is my profile.\n\nName: Jordan\n\nPlease remember this.",
     ],
 )
 def test_requests_to_keep_something(text):
@@ -47,17 +51,26 @@ def test_requests_to_keep_something(text):
         "Remind me to call mom at 5.",
         "Remember to water the plants on Friday.",
         "Summarize this report.",
+        "Fix the failing test. Note that the suite uses pytest.",
+        "Please note down the meeting summary in notes.md",
+        "Please make a note in notes.md that we shipped.",
+        "Can you remember my dog's name?",
+        "So, remember the Python script from before? Run it again.",
+        "Translate this letter:\n\nDear Sam, please remember that rent is due.",
+        "What does 'remember me' do? Remember me checkboxes confuse people.",
+        "Summarize this log. " + "x " * 400 + "please remember this",
     ],
 )
 def test_questions_files_and_reminders_are_not(text):
     assert not asks_to_keep_in_memory(text)
 
 
-def _memory(text, registry=("remember", "recall"), incognito=False):
+def _memory(text, registry=("remember", "recall"), incognito=False, background=False):
     host = SimpleNamespace(
         _tools_registry=dict.fromkeys(registry),
         _original_user_input=text,
         _incognito=incognito,
+        console=SimpleNamespace(background_mode=background),
         _looks_like_credential=MemoryMixin._looks_like_credential,
     )
     return lambda called: MemoryMixin._unsaved_memory_request(host, called)
@@ -79,6 +92,10 @@ def test_no_nudge_without_memory_or_for_a_secret():
 
 def test_no_nudge_in_a_private_chat():
     assert _memory(RC17, incognito=True)(set()) is None
+
+
+def test_no_nudge_in_a_background_run():
+    assert _memory(RC17, background=True)(set()) is None
 
 
 # ---------------------------------------------------------------------------
