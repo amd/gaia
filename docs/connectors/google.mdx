@@ -110,13 +110,12 @@ This is separate from authorizing the connection or granting scopes
 inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
-request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` / `email` / `profile` are requested on every
-connection regardless of
-agent. `email` is listed twice, once as the short OIDC name and once as
-its `userinfo.email` URL equivalent — Google treats them as the same
-permission, and GAIA asks for whichever the connecting surface uses, so
-declare both.
+request — the flagship [`gaia` agent](/guides/email) uses `gmail.readonly` and
+`gmail.compose` for mail and `calendar.events` for its calendar tools; `openid` and `userinfo.email` are requested on every
+connection regardless of agent. GAIA no longer requests the short `email`
+and `profile` names (`email` is the same permission as `userinfo.email`). It
+still accepts them so connections made by older GAIA versions keep working,
+and declaring them does no harm.
 
 {/* google-scopes:start */}
 | Scope | Tier | What it buys |
@@ -127,6 +126,7 @@ declare both.
 | `https://www.googleapis.com/auth/userinfo.email` | Non-sensitive | See your email address — Google's URL spelling of `email` |
 | `https://www.googleapis.com/auth/gmail.readonly` | Restricted | Read your email |
 | `https://www.googleapis.com/auth/gmail.send` | Sensitive | Send email on your behalf |
+| `https://www.googleapis.com/auth/gmail.compose` | Restricted | Draft and send email on your behalf |
 | `https://www.googleapis.com/auth/gmail.modify` | Restricted | Read, modify, and send email on your behalf |
 | `https://www.googleapis.com/auth/calendar.readonly` | Sensitive | Read your calendar events |
 | `https://www.googleapis.com/auth/calendar.events` | Sensitive | Manage your calendar events |
@@ -184,7 +184,7 @@ explains how to copy or download the credentials.
 ## Step 5 — Paste credentials into GAIA
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. Click **Settings** (gear) → **Connections**.
+2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
@@ -247,8 +247,12 @@ On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent
 already declares in its own code, so there's no list to type out or keep
 in sync:
 
-**Flagship `gaia` agent — the read-only Gmail scope** it needs to read and
-search your mailbox:
+**Flagship `gaia` agent — two Gmail scopes and one calendar scope:**
+`gmail.readonly` to read and search, `gmail.compose` to draft and send
+through its bundled `send-email` skill, with a confirmation before anything is
+sent, and `calendar.events` so it can read
+your calendar and, once you approve each change, create, change or cancel
+events. It never asks for `gmail.modify`:
 
 ```bash
 gaia connectors connect google --grant-agent installed:gaia
@@ -260,19 +264,24 @@ Naming the agent is enough; GAIA rejects `--grant-agent` outright for an
 agent that declares no Google scopes, rather than silently granting
 nothing.
 
-**Chat agent — a narrower, read-only Gmail grant:** the chat agent
-declares no fixed Google requirement, so grant it explicit scopes
-instead:
+**Flagship — the same two scopes, as a grant:** mail tools read the
+`installed:gaia` grant. Use this when Google is already connected with
+both scopes and you only need the ledger entry:
 
 ```bash
-gaia connectors grants grant google builtin:chat \
-  --scopes https://www.googleapis.com/auth/gmail.readonly
+gaia connectors grants grant google installed:gaia \
+  --scopes https://www.googleapis.com/auth/gmail.readonly \
+  https://www.googleapis.com/auth/gmail.compose
 ```
 
+A connection made when the flagship only read mail holds `gmail.readonly`
+alone. It keeps reading, but drafting or sending asks you to reconnect
+Google and approve `gmail.compose`.
+
 <Note>
-  `gmail.readonly` is a **Restricted** scope — the same tier as
-  `gmail.modify` (see [Scopes to declare in your
-  Console](#declare-scopes-under-data-access)). Read-only narrows what the
+  `gmail.readonly` and `gmail.compose` are **Restricted** scopes — the same
+  tier as `gmail.modify` (see [Scopes to declare in your
+  Console](#declare-scopes-under-data-access)). Narrower scopes limit what the
   agent can *do*, not which verification tier Google applies.
 </Note>
 
@@ -311,7 +320,7 @@ it (**Step 6**). Until the per-agent grant lands, the agent surfaces:
 
 ```
 AGENT_NOT_GRANTED: this agent isn't granted these scopes on google: …
-Open Settings → Connections → google → Per-agent grants and grant them.
+Open Settings → Connectors → google → Per-agent grants and grant them.
 ```
 
 Fix it in the UI (Google tile → **Per-agent grants**) or run the
@@ -336,9 +345,9 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out after two minutes
-(`OAuth flow ... timed out after 120s. Restart the flow.`) — that
-message will not name the real cause.
+handler never runs and the CLI/UI just times out once the sign-in window
+closes after 15 minutes (`Sign-in to google was not finished within 15
+minutes ...`) — that message will not name the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.
@@ -368,8 +377,7 @@ fixes this without testing it.
 ### `Error 400: invalid_grant` after a long while
 
 Refresh tokens expire if your app stays in Testing mode for more than
-seven days without use. Reconnect from the Agent UI's Connections
-panel — it will issue a new refresh token.
+seven days without use. Reconnect from **Settings → Connectors** in the Agent UI — it will issue a new refresh token.
 
 ### `client_secret is missing`
 
@@ -381,7 +389,7 @@ and reconnect from the UI to reset.
 
 Two places — both work:
 
-- **From GAIA**: Settings → Connections → Google → **Disconnect**.
+- **From GAIA**: Settings → Connectors → Google → **Disconnect**.
   Removes the refresh token from the keyring; the next API call
   errors with `NOT_CONNECTED`.
 - **From Google**: Follow Google's
@@ -392,7 +400,7 @@ Two places — both work:
 ## See also
 
 - [Connectors overview](/connectors)
-- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly`
+- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly` and `gmail.compose` for mail and `calendar.events` for its calendar
 - [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) — the AMD-internal client + rotation procedure (maintainers)
 - [Manage OAuth Clients — Google Cloud Console Help](https://support.google.com/cloud/answer/15549257)
 - [Get started with the Google Auth Platform — Google Cloud Console Help](https://support.google.com/cloud/answer/15544987)

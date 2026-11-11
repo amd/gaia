@@ -34,10 +34,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
 
-      - name: Install OpenSSL (Windows)
-        if: runner.os == 'Windows'
-        run: choco install openssl --no-progress -y
-
       - name: Restore FetchContent cache
         uses: actions/cache@v6
         with:
@@ -64,30 +60,34 @@ jobs:
 
       # Build static library + examples + benchmarks
       - name: Configure CMake (static + benchmarks)
-        run: >
-          cmake -B cpp/build-bench -S cpp
-          -DCMAKE_BUILD_TYPE=Release
-          -DGAIA_BUILD_BENCHMARKS=ON
-          -DGAIA_BUILD_EXAMPLES=ON
-          -DGAIA_BUILD_TESTS=OFF
-          -DGAIA_BUILD_INTEGRATION_TESTS=OFF
-          -DGAIA_BUILD_TUI=OFF
-          -DGAIA_BUILD_BASH_AGENT=OFF
+        shell: bash
+        run: |
+          cmake -B cpp/build-bench -S cpp \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGAIA_BUILD_BENCHMARKS=ON \
+            -DGAIA_BUILD_EXAMPLES=ON \
+            -DGAIA_BUILD_TESTS=OFF \
+            -DGAIA_BUILD_INTEGRATION_TESTS=OFF \
+            -DGAIA_BUILD_TUI=OFF \
+            -DGAIA_BUILD_BASH_AGENT=OFF | tee cpp-benchmark-configure.log
+          grep -q "GAIA SSL: enabled" cpp-benchmark-configure.log || { echo "::error::OpenSSL not found; benchmark binaries would build without HTTPS"; exit 1; }
 
       - name: Build (static + benchmarks)
         run: cmake --build cpp/build-bench --config Release --parallel
 
       # Build shared library separately for DLL/SO size measurement
       - name: Configure CMake (shared library)
-        run: >
-          cmake -B cpp/build-bench-shared -S cpp
-          -DCMAKE_BUILD_TYPE=Release
-          -DBUILD_SHARED_LIBS=ON
-          -DGAIA_BUILD_TESTS=OFF
-          -DGAIA_BUILD_EXAMPLES=OFF
-          -DGAIA_BUILD_BENCHMARKS=OFF
-          -DGAIA_BUILD_TUI=OFF
-          -DGAIA_BUILD_BASH_AGENT=OFF
+        shell: bash
+        run: |
+          cmake -B cpp/build-bench-shared -S cpp \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGAIA_BUILD_TESTS=OFF \
+            -DGAIA_BUILD_EXAMPLES=OFF \
+            -DGAIA_BUILD_BENCHMARKS=OFF \
+            -DGAIA_BUILD_TUI=OFF \
+            -DGAIA_BUILD_BASH_AGENT=OFF | tee cpp-benchmark-shared-configure.log
+          grep -q "GAIA SSL: enabled" cpp-benchmark-shared-configure.log || { echo "::error::OpenSSL not found; benchmark shared library would build without HTTPS"; exit 1; }
 
       - name: Build (shared library)
         run: cmake --build cpp/build-bench-shared --config Release --parallel

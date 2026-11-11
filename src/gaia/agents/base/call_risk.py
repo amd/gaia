@@ -37,7 +37,15 @@ _ORDER = {READ: 0, WRITE: 1, EXECUTE: 2, DESTRUCTIVE: 3}
 #: so no "always" is offered for it and none can cover it.
 RISK_NOTE_ARG = "_risk_note"
 
-SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+#: Prompt argument marking a call only a person may approve: a console that
+#: pre-approves tools still asks about it, and never shows the marker itself.
+NEEDS_PERSON_ARG = "_needs_person"
+
+#: Display-only prompt argument carrying the literal text a person is approving,
+#: such as a whole email. Every front-end shows it in full, never shortened.
+EXACT_TEXT_ARG = "_exact_text"
+
+SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
     {
@@ -341,6 +349,8 @@ def plain_risk_note(risk: Optional[str]) -> str:
 __all__ = [
     "DESTRUCTIVE",
     "EXECUTE",
+    "EXACT_TEXT_ARG",
+    "NEEDS_PERSON_ARG",
     "READ",
     "RISK_NOTE_ARG",
     "SHELL_TOOLS",

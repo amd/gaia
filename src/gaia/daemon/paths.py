@@ -12,14 +12,15 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
-_ENV_HOME = "GAIA_DAEMON_HOME"
+HOME_ENV_VAR = "GAIA_DAEMON_HOME"
 
 
 def host_dir() -> Path:
     """Directory holding instance.json, the start lock, and the daemon log."""
-    override = os.environ.get(_ENV_HOME)
+    override = os.environ.get(HOME_ENV_VAR)
     if override:
         return Path(override)
     # GAIA_HOME isolates the whole runtime; a daemon outside it would manage
@@ -103,6 +104,30 @@ def scheduler_db_path() -> Path:
     return path
 
 
+_WINDOWS_REPLACE_ATTEMPTS = 5
+_WINDOWS_REPLACE_INITIAL_DELAY = 0.05
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    """Replace *target* with *source*, retrying transient Windows share violations."""
+    if not _is_windows():
+        os.replace(str(source), str(target))
+        return
+
+    for attempt in range(_WINDOWS_REPLACE_ATTEMPTS):
+        try:
+            os.replace(str(source), str(target))
+            return
+        except PermissionError:
+            if attempt == _WINDOWS_REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_WINDOWS_REPLACE_INITIAL_DELAY * (2**attempt))
+
+
 def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     """Atomically persist *payload* as JSON at *path*, default file mode 0600.
 
@@ -111,6 +136,8 @@ def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     temp file in the same directory (so ``os.replace`` is a same-filesystem
     atomic rename), fsyncs it, then renames it over the target. The temp file
     is created ``O_EXCL`` at *mode* so it is never briefly world-readable.
+    On Windows the rename is retried briefly on ``PermissionError`` (a reader
+    or scanner holding the target open); persistent failures still raise.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +157,14 @@ def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
         except OSError:
             pass
         raise
-    os.replace(str(tmp), str(path))
+    try:
+        _replace_file(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
     # os.replace preserves the temp's mode; re-assert defensively for platforms
     # where the source mode is not carried across the rename.
     try:

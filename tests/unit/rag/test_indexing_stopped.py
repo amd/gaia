@@ -72,3 +72,27 @@ def test_a_heartbeat_can_stop_a_pdf_between_pages(sdk, tmp_path):
     with pytest.raises(IndexingStopped):
         sdk.index_document(str(doc), heartbeat=heartbeat)
     assert len(beats) == 2
+
+
+def test_a_cancelled_wait_for_the_model_keeps_the_cache_too(sdk, tmp_path):
+    from gaia.daemon.broker_client import LeaseWaitCancelled
+
+    doc = tmp_path / "doc.txt"
+    doc.write_text("some content to index", encoding="utf-8")
+    assert sdk.index_document(str(doc))["success"]
+    cached = sorted(
+        p.name for p in Path(sdk.config.cache_dir).rglob("*") if p.is_file()
+    )
+    sdk.remove_document(str(doc))
+
+    def cancelled_while_queued(*_a, **_k):
+        raise LeaseWaitCancelled("stopped while waiting for the model slot")
+
+    sdk._load_embedder = cancelled_while_queued
+    sdk._encode_texts = cancelled_while_queued
+
+    with pytest.raises(LeaseWaitCancelled):
+        sdk.index_document(str(doc))
+
+    after = sorted(p.name for p in Path(sdk.config.cache_dir).rglob("*") if p.is_file())
+    assert after == cached

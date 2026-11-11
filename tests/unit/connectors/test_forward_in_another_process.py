@@ -29,7 +29,11 @@ import pytest
 import respx
 
 from gaia.connectors import _refresh_lock, tokens
-from gaia.connectors.errors import AuthRequiredError
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConnectionBusyError,
+    ConnectorsError,
+)
 from gaia.connectors.providers import _registry
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.providers.google import GoogleOAuthProvider
@@ -52,9 +56,18 @@ _CHILD_TIMEOUT = 180
 _FORWARD = r"""
 import sys
 sys.path.insert(0, sys.argv[1])
+import os
 import keyring
 from _file_keyring import FileKeyring
 keyring.set_keyring(FileKeyring(sys.argv[2]))
+from gaia.connectors import store
+
+if sys.argv[5] == "kill-after-client-write":
+    def die_after_client_write(**_kwargs):
+        os._exit(17)
+
+    store.save_connection = die_after_client_write
+
 from gaia.connectors.api import import_forwarded_connection
 import_forwarded_connection(
     provider="google",
@@ -151,7 +164,9 @@ def _release(holder) -> None:
     holder.wait(timeout=_CHILD_TIMEOUT)
 
 
-def _forward_in_another_process(keyring_path: Path) -> None:
+def _forward_in_another_process(
+    keyring_path: Path, *, kill_after_client_write: bool = False
+) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -161,12 +176,16 @@ def _forward_in_another_process(keyring_path: Path) -> None:
             str(keyring_path),
             NEW_CLIENT,
             GMAIL,
+            "kill-after-client-write" if kill_after_client_write else "complete",
         ],
         env=_child_env(),
         capture_output=True,
         text=True,
         timeout=_CHILD_TIMEOUT,
     )
+    if kill_after_client_write:
+        assert result.returncode == 17, result.stderr
+        return
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "forwarded"
 
@@ -196,6 +215,102 @@ def _accepts_only_the_forwarded_grant(request):
 def _stored_refresh_token(provider_id: str = "google"):
     stored = peek_connection(provider_id)
     return stored and stored["refresh_token"]
+
+
+def test_a_killed_forward_is_recovered_before_a_new_read(
+    shared_keyring, connected_under_old_client
+):
+    """A crash between the two keyring writes restores the old pair."""
+    _forward_in_another_process(shared_keyring, kill_after_client_write=True)
+
+    from gaia.connectors import store
+
+    assert store.has_forward_recovery("google")
+    assert store.peek_provider_credentials("google")["client_id"] == NEW_CLIENT
+
+    # The normal reader takes the lock, restores the marker, and only then
+    # evaluates the client-hash tripwire.
+    provider, connection = tokens.load_current_connection("google")
+    assert provider.client_id == OLD_CLIENT
+    assert connection["refresh_token"] == "old-refresh"
+    assert not store.has_forward_recovery("google")
+
+
+def test_a_disconnect_after_a_killed_forward_is_not_undone(
+    shared_keyring, connected_under_old_client
+):
+    """A stale marker must not bring back a connection the user removed."""
+    from gaia.connectors import store
+
+    _forward_in_another_process(shared_keyring, kill_after_client_write=True)
+    store.delete_connection("google")
+
+    assert not store.has_forward_recovery("google")
+    assert peek_connection("google") is None
+    assert tokens.load_current_connection("google")[1] is None
+    assert peek_connection("google") is None
+
+
+def test_a_reconnect_after_a_killed_forward_is_not_rolled_back(
+    shared_keyring, connected_under_old_client
+):
+    """A new sign-in under the forwarded client supersedes the marker."""
+    from gaia.connectors import store
+
+    _forward_in_another_process(shared_keyring, kill_after_client_write=True)
+    _registry.clear()
+    fresh = get_provider("google")
+    assert fresh.client_id == NEW_CLIENT
+    save_connection(
+        provider="google",
+        account_email="alice@example.com",
+        refresh_token="reconnected-refresh",
+        scopes=[GMAIL],
+        client_id_hash=fresh.client_id_hash,
+    )
+
+    assert not store.has_forward_recovery("google")
+    provider, connection = tokens.load_current_connection("google")
+    assert provider.client_id == NEW_CLIENT
+    assert connection["refresh_token"] == "reconnected-refresh"
+
+
+@pytest.mark.parametrize(
+    "slots",
+    [
+        {"secret:gateway": "attacker"},
+        {"provider:google": None, "google:default": None, "github:default": "x"},
+        {"provider:google": 7},
+    ],
+)
+def test_a_recovery_marker_only_restores_this_providers_two_slots(
+    shared_keyring, connected_under_old_client, slots
+):
+    """A marker naming any other slot is refused, and nothing is written."""
+    import json
+
+    from gaia.connectors import store
+
+    before = keyring.get_password(store.SERVICE_NAME, "secret:gateway")
+    store._kr_set("recovery:forward:google", json.dumps({"version": 1, "slots": slots}))
+    with pytest.raises(ConnectorsError, match="recovery record"):
+        store.recover_forward_recovery("google")
+    assert keyring.get_password(store.SERVICE_NAME, "secret:gateway") == before
+    assert peek_connection("google")["refresh_token"] == "old-refresh"
+
+
+def test_a_corrupt_recovery_marker_is_cleared_by_a_disconnect(
+    shared_keyring, connected_under_old_client
+):
+    """The error tells the user to reconnect; doing so must actually work."""
+    from gaia.connectors import store
+
+    store._kr_set("recovery:forward:google", "{not json")
+    with pytest.raises(ConnectorsError, match="recovery record"):
+        tokens.load_current_connection("google")
+    store.delete_connection("google")
+    assert not store.has_forward_recovery("google")
+    assert tokens.load_current_connection("google")[1] is None
 
 
 @respx.mock
@@ -274,24 +389,99 @@ def test_a_forward_landing_after_an_empty_read_is_not_deleted(
     assert _stored_refresh_token() == "forwarded-refresh"
 
 
-def test_a_mismatch_is_not_cleared_while_another_process_holds_the_lock(
-    connected_under_old_client, lock_held_elsewhere
-):
-    from gaia.connectors.api import _authorize_access, get_connection
-
+@pytest.fixture
+def busy_mismatch(connected_under_old_client, lock_held_elsewhere):
+    """A connection that mismatches the configured client, while another
+    process holds its lock — mid-save, so not known to be gone."""
     _written_by_another_process()
     save_provider_credentials("google", client_id="third.apps.example")
+    return lock_held_elsewhere
 
-    with pytest.raises(AuthRequiredError, match="left in place"):
+
+def _busy_error():
+    from gaia.connectors.api import _authorize_access
+
+    with pytest.raises(ConnectionBusyError) as exc:
         _authorize_access(
             provider="google", scopes=[GMAIL], agent_id=None, account_email="default"
         )
-    assert get_connection("google") is None
+    return exc.value
+
+
+def test_the_busy_error_is_part_of_the_public_connectors_api():
+    import gaia.connectors as connectors
+
+    assert "ConnectionBusyError" in connectors.__all__
+    assert connectors.ConnectionBusyError is ConnectionBusyError
+
+
+def test_a_busy_connection_is_not_reported_as_disconnected(busy_mismatch):
+    from gaia.connectors.formatting import format_connector_error
+    from gaia.ui.routers.connectors import _raise_http_for
+
+    err = _busy_error()
+
+    # The TUI keys on this phrase (preflight/check.go connectionBeingSaved).
+    assert "being saved by another GAIA operation" in str(err)
+    tool_text = format_connector_error(err)
+    assert tool_text.startswith("CONNECTION_BUSY:")
+    assert "Retry" in tool_text and "click Connect" not in tool_text
+    http = _raise_http_for(err)
+    assert http.status_code == 503
+    assert http.detail["error"] == "connection_busy"
+    assert http.headers["Retry-After"] == "1"
     assert _stored_refresh_token() == "forwarded-refresh"
 
-    _release(lock_held_elsewhere)
+
+def test_the_listing_keeps_a_busy_connection_then_clears_it_once_free(
+    busy_mismatch,
+):
+    from gaia.connectors.api import get_connection
+
+    row = get_connection("google")
+    assert row["error"] == "busy"
+    assert row["scopes"] == [], "scopes mid-save can't be trusted for a decision"
+    assert row["account_email"] == "alice@example.com"
+    assert "refresh_token" not in row
+    assert _stored_refresh_token() == "forwarded-refresh"
+
+    _release(busy_mismatch)
     assert get_connection("google") is None
     assert _stored_refresh_token() is None
+
+
+def test_the_daemon_keeps_its_forward_while_the_connection_is_busy(busy_mismatch):
+    from gaia.connectors.api import _authorize_access
+    from tests.unit.test_daemon_forward import _forwarder
+
+    def mint(*, provider, scopes, agent_id):
+        _authorize_access(
+            provider=provider, scopes=scopes, agent_id=None, account_email="default"
+        )
+        return ("token", 1_900_000_000.0)
+
+    fwd, http = _forwarder(grants={"google": {"installed:email": [GMAIL]}}, mint=mint)
+    with pytest.raises(ConnectionBusyError):
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+
+    assert http.deletes == [], "withdrew a forward that is still valid"
+    assert http.posts == []
+
+
+def test_an_unreadable_connection_is_busy_while_another_process_writes_it(
+    monkeypatch, connected_under_old_client, lock_held_elsewhere
+):
+    from gaia.connectors.api import list_connections
+
+    monkeypatch.setattr(tokens, "peek_connection", lambda *_a, **_k: None)
+
+    rows = list_connections()
+
+    assert [(r["provider"], r["error"]) for r in rows] == [("google", "busy")]
+    monkeypatch.undo()
+    assert _stored_refresh_token() == "old-refresh"
 
 
 def test_a_forward_saves_its_client_only_under_the_lock(
@@ -462,7 +652,7 @@ def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
     holder.start()
     try:
         assert holding.wait(_CHILD_TIMEOUT)
-        with pytest.raises(AuthRequiredError, match="this process or another"):
+        with pytest.raises(ConnectionBusyError, match="this process or another"):
             _authorize_access(
                 provider="google",
                 scopes=[GMAIL],
@@ -488,3 +678,115 @@ async def test_reloading_a_stale_client_never_logs_a_secret(
     assert "reloading" in caplog.text
     for secret in ("forwarded-refresh", "old-refresh"):
         assert secret not in caplog.text
+
+
+def _forward_with_failing_connection_write(monkeypatch, error=None):
+    from gaia.connectors import store
+    from gaia.connectors.api import import_forwarded_connection
+
+    def locked_keyring(**_kwargs):
+        raise error or ConnectorsError("keyring locked (simulated)")
+
+    monkeypatch.setattr(store, "save_connection", locked_keyring)
+    try:
+        import_forwarded_connection(
+            provider="google",
+            client_id=NEW_CLIENT,
+            client_secret="forwarded-secret",
+            refresh_token="forwarded-refresh",
+            scopes=[GMAIL],
+            required_scopes=[],
+        )
+    finally:
+        monkeypatch.setattr(store, "save_connection", save_connection)
+
+
+@respx.mock
+async def test_a_forward_that_fails_halfway_keeps_the_existing_connection(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors.api import list_connections
+
+    with pytest.raises(ConnectorsError, match="keyring locked"):
+        _forward_with_failing_connection_write(monkeypatch)
+
+    assert peek_provider_credentials("google")["client_id"] == OLD_CLIENT
+    # This process must not keep the forwarded client it was halfway to using.
+    cached = _registry.get("google")
+    assert cached is None or cached.client_id == OLD_CLIENT
+    _registry.clear()  # any process, starting fresh
+    assert [c["provider"] for c in list_connections()] == ["google"]
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "a", "expires_in": 60})
+    )
+    assert await tokens.get_or_refresh("google") == "a"
+    assert _stored_refresh_token() == "old-refresh"
+
+
+def test_a_failed_undo_of_a_halfway_forward_says_so(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors import store
+
+    def also_fails(_snapshot):
+        raise ConnectorsError("keyring gone (simulated)")
+
+    monkeypatch.setattr(store, "restore_connection_slots", also_fails)
+
+    with pytest.raises(ConnectorsError, match="putting back the previous") as exc:
+        _forward_with_failing_connection_write(monkeypatch)
+
+    assert "keyring locked" in str(exc.value)
+    assert "keyring gone" in str(exc.value)
+
+
+def test_the_startup_sweep_clears_a_dead_connection_on_a_cold_start(
+    connected_under_old_client,
+):
+    from gaia.connectors.api import tripwire_check
+
+    save_provider_credentials("google", client_id="third.apps.example")
+    _registry.clear()  # the sweep runs at startup, before anything is cached
+
+    tripwire_check()
+
+    assert _stored_refresh_token() is None
+
+
+def test_the_startup_sweep_leaves_a_busy_connection_in_place(busy_mismatch, caplog):
+    from gaia.connectors.api import tripwire_check
+
+    with caplog.at_level("INFO", logger="gaia.connectors.api"):
+        tripwire_check()
+
+    assert _stored_refresh_token() == "forwarded-refresh"
+    # Reported as a busy connection, not as a failed check or a cleared one.
+    assert "being saved by another GAIA operation; left in place" in caplog.text
+    assert "check failed" not in caplog.text
+    assert "cleared by tripwire" not in caplog.text
+
+
+def test_an_interrupted_forward_whose_undo_fails_still_raises_the_interrupt(
+    monkeypatch, connected_under_old_client
+):
+    from gaia.connectors import store
+
+    def also_fails(_snapshot):
+        raise ConnectorsError("keyring gone (simulated)")
+
+    monkeypatch.setattr(store, "restore_connection_slots", also_fails)
+
+    with pytest.raises(KeyboardInterrupt) as exc:
+        _forward_with_failing_connection_write(monkeypatch, KeyboardInterrupt())
+
+    assert "keyring gone" in str(exc.value.__cause__), "the failed undo was not kept"
+
+
+def test_an_interrupted_forward_still_puts_back_the_old_connection(
+    monkeypatch, connected_under_old_client
+):
+    with pytest.raises(KeyboardInterrupt):
+        _forward_with_failing_connection_write(monkeypatch, KeyboardInterrupt())
+
+    assert peek_provider_credentials("google")["client_id"] == OLD_CLIENT
+    assert _stored_refresh_token() == "old-refresh"

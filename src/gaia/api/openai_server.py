@@ -686,8 +686,7 @@ async def health_check():
                     "backend": "lemonade",
                     "model": "Gemma-4-E4B-it-GGUF",
                     "url": "http://localhost:<port>/api/v1"
-                },
-                "rag": {"status": "not_configured"}
+                }
             }
         }
         ```
@@ -699,7 +698,6 @@ async def health_check():
         "components": {
             "api": {"status": "ready"},
             "llm": llm,
-            "rag": {"status": "not_configured"},
         },
     }
 

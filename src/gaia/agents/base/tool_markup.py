@@ -54,13 +54,20 @@ _DS_TOOL_SEP = re.compile(rf"<{_BAR}tool{_SEP}sep{_BAR}>")
 _DS_ANY = re.compile(rf"<{_BAR}tool{_SEP}(?:calls?{_SEP}(?:begin|end)|sep){_BAR}>")
 _JSON_FENCE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.DOTALL)
 
-_CODE = re.compile(r"(```|~~~)[\s\S]*?(?:\1|\Z)|`[^`\n]+`")
+# CommonMark: a fence opens with 3+ backticks or tildes (up to 3 spaces in)
+# and closes only on a line of the same character at least as long.
+_FENCE_OPEN = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+_FENCE_CLOSE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
+# An inline code span: a backtick run closed by a run of the same length,
+# within one paragraph.
+_INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])+?(?<!`)\1(?!`)")
 
 # (opening marker, closing marker) for the other markup families stripped from answers.
 _STRIP_BLOCKS = (
     (_DS_CALLS_BEGIN, _DS_CALLS_END),
     (_DS_CALL_BEGIN, _DS_CALL_END),
-    (re.compile(r"<tool_call>"), re.compile(r"</tool_call>")),
+    # A body that opens with "{": "<tool_call>" followed by words is prose.
+    (re.compile(r"<tool_call>(?=\s*\{)"), re.compile(r"</tool_call>")),
     (re.compile(r"<function_calls>"), re.compile(r"</function_calls>")),
     (re.compile(r"<invoke\s+name\s*="), re.compile(r"</invoke>")),
     (
@@ -84,6 +91,8 @@ class MalformedToolMarkup(ValueError):
 class MarkupToolCall:
     name: str
     args: Dict[str, Any] = field(default_factory=dict)
+    # XML parameters carry text only; the caller types them against the schema.
+    raw_strings: bool = False
 
 
 @dataclass
@@ -92,22 +101,251 @@ class MarkupParse:
     prose: str
 
 
+def _block_code_spans(text: str, after_blank: bool = True) -> List[tuple]:
+    """``(start, end)`` of fenced and indented code blocks in *text*, in order.
+
+    *after_blank* says whether the line before *text* was blank, which an
+    indented code block needs (it cannot interrupt a paragraph).
+    """
+    spans: List[tuple] = []
+    fence = None  # (char, length, start)
+    indented = None  # [start, end]
+    prev_blank = after_blank
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        start, pos = pos, pos + len(line)
+        body = line.rstrip("\r\n")
+        if fence is not None:
+            close = _FENCE_CLOSE.fullmatch(body)
+            if (
+                close
+                and close.group(1)[0] == fence[0]
+                and len(close.group(1)) >= fence[1]
+            ):
+                spans.append((fence[2], pos))
+                fence = None
+                prev_blank = False
+            continue
+        opening = _FENCE_OPEN.fullmatch(body)
+        if opening and not (opening.group(1)[0] == "`" and "`" in opening.group(2)):
+            if indented is not None:
+                spans.append(tuple(indented))
+                indented = None
+            fence = (opening.group(1)[0], len(opening.group(1)), start)
+            continue
+        blank = not body.strip()
+        if (
+            not blank
+            and body.startswith(("    ", "\t"))
+            and (prev_blank or indented is not None)
+        ):
+            if indented is None:
+                indented = [start, pos]
+            indented[1] = pos
+        elif not blank and indented is not None:
+            spans.append(tuple(indented))
+            indented = None
+        prev_blank = blank
+    if fence is not None:
+        spans.append((fence[2], len(text)))  # an unclosed fence runs to the end
+    if indented is not None:
+        spans.append(tuple(indented))
+    return spans
+
+
+def _code_spans(text: str, after_blank: bool = True) -> List[tuple]:
+    """Sorted, disjoint ``(start, end)`` of every code block and inline span."""
+    blocks = _block_code_spans(text, after_blank)
+    spans: List[tuple] = []
+    gap = 0
+    for lo, hi in blocks + [(len(text), len(text))]:
+        segment = text[gap:lo]
+        spans.extend(
+            (gap + m.start(), gap + m.end()) for m in _INLINE_CODE.finditer(segment)
+        )
+        if lo < hi:
+            spans.append((lo, hi))
+        gap = hi
+    return spans
+
+
 def _outside_code(pattern: re.Pattern, text: str, pos: int = 0) -> Optional[int]:
-    """Index of the first *pattern* match at or after *pos* not inside code."""
-    rest = text[pos:]
-    code = [(m.start(), m.end()) for m in _CODE.finditer(rest)]
+    """Index of the first *pattern* match at or after *pos* not inside code.
+
+    Code is found from the start of *pos*'s line, so what came before (an
+    earlier call's text) cannot open a fence that hides a later call.
+    """
+    line_start = text.rfind("\n", 0, pos) + 1
+    before = text[:line_start].rstrip("\r\n")
+    after_blank = line_start == 0 or not before[before.rfind("\n") + 1 :].strip()
+    rest = text[line_start:]
+    code = _code_spans(rest, after_blank)
     starts = [start for start, _ in code]
-    for match in pattern.finditer(rest):
+    for match in pattern.finditer(rest, pos - line_start):
         # Spans are sorted and disjoint: only the last one starting before can hold it.
         i = bisect.bisect_right(starts, match.start()) - 1
         if i < 0 or match.start() >= code[i][1]:
-            return pos + match.start()
+            return line_start + match.start()
     return None
+
+
+# Gemma 4's own tool syntax: its string quote and its call/response delimiters.
+_GEMMA_TOOL_MARKUP = re.compile(r'<\|"\|>|<\|?tool_(?:call|response)\|?>')
+
+
+def has_gemma_tool_markup(text: str) -> bool:
+    """Whether *text* carries Gemma's native tool-call or tool-response syntax.
+
+    A server that does not stop generation at the end of a native tool call
+    (FastFlowLM) lets Gemma keep writing: it invents the tool's response in
+    this syntax, then answers from it, before the real result exists.
+    """
+    return bool(text) and _outside_code(_GEMMA_TOOL_MARKUP, text) is not None
 
 
 def has_tool_markup(text: str) -> bool:
     """Whether *text* carries tool-call markup of any supported format."""
     return bool(text) and _outside_code(_ANY_MARKUP, text) is not None
+
+
+_XML_OPEN = re.compile(r"<function_calls>|<invoke\s+name\s*=")
+_XML_INVOKE = re.compile(r"<invoke\s+name\s*=\s*\"([^\"]*)\"\s*>")
+_XML_PARAM = re.compile(
+    r"<parameter\s+name\s*=\s*\"([^\"]*)\"\s*>(.*?)</parameter>", re.DOTALL
+)
+_JSON_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+# A call's body is a JSON object; "<tool_call>" followed by words is prose.
+_JSON_CALL_START = re.compile(r"<tool_call>(?=\s*\{)")
+_XML_CLOSE = re.compile(r"</invoke>")
+_XML_PARAM_OPEN = re.compile(r"<parameter\b")
+_XML_STRUCT = re.compile(r"<parameter\b|</invoke>")
+
+
+def parse_text_tool_calls(text: str) -> Optional[MarkupParse]:
+    """Tool calls a model wrote as text in any supported dialect, or ``None``.
+
+    DeepSeek DSML and special tokens, Anthropic-style ``<invoke>`` XML, and
+    Hermes/Qwen ``<tool_call>{json}</tool_call>``.
+
+    Raises:
+        MalformedToolMarkup: the markup is there but truncated or unparseable.
+    """
+    found = parse_deepseek_tool_calls(text)
+    if found is not None or not text:
+        return found
+    start = _outside_code(_XML_OPEN, text)
+    # No closing tag and no parameter is prose about the format, not a call;
+    # one shown inside a code example later on does not make it a call.
+    if start is not None and (
+        _outside_code(_XML_CLOSE, text, start) is not None
+        or _outside_code(_XML_PARAM_OPEN, text, start) is not None
+    ):
+        return _parse_xml_invokes(text, start)
+    start = _outside_code(_JSON_CALL_START, text)
+    if start is not None:
+        return _parse_json_calls(text, start)
+    return None
+
+
+def _parse_xml_invokes(text: str, start: int) -> MarkupParse:
+    calls: List[MarkupToolCall] = []
+    pos, spans = start, []
+    while True:
+        # Every invoke, not just the first, must sit outside fenced/inline code.
+        at = _outside_code(_XML_INVOKE, text, pos)
+        if at is None:
+            break
+        opening = _XML_INVOKE.match(text, at)
+        first = _XML_STRUCT.search(text, opening.end())
+        nxt = _XML_INVOKE.search(text, opening.end())
+        if first is not None and (
+            (nxt is not None and nxt.start() < first.start())
+            or _outside_code(_XML_STRUCT, text, opening.end()) != first.start()
+        ):
+            # Its first tag belongs to another invoke or sits in a later code
+            # example: prose naming the tag, not a call.
+            pos = opening.end()
+            continue
+        close = text.find("</invoke>", opening.end())
+        if close < 0:
+            raise MalformedToolMarkup(
+                f"Tool call '{opening.group(1) or '?'}' was cut off before </invoke>."
+            )
+        name = opening.group(1).strip()
+        if not name:
+            raise MalformedToolMarkup("<invoke> tag has no tool name.")
+        body = text[opening.end() : close]
+        args = {
+            m.group(1): _strip_one_newline(m.group(2))
+            for m in _XML_PARAM.finditer(body)
+        }
+        if "<parameter" in _XML_PARAM.sub("", body):
+            raise MalformedToolMarkup(
+                f"A parameter of tool call '{name}' was cut off before </parameter>."
+            )
+        calls.append(MarkupToolCall(name=name, args=args, raw_strings=True))
+        spans.append((opening.start(), close + len("</invoke>")))
+        pos = close + len("</invoke>")
+    if not calls:
+        raise MalformedToolMarkup("Tool-call markup contained no complete <invoke>.")
+    prose = text
+    for lo, hi in reversed(spans):
+        prose = prose[:lo] + prose[hi:]
+    prose = re.sub(r"</?function_calls>", "", prose)
+    return MarkupParse(calls=calls, prose=prose.strip())
+
+
+def _parse_json_calls(text: str, start: int) -> MarkupParse:
+    calls: List[MarkupToolCall] = []
+    pos, spans = start, []
+    while True:
+        # Every call, not just the first, must sit outside fenced/inline code.
+        at = _outside_code(_JSON_CALL_START, text, pos)
+        if at is None:
+            break
+        match = _JSON_CALL.match(text, at)
+        if match is None:
+            break  # an opening tag with no close: reported below if nothing ran
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            raise MalformedToolMarkup(
+                f"<tool_call> body is not valid JSON: {exc}"
+            ) from exc
+        if not isinstance(payload, dict) or not payload.get("name"):
+            raise MalformedToolMarkup("<tool_call> body has no tool name.")
+        args = payload.get("arguments", payload.get("parameters", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError as exc:
+                raise MalformedToolMarkup(
+                    f"Arguments of '{payload['name']}' are not valid JSON: {exc}"
+                ) from exc
+        if not isinstance(args, dict):
+            raise MalformedToolMarkup(
+                f"Arguments of '{payload['name']}' must be an object."
+            )
+        calls.append(MarkupToolCall(name=str(payload["name"]), args=args))
+        spans.append(match.span())
+        pos = match.end()
+    if not calls:
+        raise MalformedToolMarkup(
+            "A <tool_call> block was cut off before </tool_call>."
+        )
+    # Examples left in code stay in the answer; only the calls that run go.
+    prose = text
+    for lo, hi in reversed(spans):
+        prose = prose[:lo] + prose[hi:]
+    return MarkupParse(calls=calls, prose=prose.strip())
+
+
+def _strip_one_newline(value: str) -> str:
+    if value.startswith("\n"):
+        value = value[1:]
+    if value.endswith("\n"):
+        value = value[:-1]
+    return value
 
 
 def parse_deepseek_tool_calls(text: str) -> Optional[MarkupParse]:

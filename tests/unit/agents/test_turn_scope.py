@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 from gaia.agents.base.verification import check_was_executed
@@ -210,6 +210,40 @@ def test_real_loop_stops_off_request_work_after_the_answer(agent, tmp_path):
     assert len(sent) == 4
 
 
+def test_scope_closing_overflow_note_reads_as_one_sentence(agent, tmp_path):
+    """A closing call too long even trimmed: the note finishes the stop sentence."""
+    (tmp_path / "other.txt").write_text("SENTINEL-OTHER")
+    (tmp_path / "third.txt").write_text("SENTINEL-THIRD")
+    turns = [
+        # A save claim nobody asked for keeps the turn going past the answer.
+        {"answer": "The fix is done. The summary is saved to `summary.md`."},
+        call("read_file", file_path="other.txt"),
+        call("read_file", file_path="third.txt"),
+    ]
+    too_long = (
+        "Error in chat completions (status 400): "
+        '{"error":{"message":"the request (500 tokens) exceeds the available '
+        'context size (300 tokens)."}}'
+    )
+
+    def send(messages, *a, **kw):
+        if not turns:
+            raise OverflowError(too_long)
+        return MagicMock(text=json.dumps(turns.pop(0)), stats={})
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages.side_effect = send
+
+    answer = agent.process_query("Summarize the fix.")["result"]
+
+    assert answer.startswith(
+        "I stopped because I had started work this request did not ask for, "
+        "and the closing answer couldn't be written. "
+        f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+    )
+    assert "status 400" not in answer
+
+
 def test_real_loop_ends_when_one_tool_keeps_failing_with_new_arguments(agent):
     script(
         agent,
@@ -409,7 +443,7 @@ OTHER_PAGE = "https://other-shop.example.com/cm5/"
 
 
 def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
-    """rc12 kw-02: the plan budget forced an answer, the completion check sent it
+    """The plan budget forced an answer, the completion check sent it
     back for the missing BOM, and the guard then refused the work the BOM needed."""
     from gaia.security import PathValidator
 
@@ -424,7 +458,7 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
         agent._tool_requires_confirmation = lambda *a, **kw: False
         agent.console = MagicMock()
         agent.console.cancelled = None
-        scratch = tmp_path / "gaia-scratch-kw02"
+        scratch = tmp_path / "gaia-scratch-bom"
         scratch.mkdir()
         agent.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
         agent.path_validator.set_scratch_dir(str(scratch))

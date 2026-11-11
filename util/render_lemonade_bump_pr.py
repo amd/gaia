@@ -11,7 +11,7 @@ them, never from the agent's text.
     python -I util/render_lemonade_bump_pr.py pr --summary pr-body.md \\
         --current 2026.42.1 --target 2026.43.1 --follow-ups "12 13" --out body.md
     python -I util/render_lemonade_bump_pr.py proposal --proposal 1.md \\
-        --target 2026.43.1 --title-out title.txt --body-out body.md
+        --target 2026.43.1 --title-out title.txt --body-out body.md --key-out key.txt
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pathlib import Path
 
 MAX_TEXT = 4000
 MAX_TITLE = 100
+MAX_KEY = 60
 MAX_FOLLOW_UPS = 2
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 ISSUE_NUMBER = re.compile(r"[1-9][0-9]{0,6}")
@@ -81,12 +82,17 @@ def render(summary: str, current: str, target: str, follow_ups: str = "") -> str
 
 
 def render_proposal(text: str, target: str) -> tuple:
-    """A feature proposal's issue title and body. Its first line is the title."""
+    """A feature proposal's issue title, body and auto-issue key.
+
+    Its first line is the title. The key is the title in lower case with every
+    other character a dash, so a re-run updates the same issue.
+    """
     _check_versions(target)
     first, _, rest = text.replace("\r\n", "\n").strip().partition("\n")
     title = re.sub(r"[^A-Za-z0-9 ,.:;()'/+-]", "", first.lstrip("# "))
     title = " ".join(title.split())[:MAX_TITLE]
-    if not title:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:MAX_KEY]
+    if not slug:
         raise ValueError("a proposal's first line must be its title")
     body = (
         f"The bump agent's proposal, from the Lemonade v{target} release notes, "
@@ -94,7 +100,8 @@ def render_proposal(text: str, target: str) -> tuple:
         f"_Auto-proposed by the Lemonade release scan (v{target}); maintainer "
         "triage decides scope. cc @kovtcharov-amd_\n"
     )
-    return f"feat: {title} (unlocked by Lemonade v{target})", body
+    key = f"lemonade-version-bump/proposal/v{target}/{slug.strip('-')}"
+    return f"feat: {title} (unlocked by Lemonade v{target})", body, key
 
 
 def main(argv=None) -> int:
@@ -111,6 +118,7 @@ def main(argv=None) -> int:
     proposal.add_argument("--target", required=True)
     proposal.add_argument("--title-out", type=Path, required=True)
     proposal.add_argument("--body-out", type=Path, required=True)
+    proposal.add_argument("--key-out", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.kind == "pr":
         summary = args.summary.read_text(encoding="utf-8", errors="replace")
@@ -118,9 +126,10 @@ def main(argv=None) -> int:
         args.out.write_text(body, encoding="utf-8")
     else:
         text = args.proposal.read_text(encoding="utf-8", errors="replace")
-        title, body = render_proposal(text, args.target)
+        title, body, key = render_proposal(text, args.target)
         args.title_out.write_text(title, encoding="utf-8")
         args.body_out.write_text(body, encoding="utf-8")
+        args.key_out.write_text(key, encoding="utf-8")
     return 0
 
 

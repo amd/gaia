@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.lemonade_bump import (
+    CURRENT,
+    SKIPPED,
     REPO_ROOT,
     TARGET,
     git,
@@ -36,7 +38,8 @@ from tests.fixtures.lemonade_bump import (
     write,
 )
 
-AGENT_FREE = ("verify", "proposals", "publish", "report")
+AGENT_FREE = ("verify", "proposals", "publish", "report", "resolve")
+TRACKING_KEY = "lemonade-version-bump/failure"
 ARTIFACT_ID = "${{ needs.bump.outputs.artifact_id }}"
 READY = "needs.bump.outputs.ready == 'true'"
 
@@ -66,12 +69,13 @@ def test_each_job_holds_only_the_token_it_needs(jobs):
         "contents": "read",
         "pull-requests": "read",
     }
-    assert jobs["proposals"]["permissions"] == {"issues": "write"}
+    issues = {"contents": "read", "issues": "write"}
+    for job_id in ("proposals", "report", "resolve"):
+        assert jobs[job_id]["permissions"] == issues, job_id
     assert jobs["publish"]["permissions"] == {
         "contents": "write",
         "pull-requests": "write",
     }
-    assert jobs["report"]["permissions"] == {"issues": "write"}
 
 
 def test_every_job_has_a_timeout(jobs):
@@ -81,7 +85,7 @@ def test_every_job_has_a_timeout(jobs):
 
 
 def test_no_checkout_leaves_the_token_in_git_config(jobs):
-    for job_id in ("bump", "verify", "proposals", "publish"):
+    for job_id in ("bump", "verify", "proposals", "publish", "report", "resolve"):
         checkouts = [
             s
             for s in jobs[job_id]["steps"]
@@ -89,7 +93,14 @@ def test_no_checkout_leaves_the_token_in_git_config(jobs):
         ]
         assert len(checkouts) == 1, job_id
         assert checkouts[0]["with"]["persist-credentials"] is False, job_id
-    assert jobs["report"]["steps"][0].get("uses") is None, "report checks out nothing"
+    report = _step(jobs["report"], "Checkout the issue action")["with"]
+    assert report["sparse-checkout"] == ".github/actions/auto-issue"
+    resolve = _step(jobs["resolve"], "Checkout the issue action and main's pin")
+    assert resolve["with"]["ref"] == "main"
+    assert resolve["with"]["sparse-checkout"].split() == [
+        ".github/actions/auto-issue",
+        "src/gaia/version.py",
+    ]
     assert _step(jobs["bump"], "Checkout repository")["with"]["ref"] == "main"
     assert _step(jobs["verify"], "Checkout main")["with"]["ref"] == "main"
     for job_id in ("proposals", "publish"):
@@ -120,7 +131,7 @@ def test_no_expression_is_expanded_inside_a_script(jobs):
 
 
 def test_the_write_jobs_run_no_code_from_the_bump(jobs):
-    for job_id in ("proposals", "publish", "report"):
+    for job_id in ("proposals", "publish", "report", "resolve"):
         for step in jobs[job_id]["steps"]:
             run = step.get("run") or ""
             assert "pip install" not in run and "pytest" not in run, step["name"]
@@ -157,6 +168,14 @@ def test_the_jobs_run_in_order_and_only_on_a_packaged_bump(jobs):
         "contains(needs.*.result, 'cancelled')",
     ):
         assert clause in condition, clause
+    resolve = jobs["resolve"]
+    assert sorted(resolve["needs"]) == ["bump", "proposals", "publish", "verify"]
+    assert " ".join(resolve["if"].split()) == (
+        "always() && needs.bump.result == 'success' "
+        "&& !contains(needs.*.result, 'failure') "
+        "&& !contains(needs.*.result, 'cancelled')"
+    )
+    assert "needs.bump.outputs" not in str(resolve)
 
 
 def test_later_jobs_trust_only_verifys_target(jobs):
@@ -178,9 +197,12 @@ def test_later_jobs_trust_only_verifys_target(jobs):
     )
     checker = _step(verify, "Check and apply the bump")
     assert checker["env"]["TARGET"] == "${{ steps.target.outputs.target_version }}"
-    for job_id in ("proposals", "publish"):
+    for job_id in ("proposals", "publish", "resolve"):
         for step in jobs[job_id]["steps"]:
-            for key, value in (step.get("env") or {}).items():
+            for key, value in {**step.get("env", {}), **step.get("with", {})}.items():
+                # The artifact id is checked against verify's digest in the next step.
+                if key == "artifact-ids" and value == ARTIFACT_ID:
+                    continue
                 if "needs.bump.outputs" in str(value):
                     pytest.fail(
                         f"{job_id}/{step['name']} reads {key} from the bump job"
@@ -191,7 +213,7 @@ def test_later_jobs_trust_only_verifys_target(jobs):
                     == "${{ needs.verify.outputs.target_version }}"
                 )
     assert "BRANCH" not in (_step(jobs["publish"], "Open the bump PR").get("env") or {})
-    report = _step(jobs["report"], "File a tracking issue")["env"]
+    report = _step(jobs["report"], "Compose the tracking issue")["env"]
     assert report["TARGET"] == "${{ needs.verify.outputs.target_version }}"
     assert "BRANCH" not in report
 
@@ -227,7 +249,9 @@ def test_each_job_downloads_the_artifact_by_id_with_its_digest_checked(jobs, job
                 "Checkout the main commit verify checked",
                 "Download the bump",
                 "Confirm this is the bump verify checked",
-                "File the feature proposals",
+                "Render the feature proposals",
+                "File proposal 1",
+                "File proposal 2",
             ],
         ),
         (
@@ -247,8 +271,11 @@ def test_every_check_must_pass_before_the_next_step(jobs, job_id, order):
     job = jobs[job_id]
     assert [n for n in _names(job) if n in order] == order
     for step in job["steps"]:
+        # A proposal is filed only if it was rendered; nothing else may be skipped.
+        filing = re.fullmatch(r"File proposal ([12])", step["name"])
+        allowed = f"steps.render.outputs.has_{filing[1]} == 'true'" if filing else None
         assert (
-            "if" not in step
+            step.get("if") == allowed
         ), f"{step['name']!r} must run only if all before it passed"
         assert not step.get("continue-on-error"), step["name"]
         run = step.get("run")
@@ -478,13 +505,15 @@ def test_a_write_job_acts_only_on_the_bump_verify_checked(
         assert "is not the one verify checked" in result.stdout
 
 
-def _file_proposals(bump: Path, tmp_path: Path, existing: str = "", search=None):
-    env = {"BUMP": bump.as_posix(), "TARGET": TARGET, "FAKE_ISSUE_LIST": existing}
-    if search is not None:
-        if not shutil.which("jq"):
-            pytest.skip("answering the dedupe search needs jq")
-        env["FAKE_ISSUE_JSON"] = json.dumps(search)
-    return run_step("proposals", "File the feature proposals", REPO_ROOT, env, tmp_path)
+def _render_proposals(bump: Path, tmp_path: Path):
+    env = {"BUMP": bump.as_posix(), "TARGET": TARGET}
+    return run_step(
+        "proposals", "Render the feature proposals", REPO_ROOT, env, tmp_path
+    )
+
+
+def _outputs(text: str) -> dict:
+    return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
 
 
 @pytest.mark.parametrize("extra", ["3.md", "notes.txt", ".hidden"])
@@ -492,68 +521,63 @@ def test_the_proposals_job_refuses_more_than_two(bump_dir, tmp_path, extra):
     """The privileged job enforces the cap; the agent's runner only asked for it."""
     write(bump_dir / "proposals" / "2.md", "Two\nbody\n")
     write(bump_dir / "proposals" / extra, "Three\nbody\n")
-    result, outputs, calls = _file_proposals(bump_dir, tmp_path)
+    result, outputs, calls = _render_proposals(bump_dir, tmp_path)
     assert result.returncode != 0
     assert f"at most 1.md and 2.md, not {extra}" in result.stdout
-    assert calls == [], "nothing may be filed"
-    assert "numbers=" not in outputs
+    assert "has_" not in outputs, "nothing may be filed"
 
 
-def test_a_proposal_is_skipped_only_for_an_exact_title_match(bump_dir, tmp_path):
-    title = f"feat: Idea (unlocked by Lemonade v{TARGET})"
-    near_misses = [
-        {"number": 7, "title": f"feat: Idea and more (unlocked by Lemonade v{TARGET})"},
-        {"number": 8, "title": title.upper()},
-    ]
-    result, outputs, calls = _file_proposals(bump_dir, tmp_path, search=near_misses)
+def test_proposals_are_rendered_with_a_fixed_title_and_key(bump_dir, tmp_path):
+    write(bump_dir / "proposals" / "2.md", "Second idea @someone\nbody\n")
+    result, outputs, calls = _render_proposals(bump_dir, tmp_path)
     assert result.returncode == 0, result.stderr
-    assert "numbers=101" in outputs
-    exact = near_misses + [{"number": 9, "title": title}]
-    result, outputs, calls = _file_proposals(bump_dir, tmp_path, search=exact)
-    assert result.returncode == 0, result.stderr
-    assert "Proposal already open as #9" in result.stdout
-    assert not [c for c in calls if c[:2] == ["issue", "create"]]
+    out = _outputs(outputs)
+    assert out["has_1"] == out["has_2"] == "true"
+    assert out["title_1"] == f"feat: Idea (unlocked by Lemonade v{TARGET})"
+    assert (
+        out["title_2"] == f"feat: Second idea someone (unlocked by Lemonade v{TARGET})"
+    )
+    assert out["key_1"] == f"lemonade-version-bump/proposal/v{TARGET}/idea"
+    assert out["key_2"] == (
+        f"lemonade-version-bump/proposal/v{TARGET}/second-idea-someone"
+    )
+    for n in (1, 2):
+        body = read(tmp_path / f"proposal-{n}.md")
+        assert "Auto-proposed by the Lemonade release scan" in outside_fences(body)
+    assert calls == [], "rendering files nothing"
 
 
 def test_a_proposal_title_is_capped(bump_dir, tmp_path):
     write(bump_dir / "proposals" / "1.md", "x" * 300 + "\nbody\n")
-    result, _, calls = _file_proposals(bump_dir, tmp_path)
+    result, outputs, _ = _render_proposals(bump_dir, tmp_path)
     assert result.returncode == 0, result.stderr
-    create = next(c for c in calls if c[:2] == ["issue", "create"])
-    title = create[create.index("--title") + 1]
+    title = _outputs(outputs)["title_1"]
     assert title == f"feat: {'x' * 100} (unlocked by Lemonade v{TARGET})"
 
 
-def test_proposals_are_filed_with_a_fixed_title_and_label(bump_dir, tmp_path):
-    write(bump_dir / "proposals" / "2.md", "Second idea @someone\nbody\n")
-    result, outputs, calls = _file_proposals(bump_dir, tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert "numbers=101 102" in outputs
-    creates = [c for c in calls if c[:2] == ["issue", "create"]]
-    assert len(creates) == 2
-    for call in creates:
-        title = call[call.index("--title") + 1]
-        assert title.startswith("feat: ") and title.endswith(
-            f"(unlocked by Lemonade v{TARGET})"
-        )
-        assert "@" not in title
-        assert call[call.index("--label") + 1] == "enhancement"
-        body = read(Path(call[call.index("--body-file") + 1]))
-        assert "Auto-proposed by the Lemonade release scan" in outside_fences(body)
-
-
-def test_a_proposal_already_open_is_not_filed_again(bump_dir, tmp_path):
-    result, outputs, calls = _file_proposals(bump_dir, tmp_path, existing="55")
-    assert result.returncode == 0, result.stderr
-    assert "numbers=\n" in outputs or outputs.rstrip().endswith("numbers=")
-    assert not [c for c in calls if c[:2] == ["issue", "create"]]
-
-
-def test_no_proposals_file_nothing(bump_dir, tmp_path):
+def test_no_proposals_render_nothing(bump_dir, tmp_path):
     shutil.rmtree(bump_dir / "proposals")
-    result, _, calls = _file_proposals(bump_dir, tmp_path)
+    result, outputs, calls = _render_proposals(bump_dir, tmp_path)
     assert result.returncode == 0, result.stderr
-    assert calls == []
+    assert "has_" not in outputs and calls == []
+
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_each_proposal_is_filed_by_the_issue_action_under_its_key(jobs, n):
+    """auto-issue dedupes by key among bot-filed issues, so a re-run files nothing twice."""
+    step = _step(jobs["proposals"], f"File proposal {n}")
+    assert step["id"] == f"proposal_{n}"
+    assert step["uses"] == "./.github/actions/auto-issue"
+    assert step["with"] == {
+        "mode": "report",
+        "key": f"${{{{ steps.render.outputs.key_{n} }}}}",
+        "title": f"${{{{ steps.render.outputs.title_{n} }}}}",
+        "body-file": f"${{{{ runner.temp }}}}/proposal-{n}.md",
+        "labels": "enhancement",
+    }
+    assert jobs["proposals"]["outputs"]["numbers"] == (
+        "${{ steps.proposal_1.outputs.issue }} ${{ steps.proposal_2.outputs.issue }}"
+    )
 
 
 def _detect(tmp_path, force: str = "", latest: str = f"v{TARGET}"):
@@ -588,16 +612,19 @@ def test_detect_refuses_a_version_that_is_not_x_y_z(tmp_path, force, latest):
 
 def _report(tmp_path: Path, **env):
     base = {
-        "GH_TOKEN": "x",
         "TARGET": TARGET,
-        "BRANCH": f"deps/lemonade-{TARGET}",
         "SHOULD_BUMP": "true",
         "STOPPED": "",
         "BUMP_RESULT": "success",
-        "FAKE_ISSUE_LIST": "",
     }
-    return run_step(
-        "report", "File a tracking issue", REPO_ROOT, {**base, **env}, tmp_path
+    result, outputs, calls = run_step(
+        "report", "Compose the tracking issue", REPO_ROOT, {**base, **env}, tmp_path
+    )
+    body = tmp_path / "tracking-issue.md"
+    return (
+        result,
+        _outputs(outputs).get("title", ""),
+        read(body) if body.exists() else "",
     )
 
 
@@ -606,29 +633,37 @@ def _report(tmp_path: Path, **env):
     [
         ({"STOPPED": "true"}, "the agent stopped without committing a bump"),
         ({"BUMP_RESULT": "failure"}, "the agent job failed"),
-        ({"BUMP_RESULT": "failure", "SHOULD_BUMP": ""}, "versions undetermined"),
+        ({"BUMP_RESULT": "failure", "SHOULD_BUMP": ""}, "detection step"),
         ({}, "did not pass the checks run before a PR is opened"),
     ],
     ids=["agent-stopped", "agent-failed", "detect-failed", "checks-failed"],
 )
-def test_report_files_one_rolling_issue_from_this_workflow(tmp_path, env, phrase):
-    result, _, calls = _report(tmp_path, **env)
+def test_report_composes_the_message_for_each_failure(tmp_path, env, phrase):
+    result, title, body = _report(tmp_path, **env)
     assert result.returncode == 0, result.stderr
-    search = next(c for c in calls if c[:2] == ["issue", "list"])
-    assert search[search.index("--author") + 1] == "app/github-actions"
-    assert search[search.index("--label") + 1] == "devops"
-    create = next(c for c in calls if c[:2] == ["issue", "create"])
-    assert phrase in " ".join(create)
-    assert ["--label", "bug"] == create[
-        create.index("--label") : create.index("--label") + 2
-    ]
+    assert phrase in body
+    assert body.startswith("The Lemonade version-bump workflow ")
+    assert "cc @kovtcharov-amd" in body
+    if env.get("SHOULD_BUMP") == "":
+        assert title == "⚠️ Lemonade version-bump check failed (versions undetermined)"
+    else:
+        assert title == f"⚠️ Lemonade version-bump run failed (target v{TARGET})"
 
 
-def test_report_comments_on_the_open_tracking_issue(tmp_path):
-    result, _, calls = _report(tmp_path, FAKE_ISSUE_LIST="77")
-    assert result.returncode == 0, result.stderr
-    assert any(c[:3] == ["issue", "comment", "77"] for c in calls)
-    assert not any(c[:2] == ["issue", "create"] for c in calls)
+def test_report_files_one_rolling_issue_through_the_issue_action(jobs):
+    """auto-issue finds the issue by its key among the ones this workflow's bot filed."""
+    step = _step(jobs["report"], "File or update the tracking issue")
+    assert step["uses"] == "./.github/actions/auto-issue"
+    assert step["with"] == {
+        "mode": "report",
+        "key": TRACKING_KEY,
+        "legacy-title-prefix": "⚠️ Lemonade version-bump",
+        "title": "${{ steps.compose.outputs.title }}",
+        "body-file": "${{ runner.temp }}/tracking-issue.md",
+        "labels": "bug\ndevops\n",
+        "assignees": "kovtcharov-amd",
+    }
+    assert _names(jobs["report"])[-1] == "File or update the tracking issue"
 
 
 def _verify_target(tmp_path, claimed, latest, force="", open_pr=""):
@@ -649,7 +684,7 @@ def test_verify_accepts_the_target_it_works_out_itself(tmp_path):
     result, outputs, _ = _verify_target(tmp_path, TARGET, f"v{TARGET}")
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"target_version={TARGET}" in outputs
-    assert "current_version=2026.42.1" in outputs
+    assert f"current_version={CURRENT}" in outputs
 
 
 def test_verify_accepts_a_forced_older_target(tmp_path):
@@ -677,11 +712,11 @@ def test_verify_refuses_a_target_that_already_has_a_pr(tmp_path):
 @pytest.mark.parametrize(
     "claimed,latest,force,reason",
     [
-        ("2026.43.2", f"v{TARGET}", "", "but the target is 2026.43.1"),
-        ("2026.40.0", f"v{TARGET}", "2026.43.1", "but the target is 2026.43.1"),
-        ("2026.42.1", "v2026.42.1", "", "is already pinned"),
+        (SKIPPED[1], f"v{TARGET}", "", f"but the target is {TARGET}"),
+        ("2026.40.0", f"v{TARGET}", TARGET, f"but the target is {TARGET}"),
+        (CURRENT, f"v{CURRENT}", "", "is already pinned"),
         ("2026.40.0", "v2026.40.0", "", "is older than the pinned"),
-        (TARGET, "v2026.43.1;x", "", "is not an X.Y.Z Lemonade version"),
+        (TARGET, f"v{TARGET};x", "", "is not an X.Y.Z Lemonade version"),
     ],
     ids=["claims-another", "claims-not-forced", "not-newer", "older", "malformed"],
 )
@@ -734,24 +769,62 @@ def test_publish_refuses_a_target_that_is_not_x_y_z(main_repo, tmp_path, target)
 
 
 def test_report_says_unknown_when_verify_set_no_target(tmp_path):
-    result, _, calls = _report(tmp_path, TARGET="", STOPPED="true")
+    result, title, body = _report(tmp_path, TARGET="", STOPPED="true")
     assert result.returncode == 0, result.stderr
-    create = next(c for c in calls if c[:2] == ["issue", "create"])
-    assert "(target vunknown)" in " ".join(create)
+    assert title.endswith("(target vunknown)")
 
 
 def test_report_prints_no_unchecked_target(tmp_path):
-    result, _, calls = _report(tmp_path, TARGET="2026.43.1](https://x.test) @someone")
+    result, title, body = _report(
+        tmp_path, TARGET="2026.43.1](https://x.test) @someone"
+    )
     assert result.returncode == 0, result.stderr
-    create = next(c for c in calls if c[:2] == ["issue", "create"])
-    text = " ".join(create)
-    assert "(target vunknown)" in text
-    assert "@someone" not in text and "x.test" not in text
+    assert "(target vunknown)" in title
+    for text in (title, body):
+        assert "@someone" not in text and "x.test" not in text
 
 
-def test_the_proposal_dedupe_searches_the_title_as_one_phrase(bump_dir, tmp_path):
-    result, _, calls = _file_proposals(bump_dir, tmp_path)
+def _resolve(tmp_path: Path, published: str, latest: str):
+    if not shutil.which("jq"):
+        pytest.skip("the resolve step needs jq")
+    env = {
+        "GH_TOKEN": "x",
+        "PUBLISHED": published,
+        "FAKE_API_JSON": json.dumps({"tag_name": latest}),
+    }
+    result, outputs, calls = run_step(
+        "resolve", "Confirm the bump is done", REPO_ROOT, env, tmp_path
+    )
+    return result, _outputs(outputs).get("close"), calls
+
+
+@pytest.mark.parametrize(
+    "published,latest,close",
+    [
+        ("success", "v9999.0.0", "true"),
+        ("skipped", f"v{CURRENT}", "true"),
+        ("skipped", f"v{TARGET}", "false"),
+    ],
+    ids=["pr-opened", "nothing-to-bump", "bump-still-due"],
+)
+def test_the_tracking_issue_closes_only_once_the_bump_is_done(
+    tmp_path, published, latest, close
+):
+    result, decided, calls = _resolve(tmp_path, published, latest)
     assert result.returncode == 0, result.stderr
-    search = next(c for c in calls if c[:2] == ["issue", "list"])
-    query = search[search.index("--search") + 1]
-    assert query == f'"feat: Idea (unlocked by Lemonade v{TARGET})" in:title'
+    assert decided == close
+    if published == "success":
+        assert calls == [], "an opened PR needs no lookup"
+
+
+def test_the_resolve_job_closes_the_same_key(jobs):
+    step = _step(jobs["resolve"], "Close the tracking issue")
+    assert step["if"] == "steps.done.outputs.close == 'true'"
+    assert step["uses"] == "./.github/actions/auto-issue"
+    assert step["with"] == {
+        "mode": "resolve",
+        "key": TRACKING_KEY,
+        "legacy-title-prefix": "⚠️ Lemonade version-bump",
+    }
+    done = _step(jobs["resolve"], "Confirm the bump is done")
+    assert done["env"]["PUBLISHED"] == "${{ needs.publish.result }}"

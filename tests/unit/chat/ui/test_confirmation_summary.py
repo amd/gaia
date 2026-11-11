@@ -165,3 +165,15 @@ def test_a_one_time_command_is_shown_verbatim_with_its_folder_and_note():
     assert folder == f"in {WS}"
     assert note == "Can run any code with your permissions."
     assert "always_scope" not in event
+
+
+def test_a_command_run_in_the_home_folder_keeps_its_paths_home_rooted():
+    """Stripped of the home folder, `ls ~/src` read as `ls src` — the project a
+    TUI user is sitting in, not the home folder the command really lists."""
+    home = os.path.expanduser("~")
+    summary = render_command_summary(
+        "run_shell_command",
+        {"command": f"ls -d {home}/*/src/app; ls -d {home}/src/app"},
+        workspace=home,
+    )
+    assert summary == "ls -d ~/*/src/app; ls -d ~/src/app"

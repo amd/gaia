@@ -13,7 +13,7 @@ The patch may only modify these files, and only like this:
 - ``src/gaia/llm/lemonade_embedded.py``: ``EMBEDDABLE_SHA256``, pinning exactly
   the target's four embeddable archives.
 - ``src/gaia/installer/lemonade_installer.py``: ``INSTALLER_SHA256``, pinning
-  exactly the target's five installers, and ``LEGACY_MSI_SHA256``, which keeps
+  exactly the target's two Windows MSIs, and ``LEGACY_MSI_SHA256``, which keeps
   every existing pin and gains exactly the two MSIs of the outgoing version
   (with the digests main pinned for them) and of each release appended to the
   tag list before the target, matched as text.
@@ -57,9 +57,6 @@ EXACT_PINS = {
     "INSTALLER_SHA256": (
         "v{v}/lemonade.msi",
         "v{v}/lemonade-server-minimal.msi",
-        "v{v}/lemonade-server_{v}-debian13_amd64.deb",
-        "v{v}/lemonade-server_{v}-debian13_arm64.deb",
-        "v{v}/Lemonade-{v}-Darwin.pkg",
     ),
     "EMBEDDABLE_SHA256": (
         "lemonade-embeddable-{v}-windows-x64.zip",

@@ -106,6 +106,23 @@ const (
 	followUpContractMinor = 15
 )
 
+// followUpAgentID is the only agent that serves the follow-up route. The email
+// sidecar also reports schema 2.15 because it published its stateful routes,
+// but it does not accept mid-turn follow-ups.
+const followUpAgentID = "gaia"
+
+// surfaceContract is the contract version from which the flagship's `/query`
+// takes `surface` (schema 2.20). Without it the agent words provider errors for
+// a headless caller instead of pointing at the TUI's own settings. Gaia only:
+// email numbers its own contract and has no such field.
+const (
+	surfaceContractMajor = 2
+	surfaceContractMinor = 20
+)
+
+// surfaceAgentID is the only agent whose `/query` takes `surface`.
+const surfaceAgentID = "gaia"
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -129,6 +146,8 @@ type peerContract struct {
 	// supportsToolDecision is true only when the peer is the gaia agent at
 	// >= 2.14, and so has the routes that answer a permission prompt and toggle bypass.
 	supportsToolDecision bool
+	// supportsSurface is true only when the peer is the gaia agent at >= 2.20.
+	supportsSurface bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -241,9 +260,12 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
 	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
-	supportsFollowUp := contractAtLeast(payload.APIVersion, followUpContractMajor, followUpContractMinor)
+	supportsFollowUp := s.agentID == followUpAgentID &&
+		contractAtLeast(payload.APIVersion, followUpContractMajor, followUpContractMinor)
 	supportsDecision := s.agentID == toolDecisionAgentID &&
 		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
+	supportsSurface := s.agentID == surfaceAgentID &&
+		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
 	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t)",
 		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision)
 	agentVersion := payload.Version
@@ -257,6 +279,7 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		supportsSession:      supportsSession,
 		supportsFollowUp:     supportsFollowUp,
 		supportsToolDecision: supportsDecision,
+		supportsSurface:      supportsSurface,
 		answered:             true,
 	}
 }
@@ -370,11 +393,11 @@ func noticeForMissingMemory(agentID, version string) string {
 
 // updateCommand names the AGENT-scoped hub command, never the bare verb.
 //
-// `gaia install` / `gaia uninstall` also exist and look right, which is the
-// trap: they are GAIA-wide — `gaia uninstall` is the tiered cleanup of the GAIA
-// install itself, one flag away from `--purge`. They reject a trailing agent id,
-// so a user handed `gaia uninstall email` sees an argparse error and may
-// reasonably retry without the argument, straight at the wrong tool. `gaia hub
+// `gaia uninstall` also exists and looks right, which is the trap: it is
+// GAIA-wide — the tiered cleanup of the GAIA install itself, one flag away from
+// `--purge`. It rejects a trailing agent id, so a user handed `gaia uninstall
+// email` sees an argparse error and may reasonably retry without the argument,
+// straight at the wrong tool. `gaia hub
 // <verb> <id>` takes the agent id and is the same command whether the TUI was
 // launched standalone or through the Python CLI.
 func updateCommand(verb, agentID string) string {

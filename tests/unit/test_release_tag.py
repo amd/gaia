@@ -14,9 +14,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -353,50 +351,77 @@ def test_a_superseded_rc_stops_after_approval_before_any_publish(publish):
     assert steps.index(check) == len(steps) - 1
 
 
-def test_nothing_publishes_unless_the_tagged_commit_passed_ci(publish):
+def test_a_final_publishes_only_if_the_tagged_commit_passed_ci(publish):
     gate = publish["ci-green"]
     assert gate["needs"] == "validate"
     assert gate["permissions"]["actions"] == "write"
     assert "check_release_ci.py" in gate["steps"][-1]["run"]
     approve = publish["approve-publish"]
     assert "ci-green" in approve["needs"]
-    assert "needs.ci-green.result == 'success'" in approve["if"]
+    # The only carve-out is an RC, which tests never hold.
+    assert (
+        "(needs.validate.outputs.is_rc == 'true' || "
+        "needs.ci-green.result == 'success')"
+    ) in approve["if"]
+
+
+def test_an_rc_skips_only_the_installer_job_that_tests_the_source(publish):
+    installers = publish["build-desktop-installers"]["with"]
+    assert installers["skip_source_tests"] == (
+        "${{ needs.validate.outputs.is_rc == 'true' }}"
+    )
+    callee = _workflow("build-installers.yml")["jobs"]
+    skipped = [
+        name
+        for name, job in callee.items()
+        if "inputs.skip_source_tests" in str(job.get("if", ""))
+    ]
+    assert skipped == ["custom-agent-mcp-harness"]
+    assert "!inputs.skip_source_tests" in callee["custom-agent-mcp-harness"]["if"]
 
 
 def test_an_rc_github_release_is_a_prerelease(publish):
-    steps = [
+    step = next(
         s
         for s in publish["github-release"]["steps"]
-        if s.get("uses", "").startswith("softprops/action-gh-release")
-    ]
-    final = next(s for s in steps if s["if"] == NOT_RC)
-    rc = next(s for s in steps if s["if"] == IS_RC)
-    assert "prerelease" not in final["with"]
-    assert rc["with"]["prerelease"] is True
-    assert rc["with"]["make_latest"] is False
-    assert rc["with"]["files"] == final["with"]["files"]
+        if s.get("name") == "Create GitHub Release with bounded rate-limit retry"
+    )
+    assert step["env"]["IS_RC"] == "${{ needs.validate.outputs.is_rc }}"
+    assert "--prerelease" in step["run"]
+    assert "python3 util/github_release_retry.py" in step["run"]
+    assert "softprops/action-gh-release" not in step["run"]
 
 
-def test_only_an_rc_requests_the_website_redeploy_from_publish(publish):
-    # A final's redeploy comes from release_components.yml; a second one here
-    # would change the final path.
-    job = publish["redeploy-website-rc"]
-    assert IS_RC in job["if"]
+def test_every_release_requests_the_website_redeploy_from_publish(publish):
+    # A final must not wait on release_components.yml's hub-publish approval to
+    # show up on the site.
+    job = publish["redeploy-website"]
+    assert IS_RC not in job["if"]
     assert "!cancelled()" in job["if"]
+    assert "needs.github-release.result == 'success'" in job["if"]
+    # After the installers attach, so the rebuild sees the final asset set --
+    # waited for, not required, so a failed attach never hides the release.
+    assert "github-release-installers" in job["needs"]
+    assert "github-release-installers" not in job["if"]
 
 
-def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
-    tui = publish["rc-tui-binaries"]
-    assert IS_RC in tui["if"]
+def test_every_tag_builds_the_windows_setup_for_its_own_release(publish):
+    tui = publish["tui-installers"]
+    assert IS_RC not in tui["if"]
     assert tui["uses"] == "./.github/workflows/tui_installers.yml"
-    # rpm cannot carry -rc.N, so the macOS/Linux packages stay with the final.
-    assert tui["with"]["installers"] is False
+    # The macOS/Linux packages too (tests/unit/test_rc_terminal_installers.py).
+    assert tui["with"].get("installers", True) is True
 
-    setup = publish["rc-windows-setup"]
-    assert IS_RC in setup["if"] and "!cancelled()" in setup["if"]
+    setup = publish["windows-setup"]
+    assert IS_RC not in setup["if"] and "!cancelled()" in setup["if"]
+    assert "environment" not in setup
     assert setup["uses"] == "./.github/workflows/windows_setup.yml"
-    # The flagship this RC run froze, not the lock's published build.
-    assert setup["with"]["sidecar"] == "artifact"
+    # An RC bundles the flagship its run froze; a final the lock's, which
+    # validate checked was released from this commit.
+    assert setup["with"]["sidecar"] == (
+        "${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}"
+    )
+    assert f"({NOT_RC} || needs.rc-flagship.result == 'success')" in setup["if"]
     # This run's own desktop app build, never a published release.
     assert setup["with"]["agent_ui_publish_run_sha"] == "${{ github.sha }}"
     assert "agent_ui_release" not in setup["with"]
@@ -405,25 +430,27 @@ def test_an_rc_builds_the_windows_setup_for_its_own_prerelease_only(publish):
         assert job["with"]["version"] == "${{ needs.validate.outputs.npm_version }}"
 
     # A failed setup turns the run red instead of quietly shipping without it.
-    missing = publish["rc-windows-setup-missing"]
-    assert IS_RC in missing["if"]
-    assert "needs.rc-windows-setup.outputs.ok != 'true'" in missing["if"]
+    missing = publish["windows-setup-missing"]
+    assert IS_RC not in missing["if"]
+    assert "needs.windows-setup.outputs.ok != 'true'" in missing["if"]
     assert "exit 1" in missing["steps"][0]["run"]
 
 
 def test_the_windows_setup_attaches_only_after_its_smoke_test(publish):
     release = publish["github-release"]
-    assert "rc-windows-setup" in release["needs"]
-    # Waited for, never required: a final skips it and must still release.
-    assert "rc-windows-setup" not in release["if"]
-    gated = [s for s in release["steps"] if "rc-windows-setup" in s.get("if", "")]
+    assert "windows-setup" in release["needs"]
+    # A final requires it; an RC only waits, and its notes say when it failed.
+    assert f"({IS_RC} || needs.windows-setup.outputs.ok == 'true')" in release["if"]
+    assert "needs.windows-setup.result" not in release["if"]
+    gated = [s for s in release["steps"] if "windows-setup" in s.get("if", "")]
     assert gated, "the setup is attached without checking its smoke test"
     for step in gated:
-        assert step["if"] == f"{IS_RC} && needs.rc-windows-setup.outputs.ok == 'true'"
+        # For a final as well as an RC.
+        assert step["if"] == "needs.windows-setup.outputs.ok == 'true'"
 
 
 def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
-    # rc-tui-binaries uploads `tui-binaries`; on the release it would duplicate
+    # tui-installers uploads `tui-binaries`; on the release it would duplicate
     # the six raw binaries under other names and enter their checksum file.
     (step,) = _steps(publish["github-release"], "Download TUI binaries")
     assert step["with"]["pattern"] == "tui-{linux,darwin,windows}-*"
@@ -434,47 +461,6 @@ def test_terminal_binaries_on_the_release_exclude_the_setups_input(publish):
 def test_the_windows_setup_never_reaches_the_hub_from_publish():
     text = (WORKFLOWS / "publish.yml").read_text(encoding="utf-8")
     assert "publish_to_r2" not in text and "GAIA_HUB" not in text
-
-
-def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def test_final_release_notes_diff_from_the_previous_final_not_an_rc(tmp_path):
-    # claude.yml's release-notes job rewrites the final's notes from the diff
-    # since PREVIOUS_TAG; an RC there would leave the final's notes nearly empty.
-    step = next(
-        s
-        for s in _workflow("claude.yml")["jobs"]["release-notes"]["steps"]
-        if s.get("name") == "Generate release context"
-    )
-    line = next(
-        ln for ln in step["run"].splitlines() if "PREVIOUS_TAG=$(git describe" in ln
-    )
-    describe = shlex.split(re.search(r"\$\((git describe[^)]*?)\s*2>", line)[1])
-
-    _git(tmp_path, "init", "-q")
-    for name in ("v0.24.1", "agent-pkg-gaia-v0.1.1", "v0.25.0-rc1", "v0.25.0"):
-        _git(
-            tmp_path,
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            name,
-        )
-        _git(tmp_path, "tag", name)
-
-    args = [a.replace("$CURRENT_TAG", "v0.25.0") for a in describe[1:]]
-    assert _git(tmp_path, *args) == "v0.24.1"
 
 
 # ── Superseded release candidates ────────────────────────────────────────────

@@ -13,21 +13,39 @@ import datetime
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
-from gaia.agents.tools.path_access import missing_file_error, read_access_error
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_access_error,
+    readable_entry,
+)
+from gaia.agents.tools.protected_folders import ProtectedFolders
 from gaia.agents.tools.search_scope import (
+    SearchBudget,
     confine_roots,
+    hidden_granted_roots,
     in_env_scope,
+    is_link,
     root_depth,
     search_roots,
 )
+from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_default
+from gaia.filesystem.name_match import (
+    fold_glob_match,
+    fold_words_match,
+    fts_name_terms,
+    glob_matches_mid_word,
+)
 from gaia.logger import get_logger
+from gaia.security import _format_size
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
@@ -37,18 +55,6 @@ logger = get_logger(__name__)
 # enough for any reasonable document (PDFs, big CSVs) but small enough that
 # we can tolerate loading it into memory at once.
 MAX_READ_BYTES = 50 * 1024 * 1024
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format bytes to human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 def _format_date(timestamp: float) -> str:
@@ -83,7 +89,7 @@ def _scope_roots(scope: str, host: Any = None) -> list:
     if scope == "home":
         raw = Path.home()
     else:
-        raw = Path(scope)
+        raw = _resolve_target(scope, None, _workspace_default(host))
     return [raw.expanduser().resolve()]
 
 
@@ -183,6 +189,37 @@ def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
     return head + "See the GAIA log for details." + tail
 
 
+def _index_search_failed_note(exc: BaseException) -> str:
+    """The find_files footnote saying the index failed and the disk was walked."""
+    head = (
+        f"\n\nNote: the file index failed ({exc}), so this searched the disk "
+        "instead, which is slower and may stop before covering every folder. "
+    )
+    kind = _sqlite_kind(exc)
+    if kind == "busy":
+        return head + (
+            "It is locked by another GAIA process; searching again later "
+            "should use it."
+        )
+    if kind == "corrupt":
+        return head + "The index file is damaged; tell the user it needs rebuilding."
+    if kind == "access":
+        return head + (
+            "GAIA can't read the index file; tell the user to check its permissions."
+        )
+    return head + (
+        "Tell the user the file index is failing; details are in the GAIA log."
+    )
+
+
+class PathAccessDenied(ValueError):
+    """The validator refused a path; ``refusal`` is the tool result to return."""
+
+    def __init__(self, denied: dict):
+        super().__init__(f"Access denied: {denied['error']}")
+        self.refusal = {**denied, "error": str(self)}
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -215,8 +252,6 @@ class FileSystemToolsMixin:
         db_path = getattr(config, "filesystem_index_path", None)
         if not db_path:
             return None
-        import sqlite3
-
         from gaia.filesystem.index import FileSystemIndexService
 
         with _open_lock_for(self):
@@ -231,11 +266,11 @@ class FileSystemToolsMixin:
         return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
-        """Validate and resolve a path. Raises ValueError if blocked."""
-        resolved = Path(path).expanduser().resolve()
+        """Validate and resolve a path. Raises PathAccessDenied if blocked."""
+        resolved = _resolve_target(path, None, _workspace_default(self))
         denied = read_access_error(self, resolved)
         if denied:
-            raise ValueError(f"Access denied: {denied['error']}")
+            raise PathAccessDenied(denied)
         return resolved
 
     def workspace_roots(self) -> list:
@@ -292,27 +327,32 @@ class FileSystemToolsMixin:
 
         mixin = self  # Capture self for nested functions
 
-        @tool(atomic=True)
+        # Shares its name with FileSearchToolsMixin.browse_directory.
+        @tool(atomic=True, override=True)
         def browse_directory(
-            path: str = "~",
+            path: str = ".",
             show_hidden: bool = False,
             sort_by: str = "name",
             filter_type: str = None,
             max_items: int = 50,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
-            Use this to explore what's inside a folder. Default path is user's home directory.
+            Use this to explore what's inside a folder. A bare path is relative to the chat workspace; without one, the default opens the home directory.
 
             Args:
-                path: Directory to browse (default: home directory ~)
+                path: Directory to browse (default: chat workspace, otherwise home directory)
                 show_hidden: Include hidden files/directories (default: False)
                 sort_by: Sort order - name, size, modified, or type (default: name)
                 filter_type: Filter by extension without dot, e.g. 'pdf', 'py' (default: all)
                 max_items: Maximum items to return (default: 50)
             """
             try:
+                workspace = _workspace_default(mixin)
+                if not workspace and path == ".":
+                    path = "~"
+                path = str(_resolve_target(path, None, workspace))
                 resolved = mixin._validate_path(path)
 
                 if not resolved.is_dir():
@@ -413,6 +453,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -427,7 +469,7 @@ class FileSystemToolsMixin:
             include_pattern: str = None,
             exclude_pattern: str = None,
             dirs_only: bool = False,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Show a tree visualization of a directory structure.
 
             Useful for understanding project layouts and folder hierarchies.
@@ -551,6 +593,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -558,7 +602,7 @@ class FileSystemToolsMixin:
                 return f"Error generating tree: {e}"
 
         @tool(atomic=True)
-        def file_info(path: str) -> str:
+        def file_info(path: str) -> Union[str, dict]:
             """Get comprehensive information about a file or directory.
 
             Returns size, dates, type, MIME type, encoding, and format-specific
@@ -691,10 +735,7 @@ class FileSystemToolsMixin:
 
                     elif ext == ".pdf":
                         try:
-                            try:
-                                import pypdf as _pdf
-                            except ImportError:
-                                import PyPDF2 as _pdf  # legacy fallback
+                            import pypdf as _pdf
 
                             with open(resolved, "rb") as f:
                                 reader = _pdf.PdfReader(f)
@@ -744,6 +785,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -760,7 +803,7 @@ class FileSystemToolsMixin:
             date_range: str = None,
             max_results: int = 25,
             sort_by: str = "relevance",
-        ) -> str:
+        ) -> Union[str, dict]:
             """Search for files by name, content, or metadata.
 
             The primary file search tool: hits the file system index when one
@@ -835,18 +878,35 @@ class FileSystemToolsMixin:
                             "folder to search as scope, not a file."
                         )
 
-                # Try index first if available
-                if mixin._fs_index and effective_type in (
-                    "name",
-                    "auto",
-                    "metadata",
+                is_glob = "*" in query or "?" in query
+
+                def name_matches(name: str) -> bool:
+                    if is_glob:
+                        return fold_glob_match(name, query)
+                    return fold_words_match(name, query)
+
+                # Try index first if available. The index matches word starts,
+                # so a query with no words (``*.*``) or a glob that can match
+                # mid-word (``*port*`` finds ``report``) goes to the walk.
+                by_name = effective_type != "metadata"
+                index_note = ""
+                if (
+                    mixin._fs_index
+                    and effective_type in ("name", "auto", "metadata")
+                    and (
+                        not by_name
+                        or (
+                            fts_name_terms(query)
+                            and not (is_glob and glob_matches_mid_word(query))
+                        )
+                    )
                 ):
                     # The index spans every indexed directory, so the caller's
                     # scope has to be applied to its rows too.
                     scope_roots = _scope_roots(scope, self)
                     try:
                         index_results = mixin._fs_index.query_files(
-                            name=query if effective_type != "metadata" else None,
+                            name=query if by_name else None,
                             extension=(
                                 list(type_filters)[0].lstrip(".")
                                 if type_filters and len(type_filters) == 1
@@ -858,10 +918,18 @@ class FileSystemToolsMixin:
                             modified_before=max_date,
                             limit=(
                                 max_results * _INDEX_SCOPE_OVERFETCH
-                                if scope_roots
+                                if scope_roots or by_name
                                 else max_results
                             ),
                         )
+                        # The index matches word prefixes; hold its rows to the
+                        # same name rule as the walk, globs included.
+                        if by_name:
+                            index_results = [
+                                r
+                                for r in index_results
+                                if name_matches(Path(r.get("path", "")).name)
+                            ]
                         if scope_roots:
                             index_results = [
                                 r
@@ -872,7 +940,7 @@ class FileSystemToolsMixin:
                             r
                             for r in index_results
                             if in_env_scope(self, r.get("path", ""))
-                        ]
+                        ][:max_results]
                         if index_results:
                             lines = [
                                 f"Found {len(index_results)} result(s) from index:\n"
@@ -884,27 +952,49 @@ class FileSystemToolsMixin:
                                     f"  {i}. {r['path']} ({size_str}, {mod_str})"
                                 )
                             return "\n".join(lines)
-                    except Exception as e:
-                        logger.debug(
-                            f"Index search failed, falling back to filesystem: {e}"
+                    except sqlite3.Error as e:
+                        logger.warning(
+                            "find_files: index query for %r failed, searching "
+                            "the disk instead: %s",
+                            query,
+                            e,
                         )
+                        index_note = _index_search_failed_note(e)
 
                 # Filesystem search
                 # Determine search roots based on scope
                 search_roots = [
                     str(r) for r in confine_roots(self, _get_search_roots(scope))
                 ]
+                search_roots += [
+                    str(r)
+                    for r in hidden_granted_roots(
+                        self, search_roots, mixin._get_default_excludes()
+                    )
+                ]
+                guard = ProtectedFolders(
+                    self,
+                    named=(
+                        []
+                        if scope in ("smart", "home", "cwd", "everywhere")
+                        else [scope_root]
+                    ),
+                )
                 resolved_roots = [Path(r).expanduser().resolve() for r in search_roots]
 
-                query_lower = query.lower()
-                is_glob = "*" in query or "?" in query
+                # One allowance for the whole call, well under the tool timeout.
+                budget = SearchBudget()
+                skipped = [0]
 
                 for root_path in search_roots:
                     if len(results) >= max_results:
                         break
 
                     root = Path(root_path).expanduser().resolve()
-                    if not root.exists() or not root.is_dir():
+                    if guard.blocks(root) or not root.exists() or not root.is_dir():
+                        continue
+                    if budget.exhausted():
+                        budget.unfinished(root)
                         continue
                     # A workspace scope takes its depth from the shared policy,
                     # so this tool and ``search_file`` cannot disagree on how
@@ -928,20 +1018,21 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            budget,
                             # Grep cost scales with file bytes, not directory
                             # entries, so the project is not read to
                             # DEEP_ROOT_DEPTH the way a name search walks it.
                             max_depth=(
                                 min(8, scoped_depth) if scoped_depth is not None else 8
                             ),
+                            skipped=skipped,
+                            guard=guard,
                         )
                     else:
                         # Name/metadata search
                         _search_names(
                             root,
-                            query,
-                            query_lower,
-                            is_glob,
+                            name_matches,
                             results,
                             max_results,
                             type_filters,
@@ -949,10 +1040,14 @@ class FileSystemToolsMixin:
                             max_size,
                             min_date,
                             max_date,
+                            budget,
                             max_depth=(
                                 scoped_depth if scoped_depth is not None else 10
                             ),
+                            guard=guard,
                         )
+                    if budget.truncated:
+                        budget.unfinished(root)
 
                 # Sort results
                 if sort_by == "size":
@@ -963,8 +1058,40 @@ class FileSystemToolsMixin:
                     results.sort(key=lambda x: x.get("name", "").lower())
                 # relevance = default order (already by search priority)
 
+                stopped = ""
+                if budget.truncated:
+                    logger.info(
+                        "find_files stopped (%s budget) after %d entries / %.1f s",
+                        budget.reason,
+                        budget.entries,
+                        budget.elapsed(),
+                    )
+                    stopped = (
+                        f"\n\n{budget.note()} Pass one of those folders as "
+                        "scope to search it on its own."
+                    )
+                skipped_note = (
+                    f"{skipped[0]} file(s) GAIA may not read were not searched. "
+                    "If the file may be in a folder outside the allowed ones, ask "
+                    "the user to add that folder rather than searching again."
+                    if skipped[0]
+                    else ""
+                )
+                skip_note = f"\n{guard.note()}" if guard.skipped else ""
+
                 if not results:
-                    return f"No files found matching '{query}'."
+                    if stopped:
+                        found_none = (
+                            f"No files matching '{query}' in the part searched."
+                        )
+                    else:
+                        found_none = f"No files found matching '{query}'."
+                    return (
+                        f"{found_none} {skipped_note}".rstrip()
+                        + skip_note
+                        + stopped
+                        + index_note
+                    )
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -982,15 +1109,20 @@ class FileSystemToolsMixin:
                     else:
                         lines.append(f"  {i}. {path_str} ({size_str}, {mod_str})")
 
-                return "\n".join(lines)
+                if skipped_note:
+                    lines.append(f"\n{skipped_note}")
+                return "\n".join(lines) + skip_note + stopped + index_note
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error searching files: {e}")
                 return f"Error searching files: {e}"
 
-        @tool(atomic=True)
+        # Shares its name with the FileSearchToolsMixin and FileIOToolsMixin read_file.
+        @tool(atomic=True, override=True)
         def read_file(
             file_path: str,
             lines: int = 100,
@@ -998,7 +1130,7 @@ class FileSystemToolsMixin:
             mode: str = "full",
             offset: int = 0,
             limit: Optional[int] = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Read and display a file's contents with intelligent type-based analysis.
 
             For text/code: shows content with line numbers.
@@ -1224,13 +1356,15 @@ class FileSystemToolsMixin:
                 reads.note(resolved, seen)
                 return "\n".join(output_lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error reading file: {e}")
                 return f"Error reading file: {e}"
 
-        def _bookmark_impl(action: str, path: str, label: str) -> str:
+        def _bookmark_impl(action: str, path: str, label: str) -> Union[str, dict]:
             try:
                 index = mixin._bookmark_index()
                 if action == "list":
@@ -1306,6 +1440,8 @@ class FileSystemToolsMixin:
 
             except FileIndexUnavailableError as e:
                 return str(e)
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -1317,7 +1453,7 @@ class FileSystemToolsMixin:
             action: str = "list",
             path: str = None,
             label: str = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Save, list, or remove bookmarks for frequently accessed files and directories.
 
             Bookmarks persist across sessions in the file system index.
@@ -1331,7 +1467,10 @@ class FileSystemToolsMixin:
                 label: Human-friendly name for the bookmark (optional, for add)
             """
             result = _bookmark_impl(action, path, label)
-            return _take_rebuild_notice(mixin, mixin._fs_index) + result
+            notice = _take_rebuild_notice(mixin, mixin._fs_index)
+            if isinstance(result, dict):
+                return {**result, "error": notice + result["error"]}
+            return notice + result
 
         # --- Helper functions (not tools, not decorated) ---
 
@@ -1415,27 +1554,34 @@ class FileSystemToolsMixin:
             elif scope == "smart":
                 roots = list(workspace)
                 common = [
-                    "Documents",
-                    "Downloads",
-                    "Desktop",
-                    "Projects",
-                    "Work",
-                    "OneDrive",
+                    documents_dir(Path(home)),
+                    *(
+                        Path(home) / folder
+                        for folder in (
+                            "Downloads",
+                            "Desktop",
+                            "Projects",
+                            "Work",
+                            "OneDrive",
+                        )
+                    ),
                 ]
-                for folder in common:
-                    p = Path(home) / folder
+                for p in common:
                     if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots
             else:
-                # Treat as a specific path
-                return [scope]
+                # Treat as a specific path, using the same workspace base as
+                # the validation and indexed-result paths above.
+                return [str(_resolve_target(scope, None, _workspace_default(self)))]
+
+        def _listed(results, path):
+            # Search roots overlap (cwd sits under home), so a file can be met twice.
+            return any(r["path"] == path for r in results)
 
         def _search_names(
             root,
-            _query,
-            query_lower,
-            is_glob,
+            name_matches,
             results,
             max_results,
             type_filters,
@@ -1443,21 +1589,19 @@ class FileSystemToolsMixin:
             max_size,
             min_date,
             max_date,
+            budget,
             max_depth=10,
+            guard=None,
         ):
-            """Search for files by name."""
-            import fnmatch
-
+            """Search for files by name, ignoring case and accents."""
             default_excludes = mixin._get_default_excludes()
-            # "fed rate decision" names fed_rate_decision_nov2024.txt.
-            query_words = query_lower.split()
 
             def _walk(current, depth):
                 if depth > max_depth or len(results) >= max_results:
                     return
                 try:
                     for entry in os.scandir(str(current)):
-                        if len(results) >= max_results:
+                        if len(results) >= max_results or budget.spend(current):
                             return
                         try:
                             name = entry.name
@@ -1466,14 +1610,7 @@ class FileSystemToolsMixin:
 
                             is_dir = entry.is_dir(follow_symlinks=False)
 
-                            # Check name match
-                            if is_glob:
-                                match = fnmatch.fnmatch(name.lower(), query_lower)
-                            else:
-                                name_lower = name.lower()
-                                match = all(w in name_lower for w in query_words)
-
-                            if match:
+                            if name_matches(name):
                                 st = entry.stat(follow_symlinks=False)
 
                                 # Type filter
@@ -1503,18 +1640,27 @@ class FileSystemToolsMixin:
                                     if mod_str > max_date:
                                         continue
 
-                                results.append(
-                                    {
-                                        "path": str(Path(entry.path).resolve()),
-                                        "name": name,
-                                        "size": st.st_size if not is_dir else 0,
-                                        "modified": st.st_mtime,
-                                        "is_dir": is_dir,
-                                    }
-                                )
+                                found = str(Path(entry.path).resolve())
+                                if not _listed(results, found):
+                                    results.append(
+                                        {
+                                            "path": found,
+                                            "name": name,
+                                            "size": st.st_size if not is_dir else 0,
+                                            "modified": st.st_mtime,
+                                            "is_dir": is_dir,
+                                        }
+                                    )
 
-                            if is_dir and name not in default_excludes:
+                            if (
+                                is_dir
+                                and name not in default_excludes
+                                and not is_link(entry)
+                                and not (guard and guard.blocks(entry.path))
+                            ):
                                 _walk(Path(entry.path), depth + 1)
+                                if budget.truncated:
+                                    return
 
                         except (PermissionError, OSError):
                             continue
@@ -1533,9 +1679,17 @@ class FileSystemToolsMixin:
             max_size,
             _min_date,
             _max_date,
+            budget,
             max_depth=8,
+            skipped=None,
+            guard=None,
         ):
-            """Search inside file contents."""
+            """Search inside file contents.
+
+            Files the agent may not read are skipped without asking: one
+            approval prompt per scanned file floods the user. *skipped* (a
+            one-item list) counts them so the result can say so.
+            """
             default_excludes = mixin._get_default_excludes()
             text_exts = {
                 ".txt",
@@ -1574,7 +1728,7 @@ class FileSystemToolsMixin:
                     return
                 try:
                     for entry in os.scandir(str(current)):
-                        if len(results) >= max_results:
+                        if len(results) >= max_results or budget.spend(current):
                             return
                         try:
                             name = entry.name
@@ -1582,7 +1736,12 @@ class FileSystemToolsMixin:
                                 continue
 
                             if entry.is_dir(follow_symlinks=False):
-                                _walk(Path(entry.path), depth + 1)
+                                if not is_link(entry) and not (
+                                    guard and guard.blocks(entry.path)
+                                ):
+                                    _walk(Path(entry.path), depth + 1)
+                                    if budget.truncated:
+                                        return
                             elif entry.is_file(follow_symlinks=False):
                                 ext = Path(name).suffix.lower()
 
@@ -1605,12 +1764,11 @@ class FileSystemToolsMixin:
                                 if st.st_size > 10 * 1024 * 1024:  # 10MB
                                     continue
 
-                                try:
-                                    mixin._validate_path(entry.path)
-                                except ValueError as exc:
-                                    logger.debug(
-                                        "Skipping unreadable search result: %s", exc
-                                    )
+                                if _listed(results, str(Path(entry.path).resolve())):
+                                    continue
+                                if not readable_entry(mixin, entry.path):
+                                    if skipped is not None:
+                                        skipped[0] += 1
                                     continue
                                 try:
                                     with open(
@@ -1733,18 +1891,10 @@ class FileSystemToolsMixin:
 
         def _read_pdf(path, mode):
             """Read PDF file."""
-            # Prefer ``pypdf`` (the modern maintained fork). Fall back to
-            # ``PyPDF2`` (deprecated legacy name) for older installs. The
-            # two share an identical API on the surface we use.
             try:
                 import pypdf as _pdf
             except ImportError:
-                try:
-                    import PyPDF2 as _pdf
-                except ImportError:
-                    return (
-                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
-                    )
+                return f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
 
             try:
                 with open(path, "rb") as f:

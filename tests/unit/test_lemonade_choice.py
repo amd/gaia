@@ -10,6 +10,7 @@ answer. The unit conftest points ``config.json`` at a per-test tmp file.
 from __future__ import annotations
 
 import json
+import socket
 from types import SimpleNamespace
 from unittest import mock
 
@@ -57,7 +58,7 @@ class FakeResponse:
         return self._body
 
 
-def _lemonade(version="11.8.1"):
+def _lemonade(version="2026.44.1"):
     return FakeResponse(body={"status": "ok", "version": version, "model_loaded": None})
 
 
@@ -225,6 +226,174 @@ class TestPrecedence:
             assert gaia_runs_lemonade() is True
 
 
+class TestEnvChosenAwayFrom:
+    """GAIA's own picked in the app over a LEMONADE_BASE_URL that wasn't answering."""
+
+    def test_the_env_value_it_overrode_is_ignored(self, monkeypatch):
+        from gaia.llm.lemonade_client import (
+            configured_lemonade_url,
+            resolve_lemonade_api_key,
+        )
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        monkeypatch.setenv("LEMONADE_API_KEY", "for-that-server")
+        assert choice.configured_source() == "env"
+
+        assert choice.ignore_env_url() == "http://127.0.0.1:59999/api/v1"
+        saved = GaiaConfig.load()
+        assert saved.lemonade_env_url_ignored == "http://127.0.0.1:59999/api/v1"
+        assert configured_lemonade_url() is None
+        assert choice.configured_source() is None
+        assert choice.env_override_note() is None
+        # Its key belonged to the server it named, never GAIA's own.
+        assert resolve_lemonade_api_key() is None
+        info = choice.describe()
+        assert info["source"] == "gaia"
+        assert info["env_url_ignored"] == "http://127.0.0.1:59999/api/v1"
+
+    def test_a_trailing_slash_is_the_same_value(self, monkeypatch):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", " http://127.0.0.1:59999/api/v1/ ")
+        assert choice.configured_source() is None
+
+    def test_a_bare_origin_and_its_api_path_are_the_same_value(self, monkeypatch):
+        # The TUI hands its Python child the normalized form of the user's value.
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        assert choice.configured_source() is None
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            "http://127.0.0.1:59998",
+            "http://127.0.0.1:59999/proxy/api/v1",
+            "https://127.0.0.1:59999",
+        ],
+    )
+    def test_a_different_server_is_not_the_ignored_value(self, monkeypatch, other):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", other)
+        assert choice.configured_source() == "env"
+
+    def test_a_changed_env_value_applies_again(self, monkeypatch):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        assert configured_lemonade_url() == "http://gpu-box:13305"
+        assert choice.configured_source() == "env"
+        assert choice.describe()["env_url_ignored"] is None
+        assert "gpu-box" in choice.env_override_note()
+
+    def test_the_saved_external_server_still_applies_over_an_ignored_env(
+        self, monkeypatch
+    ):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert configured_lemonade_url() == USER_URL
+        assert choice.configured_source() == "config"
+
+    def test_gaia_lemonade_status_says_the_env_value_is_ignored(
+        self, monkeypatch, capsys
+    ):
+        from gaia.cli import handle_lemonade_choice_command
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        handle_lemonade_choice_command(
+            SimpleNamespace(lemonade_action="status", json=False)
+        )
+        out = capsys.readouterr().out
+        assert "GAIA uses its own Lemonade Server" in out
+        assert "LEMONADE_BASE_URL=http://127.0.0.1:59999/api/v1 is ignored" in out
+
+    def test_an_unreadable_config_is_an_error_with_the_env_value_set(self, monkeypatch):
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        GaiaConfig.config_path().parent.mkdir(parents=True, exist_ok=True)
+        GaiaConfig.config_path().write_text('{"lemonade_mode":', encoding="utf-8")
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        # It can't say whether that value is ignored, so it can't be guessed.
+        with pytest.raises(GaiaConfigError, match="not valid JSON"):
+            configured_lemonade_url()
+
+    def _gaias_own_running(self, tmp_path, port=63207):
+        state = tmp_path / "gaia-home" / "lemonade" / "state.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"port": port, "api_key": "k"}), encoding="utf-8")
+
+    DEAD = "http://127.0.0.1:59999/api/v1"
+    INHERITED = {"LEMONADE_BASE_URL": DEAD, "LEMONADE_API_KEY": "dead", "PATH": "p"}
+
+    def test_a_child_gets_gaias_own_instead_of_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        # Agents are built apart from GAIA and may never read the saved choice.
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == {
+            "LEMONADE_BASE_URL": "http://localhost:63207/api/v1",
+            "GAIA_LEMONADE_EMBEDDED": "1",
+            "PATH": "p",
+        }
+
+    def test_a_child_gets_no_address_while_gaias_own_is_down(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_follows_a_saved_server_over_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_keeps_a_value_that_is_not_ignored(self, monkeypatch, tmp_path):
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == self.INHERITED
+        own = {**self.INHERITED, "GAIA_LEMONADE_EMBEDDED": "1"}
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(own) == own
+
+    def test_the_daemon_and_setup_children_never_inherit_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        from gaia.daemon.client import _daemon_env
+        from gaia.ui.setup_runner import _child_env
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        monkeypatch.setenv("LEMONADE_API_KEY", "dead")
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        for env in (_daemon_env(), _child_env()):
+            assert env["LEMONADE_BASE_URL"] == "http://localhost:63207/api/v1"
+            assert env["GAIA_LEMONADE_EMBEDDED"] == "1"
+            assert "LEMONADE_API_KEY" not in env
+
+    def test_nothing_is_saved_without_an_env_value(self, monkeypatch):
+        assert choice.ignore_env_url() is None
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")
+        monkeypatch.setenv("GAIA_LEMONADE_EMBEDDED", "1")
+        # GAIA's own exported URL is not the user's choice to override.
+        assert choice.ignore_env_url() is None
+        assert GaiaConfig.load().lemonade_env_url_ignored is None
+
+
 # ---------------------------------------------------------------------------
 # API keys
 # ---------------------------------------------------------------------------
@@ -333,21 +502,95 @@ class TestProbe:
         assert choice.probe(USER_URL, "wrong").status == choice.BAD_KEY
 
     def test_too_old_names_both_versions_and_the_upgrade(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         result = choice.probe(USER_URL)
         assert result.status == choice.TOO_OLD
         msg = result.message()
-        assert "v10.2.0" in msg and f"v{choice.minimum_version()}" in msg
-        assert "Upgrade" in msg and "lemonade_mode gaia" in msg
+        assert "v11.9.0" in msg and f"v{choice.minimum_version()}" in msg
+        assert "Upgrade" in msg and "lemonade_mode" not in msg
+        assert "lemonade_mode gaia" in result.message(in_use=True)
 
     def test_calver_is_new_enough(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("2026.40.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("2026.45.0~3.abc1234")
         assert choice.probe(USER_URL).status == choice.OK
 
     def test_down_server_is_unreachable(self, http):
         result = choice.probe(USER_URL)
         assert result.status == choice.UNREACHABLE
         assert "Start it" in result.message()
+
+
+def _wrapped(cause):
+    """A ConnectionError shaped like the one requests raises: socket error inside."""
+    import urllib3
+
+    conn = urllib3.exceptions.NewConnectionError(None, "Failed to establish")
+    conn.__cause__ = cause
+    pool = urllib3.exceptions.MaxRetryError(None, "/api/v1/health", conn)
+    return requests.exceptions.ConnectionError(pool)
+
+
+class TestUnreachableReason:
+    """Why nothing answered, in words, never the raw urllib3 exception."""
+
+    @pytest.mark.parametrize(
+        "error,reason",
+        [
+            (
+                _wrapped(ConnectionRefusedError(10061, "actively refused")),
+                "nothing is listening on that port",
+            ),
+            (
+                _wrapped(socket.gaierror(11002, "getaddrinfo failed")),
+                "the host name could not be found",
+            ),
+            (
+                requests.exceptions.ConnectTimeout("connect timeout=3"),
+                "nothing accepted the connection in time",
+            ),
+            (
+                requests.exceptions.ReadTimeout("read timeout=10"),
+                "did not answer in time",
+            ),
+            (
+                requests.exceptions.SSLError("[SSL: WRONG_VERSION_NUMBER]"),
+                "secure (HTTPS) connection could not be set up",
+            ),
+            (requests.exceptions.ConnectionError("odd"), "the connection failed"),
+        ],
+    )
+    def test_each_failure_reads_plainly(self, http, error, reason):
+        http.routes[f"{USER_URL}/health"] = error
+        result = choice.probe(USER_URL)
+        assert result.status == choice.UNREACHABLE
+        msg = result.message()
+        assert reason in msg
+        assert msg.endswith("Start it, or check the address and port.")
+        for leak in ("HTTPConnectionPool", "Max retries", "WinError", "Errno"):
+            assert leak not in msg
+
+    def test_only_a_server_already_in_use_names_the_way_back(self, http):
+        result = choice.probe(USER_URL)
+        assert "gaia config set" not in result.message()
+        assert "gaia config set lemonade_mode gaia" in result.message(in_use=True)
+
+    def test_the_full_error_is_logged(self, http, caplog):
+        http.routes[f"{USER_URL}/health"] = _wrapped(ConnectionRefusedError(111, "x"))
+        with caplog.at_level("DEBUG", logger=choice.log.name):
+            choice.probe(USER_URL)
+        assert "NewConnectionError" in caplog.text or "MaxRetryError" in caplog.text
+
+    @pytest.mark.allow_network
+    def test_a_real_closed_port_reads_plainly(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        result = choice.probe(f"http://127.0.0.1:{port}", timeout=(5.0, 1.0))
+        assert result.status == choice.UNREACHABLE
+        assert result.detail in (
+            "nothing is listening on that port",
+            "nothing accepted the connection in time",
+        )
 
 
 class TestDetect:
@@ -389,7 +632,7 @@ class TestDetect:
             assert choice.detect_running_lemonade() is None
 
     def test_too_old_is_reported_not_offered(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         assert choice.detect_running_lemonade().status == choice.TOO_OLD
 
     def test_a_busy_server_gets_time_to_answer(self, http, monkeypatch):
@@ -433,7 +676,7 @@ class TestUseExternal:
         "response,status",
         [
             (FakeResponse(401), choice.NEEDS_KEY),
-            (_lemonade("10.2.0"), choice.TOO_OLD),
+            (_lemonade("11.9.0"), choice.TOO_OLD),
             (FakeResponse(body=None, content_type="text/html"), choice.NOT_LEMONADE),
             (None, choice.UNREACHABLE),
         ],
@@ -466,7 +709,14 @@ class TestUseExternal:
         with pytest.raises(choice.LemonadeChoiceError) as err:
             choice.set_mode("external")
         assert err.value.status == choice.UNREACHABLE
+        assert "gaia config set" not in str(err.value)
         assert GaiaConfig.load().lemonade_mode == "gaia"
+
+    def test_a_dead_server_already_in_use_names_the_way_back(self, http, keyring):
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        with pytest.raises(choice.LemonadeChoiceError) as err:
+            choice.set_url("http://other:13305")
+        assert "gaia config set lemonade_mode gaia" in str(err.value)
 
     def test_set_mode_external_needs_a_saved_server(self):
         with pytest.raises(choice.LemonadeChoiceError, match="lemonade connect"):

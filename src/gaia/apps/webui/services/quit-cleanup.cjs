@@ -14,8 +14,12 @@
 
 "use strict";
 
-/** Longest the quit waits for cleanup before going ahead without it (ms). */
-const CLEANUP_TIMEOUT_MS = 20000;
+/**
+ * Longest the quit waits for cleanup before going ahead without it (ms).
+ * Covers the slowest agent stop: two 20 s Windows process-table reads, the
+ * agent's shutdown wait and the kill grace.
+ */
+const CLEANUP_TIMEOUT_MS = 50000;
 
 /**
  * @param {object} deps
@@ -56,12 +60,17 @@ function installQuitCleanup({ app, cleanup, timeoutMs = CLEANUP_TIMEOUT_MS, logg
           logger.error("[main] Cleanup error:", (err && err.stack) || err);
         }),
       deadline,
-    ]).then(() => {
-      clearTimeout(timer);
-      done = true;
-      logger.log("[main] Cleanup complete, quitting...");
-      app.quit();
-    });
+    ])
+      // Re-quit on a later task: Electron drops a quit() that arrives while it
+      // is still unwinding the will-quit it just prevented, which is what an
+      // instant cleanup (no backend left to stop) used to hit.
+      .then(() => new Promise((resolve) => setImmediate(resolve)))
+      .then(() => {
+        clearTimeout(timer);
+        done = true;
+        logger.log("[main] Cleanup complete, quitting...");
+        app.quit();
+      });
   });
 
   return {

@@ -390,12 +390,13 @@ class TestListingAndSearch:
 
     def test_browse_outside_is_refused(self, tools, confined):
         result = _tool("browse_directory")(path=str(confined.key.parent))
-        assert "answer_key" not in result
-        assert ALLOWED_PATHS_ENV in result
+        assert result["executed"] is False
+        assert "answer_key" not in _text(result)
+        assert ALLOWED_PATHS_ENV in _text(result)
 
     def test_tree_outside_is_refused(self, tools, confined):
         result = _tool("tree")(path=str(confined.home))
-        assert "answer_key" not in result
+        assert "answer_key" not in _text(result)
 
     @pytest.mark.parametrize("scope", ["home", "smart"])
     def test_wide_name_search_stays_in_the_task(self, tools, confined, scope):
@@ -481,10 +482,10 @@ class TestChatAgentInheritsTheNarrowedScope:
     """One narrowing in ChatAgent reaches every consumer of its scope."""
 
     def test_validator_rag_and_config_agree(self, confined):
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         from unittest.mock import patch
 
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         config = ChatAgentConfig(
             prompt_profile="doc",
@@ -492,8 +493,8 @@ class TestChatAgentInheritsTheNarrowedScope:
             allowed_paths=[str(confined.home)],
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.SessionManager"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.SessionManager"),
         ):
             agent = ChatAgent(config)
 

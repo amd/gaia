@@ -14,6 +14,7 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // dev is developer mode: rich in-TUI output (per-turn timings, step and turn
@@ -182,12 +183,24 @@ var rootCmd = &cobra.Command{
 		// The saved preference is the default; an explicit --full-access
 		// overrides it in either direction, which is what makes
 		// --full-access=false a one-launch opt-out.
-		saved := preflight.ReadFullAccess().Enabled
+		savedConfig := preflight.ReadFullAccess()
+		if savedConfig.Err != nil {
+			return fmt.Errorf("could not read the saved full-access setting: %w", savedConfig.Err)
+		}
+		saved := savedConfig.Enabled
 		fullAccess, fromSaved := saved, saved
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
-		return ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace)
+		if err := update.RemoveLeftover(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace); err != nil {
+			return err
+		}
+		// An install the user asked for in /update runs now, after the TUI
+		// has closed, so the installer can replace this binary.
+		return update.RunPending(cmd.Context(), os.Stdout, os.Stderr)
 	},
 }
 
@@ -325,11 +338,11 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. This binary is addressed as
-// `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui run email` — the exact spelling
-// the docs use — would fail with "unknown command". Both spellings work; only
-// the first argument is considered, so an agent named "tui" is unaffected.
+// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
+// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// "unknown command". Both spellings work; only the first argument is
+// considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

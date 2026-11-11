@@ -74,7 +74,7 @@ class _FakeTavilyClient:
         return {}
 
     def usage(self):
-        return {"cap": None, "total_credits": 0}
+        return {"cap": None, "total_credits": 0, "session_credits": 0}
 
     def close(self):
         self.closed = True
@@ -196,3 +196,31 @@ def test_client_is_closed_even_when_budget_exceeded(monkeypatch):
 def test_successful_search_does_not_exit():
     # A clean run must not raise SystemExit at all.
     cli.handle_knowledge_command(_knowledge_args("search"))
+
+
+# ---------------------------------------------------------------------------
+# Usage line: session spend shown only where the command spent something
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _seeded_usage(monkeypatch):
+    monkeypatch.setattr(
+        _FakeTavilyClient,
+        "usage",
+        lambda self: {"cap": 5, "total_credits": 7, "session_credits": 1},
+    )
+
+
+@pytest.mark.parametrize("action", ["search", "extract"])
+def test_spending_actions_report_session_credits(_seeded_usage, capsys, action):
+    cli.handle_knowledge_command(_knowledge_args(action))
+    out = capsys.readouterr().out
+    assert "Credits used: 7 total, 1 this session (cap: 5)" in out
+
+
+def test_usage_action_omits_always_zero_session_figure(_seeded_usage, capsys):
+    cli.handle_knowledge_command(_knowledge_args("usage"))
+    out = capsys.readouterr().out
+    assert "Credits used: 7 total (cap: 5)" in out
+    assert "this session" not in out

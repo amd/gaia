@@ -25,7 +25,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "lemonade-version-bump.yml"
 CHECKER = REPO_ROOT / "util" / "check_lemonade_bump.py"
 RENDER = REPO_ROOT / "util" / "render_lemonade_bump_pr.py"
-CURRENT, TARGET = "2026.42.1", "2026.43.1"
+
+
+def _pinned_version() -> str:
+    text = (REPO_ROOT / "src" / "gaia" / "version.py").read_text(encoding="utf-8")
+    return re.search(r'^LEMONADE_VERSION = "([0-9.]+)"', text, re.M)[1]
+
+
+# The scratch repos copy the real pin files, so the bump starts from main's pin and
+# goes one minor release up; SKIPPED are two releases in between.
+CURRENT = _pinned_version()
+_year, _minor, _patch = (int(part) for part in CURRENT.split("."))
+TARGET = f"{_year}.{_minor + 1}.1"
+SKIPPED = (f"{_year}.{_minor}.{_patch + 4}", f"{_year}.{_minor + 1}.0")
 INSTALLER = "src/gaia/installer/lemonade_installer.py"
 EMBEDDED = "src/gaia/llm/lemonade_embedded.py"
 TAGS = "tests/fixtures/lemonade/release_tags.txt"
@@ -150,7 +162,12 @@ def honest_bump(repo: Path, skipped: tuple = ()) -> None:
     *skipped* are releases between the two that GAIA never pinned: their tags
     are appended before TARGET's, and their MSIs join the legacy pins.
     """
-    edit(repo, "src/gaia/version.py", f'"{CURRENT}"', f'"{TARGET}"')
+    edit(
+        repo,
+        "src/gaia/version.py",
+        f'LEMONADE_VERSION = "{CURRENT}"',
+        f'LEMONADE_VERSION = "{TARGET}"',
+    )
     outgoing = outgoing_pins(read(repo / INSTALLER))
     installer = replace_block(
         read(repo / INSTALLER),

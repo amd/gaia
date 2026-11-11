@@ -3,7 +3,7 @@
 """Contract tests for ``gaia.ui.email_sidecar.relay`` (#2109 query relay).
 
 ``relay.py`` does not exist yet — this file pins its designed public surface
-(``relay.relay_query`` + the ``STREAM_ENDED_UNEXPECTEDLY`` constant) as a
+(``relay.relay_query`` + the crash text from ``stream_ended_text()``) as a
 red-phase TDD contract. Every test in this file is expected to fail at
 collection with ``ModuleNotFoundError`` / ``ImportError`` until the module
 lands.
@@ -34,11 +34,14 @@ import pytest
 
 pytestmark = pytest.mark.allow_network
 
-from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.email_sidecar.errors import (  # noqa: E402
+from gaia.daemon.sidecars.errors import (  # noqa: E402
     SidecarError,
     SidecarHTTPError,
 )
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT  # noqa: E402
+from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
+from gaia.ui.sse_handler import MODEL_RETAKE_FAILED_MESSAGE  # noqa: E402
+from gaia.ui.turn_summary import TurnLedger  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Part 2 — unit tests: hand-rolled fakes, no real HTTP
@@ -50,20 +53,56 @@ class _FakeHandler:
 
     Mirrors the real handler's attribute names relay_query depends on:
     ``_emit``, ``cancelled`` (a ``threading.Event``), ``active_relay_response``,
-    and ``signal_done()``.
+    ``signal_done()``, ``turn_ledger``, the ``record_tool_*`` turn-state hooks,
+    and the question / model-slot hooks a ``needs_input`` drives (no slot here,
+    so stepping away is a no-op).
     """
 
     def __init__(self) -> None:
         self.events: list = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
         self.active_relay_response = None
         self.done_calls = 0
+        self.relay_question = None
+        self.step_away_result = False
+        self.retake_result = True
 
     def _emit(self, event):
         self.events.append(event)
 
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
+
+    def set_relay_confirmation(self, *_args):
+        pass
+
+    def record_tool_started(self, tool_name):
+        self.turn_ledger.tool_started(tool_name)
+
+    def record_tool_args(self, args):
+        self.turn_ledger.tool_args(args)
+
+    def record_tool_result(self, data, success):
+        self.turn_ledger.tool_result(data, success)
+
     def signal_done(self):
         self.done_calls += 1
+
+    def step_away_from_model(self):
+        return self.step_away_result
+
+    def come_back_to_model(self):
+        if self.retake_result is False:
+            self._emit(
+                {
+                    "type": "agent_error",
+                    "content": MODEL_RETAKE_FAILED_MESSAGE,
+                    "fatal": True,
+                }
+            )
+            self.cancelled.set()
+        return self.retake_result
 
 
 class _RaisingIterator:
@@ -633,7 +672,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         # Ends the turn: the chat is recorded failed, not done.
         assert agent_errors[0]["fatal"] is True
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
@@ -647,7 +686,7 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_generator_exhausted_without_terminal_event(self):
@@ -661,8 +700,19 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
+
+    def test_crash_while_a_question_is_open_clears_it(self):
+        """Otherwise the chat keeps showing "waiting on you" after the run died."""
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "needs_input", "request_id": "req-9", "question": "Which?"}
+            raise RuntimeError("socket closed")
+
+        relay.relay_query(handler, _ScriptedProxy(_source), query="q", context=[])
+        assert handler.relay_question is None
 
     def test_exception_never_propagates_out_of_relay_query(self):
         handler = _FakeHandler()
@@ -703,13 +753,8 @@ class TestSidecarHTTPErrorDetail:
         assert agent_errors[0]["content"] == detail
 
     def test_connection_shaped_http_error_detail_gains_hint(self, monkeypatch):
-        from gaia.llm import lemonade_launcher
-
-        start = "To start it now, run: gaia lemonade embedded start"
         monkeypatch.setattr(
-            lemonade_launcher,
-            "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: True
         )
         handler = _FakeHandler()
         detail = "502 local LLM triage failed: connection refused"
@@ -722,8 +767,50 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == (
-            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_SERVER_DOWN_HINT}"
         )
+        assert "gaia " not in agent_errors[0]["content"]
+
+    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+        from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
+
+        handler = _FakeHandler()
+        detail = (
+            "GAIA's AI engine couldn't start: lemond timed out. Sending the "
+            f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
+        )
+        self._assert_left_alone(detail)
+
+    def test_a_detail_that_already_says_to_resend_gains_no_hint(self):
+        self._assert_left_alone(
+            "The local model server at localhost:13305 isn't answering (connection "
+            "refused). Start the model server, then send the message again."
+        )
+
+    def test_a_server_the_user_runs_gets_its_start_instruction(self, monkeypatch):
+        from gaia.llm import lemonade_launcher
+
+        start = "Start the Lemonade app from Applications, then retry."
+        monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
+        monkeypatch.setattr(
+            lemonade_launcher,
+            "describe_start_hint",
+            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+        )
+        detail = "local LLM triage failed: connection refused"
+        content = relay._augment_error_detail(detail)
+        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+
+    def _assert_left_alone(self, detail):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == detail
 
     def test_404_http_error_still_shows_version_upgrade_message(self):
         handler = _FakeHandler()
@@ -747,7 +834,107 @@ class TestSidecarHTTPErrorDetail:
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
+
+
+# --- Model-retake failure after an answered prompt (#6019) -------------------
+
+
+class TestModelRetakeFailure:
+    def test_retake_failure_preserves_named_terminal_error(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = False
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_confirmation",
+                    "confirm_id": "confirm-retake",
+                    "action": "send_message",
+                    "summary": "Send it?",
+                },
+                {"type": "token", "delta": "discarded"},
+                {"type": "final", "answer": "must not be discarded"},
+            )
+        )
+
+        relay.relay_query(
+            handler,
+            proxy,
+            query="q",
+            context=[],
+            run_id="rid-retake",
+            answers_confirmations=True,
+        )
+
+        errors = [e for e in handler.events if e.get("type") == "agent_error"]
+        assert errors == [
+            {
+                "type": "agent_error",
+                "content": MODEL_RETAKE_FAILED_MESSAGE,
+                "fatal": True,
+            }
+        ]
+        assert not [
+            e
+            for e in handler.events
+            if e.get("type") == "status" and e.get("message") == "Cancelled."
+        ]
+        assert not [e for e in handler.events if e.get("type") == "answer"]
+        assert proxy.cancel_calls == ["rid-retake"]
+
+    def test_user_stop_during_retake_stays_a_quiet_cancel(self):
+        handler = _FakeHandler()
+        handler.step_away_result = True
+        handler.retake_result = None
+        handler.cancelled.set()
+        proxy = _ScriptedProxy(_events({"type": "token", "delta": "discarded"}))
+
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-stop")
+
+        assert not [e for e in handler.events if e.get("type") == "agent_error"]
+        assert any(
+            e.get("type") == "status" and e.get("message") == "Cancelled."
+            for e in handler.events
+        )
+        assert proxy.cancel_calls == ["rid-stop"]
+
+    def test_late_user_stop_after_model_regain_emits_cancelled(self):
+        class _LateStopHandler(_FakeHandler):
+            def come_back_to_model(self):
+                self.cancelled.set()
+                return None
+
+        handler = _LateStopHandler()
+        handler.step_away_result = True
+        proxy = _ScriptedProxy(
+            _events(
+                {
+                    "type": "needs_confirmation",
+                    "confirm_id": "confirm-late-stop",
+                    "action": "send_message",
+                    "summary": "Send it?",
+                },
+                {"type": "token", "delta": "discarded"},
+            )
+        )
+
+        relay.relay_query(
+            handler,
+            proxy,
+            query="q",
+            context=[],
+            run_id="rid-late-stop",
+            answers_confirmations=True,
+        )
+
+        assert not [e for e in handler.events if e.get("type") == "agent_error"]
+        assert [
+            e
+            for e in handler.events
+            if e.get("type") == "status" and e.get("message") == "Cancelled."
+        ] == [{"type": "status", "message": "Cancelled."}]
+        assert proxy.cancel_calls == ["rid-late-stop"]
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------
@@ -827,7 +1014,7 @@ class TestOrphanCancelOnCrash:
         assert proxy.cancel_calls == ["rid-t7"]
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
 
 
 # --- Cancellation mid-stream -------------------------------------------------
@@ -1232,7 +1419,7 @@ class TestReadTimeoutMidStream:
         elapsed = time.monotonic() - start
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
-        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+        assert agent_errors[0]["content"] == relay.EMAIL_PROFILE.stream_ended_text()
         assert elapsed < 5.0
 
 

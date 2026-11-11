@@ -2,59 +2,113 @@
 // SPDX-License-Identifier: MIT
 
 import { useChatStore } from '../../stores/chatStore';
+import { useResourceMonitorStore } from '../../stores/resourceMonitorStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
-import { DEFAULT_CUSTOM, PALETTES, type CustomColors } from '../../utils/palette';
+import { SettingsDisclosure } from './SettingsDisclosure';
+import { UpdatesSection } from './UpdatesSection';
+import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
+import { formatShortcut } from '../../utils/platform';
+import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
+import { useT } from '../../i18n/useT';
 
-const THEMES: Array<{ value: ThemePreference; label: string }> = [
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-    { value: 'system', label: 'Match system' },
+const THEMES: Array<{ value: ThemePreference; label: MessageKey }> = [
+    { value: 'light', label: 'settings.theme.light' },
+    { value: 'dark', label: 'settings.theme.dark' },
+    { value: 'system', label: 'settings.theme.system' },
 ];
 
-const SHORTCUTS: Array<[string, string]> = [
-    ['Enter', 'Send'],
-    ['Shift+Enter', 'New line'],
-    ['Esc', 'Stop the answer'],
-    ['Ctrl+Shift+O', 'New chat'],
-    ['Ctrl+K', 'Search chats'],
-    ['Ctrl+B', 'Show or hide the sidebar'],
-    ['Ctrl+,', 'Settings'],
+const PALETTE_NAME: Record<PaletteId, MessageKey> = {
+    default: 'palette.default',
+    stone: 'palette.stone',
+    marble: 'palette.marble',
+    glacier: 'palette.glacier',
+    forest: 'palette.forest',
+    sage: 'palette.sage',
+    basalt: 'palette.basalt',
+    gold: 'palette.gold',
+    dusk: 'palette.dusk',
+    custom: 'settings.colors.custom',
+};
+
+const SHORTCUTS: Array<[string, MessageKey]> = [
+    ['Enter', 'settings.shortcut.send'],
+    ['Shift+Enter', 'settings.shortcut.newLine'],
+    ['Esc', 'settings.shortcut.stop'],
+    ['Mod+Shift+O', 'settings.shortcut.newChat'],
+    ['Mod+K', 'settings.shortcut.search'],
+    ['Mod+B', 'settings.shortcut.sidebar'],
+    ['Mod+,', 'settings.shortcut.settings'],
 ];
 
 export function GeneralSettings() {
+    const t = useT();
+    const locale = useChatStore((s) => s.locale);
+    const setLocale = useChatStore((s) => s.setLocale);
     const pref = useChatStore((s) => s.themePreference);
     const setPref = useChatStore((s) => s.setThemePreference);
     const palette = useChatStore((s) => s.palette);
     const setPalette = useChatStore((s) => s.setPalette);
     const custom = useChatStore((s) => s.customColors);
     const setCustom = useChatStore((s) => s.setCustomColors);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const pick = (key: keyof CustomColors) => (e: React.ChangeEvent<HTMLInputElement>) =>
         setCustom({ ...custom, [key]: e.target.value.toUpperCase() });
 
     return (
         <div className="settings-pane">
-            <h2 className="settings-pane-title">General</h2>
+            <h2 className="settings-pane-title">{t('settings.section.general')}</h2>
             <div className="settings-field">
-                <span className="settings-label" id="appearance-label">Appearance</span>
+                <label className="settings-label" htmlFor="ui-language">{t('settings.language')}</label>
+                <select
+                    id="ui-language"
+                    className="settings-input"
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value)}
+                >
+                    {LOCALES.map(({ meta }) => (
+                        <option key={meta.code} value={meta.code} lang={meta.code} dir={meta.dir}>
+                            {localeOptionLabel(meta)}
+                        </option>
+                    ))}
+                </select>
+                <span className="settings-hint">{t('settings.languageHint')}</span>
+            </div>
+            <div className="settings-field">
+                <span className="settings-label" id="appearance-label">{t('settings.appearance')}</span>
                 <div className="segmented" role="radiogroup" aria-labelledby="appearance-label">
-                    {THEMES.map((t) => (
+                    {THEMES.map((th) => (
                         <button
-                            key={t.value}
+                            key={th.value}
                             type="button"
                             role="radio"
-                            aria-checked={pref === t.value}
-                            className={pref === t.value ? 'is-active' : ''}
-                            onClick={() => setPref(t.value)}
+                            aria-checked={pref === th.value}
+                            className={pref === th.value ? 'is-active' : ''}
+                            onClick={() => setPref(th.value)}
                         >
-                            {t.label}
+                            {t(th.label)}
                         </button>
                     ))}
                 </div>
             </div>
-            <DesktopAppSettings />
             <div className="settings-field">
-                <span className="settings-label" id="palette-label">Colors</span>
+                <label className="setting-row">
+                    <span>{t('resources.settings')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={showResources}
+                            onChange={(e) => setShowResources(e.target.checked)}
+                            aria-label={t('resources.settings')}
+                            aria-describedby="resources-hint"
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                <span className="settings-hint" id="resources-hint">{t('resources.settingsHint')}</span>
+            </div>
+            <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
@@ -68,7 +122,7 @@ export function GeneralSettings() {
                             <span className="palette-swatch" aria-hidden="true">
                                 {p.swatch.map((c) => <i key={c} style={{ background: c }} />)}
                             </span>
-                            {p.name}
+                            {t(PALETTE_NAME[p.id])}
                         </button>
                     ))}
                     <button
@@ -82,35 +136,36 @@ export function GeneralSettings() {
                             <i style={{ background: custom.base }} />
                             <i style={{ background: custom.accent }} />
                         </span>
-                        Custom
+                        {t('settings.colors.custom')}
                     </button>
                 </div>
                 {palette === 'custom' && (
                     <div className="palette-custom">
                         <label className="palette-color" htmlFor="custom-accent">
                             <input id="custom-accent" type="color" value={custom.accent} onChange={pick('accent')} />
-                            <span>Accent<small>Buttons, links and focus</small></span>
+                            <span>{t('settings.colors.accent')}<small>{t('settings.colors.accentHint')}</small></span>
                         </label>
                         <label className="palette-color" htmlFor="custom-base">
                             <input id="custom-base" type="color" value={custom.base} onChange={pick('base')} />
-                            <span>Background tint<small>The color the grays lean toward</small></span>
+                            <span>{t('settings.colors.base')}<small>{t('settings.colors.baseHint')}</small></span>
                         </label>
-                        <button type="button" className="btn-secondary" onClick={() => setCustom(DEFAULT_CUSTOM)}>Reset</button>
-                        <p className="settings-hint">Text colors adjust on their own so everything stays readable in light and dark.</p>
+                        <button type="button" className="btn-secondary" onClick={() => setCustom(DEFAULT_CUSTOM)}>{t('settings.colors.reset')}</button>
+                        <p className="settings-hint">{t('settings.colors.hint')}</p>
                     </div>
                 )}
-            </div>
-            <div className="settings-field">
-                <span className="settings-label">Keyboard shortcuts</span>
+            </SettingsDisclosure>
+            <DesktopAppSettings />
+            <UpdatesSection />
+            <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
                     {SHORTCUTS.map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
-                            <dt><kbd>{keys}</kbd></dt>
-                            <dd>{what}</dd>
+                            <dt><kbd>{formatShortcut(keys)}</kbd></dt>
+                            <dd>{t(what)}</dd>
                         </div>
                     ))}
                 </dl>
-            </div>
+            </SettingsDisclosure>
         </div>
     );
 }

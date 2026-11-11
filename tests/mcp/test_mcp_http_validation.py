@@ -8,16 +8,18 @@ Comprehensive test suite for HTTP-native MCP system validation.
 Tests all endpoints, protocols, and integration points.
 """
 
-import io
 import json
 import sys
 import time
 import urllib.error
 import urllib.request
 
-# Fix Unicode on Windows
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+def _configure_windows_stdout():
+    """Configure UTF-8 output for direct script execution without replacing stdout."""
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
 
 # Configuration
 MCP_HOST = "localhost"
@@ -342,6 +344,7 @@ def run_all_tests():
 
 
 if __name__ == "__main__":
+    _configure_windows_stdout()
     # Check if MCP is running
     try:
         response = make_request("/health")

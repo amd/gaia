@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for gaia.hub.compatibility — the system-requirements checker."""
 
+import math
+
 import pytest
 
 from gaia.hub import compatibility
 from gaia.hub.compatibility import check_compatibility
+
+
+@pytest.fixture
+def off_mac(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "linux-x64")
 
 
 def test_no_requirements_is_compatible():
@@ -69,6 +76,72 @@ def test_disk_estimated_from_download_size(monkeypatch):
     assert report.compatible is False
 
 
+_GB = 1024**3
+
+
+def _free_disk(monkeypatch, gb):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: gb)
+
+
+def _disk_ok(size_bytes, kind):
+    report = check_compatibility(
+        {"platforms": []}, download_size_bytes=size_bytes, artifact_kind=kind
+    )
+    return report.disk_ok
+
+
+def test_binary_install_needs_about_its_own_size(monkeypatch):
+    # A 10 GB binary is written once; 12 GB free is plenty for it.
+    _free_disk(monkeypatch, 12.0)
+    assert _disk_ok(10 * _GB, "binary") is True
+
+
+@pytest.mark.parametrize("kind", ["wheel", "cpp"])
+def test_unpacked_installs_keep_triple_headroom(monkeypatch, kind):
+    # The same 12 GB is not enough to unpack 10 GB of wheel or archive.
+    _free_disk(monkeypatch, 12.0)
+    assert _disk_ok(10 * _GB, kind) is False
+    _free_disk(monkeypatch, 30.0)
+    assert _disk_ok(10 * _GB, kind) is True
+
+
+@pytest.mark.parametrize("kind,factor", [("binary", 1.1), ("wheel", 3.0)])
+def test_disk_boundary_is_inclusive(monkeypatch, kind, factor):
+    size = 10 * _GB
+    required = size * factor / _GB
+    _free_disk(monkeypatch, required)
+    assert _disk_ok(size, kind) is True
+    _free_disk(monkeypatch, math.nextafter(required, 0.0))
+    assert _disk_ok(size, kind) is False
+
+
+def test_binary_below_ten_percent_headroom_is_blocked(monkeypatch):
+    _free_disk(monkeypatch, 10.5)
+    report = check_compatibility(
+        {"platforms": []}, download_size_bytes=10 * _GB, artifact_kind="binary"
+    )
+    assert report.compatible is False
+    assert any("~11.0 GB" in b for b in report.blockers)
+
+
+def test_unknown_artifact_kind_is_refused():
+    with pytest.raises(ValueError, match="Unknown artifact kind 'appimage'"):
+        check_compatibility({"platforms": []}, artifact_kind="appimage")
+
+
+def test_installer_gate_charges_binary_by_kind(monkeypatch, tmp_path):
+    from gaia.hub import installer
+
+    _free_disk(monkeypatch, 12.0)
+    binary = {"size_bytes": 10 * _GB, "artifact_kind": installer.ARTIFACT_KIND_BINARY}
+    installer._machine_gate({"requirements": {"platforms": []}}, binary, tmp_path)
+
+    wheel = {"size_bytes": 10 * _GB, "artifact_kind": installer.ARTIFACT_KIND_WHEEL}
+    with pytest.raises(installer.DiskSpaceError):
+        installer._machine_gate({"requirements": {"platforms": []}}, wheel, tmp_path)
+
+
+@pytest.mark.usefixtures("off_mac")
 def test_npu_and_gpu_emit_warnings(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True, "gpu_vram_gb": 8})
@@ -104,6 +177,7 @@ def test_detected_npu_present_suppresses_warning(monkeypatch):
     assert report.detected_npu is True
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_detected_npu_absent_is_named_warning(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True}, detected_npu=False)
@@ -111,12 +185,14 @@ def test_detected_npu_absent_is_named_warning(monkeypatch):
     assert any("none was detected" in w for w in report.warnings)
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_unprobed_npu_keeps_cannot_verify_warning(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility({"platforms": [], "npu": True})
     assert any("cannot verify NPU" in w for w in report.warnings)
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_failed_npu_probe_does_not_suggest_driver_remediation(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility(
@@ -148,6 +224,7 @@ def test_detected_gpu_vram_meets_requirement_no_warning(monkeypatch):
 # its "This agent…" wording, but the onboarding preflight passes its own
 # subject and a capable GPU turns the NPU warning purely informational.
 # ---------------------------------------------------------------------------
+@pytest.mark.usefixtures("off_mac")
 def test_npu_absent_default_subject_keeps_agent_wording(monkeypatch):
     # Regression guard: the per-agent hub-install path is unchanged when no
     # capable GPU is present (acceptance criterion #3).
@@ -159,6 +236,7 @@ def test_npu_absent_default_subject_keeps_agent_wording(monkeypatch):
     )
 
 
+@pytest.mark.usefixtures("off_mac")
 def test_npu_absent_with_capable_gpu_is_informational(monkeypatch):
     monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
     report = check_compatibility(
@@ -175,6 +253,22 @@ def test_npu_absent_with_capable_gpu_is_informational(monkeypatch):
     assert "agent" not in joined.lower()
     assert "install" not in joined.lower()
     assert "optional" in joined.lower()
+
+
+@pytest.mark.parametrize(
+    "scan",
+    [
+        {"detected_npu": False, "detected_gpu_vram_gb": 24.0},
+        {"detected_npu": False},
+        {"npu_probe_error": "Lemonade system-info query failed"},
+        {},
+    ],
+)
+def test_mac_never_gets_an_npu_line(monkeypatch, scan):
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "darwin-arm64")
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True}, **scan)
+    assert not any("NPU" in w for w in report.warnings)
 
 
 def test_subject_flows_into_memory_and_vram_warnings(monkeypatch):

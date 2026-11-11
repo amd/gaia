@@ -1,0 +1,17 @@
+{
+  "$comment": "Test fixture: an eval/ci_tiers.json-shaped stable set that names the two gaia_memory scenarios regressed_run flips, so the filing path can be exercised. The real stable set is eval/ci_tiers.json's smoke tier.",
+  "tiers": {
+    "smoke": {
+      "machines": [
+        {
+          "machine": "smoke-1",
+          "scenarios": [
+            {"id": "mem_contradiction_resolution"},
+            {"id": "mem_false_premise_recall"},
+            {"id": "mem_credential_refusal"}
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -18,35 +18,40 @@ icon: "circle-question"
 
     - **Windows:** Settings → Apps → Installed apps → GAIA → Uninstall
     - **macOS:** Drag GAIA from `/Applications` to the Trash
-    - **Linux (Debian/Ubuntu):** `sudo apt remove gaia-desktop` (`apt purge` also preserves personal data; run `~/.gaia/venv/bin/gaia uninstall --purge` separately to delete it)
+    - **Linux (Debian/Ubuntu):** `sudo apt remove gaia-desktop` (`apt purge` also preserves personal data; run `/opt/GAIA/resources/core/gaia uninstall --purge` first to delete it)
     - **Linux (AppImage):** Delete the `.AppImage` file
 
-    By default, uninstalling keeps your chats and documents. To remove everything, run `gaia uninstall --purge` from a terminal:
+    By default, uninstalling keeps your chats and documents. To remove your data — chats, documents, memory, settings and saved keys — run `gaia uninstall --purge` from a terminal before you uninstall the app, using the `gaia` inside it. It keeps your connector setup and your own skills:
 
     <Tabs>
       <Tab title="Windows">
         ```powershell
-        ~\.gaia\venv\Scripts\gaia uninstall --purge
+        & "$env:LOCALAPPDATA\Programs\gaia-desktop\resources\core\gaia.exe" uninstall --purge
         ```
       </Tab>
-      <Tab title="macOS / Linux">
+      <Tab title="macOS">
         ```bash
-        ~/.gaia/venv/bin/gaia uninstall --purge
+        /Applications/GAIA.app/Contents/Resources/core/gaia uninstall --purge
+        ```
+      </Tab>
+      <Tab title="Linux">
+        ```bash
+        /opt/GAIA/resources/core/gaia uninstall --purge
         ```
       </Tab>
     </Tabs>
   </Accordion>
 
-  <Accordion title="Why is the first launch slow?" icon="hourglass">
-    The first time you launch GAIA Agent UI, it automatically sets up its Python backend — downloads `uv`, creates a Python 3.12 virtualenv at `~/.gaia/venv/`, installs the `amd-gaia[ui]` package, downloads the Lemonade Server, and downloads a minimal model.
-
-    This takes about **5-10 minutes** depending on your internet speed. **Subsequent launches are instant** — the app reuses the installed environment. See the [installation guide](/guides/install#first-launch-setup) for a breakdown of each stage.
+  <Accordion title="What happens on the first launch?" icon="hourglass">
+    The app ships its backend, so the first launch installs nothing before its window is ready. The setup screen that opens asks whether chat runs in the cloud or on this PC, and only a local choice downloads a chat model (about 6 GB, or about 30 GB for Qwen3.6), with its progress shown. See the [installation guide](/guides/install#first-launch-setup).
   </Accordion>
 
   <Accordion title="Does GAIA send my data anywhere?" icon="shield">
     **Not by default.** GAIA runs entirely on your machine. There is no telemetry, no crash reporting, and no usage analytics.
 
-    The only network traffic is package downloads during install (from PyPI, npm, GitHub, and Astral's `uv` distribution). Once installed, GAIA can run fully offline with the default Lemonade Server backend. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
+    The only network traffic is downloads during setup: the models you pick, Lemonade Server and the GAIA agent. Once installed, GAIA can run fully offline with the default Lemonade Server backend. This is a deliberate design choice — see §2 of the [desktop installer plan](/plans/desktop-installer) for the rationale.
+
+    When a model call fails, GAIA saves a problem report in `~/.gaia/failures/` on your PC, with keys and your home folder taken out. It stays there unless you choose to share it; see [problem reports](/reference/troubleshooting#a-model-call-failed-the-problem-report-it-names).
 
     **Caveat:** If you explicitly configure an external LLM provider (Claude API or OpenAI) via the provider settings, prompts and responses for those sessions are sent to the provider you selected. Local-first is the default; cloud is opt-in.
   </Accordion>
@@ -58,9 +63,9 @@ icon: "circle-question"
   </Accordion>
 
   <Accordion title="How do I update GAIA?" icon="arrow-up">
-    GAIA Agent UI checks for updates automatically (10 seconds after launch, then every 4 hours) and notifies you in the status bar. Click **Restart to update** when prompted — your chat history is preserved across updates.
+    GAIA checks for new releases and offers them; it doesn't install one unless you say so. In the desktop app click **Update now** on the corner chip, or use **Settings → General → Updates**, which also has **Check for updates**, **Install a specific version…**, and **Install updates automatically** (off by default). In the Terminal UI type `/update now`, or `/update v0.25.0` for an exact version. To undo an update, use **Go back to GAIA vX** in the same Settings section, or `/update back` in the Terminal UI.
 
-    To disable auto-updates, set the environment variable `GAIA_DISABLE_UPDATE=1` before launching. To force a manual check, relaunch the app (the in-app updater runs on startup). See the [installation guide](/guides/install#updating-gaia) for more.
+    To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching. See the [installation guide](/guides/install#updating-gaia) for more.
   </Accordion>
 
   <Accordion title="Can I reinstall GAIA?" icon="rotate">
@@ -89,7 +94,7 @@ icon: "circle-question"
     | **Processor** | AMD Ryzen AI 300-series (for optimal performance) |
     | **RAM** | 16GB minimum, 64GB recommended |
     | **Storage** | 20GB free space |
-    | **OS** | Windows 11 Pro 24H2 or Ubuntu 22.04+ |
+    | **OS** | Windows 11 Pro 24H2 or Ubuntu 24.04+ |
 
     On a 16GB PC, close other large apps before starting GAIA: the default model
     needs about 8GB free to load, and about 11GB for its full context window.
@@ -155,9 +160,9 @@ Discover the capabilities of Ryzen AI with GAIA - an innovative generative AI ap
     GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), so any model in the Lemonade catalog works — GGUF models via llama.cpp on GPU/CPU, and FLM models on the Ryzen AI NPU. The models GAIA agents use by default:
 
     - **Gemma-4-E4B-it-GGUF** — default chat/coding/vision model (multimodal)
-    - **Qwen3-VL-4B-Instruct-GGUF** — alternate vision model
+    - **Qwen3-VL-4B-Instruct-GGUF** — alternate vision model for RAG/document extraction when configured explicitly
     - **embeddinggemma-300m-GGUF** — embeddings for RAG/document Q&A
-    - **NPU (FLM):** `gemma4-it-e2b-FLM` + `embed-gemma-300m-FLM` (via `gaia init --profile npu`)
+    - **NPU (FLM):** `gemma4-it-e4b-FLM` + `embed-gemma-300m-FLM` (via `gaia init --profile npu`)
 
     Download them per use case with `gaia init --profile <profile>` (e.g. `minimal`, `chat`, `code`, `vlm`, `npu`).
 
@@ -190,6 +195,8 @@ Discover the capabilities of Ryzen AI with GAIA - an innovative generative AI ap
     **Privacy:**
     - No data leaves your machine
     - Complete control over sensitive information
+    - Want it enforced? `gaia config set network_policy local_ai_only` makes GAIA
+      refuse every cloud AI model — see [Local only](/reference/cli#local-only)
 
     **Performance:**
     - Reduced latency (no cloud communication)
@@ -232,7 +239,7 @@ The GAIA demo consists of two main components working together to provide powerf
 Powered by the Ryzen AI platform through Lemonade Server:
 
 - **NPU/iGPU Acceleration:** Leverages Ryzen AI hardware
-- **Multiple Models:** Supports various LLMs including Llama-3.2-3B-Instruct-Hybrid
+- **Multiple Models:** Supports various LLMs including Qwen3.6-35B-A3B-GGUF and Gemma-4-E4B-it-GGUF
 - **Agent System:** Specialized tasks and workflows
 - **WebSocket Streaming:** Real-time response delivery
 - **Dual Interfaces:** Both CLI and GUI available

@@ -222,6 +222,122 @@ def test_unlimited_budget_never_blocks(fake_sdk):
     client.close()
 
 
+# --- Per-session budget (#3546) ----------------------------------------------
+
+
+def _seed_ledger(db_path, credits, created_at=0):
+    """Pre-existing spend from an earlier process, written through a closed client."""
+    seeder = TavilyClient(db_path=db_path, sdk_client=FakeSyncSDK())
+    seeder.insert(
+        "tavily_ledger",
+        {"operation": "search", "credits": credits, "created_at": created_at},
+    )
+    seeder.close()
+
+
+def test_budget_ignores_spend_from_previous_sessions(tmp_path):
+    db = tmp_path / "tavily.db"
+    _seed_ledger(db, 6)  # already past a cap of 5 before this session starts
+    sdk = FakeSyncSDK()
+    client = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=5))
+    client.search("q")  # first call of a new session must go through
+    assert sdk.search_calls == 1
+    usage = client.usage()
+    assert usage["total_credits"] == 7  # lifetime total is still reported
+    assert usage["session_credits"] == 1
+    assert usage["remaining"] == 4  # cap minus this session's spend
+    client.close()
+
+
+def test_budget_still_blocks_within_one_session(tmp_path):
+    db = tmp_path / "tavily.db"
+    _seed_ledger(db, 100)
+    sdk = FakeSyncSDK()
+    client = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=2))
+    client.search("a")
+    client.search("b")
+    with pytest.raises(TavilyBudgetExceeded):
+        client.search("c")
+    assert sdk.search_calls == 2
+    client.close()
+
+
+def test_budget_second_client_starts_fresh_after_first_exhausts_cap(tmp_path):
+    db = tmp_path / "tavily.db"
+    first = TavilyClient(
+        db_path=db, sdk_client=FakeSyncSDK(), budget=BudgetConfig(cap=1)
+    )
+    first.search("a")
+    with pytest.raises(TavilyBudgetExceeded):
+        first.search("b")
+    first.close()
+    sdk = FakeSyncSDK()
+    second = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=1))
+    second.search("c")
+    assert sdk.search_calls == 1
+    second.close()
+
+
+def test_budget_session_boundary_is_immune_to_clock_steps(tmp_path, monkeypatch):
+    """Rows are scoped by ledger order, not wall-clock time.
+
+    Old rows stamped in the future and a clock that steps backwards mid-session
+    must neither leak into this session nor hide its own spend.
+    """
+    db = tmp_path / "tavily.db"
+    _seed_ledger(db, 50, created_at=10_000_000.0)  # "future" row from skewed clock
+    clock = Clock(1000.0)
+    monkeypatch.setattr(tav, "time", clock)
+    sdk = FakeSyncSDK()
+    client = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=2))
+    client.search("a")
+    clock.t = 5.0  # clock steps back; new rows now predate the session start
+    client.search("b")
+    with pytest.raises(TavilyBudgetExceeded):
+        client.search("c")
+    assert client.usage()["session_credits"] == 2
+    client.close()
+
+
+def test_budget_row_written_same_instant_as_session_start_counts(tmp_path, monkeypatch):
+    db = tmp_path / "tavily.db"
+    monkeypatch.setattr(tav, "time", Clock(1000.0))  # frozen: start == created_at
+    sdk = FakeSyncSDK()
+    client = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=1))
+    client.search("a")
+    with pytest.raises(TavilyBudgetExceeded):
+        client.search("b")
+    client.close()
+
+
+def test_concurrent_client_spend_after_start_counts_toward_cap(tmp_path):
+    """Spend by another process sharing the ledger after we start is still seen."""
+    db = tmp_path / "tavily.db"
+    sdk = FakeSyncSDK()
+    client = TavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=3))
+    other = TavilyClient(db_path=db, sdk_client=FakeSyncSDK())
+    other.insert(
+        "tavily_ledger", {"operation": "search", "credits": 3, "created_at": 1.0}
+    )
+    other.close()
+    with pytest.raises(TavilyBudgetExceeded):
+        client.search("q")
+    client.close()
+
+
+async def test_async_budget_ignores_spend_from_previous_sessions(tmp_path):
+    db = tmp_path / "tavily.db"
+    _seed_ledger(db, 6)
+    sdk = FakeAsyncSDK()
+    client = AsyncTavilyClient(db_path=db, sdk_client=sdk, budget=BudgetConfig(cap=1))
+    await client.search("a")  # new session: allowed
+    with pytest.raises(TavilyBudgetExceeded):
+        await client.search("b")  # same session: blocked at the cap
+    assert sdk.search_calls == 1
+    assert client.usage()["total_credits"] == 7
+    client.close()
+
+
 # --- DuckDuckGo fallback ----------------------------------------------------
 
 

@@ -52,7 +52,7 @@ For a typical setup, include **`repo`** and **`read:user`**. Add
 ## Step 2 — Paste it into GAIA
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. **Settings** (gear) → **Connections** → click the **GitHub** tile.
+2. **Settings** (gear) → **Connectors** → click the **GitHub** tile.
 3. Paste the PAT into the **GitHub Personal Access Token** field.
 4. Click **Save**.
 
@@ -83,7 +83,7 @@ gaia connectors grants grant mcp-github builtin:chat \
   --scopes list_issues list_pull_requests
 ```
 
-(In the UI: open the connector tile → **Per-agent grants** section.)
+(In the UI: open the connector tile and turn on the **GAIA can use GitHub in chat** switch.)
 
 ### Activate the tools for the agent
 
@@ -95,7 +95,7 @@ defaults to OFF (least-privilege), so activate it explicitly:
 gaia connectors activations activate mcp-github builtin:chat
 ```
 
-(In the UI: the tile's **Per-agent** toggle flips both at once.) An
+(In the UI: the tile's **GAIA can use GitHub in chat** switch does both at once.) An
 agent that has a grant but no activation still can't see or call the
 tools. See the [connections security model](/security/connections) for
 why visibility and credential access are gated separately.
@@ -105,13 +105,16 @@ why visibility and credential access are gated separately.
 ### `Bad credentials` from the MCP server
 
 The token in your keyring is wrong, expired, or revoked. Click
-**Disconnect** on the tile and re-paste a fresh token.
+**Disconnect** on the tile and re-paste a fresh token. **Check** on the tile
+won't catch this: the GitHub server only checks the token when a tool runs, so
+it starts fine with a bad one.
 
 ### Private repos are missing, or you hit the anonymous rate limit
 
 Connections saved before GAIA passed the token as
-`GITHUB_PERSONAL_ACCESS_TOKEN` still hand it to the server under the old
-name, so the server calls GitHub without it. Click **Disconnect** on the
+`GITHUB_PERSONAL_ACCESS_TOKEN` are carried over when you update GAIA: the
+server gets the saved token under the name it reads. If calls still go out
+anonymous, the saved token is missing or expired. Click **Disconnect** on the
 tile and paste the token again, or run
 `gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…`.
 
@@ -140,7 +143,7 @@ for each organization you want the token to reach.
 
 ## Revoking access
 
-- **From GAIA**: Settings → Connections → GitHub → **Disconnect**. The
+- **From GAIA**: Settings → Connectors → GitHub → **Disconnect**. The
   PAT is removed from the keyring and the MCP server entry is dropped
   from `mcp_servers.json`.
 - **From GitHub**: Follow GitHub's

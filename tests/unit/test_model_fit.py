@@ -21,7 +21,6 @@ from gaia.llm.model_fit import (
     ModelFitError,
     capacity_from_system_info,
     check_fit,
-    check_server_supports,
     pick_default_model,
 )
 
@@ -114,6 +113,12 @@ class TestFit:
         assert check_fit(
             QWEN.size_gb, capacity_from_system_info(STRIX_HALO_64), QWEN_KV
         ).fits
+
+    @pytest.mark.parametrize(
+        "gb, shown", [(0.5, "0.5"), (0.0, "0"), (1.0, "1"), (63.6, "64")]
+    )
+    def test_a_pool_under_1gb_never_reads_as_0gb(self, gb, shown):
+        assert model_fit.format_gb(gb) == shown
 
     def test_qwen_does_not_fit_the_smallest_machines(self):
         verdict = check_fit(QWEN.size_gb, capacity_from_system_info(MAC_M4), QWEN_KV)
@@ -318,6 +323,10 @@ class TestTuiDrift:
     def test_fit_constants_match(self, doc):
         assert doc["fit"]["memory_overhead_factor"] == model_fit.MEMORY_OVERHEAD_FACTOR
         assert doc["fit"]["memory_overhead_gb"] == model_fit.MEMORY_OVERHEAD_GB
+        assert (
+            doc["fit"]["windows_igpu_shared_ram_fraction"]
+            == model_fit.WINDOWS_IGPU_SHARED_RAM_FRACTION
+        )
 
     def test_custom_registrations_match_the_python_registry(self, doc):
         custom = [m for m in doc["models"] if m.get("register_as")]
@@ -333,7 +342,7 @@ class TestTuiDrift:
             assert entry.get("vision", False) == mr.vision
             assert entry.get("reasoning", False) == mr.reasoning
             assert entry["size_gb"] == mr.size_gb
-            assert entry.get("min_lemonade_version") == mr.min_lemonade_version
+            assert "min_lemonade_version" not in entry
 
     def test_both_defaults_are_recommended(self, doc):
         local = {m["id"] for m in doc["models"] if m["provider"] == "local"}
@@ -341,7 +350,7 @@ class TestTuiDrift:
         assert lc.LARGE_DEFAULT_MODEL_NAME in local
 
     def test_fit_inputs_match_the_python_registry(self, doc):
-        """The TUI's fit and version checks must judge a model as Python does."""
+        """The TUI's fit check must judge a model as Python does."""
         for entry in doc["models"]:
             mr = lc.find_model_requirement(entry.get("register_as") or entry["id"])
             if mr is not None:
@@ -350,10 +359,8 @@ class TestTuiDrift:
                 ), entry["id"]
                 if mr.kv_bytes_per_token:
                     assert entry["min_ctx_size"] == mr.min_ctx_size, entry["id"]
-                assert entry.get("size_gb") == mr.size_gb, entry["id"]
-                assert (
-                    entry.get("min_lemonade_version") == mr.min_lemonade_version
-                ), entry["id"]
+                size = mr.size_gb
+                assert entry.get("size_gb") == size, entry["id"]
 
     def test_the_default_leads_the_local_list(self, doc):
         local = [m["id"] for m in doc["models"] if m["provider"] == "local"]
@@ -437,7 +444,8 @@ class TestRealLemonadeReports:
         cap = capacity_from_system_info(self._WINDOWS_STRIX_HALO)
 
         assert asked == ["AMD Radeon(TM) 8060S Graphics"]
-        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(64.0))
+        # Lemonade's 128 GB is installed RAM: Windows sees 64 GB and shares half.
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(96.0))
         assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
 
     def test_windows_igpu_from_the_driver_loads_qwen_at_its_native_window(
@@ -460,6 +468,87 @@ class TestRealLemonadeReports:
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(self._WINDOWS_STRIX_HALO)
 
+    @staticmethod
+    def _windows_igpu(physical):
+        info = json.loads(json.dumps(TestRealLemonadeReports._WINDOWS_STRIX_HALO))
+        if physical is None:
+            del info["Physical Memory"]
+        else:
+            info["Physical Memory"] = physical
+        return info
+
+    @pytest.mark.parametrize(
+        "carve_out, physical, pool",
+        [
+            # #5050: BIOS GPU memory on Auto reserves a token 512 MB.
+            (0.5, "128.00 GB", 0.5 + 127.5 / 2),
+            # #5050: an HP ZBook Ultra G1a reserves 4 GB.
+            (4.0, "128.00 GB", 4.0 + 124.0 / 2),
+            # A Strix Halo set to a 32 GB carve-out, as captured on hardware.
+            (32.0, "128.00 GB", 32.0 + 48.0),
+            # A fixed 96 GB carve-out leaves Windows 32 GB to share half of.
+            (96.0, "128.00 GB", 96.0 + 16.0),
+        ],
+    )
+    def test_windows_igpu_small_carve_out_still_fits_qwen(
+        self, monkeypatch, carve_out, physical, pool
+    ):
+        monkeypatch.setattr(
+            model_fit, "_windows_adapter_memory_gb", lambda name: carve_out
+        )
+        cap = capacity_from_system_info(self._windows_igpu(physical))
+        assert (cap.memory_source, cap.memory_gb) == ("AMD iGPU", pytest.approx(pool))
+        assert check_fit(QWEN.size_gb, cap, QWEN_KV).fits
+        model_id, _ = pick_default_model(
+            [(QWEN.model_id, QWEN.size_gb, QWEN_KV), (lc.DEFAULT_MODEL_NAME, 6.0)],
+            cap,
+        )
+        assert model_id == QWEN.model_id
+
+    def test_windows_igpu_on_a_16gb_pc_does_not_fit_qwen(self, monkeypatch):
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
+        cap = capacity_from_system_info(self._windows_igpu("16 GB"))
+        assert cap.memory_gb == pytest.approx(0.5 + 15.5 / 2)
+        verdict = check_fit(QWEN.size_gb, cap, QWEN_KV)
+        assert not verdict.fits
+        assert "this PC has 8 GB (AMD iGPU)" in verdict.reason
+
+    def test_windows_igpu_never_fits_flash_on_its_shared_half(self, monkeypatch):
+        # ~90 GB is more than 0.5 GB + half of 128 GB; it needs a big carve-out.
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 0.5)
+        cap = capacity_from_system_info(self._windows_igpu("128.00 GB"))
+        assert not check_fit(FLASH.size_gb, cap, FLASH_KV).fits
+
+    def test_windows_igpu_never_counts_its_carve_out_twice(self, monkeypatch):
+        # Installed RAM includes the carve-out; a carve-out at or above it
+        # leaves nothing for Windows to share.
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 96.0)
+        cap = capacity_from_system_info(self._windows_igpu("96 GB"))
+        assert cap.memory_gb == pytest.approx(96.0)
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 64.0)
+        cap = capacity_from_system_info(self._windows_igpu("128 GB"))
+        assert cap.memory_gb < 128.0
+
+    @pytest.mark.parametrize("physical", [None, "", "unknown", "0 GB", "1.2.3 GB"])
+    def test_windows_igpu_carve_out_without_ram_fails_loudly(
+        self, monkeypatch, physical
+    ):
+        """The carve-out alone is never the pool, at any size."""
+        monkeypatch.setattr(model_fit, "_windows_adapter_memory_gb", lambda name: 4.0)
+        with pytest.raises(ModelFitError) as err:
+            capacity_from_system_info(self._windows_igpu(physical))
+        assert "Physical Memory" in str(err.value)
+        assert "gaia config set default_model" in str(err.value)
+
+    def test_reported_vram_never_reads_the_registry(self, monkeypatch):
+        monkeypatch.setattr(
+            model_fit,
+            "_windows_adapter_memory_gb",
+            lambda name: pytest.fail("asked the registry with vram_gb reported"),
+        )
+        cap = capacity_from_system_info(STRIX_HALO_128)
+        assert cap.memory_gb == pytest.approx(96.0 + 15.8)
+
     def test_a_discrete_gpu_never_reads_the_driver_carve_out(self, monkeypatch):
         monkeypatch.setattr(
             model_fit,
@@ -468,6 +557,86 @@ class TestRealLemonadeReports:
         )
         with pytest.raises(ModelFitError, match="not its memory"):
             capacity_from_system_info(_fixture("lemonade11_amd_dgpu_windows.json"))
+
+    def test_implausible_discrete_vram_is_not_a_model_capacity(self):
+        """Do not turn a malformed byte count into an unsafe context window (#6148)."""
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "AMD Radeon RX 5700 XT",
+                        "vram_gb": 17179869184.0,
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(info)
+
+    @pytest.mark.parametrize(
+        "raw", [float("nan"), float("inf"), -8.0, 1024.5, 17179869184, True]
+    )
+    def test_unusable_discrete_vram_never_sizes_a_model(self, raw):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "GPU",
+                        "vram_gb": raw,
+                    }
+                ]
+            },
+        }
+
+        with pytest.raises(ModelFitError, match="not its memory"):
+            capacity_from_system_info(info)
+
+    def test_vram_of_1024_gib_is_still_believed(self):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "GPU",
+                        "vram_gb": 1024,
+                    }
+                ]
+            },
+        }
+
+        assert capacity_from_system_info(info).memory_gb == pytest.approx(1024.0)
+
+    def test_a_bogus_card_listed_first_does_not_hide_the_real_one(self):
+        info = {
+            "Physical Memory": "16 GB",
+            "devices": {
+                "amd_gpu": [
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "Bogus",
+                        "vram_gb": 17179869184.0,
+                    },
+                    {
+                        "available": True,
+                        "integrated": False,
+                        "name": "AMD Radeon RX 5700 XT",
+                        "vram_gb": 8.0,
+                    },
+                ]
+            },
+        }
+
+        assert capacity_from_system_info(info).memory_gb == pytest.approx(8.0)
 
     def test_legacy_amd_igpu_key_is_read(self):
         info = {
@@ -490,52 +659,6 @@ class TestRealLemonadeReports:
         model_id, skipped, capacity = lc.recommend_default_chat_model(FakeClient())
         assert model_id == lc.DEFAULT_MODEL_NAME and capacity is None
         assert "not its memory" in skipped[0][1]
-
-
-class TestLemonadeVersionGate:
-    """The default (Qwen3.6 35B A3B) is a Lemonade built-in first listed in
-    v11.7.0; an older server cannot pull it by name. Qwen3.8 Flash (the
-    switchable alternative, not auto-selected) needs llama.cpp's qwen4exp,
-    first bundled in v2026.39.1; verified via its ModelRequirement directly
-    rather than through the ladder it is not part of.
-    """
-
-    def _client(self, info, version):
-        class FakeClient:
-            def get_system_info(self, timeout=None):
-                return info
-
-            def health_check(self):
-                return {"version": version} if version else {}
-
-        return FakeClient()
-
-    @pytest.mark.parametrize(
-        "version", ["2026.39.1", "2026.40.0~3.abc1234", "11.9.0", "11.7.0"]
-    )
-    def test_a_big_pc_gets_the_default_on_a_lemonade_that_lists_it(self, version):
-        model_id, _, _ = lc.recommend_default_chat_model(
-            self._client(STRIX_HALO_128, version)
-        )
-        assert model_id == lc.LARGE_DEFAULT_MODEL_NAME
-
-    @pytest.mark.parametrize("version", ["11.6.0", None])
-    def test_an_older_or_unknown_lemonade_keeps_gemma_and_says_upgrade(self, version):
-        model_id, skipped, _ = lc.recommend_default_chat_model(
-            self._client(STRIX_HALO_128, version)
-        )
-        assert model_id == lc.DEFAULT_MODEL_NAME
-        assert "force-reinstall" in dict(skipped)[lc.LARGE_DEFAULT_MODEL_NAME]
-
-    def test_a_pc_too_small_is_told_it_is_too_small_not_to_upgrade(self):
-        _, skipped, _ = lc.recommend_default_chat_model(self._client(MAC_M4, "11.9.0"))
-        assert "memory" in skipped[0][1] and "force-reinstall" not in skipped[0][1]
-
-    def test_the_multimodal_alternative_still_needs_the_version_floor(self):
-        verdict = check_server_supports(FLASH.min_lemonade_version, "11.9.0")
-        assert not verdict.fits and "force-reinstall" in verdict.reason
-        verdict = check_server_supports(FLASH.min_lemonade_version, "2026.39.1")
-        assert verdict.fits
 
 
 def test_flash_size_counts_the_vision_projector_lemonade_downloads():

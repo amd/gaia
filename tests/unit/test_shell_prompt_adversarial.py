@@ -251,7 +251,7 @@ def test_typing_a_at_the_terminal_on_a_one_time_prompt_denies(monkeypatch):
 
 
 def test_no_grant_scope_exists_for_any_one_time_shell_call():
-    for tool in ("run_shell_command", "run_cli_command", "wait_for_condition"):
+    for tool in ("run_shell_command", "wait_for_condition"):
         assert grant_scope(tool, {"command": "git status", RISK_NOTE_ARG: "x"}) is None
 
 
@@ -980,7 +980,7 @@ class _RunProbe(scratch_mod._Probe):
             agent.ran.append(("run_shell_command", command, working_directory))
             return {"status": "success", "return_code": 0}
 
-        @register_tool
+        @register_tool(override=True)
         def execute_python_file(file_path: str, args: str = "") -> dict:
             """Probe runner with arguments."""
             agent.ran.append(("execute_python_file", file_path, args))
@@ -1344,3 +1344,21 @@ def test_a_network_path_is_never_looked_at_before_the_prompt(
 def test_ordinary_words_do_not_read_as_scratch(folders, command):
     project, scratch = folders
     assert not command_reaches_folder(command, [str(project)], str(scratch))
+
+
+def test_an_approved_call_with_a_home_relative_folder_runs(repo, monkeypatch):
+    # The approval is noted with ~ as typed; the run expands it (#5700).
+    monkeypatch.setenv("HOME", str(repo.parent))
+    monkeypatch.setenv("USERPROFILE", str(repo.parent))
+    folder = f"~/{repo.name}"
+    python = _python()
+    agent = _agent(SSEOutputHandler())
+    approved = _write_line(python)
+    agent.note_confirmed_call(
+        "run_shell_command", {"command": approved, "working_directory": folder}
+    )
+
+    result = _tool()(command=approved, working_directory=folder)
+
+    assert result["status"] == "success", result
+    assert (repo / "ran.txt").exists()

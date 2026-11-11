@@ -15,7 +15,7 @@ from gaia.agents.base.tool_markup import (
 )
 from tests.unit.agents import test_deepseek_tool_markup as _base
 from tests.unit.agents.test_deepseek_tool_markup import (
-    KW06_MARKUP,
+    DSML_MARKUP,
     _answer,
     _final_text,
     _register_run_python,
@@ -50,9 +50,9 @@ def _block(*invokes, bar="｜"):
 @pytest.mark.parametrize(
     "text",
     [
-        "Here it is:\n```xml\n" + KW06_MARKUP + "\n```\nThat is the format.",
-        "Here it is:\n~~~\n" + KW06_MARKUP + "\n~~~",
-        "Unclosed example:\n```\n" + KW06_MARKUP,
+        "Here it is:\n```xml\n" + DSML_MARKUP + "\n```\nThat is the format.",
+        "Here it is:\n~~~\n" + DSML_MARKUP + "\n~~~",
+        "Unclosed example:\n```\n" + DSML_MARKUP,
         "Inline: `" + _invoke("run_python", "print(1)") + "` is one call.",
     ],
 )
@@ -181,12 +181,23 @@ def test_a_500kb_parameter_parses_and_strips_quickly():
 
 def test_many_inline_mentions_are_not_checked_quadratically():
     """Each match used to be checked against every code span: 64 KB took ~2 s."""
-    text = '`<tool_call>` and `<｜DSML｜invoke name="x">` ' * 4000
-    start = time.perf_counter()
-    assert not has_tool_markup(text)
-    assert strip_tool_markup(text) == text
-    assert parse_deepseek_tool_calls(text) is None
-    assert time.perf_counter() - start < 0.5
+
+    def fastest_scan(repeats):
+        text = '`<tool_call>` and `<｜DSML｜invoke name="x">` ' * repeats
+        best = float("inf")
+        for _ in range(3):
+            start = time.perf_counter()
+            assert not has_tool_markup(text)
+            assert strip_tool_markup(text) == text
+            assert parse_deepseek_tool_calls(text) is None
+            best = min(best, time.perf_counter() - start)
+        return best
+
+    # A ratio, not a wall-clock cap, so a loaded CI runner can't fail it: 4x the
+    # text costs ~4x when linear and ~16x when quadratic.
+    small, large = fastest_scan(1000), fastest_scan(4000)
+    assert large < 8 * small + 0.05
+    assert large < 5.0
 
 
 # --------------------------------------------------------------- the loop
@@ -236,7 +247,7 @@ def test_two_markup_calls_with_approval_run_both_in_order(agent):
 
 
 def test_a_fenced_example_in_a_final_answer_is_delivered_intact(agent):
-    answer = "DeepSeek writes calls like this:\n```\n" + KW06_MARKUP + "\n```"
+    answer = "DeepSeek writes calls like this:\n```\n" + DSML_MARKUP + "\n```"
     _stub_chat(agent, _answer(answer))
     result = agent.process_query("How does DeepSeek format a tool call?", max_steps=5)
     assert _final_text(result) == answer

@@ -42,10 +42,13 @@ type ServerInfo struct {
 	Port    int
 	// Owner is "gaia" (GAIA's own Lemonade), "user" (another one on this PC),
 	// or "remote".
-	Owner    string
-	Version  string
-	Chat     *LoadedModel
-	Embedder *LoadedModel
+	Owner   string
+	Version string
+	Chat    *LoadedModel
+	// LocalChat is the chat model running on this Lemonade itself: Chat when
+	// that is local, else another local one loaded beside a cloud Chat.
+	LocalChat *LoadedModel
+	Embedder  *LoadedModel
 }
 
 type loadedEntry struct {
@@ -81,7 +84,7 @@ func describeEntry(e loadedEntry, defaultBackend string) *LoadedModel {
 		m.Backend = "remote"
 		return m
 	}
-	// Any field may be absent or of an unexpected type on an older Lemonade.
+	// Which options are present depends on the recipe.
 	var opts struct {
 		CtxSize json.Number `json:"ctx_size"`
 		Backend any         `json:"llamacpp_backend"`
@@ -145,6 +148,16 @@ func describeServer(base string, embeddedPort int, health healthReply, sys sysIn
 	}
 	if info.Chat == nil && len(chat) > 0 {
 		info.Chat = describeEntry(chat[0], def)
+	}
+	if info.Chat != nil && info.Chat.Backend != "remote" {
+		info.LocalChat = info.Chat
+	} else {
+		for _, e := range chat {
+			if m := describeEntry(e, def); m.Backend != "remote" {
+				info.LocalChat = m
+				break
+			}
+		}
 	}
 	return info
 }

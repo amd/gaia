@@ -15,6 +15,7 @@ which is how a server tells an earlier app in its own process from itself.
 import asyncio
 import os
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -442,6 +443,46 @@ async def test_recovered_text_is_cleaned_like_a_finished_reply(tmp_path):
     assert reply == f"Paris\n\n{INTERRUPTED_TURN_NOTICE}"
 
 
+async def test_reasoning_a_lone_close_tag_ended_is_not_recovered(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+        journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+        journal.observe(_chunk("Check the file first."))
+        journal.observe(
+            'data: {"type": "thinking", "content": "Check the file first.", '
+            '"retracts_answer": true}\n\n'
+        )
+        journal.observe(_chunk("It says hi."))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
+async def test_a_reply_cut_off_by_a_server_restart_is_not_recovered(tmp_path):
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+        journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+        journal.observe(_chunk("It sa"))
+        journal.observe(
+            'data: {"type": "status", "phase": "answer_restart", '
+            '"message": "cut off", "retracts_answer": true}\n\n'
+        )
+        journal.observe(_chunk("It says hi."))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
 async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
@@ -631,6 +672,48 @@ async def test_a_clock_step_does_not_make_a_live_server_look_gone(monkeypatch):
     assert not process_owner.owner_is_gone(f"{parent}:b00t/4242:other")
     # A different process now holding that pid started at another tick.
     assert process_owner.owner_is_gone(f"{parent}:b00t/9999:other")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or not process_owner._UNSHIFTED,
+    reason="needs psutil 7.1+'s unshifted create_time; Windows is never shifted",
+)
+async def test_a_shifted_create_time_does_not_make_a_live_server_look_gone(
+    monkeypatch,
+):
+    """psutil shifts create_time() on macOS by how far the boot time moved
+    since it loaded, which a sleep does; the owner check must not read it."""
+    parent = os.getppid()
+    monkeypatch.setattr(process_owner, "_LINUX", False, raising=False)
+    recorded = process_owner._started(parent)
+    real = psutil.Process.create_time
+    monkeypatch.setattr(psutil.Process, "create_time", lambda self: real(self) + 3600)
+    assert process_owner._started(parent) == recorded
+    assert not process_owner.owner_is_gone(f"{parent}:{recorded}:other")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="psutil's macOS boot snapshot")
+async def test_a_server_running_across_a_sleep_leaves_a_newer_ones_turn_alone(
+    tmp_path, monkeypatch
+):
+    from psutil import _psosx
+
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hello?")
+        # A newer server (this test's parent) is running the turn.
+        parent = os.getppid()
+        live = f"{parent}:{process_owner._started(parent)}:newer"
+        db._conn.execute("UPDATE unfinished_turns SET owner = ?", (live,))
+        db._conn.commit()
+        # This server loaded psutil before the Mac slept, which moved the
+        # boot time; psutil now shifts every create_time() it reads.
+        monkeypatch.setattr(_psosx, "INIT_BOOT_TIME", _psosx.boot_time() - 3600)
+
+        assert recover_interrupted_work(db) == {"turns": 0, "documents": 0}
+    finally:
+        db.close()
 
 
 async def test_a_recovered_turn_shows_failed_and_unread_in_the_chat_list(tmp_path):

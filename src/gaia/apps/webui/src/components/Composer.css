@@ -6,16 +6,16 @@
     flex-direction: column;
     gap: 8px;
     width: 100%;
-    padding: 12px 12px 10px 16px;
+    padding-block: 12px 10px;
+    padding-inline: 16px 12px;
     background: var(--bg-input);
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-sm);
-    transition: box-shadow var(--duration) var(--ease);
 }
 
-/* A brass edge and a soft ring: focus is the one place brass frames a surface. */
+/* A hairline, not a glow. This mix holds 3:1 against the input in every palette. */
 .composer:focus-within {
-    box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--accent-solid), 0 0 0 4px var(--accent-ring);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px color-mix(in srgb, var(--text-muted) 80%, var(--bg-input));
 }
 
 .composer-disabled {
@@ -43,6 +43,12 @@
 
 .composer-input:focus-visible {
     outline: none;
+}
+
+.composer-limit-error {
+    margin: 4px 0 0;
+    color: var(--danger);
+    font-size: 12px;
 }
 
 .composer-row {
@@ -141,7 +147,8 @@
     align-items: center;
     gap: 6px;
     max-width: 260px;
-    padding: 3px 4px 3px 8px;
+    padding-block: 3px;
+    padding-inline: 8px 4px;
     border-radius: var(--radius-md);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -149,7 +156,13 @@
 }
 
 .composer-attachment.has-error {
+    flex-wrap: wrap;
+    align-content: flex-start;
     background: var(--danger-dim);
+}
+
+.composer-attachment svg {
+    flex-shrink: 0;
 }
 
 .composer-attachment-thumb {
@@ -171,8 +184,42 @@
     white-space: nowrap;
 }
 
+/* The error gets its own line under the name, so the name and remove button stay visible. */
 .composer-attachment.has-error .composer-attachment-state {
+    order: 1;
+    flex-basis: 100%;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
     color: var(--danger);
+}
+
+.composer-attachment.has-error .composer-attachment-name {
+    flex: 1;
+}
+
+/* A recording's status gets its own line too, so a long name is never squeezed out.
+   justify-self keeps an Arabic name in an English UI from sitting at the far edge. */
+.composer-attachment.is-media {
+    display: inline-grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    max-width: min(340px, 100%);
+}
+
+.composer-attachment.is-media .composer-attachment-name {
+    justify-self: start;
+    max-width: 100%;
+}
+
+.composer-attachment.is-media .composer-attachment-state {
+    grid-row: 2;
+    grid-column: 2 / -1;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
 }
 
 .composer-attachment .composer-icon-btn {
@@ -205,10 +252,25 @@
     text-overflow: ellipsis;
 }
 
+/* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
+@media (max-width: 480px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
+}
+
 .composer-chip.is-warning {
     color: var(--accent-yellow);
 }
 
 .composer-chip.is-danger {
     color: var(--danger);
+}
+
+.composer-chip.is-on {
+    background: var(--accent-dim);
+    color: var(--accent);
+}
+
+.composer-chip.is-unavailable {
+    opacity: 0.5;
+    cursor: default;
 }

@@ -193,7 +193,7 @@ def test_discovered_custom_cloud_avoids_local_load(client):
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 @responses.activate
@@ -433,7 +433,7 @@ def test_model_availability_does_not_hide_programming_errors(client, monkeypatch
         (429, "Wait before retrying"),
         (402, "spending limit"),
         (412, "spending limit"),
-        (500, "Check the provider"),
+        (500, "provider connection and selected model"),
     ],
 )
 def test_cloud_sse_backend_error_uses_status_without_reflecting_body(
@@ -804,8 +804,13 @@ def test_side_request_reaches_lemonade_with_thinking_off(monkeypatch, stream):
         # No thinking switch registered: the template's own mode, nothing sent.
         ("Gemma-4-E4B-it-GGUF", {}),
         (_QWEN3_30B, {}),
-        # Cloud providers do not take llama.cpp template kwargs.
-        ("fireworks.deepseek-v4p1-flash", {}),
+        # Cloud models generally reject template kwargs; GLM returns HTTP 400.
+        ("fireworks.glm-5p3-flash", {}),
+        # DeepSeek honors the switch: measured at 0 reasoning tokens with it.
+        (
+            "fireworks.deepseek-v4p1-flash",
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        ),
         (None, {}),
     ],
 )

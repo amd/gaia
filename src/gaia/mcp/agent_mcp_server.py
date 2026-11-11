@@ -111,7 +111,6 @@ class AgentMCPServer:
         for tool_def in tools:
             tool_name = tool_def["name"]
             tool_description = tool_def.get("description", "")
-            _input_schema = tool_def.get("inputSchema", {})
 
             # Create a wrapper function for this tool
             # We need to capture tool_name in the closure properly
@@ -169,26 +168,6 @@ class AgentMCPServer:
                                         f"[MCP] Failed to parse kwargs string: {kwargs_value}, error: {parse_error}"
                                     )
                                     # Keep original kwargs if parsing fails
-
-                        # Map common parameter variations to what agent expects
-                        # VSCode may send different param names than agent expects
-
-                        # Map VSCode's app_dir to Docker agent's appPath
-                        if "app_dir" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("app_dir")
-                            if verbose:
-                                logger.info("[MCP] Mapped app_dir to appPath")
-
-                        # Map other common variations
-                        if "directory" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("directory")
-                            if verbose:
-                                logger.info("[MCP] Mapped directory to appPath")
-
-                        if "project_path" in kwargs and "appPath" not in kwargs:
-                            kwargs["appPath"] = kwargs.pop("project_path")
-                            if verbose:
-                                logger.info("[MCP] Mapped project_path to appPath")
 
                         if verbose:
                             logger.info("[MCP TOOL] Final args to agent:")

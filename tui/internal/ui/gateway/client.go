@@ -1,5 +1,5 @@
 // Package gateway is the TUI screen for connecting GAIA to the AMD LLM
-// gateway through Lemonade's cloud offload (Lemonade >= 11.8).
+// gateway through Lemonade's cloud offload.
 //
 // This file talks to Lemonade directly rather than through the daemon: the API
 // token is the whole point of the screen, and a direct call is one fewer
@@ -219,8 +219,9 @@ func httpError(resp *http.Response, method, url, base string) error {
 	}
 	if resp.StatusCode == http.StatusNotFound && strings.Contains(url, "cloud") {
 		return fmt.Errorf(
-			"Lemonade at %s has no cloud-provider API (needs >= 11.8.0).\n"+
-				"Upgrade with `gaia init` and try again.", base)
+			"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
+				"the oldest version GAIA supports.\n%s",
+			base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
 	}
 	if env.Error.Message != "" {
 		return fmt.Errorf("%s failed (HTTP %d): %s", method, resp.StatusCode, env.Error.Message)
@@ -429,6 +430,8 @@ func (c *Client) ListModels() ([]Model, error) {
 			Recipe        string   `json:"recipe"`
 			Labels        []string `json:"labels"`
 			ContextLength int      `json:"context_length"`
+			// The provider's window; context_length is the 4096 it was "loaded" at.
+			MaxContextWindow int `json:"max_context_window"`
 		} `json:"data"`
 	}
 	if err := c.do(http.MethodGet, "models", nil, &payload); err != nil {
@@ -441,10 +444,14 @@ func (c *Client) ListModels() ([]Model, error) {
 		if entry.Recipe != cloudRecipe || !strings.HasPrefix(entry.ID, prefix) {
 			continue
 		}
+		ctx := entry.ContextLength
+		if entry.MaxContextWindow > 0 {
+			ctx = entry.MaxContextWindow
+		}
 		models = append(models, Model{
 			ID:      entry.ID,
 			Labels:  entry.Labels,
-			CtxSize: entry.ContextLength,
+			CtxSize: ctx,
 		})
 	}
 	sort.SliceStable(models, func(i, j int) bool {

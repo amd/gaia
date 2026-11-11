@@ -14,6 +14,13 @@ Scenarios are YAML files that define multi-turn conversations the eval agent wil
 
 The runner discovers scenarios automatically via recursive glob under `eval/scenarios/`. Place your YAML file in the appropriate category subdirectory and it will be picked up on the next run.
 
+<Note>
+  **Before you run a scenario:** you need a source checkout of GAIA installed in
+  editable mode, and the Agent UI backend running on port 4200. The scenarios and
+  corpus exist only in the repository, not in the installed package. Set both up
+  with the [Agent Eval prerequisites](/guides/eval#prerequisites).
+</Note>
+
 ---
 
 ## Scenario YAML Format
@@ -233,7 +240,7 @@ turns:
     objective: "Ask about the CFO approval threshold"
     ground_truth:
       doc_id: budget_2025
-      fact_id: cfo_threshold
+      fact_id: cfo_approval_threshold
       expected_answer: "$50,000"
     success_criteria: "Agent states the CFO approval threshold is $50,000"
 
@@ -241,7 +248,7 @@ turns:
     objective: "Ask if a $75,000 expense needs CFO approval"
     ground_truth:
       doc_id: budget_2025
-      fact_id: cfo_threshold
+      fact_id: cfo_approval_threshold
       expected_behavior: "Agent applies the $50K threshold to conclude $75K needs CFO approval"
     success_criteria: "Agent correctly reasons that $75,000 exceeds the $50,000 threshold"
 

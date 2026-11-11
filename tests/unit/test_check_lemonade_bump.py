@@ -21,6 +21,7 @@ from tests.fixtures.lemonade_bump import (
     EMBEDDED,
     INSTALLER,
     RENDER,
+    SKIPPED,
     REPO_ROOT,
     TAGS,
     TARGET,
@@ -116,7 +117,7 @@ MALICIOUS = {
         "never edits util/check_doc_versions.py",
     ),
     "a dropped installer pin": (
-        lambda r: _set_pins(r, "INSTALLER_SHA256", target_keys("INSTALLER_SHA256")[:2]),
+        lambda r: _set_pins(r, "INSTALLER_SHA256", target_keys("INSTALLER_SHA256")[:1]),
         "INSTALLER_SHA256 must pin exactly",
     ),
     "an extra installer pin": (
@@ -175,7 +176,9 @@ MALICIOUS = {
     ),
     "MSIs of a release that was never appended": (
         lambda r: _gain_legacy(
-            r, "v2026.43.0/lemonade.msi", "v2026.43.0/lemonade-server-minimal.msi"
+            r,
+            f"v{SKIPPED[1]}/lemonade.msi",
+            f"v{SKIPPED[1]}/lemonade-server-minimal.msi",
         ),
         "LEGACY_MSI_SHA256 must gain exactly",
     ),
@@ -212,7 +215,7 @@ MALICIOUS = {
         "must gain releases newer than",
     ),
     "tags ending before the target": (
-        lambda r: edit(r, TAGS, f"v{TARGET}\n", "v2026.42.5\n"),
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{SKIPPED[0]}\n"),
         "must gain releases newer than",
     ),
     "the outgoing MSI re-pinned with a new digest": (
@@ -222,7 +225,7 @@ MALICIOUS = {
     ),
     "a pin listed twice": (
         lambda r: edit(r, INSTALLER, ADDED_LEGACY, ADDED_LEGACY + ADDED_LEGACY),
-        "LEGACY_MSI_SHA256 pins v2026.42.1/lemonade.msi twice",
+        f"LEGACY_MSI_SHA256 pins v{CURRENT}/lemonade.msi twice",
     ),
     "code beside the pins": (
         lambda r: edit(
@@ -259,9 +262,9 @@ MALICIOUS = {
     "a pin-shaped line in another dict": (
         lambda r: edit(
             r,
-            INSTALLER,
-            "DEB_ARCH_BY_MACHINE = {\n",
-            f'DEB_ARCH_BY_MACHINE = {{\n    "x86_64": "{"b" * 64}",\n',
+            EMBEDDED,
+            "_MACHINE_ALIASES = {\n",
+            f'_MACHINE_ALIASES = {{\n    "x86_64": "{"b" * 64}",\n',
         ),
         "changes more than its pinned values",
     ),
@@ -334,7 +337,7 @@ MALICIOUS = {
     ),
     "a version other than the target": (
         lambda r: edit(r, "src/gaia/version.py", f'"{TARGET}"', '"2026.99.9"'),
-        "LEMONADE_VERSION must be '2026.43.1'",
+        f"LEMONADE_VERSION must be '{TARGET}'",
     ),
 }
 
@@ -467,9 +470,6 @@ def test_a_target_in_non_ascii_digits_is_rejected(main_repo, tmp_path):
     assert "is not a version" in result.stderr
 
 
-SKIPPED = ("2026.42.5", "2026.43.0")
-
-
 def test_a_bump_past_skipped_releases_is_applied(main_repo, tmp_path):
     """Releases GAIA never pinned get their tags and MSIs along with the target."""
     honest_bump(main_repo, skipped=SKIPPED)
@@ -479,12 +479,12 @@ def test_a_bump_past_skipped_releases_is_applied(main_repo, tmp_path):
     for version in SKIPPED:
         assert f'"v{version}/lemonade.msi"' in installer
     tags = git(main_repo, "show", f":{TAGS}")
-    assert tags.endswith(f"v{CURRENT}\nv2026.42.5\nv2026.43.0\nv{TARGET}\n")
+    assert tags.endswith(f"v{CURRENT}\nv{SKIPPED[0]}\nv{SKIPPED[1]}\nv{TARGET}\n")
 
 
 def test_a_skipped_release_without_its_msis_is_rejected(main_repo, tmp_path):
     honest_bump(main_repo, skipped=SKIPPED)
-    key = "v2026.43.0/lemonade.msi"
+    key = f"v{SKIPPED[1]}/lemonade.msi"
     edit(main_repo, INSTALLER, f'    "{key}": "{digest(key)}",\n', "")
     result = run_checker(main_repo, patch_from(main_repo, tmp_path))
     assert result.returncode == 1
@@ -518,7 +518,7 @@ def test_a_target_that_is_not_newer_is_rejected(main_repo, tmp_path, target):
     result = run_checker(main_repo, patch_from(main_repo, tmp_path), target=target)
     assert result.returncode == 1
     assert f"--target {target} must be newer than main's {CURRENT}" in result.stderr
-    assert read(main_repo / "src/gaia/version.py").count(f'"{CURRENT}"') == 1
+    assert f'LEMONADE_VERSION = "{CURRENT}"' in read(main_repo / "src/gaia/version.py")
 
 
 def test_a_target_that_is_not_a_version_is_rejected(main_repo, tmp_path):
@@ -662,7 +662,7 @@ def _proposal(tmp_path: Path, text: str):
     title_out, body_out = tmp_path / "title.txt", tmp_path / "body.md"
     command = [sys.executable, "-I", str(RENDER), "proposal", "--proposal", str(source)]
     command += ["--target", TARGET, "--title-out", str(title_out)]
-    command += ["--body-out", str(body_out)]
+    command += ["--body-out", str(body_out), "--key-out", str(tmp_path / "key")]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         return result, "", ""
@@ -679,6 +679,28 @@ def test_a_proposal_gets_a_fixed_title_and_a_quoted_body(tmp_path):
     for token in ("Closes #7", "<!--"):
         assert token not in rendered
     assert "Auto-proposed by the Lemonade release scan" in rendered
+
+
+def test_a_proposal_key_is_its_title_and_is_a_valid_auto_issue_key(tmp_path):
+    """The key is what makes a re-run update the same issue instead of filing it again."""
+    import importlib.util
+
+    path = REPO_ROOT / ".github" / "actions" / "auto-issue" / "auto_issue.py"
+    spec = importlib.util.spec_from_file_location("auto_issue_for_keys", path)
+    auto_issue = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = auto_issue  # Its dataclasses look themselves up here.
+    spec.loader.exec_module(auto_issue)
+    keys = []
+    for text in ("# Vision @x: <b>NPU</b>!\nbody", "Vision x: bNPU/b\nother body"):
+        result, _, _ = _proposal(tmp_path, text)
+        assert result.returncode == 0, result.stderr
+        keys.append(read(tmp_path / "key"))
+    assert (
+        keys[0]
+        == keys[1]
+        == f"lemonade-version-bump/proposal/v{TARGET}/vision-x-bnpu-b"
+    )
+    assert auto_issue.validate_key(keys[0]) == keys[0]
 
 
 def test_a_proposal_without_a_title_is_refused(tmp_path):

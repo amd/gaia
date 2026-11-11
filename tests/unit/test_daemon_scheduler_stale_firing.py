@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -180,19 +181,29 @@ def test_a_running_executor_renews_its_lease(tmp_path):
     jid = store.register_job(_db(path), source="t", kind=KIND_ONE_SHOT, fire_at=1.0)
     seen = []
 
-    def slow(job, _db):
-        time.sleep(0.5)
-        seen.append(store.get_job(_db, job_id=job["job_id"])["claimed_at"])
+    def runs_until_renewed(job, _db):
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            claimed_at = store.get_job(_db, job_id=job["job_id"])["claimed_at"]
+            if claimed_at > 1.0:
+                seen.append(claimed_at)
+                return
+            time.sleep(0.02)
 
     clock = DaemonClock(
-        str(path), {KIND_ONE_SHOT: slow}, stale_firing_seconds=60, heartbeat_seconds=0.1
+        str(path),
+        {KIND_ONE_SHOT: runs_until_renewed},
+        stale_firing_seconds=60,
+        heartbeat_seconds=0.1,
     )
     clock.fire_due(now=1.0)
     # Claimed at the fake now=1.0; renewed with the real clock while running.
-    assert seen[0] > 1.0
+    assert seen, "the lease was never renewed while the executor ran"
 
 
-def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
+def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(
+    tmp_path, monkeypatch
+):
     """No claim time recorded: stale after the window, not on sight."""
     path = tmp_path / "old.db"
     db = _ClockDB()
@@ -211,9 +222,16 @@ def test_a_row_stuck_by_an_older_build_starts_its_window_at_upgrade(tmp_path):
     )
     db.close_db()
 
+    # The upgrade stamps the row with the time it ran; pin that time.
+    upgraded = 5000.0
+    monkeypatch.setattr(store, "time", SimpleNamespace(time=lambda: upgraded))
     clock = _clock(path, {KIND_ONE_SHOT: lambda job, _db: None})
-    upgraded = time.time()
     assert clock.fire_due(now=upgraded) == {"fired": [], "failed": []}
+    check = _ClockDB()
+    check.init_db(str(path))
+    stamped = check.query("SELECT claimed_at FROM daemon_jobs WHERE job_id = 'old'")
+    check.close_db()
+    assert stamped[0]["claimed_at"] == upgraded
     assert clock.fire_due(now=upgraded + CONFIRM) == {"fired": [], "failed": []}
     later = upgraded + STALE + 1
     assert clock.fire_due(now=later) == {"fired": [], "failed": []}
@@ -289,3 +307,37 @@ def test_the_recovery_error_names_a_local_time(tmp_path):
     error = store.get_job(db, job_id=jid)["error"]
     assert "14:05 on 2026-10-18 (45 minutes ago)" in error
     assert str(int(claimed)) not in error
+
+
+@pytest.mark.parametrize("kind", [KIND_ONE_SHOT, KIND_RECURRING])
+def test_a_stale_read_never_recovers_a_new_claim_made_at_the_same_time(tmp_path, kind):
+    """Two claims can share a ``claimed_at``; only the ``claim_id`` tells them
+    apart. A driver acting on a stale read of the first must not take over the
+    second while it runs."""
+    db = _db(tmp_path / "clock.db")
+    interval = 60 if kind == KIND_RECURRING else None
+    jid = store.register_job(
+        db, source="t", kind=kind, fire_at=1.0, interval_seconds=interval
+    )
+    first = store.claim_job(db, job_id=jid, now=1.0)
+    [stale] = store.find_stale_firing(db, now=STALE + 2, stale_after=STALE)
+    assert store.recover_claim(db, stale, now=STALE + 2) is not None
+    # Back to pending (re-queued, or re-scheduled by the user) and claimed
+    # again by a driver whose pass carries the same timestamp.
+    db.update(
+        "daemon_jobs",
+        {"status": STATUS_PENDING, "error": None},
+        "job_id = :id",
+        {"id": jid},
+    )
+    second = store.claim_job(db, job_id=jid, now=1.0)
+    assert second not in (None, first)
+
+    # Another driver acts on the same stale read.
+    outcome = store.recover_claim(db, stale, now=STALE + 3)
+    job = store.get_job(db, job_id=jid)
+    # Taken over, it would be failed while it runs, or queued to run again.
+    assert job["status"] == STATUS_FIRING and job["claim_id"] == second
+    assert job["error"] is None
+    assert store.fetch_due(db, now=STALE + 3) == []
+    assert outcome is None

@@ -155,11 +155,11 @@ def main() -> None:
 def _core_names(agent, registry):
     """CORE set for the active profile, intersected with the live registry."""
     try:
-        from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS
+        from gaia_agent.tool_bundles import FULL_CORE_TOOLS
 
         core = set(FULL_CORE_TOOLS)
     except ImportError:
-        from gaia_agent_chat.tool_bundles import DOC_CORE_TOOLS
+        from gaia_agent.tool_bundles import DOC_CORE_TOOLS
 
         core = set(DOC_CORE_TOOLS)
     loader = getattr(agent, "tool_loader", None)

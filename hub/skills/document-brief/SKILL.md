@@ -2,7 +2,7 @@
 name: document-brief
 description: Index a document or folder and answer questions about it with quotes from the source. Use when the user points at a PDF, contract, spec, report, or folder of files and asks what it says, what changed, or what they should worry about.
 license: MIT
-version: 1.0.1
+version: 1.0.3
 metadata:
   gaia:
     security_tier: community

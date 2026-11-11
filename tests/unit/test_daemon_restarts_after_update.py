@@ -1,0 +1,892 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""An update that replaces GAIA restarts the daemon still running the old one (#5695).
+
+After the desktop app updated, the previous release's daemon and agents kept
+running, so the new app drove old code until a reboot or `gaia daemon restart`.
+The daemon now records its release and the version.py it read it from; a client
+starting up compares that with what is on disk now.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+
+import pytest
+
+from gaia import version
+from gaia.daemon import client, instance
+from gaia.daemon.errors import DaemonError
+from gaia.daemon.instance import DaemonInstance, runs_replaced_install
+
+
+def _version_file(tmp_path, text='__version__ = "0.25.1"\n'):
+    path = tmp_path / "gaia" / "version.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _inst(pid=4242, **fields):
+    return DaemonInstance(pid=pid, port=5151, token="t", started_at=100.0, **fields)
+
+
+def test_a_daemon_whose_release_is_still_installed_is_current(tmp_path):
+    path = _version_file(tmp_path)
+    assert (
+        runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(path)))
+        is None
+    )
+
+
+def test_a_daemon_whose_release_was_replaced_is_out_of_date(tmp_path):
+    path = _version_file(tmp_path, '__version__ = "0.25.2"\n')
+    why = runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(path)))
+    assert why == "it runs GAIA 0.25.1, and 0.25.2 is installed"
+
+
+def test_a_daemon_whose_install_is_gone_is_out_of_date(tmp_path):
+    gone = tmp_path / "old-venv" / "gaia" / "version.py"
+    why = runs_replaced_install(_inst(gaia_version="0.25.1", version_file=str(gone)))
+    assert why and "is gone" in why
+
+
+def test_the_desktop_app_replaces_a_daemon_from_its_old_venv(tmp_path, monkeypatch):
+    # The venv the previous app built stays on disk, so its version.py still
+    # matches; to the frozen app it is another release all the same.
+    path = _version_file(tmp_path, '__version__ = "0.25.3"\n')
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    why = runs_replaced_install(_inst(gaia_version="0.25.3", version_file=str(path)))
+    assert why == "it runs GAIA 0.25.3, and this app ships 0.25.4"
+
+
+def test_the_desktop_app_keeps_its_own_daemon(tmp_path, monkeypatch):
+    gone = tmp_path / "_internal" / "gaia" / "version.py"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", "0.25.4")
+    assert (
+        runs_replaced_install(_inst(gaia_version="0.25.4", version_file=str(gone)))
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "theirs, ours, replaced",
+    [
+        ("0.25.3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4", True),
+        ("0.25.4rc3", "0.25.4rc4", True),
+        ("", "0.25.4", True),
+        ("0.25.5", "0.25.4", False),
+        ("0.25.4", "0.25.4rc4", False),
+    ],
+)
+def test_a_frozen_gaia_replaces_only_an_older_daemon(
+    tmp_path, monkeypatch, theirs, ours, replaced
+):
+    # Two installs of different releases would otherwise restart each other's daemon.
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(version, "__version__", ours)
+    why = runs_replaced_install(_inst(gaia_version=theirs, version_file=""))
+    assert bool(why) is replaced
+
+
+def test_the_record_round_trips_through_instance_json(tmp_path, monkeypatch):
+    monkeypatch.setattr(instance.paths, "instance_path", lambda: tmp_path / "i.json")
+    monkeypatch.setattr(instance.paths, "ensure_host_dir", lambda: None)
+    recorded = _inst(gaia_version="0.25.1", version_file="/x/gaia/version.py")
+    instance.write_instance(recorded)
+    assert json.loads((tmp_path / "i.json").read_text())["gaia_version"] == "0.25.1"
+    assert instance.read_instance(tmp_path / "i.json") == recorded
+
+
+class _Process:
+    def __init__(self, cmdline, started, parent=None):
+        self._cmdline = cmdline
+        self._started = started
+        self._parent = parent
+
+    def cmdline(self):
+        if isinstance(self._cmdline, Exception):
+            raise self._cmdline
+        return self._cmdline
+
+    def create_time(self):
+        return self._started
+
+    def parent(self):
+        return self._parent
+
+
+@pytest.fixture
+def launched_with(monkeypatch):
+    import psutil
+
+    def use(cmdline, started, parent=None):
+        monkeypatch.setattr(
+            psutil, "Process", lambda pid: _Process(cmdline, started, parent)
+        )
+
+    return use
+
+
+def _installed_at():
+    installed = os.stat(version.__file__)
+    return max(installed.st_mtime, installed.st_ctime)
+
+
+def test_an_older_daemon_from_this_python_is_judged_by_its_install_time(launched_with):
+    legacy = DaemonInstance(pid=1, port=1, token="t")
+
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() + 60)
+    assert runs_replaced_install(legacy) is None
+
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() - 60)
+    why = runs_replaced_install(legacy)
+    assert why and "installed after it started" in why
+
+
+def test_the_process_start_time_wins_over_the_recorded_one(launched_with):
+    # A daemon started after the install but recording an older start is current.
+    launched_with([sys.executable, "-m", "gaia.daemon"], started=_installed_at() + 60)
+    assert (
+        runs_replaced_install(DaemonInstance(pid=1, port=1, token="t", started_at=0.0))
+        is None
+    )
+
+
+def test_an_older_daemon_from_another_python_is_left_alone(launched_with):
+    launched_with(["/opt/other-venv/bin/python", "-m", "gaia.daemon"], started=0.0)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+_BASE_PYTHON = ["C:/uv/python/cpython-3.12/python.exe", "-m", "gaia.daemon"]
+
+
+def test_an_older_daemon_behind_a_windows_venv_launcher_is_judged(launched_with):
+    # The venv python.exe hands off to the base interpreter, which is the pid
+    # recorded; only its parent, the launcher, names this venv.
+    launcher = _Process([sys.executable, "-m", "gaia.daemon"], started=0.0)
+    launched_with(_BASE_PYTHON, started=_installed_at() - 60, parent=launcher)
+    why = runs_replaced_install(DaemonInstance(pid=1, port=1, token="t"))
+    assert why and "installed after it started" in why
+
+    launched_with(_BASE_PYTHON, started=_installed_at() + 60, parent=launcher)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_a_launcher_from_another_venv_is_left_alone(launched_with):
+    # Another install on the same base interpreter must not restart this one.
+    other = _Process(["C:/other-venv/Scripts/python.exe", "-m", "gaia.daemon"], 0.0)
+    launched_with(_BASE_PYTHON, started=0.0, parent=other)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_an_unreadable_or_missing_launcher_is_left_alone(launched_with):
+    import psutil
+
+    denied = _Process(psutil.AccessDenied(7), 0.0)
+    launched_with(_BASE_PYTHON, started=0.0, parent=denied)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+    launched_with(_BASE_PYTHON, started=0.0, parent=None)
+    assert runs_replaced_install(DaemonInstance(pid=1, port=1, token="t")) is None
+
+
+def test_an_unreadable_launcher_does_not_hide_a_matching_daemon(launched_with):
+    import psutil
+
+    denied = _Process(psutil.AccessDenied(7), 0.0)
+    launched_with(
+        [sys.executable, "-m", "gaia.daemon"],
+        started=_installed_at() - 60,
+        parent=denied,
+    )
+    why = runs_replaced_install(DaemonInstance(pid=1, port=1, token="t"))
+    assert why and "installed after it started" in why
+
+
+@pytest.fixture
+def running(monkeypatch, tmp_path):
+    """A live, answering daemon; records what start_or_attach does to it."""
+    calls = {"shutdown": [], "spawned": 0}
+    path = _version_file(tmp_path, '__version__ = "0.25.2"\n')
+    state = {"inst": _inst(gaia_version="0.25.2", version_file=str(path))}
+
+    monkeypatch.setattr(client, "attach", lambda *a, **k: state["inst"])
+    monkeypatch.setattr(client, "read_instance", lambda *a: state["inst"])
+    monkeypatch.setattr(client, "_answers", lambda *a, **k: True)
+    monkeypatch.setattr(client, "missing_daemon_deps", lambda: [])
+    monkeypatch.setattr(
+        client,
+        "request_shutdown",
+        lambda inst: calls["shutdown"].append(inst.pid) or True,
+    )
+    monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: True)
+    monkeypatch.setattr(client, "outdated_daemon_busy", lambda inst: state.get("busy"))
+    monkeypatch.setattr(client, "_deferred_notice", None)
+
+    def spawn(timeout, on_progress=None, drop_env=()):
+        calls["spawned"] += 1
+        return _inst(pid=5353, gaia_version="0.25.2", version_file=str(path))
+
+    monkeypatch.setattr(client, "_spawn_and_wait", spawn)
+    return state, calls, path
+
+
+def test_a_current_daemon_is_attached_to(running):
+    state, calls, _path = running
+    assert client.start_or_attach(timeout=1) is state["inst"]
+    assert calls == {"shutdown": [], "spawned": 0}
+
+
+def test_an_out_of_date_daemon_is_restarted(running):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+
+    fresh = client.start_or_attach(timeout=1)
+
+    assert calls == {"shutdown": [4242], "spawned": 1}
+    assert fresh.pid == 5353
+
+
+def test_an_out_of_date_daemon_that_will_not_stop_says_what_to_run(
+    running, monkeypatch
+):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    monkeypatch.setattr(client, "wait_until_gone", lambda inst, timeout=0: False)
+
+    with pytest.raises(DaemonError, match="gaia daemon restart"):
+        client.start_or_attach(timeout=1)
+    assert calls["spawned"] == 0
+
+
+def test_a_busy_out_of_date_daemon_keeps_running_and_says_so_each_time(running, caplog):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "the GAIA terminal app is still using it"
+
+    with caplog.at_level("WARNING", logger="gaia.daemon.client"):
+        assert client.start_or_attach(timeout=1) is state["inst"]
+        assert client.start_or_attach(timeout=1) is state["inst"]
+
+    assert calls == {"shutdown": [], "spawned": 0}
+    notices = [
+        r.getMessage() for r in caplog.records if "keeps running" in r.getMessage()
+    ]
+    assert len(notices) == 2
+    assert "terminal app is still using it" in notices[0]
+    assert "gaia daemon restart" in notices[0]
+    # Front ends show the same text to the person using them.
+    assert "terminal app is still using it" in client.deferred_restart_notice()
+
+
+def test_the_notice_clears_once_the_daemon_is_restarted(running):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "a chat is still answering"
+    client.start_or_attach(timeout=1)
+    assert client.deferred_restart_notice()
+
+    state["busy"] = None
+    client.start_or_attach(timeout=1)
+
+    assert calls["shutdown"] == [4242]
+    assert client.deferred_restart_notice() is None
+
+
+def test_a_daemon_that_cannot_be_asked_to_stop_says_what_to_run(running, monkeypatch):
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+
+    def unreachable(inst):
+        raise DaemonError("could not reach the daemon at http://127.0.0.1:5151.")
+
+    monkeypatch.setattr(client, "request_shutdown", unreachable)
+
+    with pytest.raises(DaemonError, match="gaia daemon restart"):
+        client.start_or_attach(timeout=1)
+    assert calls["spawned"] == 0
+
+
+def test_replacing_before_a_server_swap_ignores_busy(running, monkeypatch):
+    """The swap cuts the work off anyway, and the old daemon would undo it."""
+    state, calls, path = running
+    state["inst"] = _inst(gaia_version="0.25.1", version_file=str(path))
+    state["busy"] = "the GAIA terminal app is still using it"
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+
+    why = client.replace_outdated_daemon()
+
+    assert "0.25.1" in why
+    assert calls == {"shutdown": [4242], "spawned": 0}
+
+
+def test_replacing_leaves_a_current_or_missing_daemon(running, monkeypatch):
+    state, calls, _path = running
+    monkeypatch.setattr(client, "pid_alive", lambda pid: True)
+    assert client.replace_outdated_daemon() is None
+
+    state["inst"] = None
+    assert client.replace_outdated_daemon() is None
+    assert calls == {"shutdown": [], "spawned": 0}
+
+
+class _Response:
+    def __init__(self, status_code, body=None):
+        self.status_code = status_code
+        self._body = body or {}
+        self.text = json.dumps(self._body)
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def daemon_reports(monkeypatch, tmp_path):
+    """Answers the clients route; the job store lives in a scratch host dir."""
+    import requests
+
+    answers = {
+        "status": _Response(200, {"service": "gaia-daemon", "relayed_turns": 0}),
+        "agents": _Response(200, {"agents": []}),
+        "clients": _Response(200, {"clients": [], "seconds_since_request": None}),
+    }
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kwargs: answers[url.rsplit("/", 1)[-1]],
+    )
+    monkeypatch.setattr(client, "_LOCAL_WORK", [])
+    monkeypatch.setattr(client, "pid_alive", lambda pid: pid != 999999)
+    monkeypatch.setattr(client.paths, "host_dir", lambda: tmp_path)
+    return answers
+
+
+def _job(tmp_path, status, fire_at=None, claimed_at=None):
+    import sqlite3
+    import time as _time
+
+    from gaia.daemon.scheduler.store import DAEMON_JOBS_DDL
+
+    with sqlite3.connect(tmp_path / "scheduler.db") as db:
+        db.executescript(DAEMON_JOBS_DDL)
+        db.execute(
+            "INSERT INTO daemon_jobs (job_id, source, kind, fire_at, "
+            "interval_seconds, payload_json, status, created_at, claimed_at) "
+            "VALUES (?, 'test', 'recurring', ?, 86400, '{}', ?, ?, ?)",
+            (f"j{_time.monotonic_ns()}", fire_at, status, _time.time(), claimed_at),
+        )
+
+
+def test_an_idle_daemon_is_free_to_restart(daemon_reports):
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_recurring_job_waiting_for_tomorrow_does_not_keep_it(
+    daemon_reports, tmp_path
+):
+    import time as _time
+
+    _job(tmp_path, "pending", fire_at=_time.time() + 86400)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_running_scheduled_job_keeps_the_daemon(daemon_reports, tmp_path):
+    import time as _time
+
+    _job(tmp_path, "firing", claimed_at=_time.time())
+    assert "1 scheduled job(s) are running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_job_due_now_keeps_the_daemon(daemon_reports, tmp_path):
+    import time as _time
+
+    _job(tmp_path, "pending", fire_at=_time.time() - 5)
+    assert "due to run" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_firing_row_left_by_a_crash_does_not_keep_it(daemon_reports, tmp_path):
+    _job(tmp_path, "firing", claimed_at=1.0)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_another_running_front_end_keeps_the_daemon(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia-tui", "pids": [4343]}]}
+    )
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_supervised_agent_does_not_keep_the_outdated_daemon(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_packaged_agent_child_does_not_keep_the_outdated_daemon(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    class _Child:
+        pid = 4344
+
+    class _Launcher:
+        def children(self, recursive=False):
+            assert recursive is True
+            return [_Child()]
+
+    monkeypatch.setattr(psutil, "Process", lambda pid: _Launcher())
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4344]}]}
+    )
+
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_stopped_or_pidless_agent_does_not_hide_a_front_end(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200,
+        {
+            "agents": [
+                {"pid": 4343, "state": "stopped"},
+                {"pid": None, "state": "running"},
+                {"pid": "4345", "state": "running"},
+            ]
+        },
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia-tui", "pids": [4343]},
+                {"name": "gaia-ui", "pids": [4345]},
+            ]
+        },
+    )
+
+    assert "gaia-tui, gaia-ui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_front_end_beside_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_turn_in_a_supervised_agent_still_keeps_it(daemon_reports):
+    daemon_reports["status"] = _Response(
+        200, {"service": "gaia-daemon", "relayed_turns": 1}
+    )
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "1 agent turn(s) are still running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_recent_model_request_from_a_supervised_agent_still_keeps_it(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [{"name": "gaia agent", "pids": [4343]}],
+            "seconds_since_request": 5.0,
+        },
+    )
+
+    assert "answered a request 5s ago" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_launcher_that_exited_mid_check_still_counts_its_own_pid(
+    daemon_reports, monkeypatch
+):
+    import psutil
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(psutil, "Process", gone)
+    daemon_reports["agents"] = _Response(
+        200, {"agents": [{"pid": 4343, "state": "running"}]}
+    )
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "gaia agent", "pids": [4343]},
+                {"name": "gaia-tui", "pids": [5151]},
+            ]
+        },
+    )
+
+    assert "gaia-tui is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_older_daemon_without_the_agents_route_is_judged_as_before(
+    daemon_reports,
+):
+    daemon_reports["agents"] = _Response(404)
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [{"name": "gaia agent", "pids": [4343]}]}
+    )
+
+    assert "gaia agent is still using it" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_agents_route_that_fails_says_it_could_not_check(daemon_reports):
+    daemon_reports["agents"] = _Response(500, {"detail": "registry exploded"})
+
+    assert "could not check whether it is busy" in client.outdated_daemon_busy(_inst())
+
+
+def test_this_process_and_exited_front_ends_do_not_keep_it(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200,
+        {
+            "clients": [
+                {"name": "this", "pids": [os.getpid()]},
+                {"name": "parent", "pids": [os.getppid()]},
+                {"name": "gone", "pids": [999999]},
+            ]
+        },
+    )
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_model_request_just_now_keeps_the_daemon(daemon_reports):
+    daemon_reports["clients"] = _Response(
+        200, {"clients": [], "seconds_since_request": 4.0}
+    )
+    assert "4s ago" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_daemon_without_the_clients_route_is_judged_by_its_jobs(daemon_reports):
+    daemon_reports["clients"] = _Response(404)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_daemon_that_cannot_be_checked_is_kept(daemon_reports, monkeypatch):
+    import requests
+
+    def down(url, **kwargs):
+        raise requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", down)
+    assert "could not check" in client.outdated_daemon_busy(_inst())
+
+
+def _old_store(tmp_path, status, fire_at=None):
+    """A job store from before 0.25.1, which had no heartbeat column."""
+    import sqlite3
+
+    with sqlite3.connect(tmp_path / "scheduler.db") as db:
+        db.execute(
+            "CREATE TABLE daemon_jobs (job_id TEXT PRIMARY KEY, status TEXT, fire_at REAL)"
+        )
+        db.execute("INSERT INTO daemon_jobs VALUES ('j1', ?, ?)", (status, fire_at))
+
+
+def test_an_older_store_with_a_future_job_does_not_keep_it(daemon_reports, tmp_path):
+    import time as _time
+
+    _old_store(tmp_path, "pending", fire_at=_time.time() + 86400)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_an_older_store_with_a_running_job_keeps_it(daemon_reports, tmp_path):
+    _old_store(tmp_path, "firing")
+    assert "running" in client.outdated_daemon_busy(_inst())
+
+
+def test_a_store_without_the_jobs_table_does_not_keep_it(daemon_reports, tmp_path):
+    import sqlite3
+
+    sqlite3.connect(tmp_path / "scheduler.db").close()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_a_turn_relayed_through_the_daemon_keeps_it(daemon_reports):
+    daemon_reports["status"] = _Response(200, {"relayed_turns": 2})
+    assert "2 agent turn(s) are still running" in client.outdated_daemon_busy(_inst())
+
+
+def test_an_older_daemon_without_the_turn_count_is_judged_as_before(daemon_reports):
+    daemon_reports["status"] = _Response(200, {"service": "gaia-daemon"})
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_this_processs_own_work_keeps_it_even_with_nothing_else(daemon_reports):
+    client.add_local_work(lambda: "1 Agent UI chat(s) are still answering")
+    assert "Agent UI chat" in client.outdated_daemon_busy(_inst())
+
+
+def test_removed_local_work_no_longer_keeps_it(daemon_reports):
+    def check():
+        return "busy"
+
+    client.add_local_work(check)
+    client.remove_local_work(check)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+# The Agent UI talks to the flagship directly, so the daemon cannot count its
+# turns. Its backend is also the process that runs the check, so it excludes
+# itself from the front ends it sees: its own turns must be counted here.
+
+
+def test_an_in_process_agent_ui_turn_keeps_the_daemon_from_restarting(
+    daemon_reports, monkeypatch
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    client.add_local_work(helpers.active_turns_in_flight)
+
+    # The caller registers its handler before it contacts the daemon; that
+    # starting turn must not make its own restart check busy.
+    helpers._active_sse_handlers["chat-starting"] = SSEOutputHandler()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+    # A second in-process turn that has reached the agent query must keep the
+    # daemon alive while the model/tool loop is still running.
+    running = SSEOutputHandler()
+    running.in_process_turn_active = True
+    helpers._active_sse_handlers["chat-running"] = running
+    assert "1 Agent UI chat(s) are still answering" in (
+        client.outdated_daemon_busy(_inst())
+    )
+
+
+class _InProcessAgent:
+    """Cached in-process agent whose query reports what the daemon would see."""
+
+    def __init__(self, fail=False):
+        self.indexed_files = set()
+        self.conversation_history = []
+        self.rag = None
+        self.path_validator = None
+        self._cancel_event = threading.Event()
+        self.console = None
+        self.fail = fail
+        self.seen = []
+
+    def _register_tools(self):
+        pass
+
+    def process_query(self, _message, **_kwargs):
+        from gaia.ui import _chat_helpers as helpers
+
+        self.seen.append(helpers.active_turns_in_flight())
+        if self.fail:
+            raise RuntimeError("tool loop blew up")
+        if self.console is not None:
+            self.console.print_final_answer("done")
+        return {"result": "done", "status": "success"}
+
+
+def _run_in_process_turn(monkeypatch, agent):
+    import asyncio
+    from types import SimpleNamespace
+
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.models import ChatRequest
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    monkeypatch.setattr(helpers, "_agent_registry", None)
+    monkeypatch.setattr(helpers, "_maybe_load_expected_model", lambda *a, **k: None)
+    helpers._agent_cache.clear()
+    db = ChatDatabase(":memory:")
+    try:
+        session = db.create_session(model="M-GGUF", agent_type="chat")
+        helpers._store_agent(session["id"], "M-GGUF", [], agent, "chat")
+        request = ChatRequest(session_id=session["id"], message="hi", stream=True)
+
+        async def drain():
+            async for _chunk in helpers._stream_chat_impl(
+                SimpleNamespace(handler=None), db, session, request
+            ):
+                pass
+
+        asyncio.run(drain())
+    finally:
+        helpers._agent_cache.clear()
+        db.close()
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["answers", "raises"])
+def test_the_real_in_process_turn_counts_only_while_its_agent_runs(
+    daemon_reports, monkeypatch, fail
+):
+    from gaia.ui import _chat_helpers as helpers
+
+    client.add_local_work(helpers.active_turns_in_flight)
+    agent = _InProcessAgent(fail=fail)
+    _run_in_process_turn(monkeypatch, agent)
+
+    assert agent.seen == ["1 Agent UI chat(s) are still answering"]
+    # A turn that ended, even by raising, must not hold the daemon forever.
+    assert helpers.active_turns_in_flight() is None
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+class _ParkedProxy:
+    """A flagship whose run parks on *event* until released."""
+
+    agent_id = "gaia"
+
+    def __init__(self, event):
+        self.event = event
+        self.parked = threading.Event()
+        self.release = threading.Event()
+
+    def query_stream(self, body, read_timeout=None, on_response=None):
+        yield dict(self.event, run_id=body.get("run_id"))
+        self.parked.set()
+        self.release.wait(10)
+        yield {"type": "final", "answer": "done", "run_id": body.get("run_id")}
+
+    def cancel_query(self, _rid):
+        self.release.set()
+
+    def tool_decision(self, *_a):
+        return {"delivered": True}
+
+    def set_bypass(self, *_a):
+        pass
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "tool_call", "tool": "run_shell_command", "args": {}},
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "Allow writing file?",
+            "confirm_id": "c-1",
+        },
+    ],
+    ids=["slow-tool", "approval"],
+)
+def test_a_parked_agent_ui_turn_keeps_the_daemon_from_restarting(
+    daemon_reports, monkeypatch, event
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import relay
+    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    monkeypatch.setattr(helpers, "_active_sse_handlers", {})
+    client.add_local_work(helpers.active_turns_in_flight)
+    # The calling chat, still on its way to the agent, does not count.
+    helpers._active_sse_handlers["chat-b"] = SSEOutputHandler()
+    assert client.outdated_daemon_busy(_inst()) is None
+
+    proxy = _ParkedProxy(event)
+    handler = SSEOutputHandler()
+    helpers._active_sse_handlers["chat-a"] = handler
+    turn = threading.Thread(
+        target=relay.relay_query,
+        args=(handler, proxy),
+        kwargs={
+            "query": "q",
+            "context": [],
+            "run_id": "r-a",
+            "profile": GAIA_PROFILE,
+            "session_id": "chat-a",
+            "answers_confirmations": True,
+        },
+        daemon=True,
+    )
+    turn.start()
+    try:
+        assert proxy.parked.wait(5)
+        assert "1 Agent UI chat(s) are still answering" in (
+            client.outdated_daemon_busy(_inst())
+        )
+    finally:
+        proxy.release.set()
+        turn.join(10)
+    assert client.outdated_daemon_busy(_inst()) is None
+
+
+def test_an_agent_ui_chat_shows_why_the_update_is_not_running_yet(monkeypatch):
+    from types import SimpleNamespace
+
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.models import ChatRequest
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    class _Done:
+        agent_id = "gaia"
+
+        def init(self):
+            return 200, {}
+
+        def query_stream(self, body, read_timeout=None, on_response=None):
+            yield {"type": "final", "answer": "ok"}
+
+        def cancel_query(self, _rid):
+            pass
+
+        def set_bypass(self, *_a):
+            pass
+
+    handle = SimpleNamespace(api_version="2.24", proxy=lambda: _Done())
+    monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
+    monkeypatch.setattr(helpers, "_replay_cloud_key_for_relay", lambda *_a: None)
+    monkeypatch.setattr(
+        client, "_deferred_notice", "GAIA's background service is out of date"
+    )
+    handler = SSEOutputHandler()
+
+    helpers._dispatch_sidecar_query(
+        handler,
+        ChatRequest(session_id="s", message="hi", agent_type="gaia"),
+        [],
+        None,
+        "gaia",
+    )
+
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    notes = [e for e in events if e.get("type") == "status"]
+    assert any("out of date" in e.get("message", "") for e in notes), events

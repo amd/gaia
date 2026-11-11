@@ -217,6 +217,9 @@ _TRANSIENT_PHRASES = (
     "temporarily unavailable",
     "currently overloaded",
     "server is overloaded",
+    # A llama-server start that crashed (an intermittent Vulkan iGPU fault),
+    # which Lemonade reports as a model_load_error.
+    "llama-server failed to start",
 )
 
 #: libcurl's wording for a transfer that broke at the connection level, as
@@ -252,6 +255,9 @@ _NOT_RETRYABLE_PHRASES = (
     "model_not_found",
     "model not found",
     "does not exist",
+    # Lemonade could not load the model (NPU driver, memory, a bad model).
+    "model_load_error",
+    "model_load_refused",
     # Content filters answer with a verdict on the prompt, not a fault.
     "content_filter",
     "content management policy",
@@ -338,6 +344,21 @@ _REASON_ATTR = "retry_reason"
 _RETRY_AFTER_ATTR = "retry_after"
 #: Attribute carrying the :class:`RetryState` of a request that gave up.
 _STATE_ATTR = "model_retry_state"
+
+
+def http_body_text(response: Any) -> str:
+    """*response*'s body as text, read as UTF-8 unless it names a charset.
+
+    ``requests`` decodes a ``text/*`` body with no charset as ISO-8859-1, which
+    turns the UTF-8 that Lemonade and hosted providers send ("—") into mojibake.
+    """
+    content = getattr(response, "content", None)
+    if not isinstance(content, bytes):
+        return response.text
+    content_type = str((response.headers or {}).get("Content-Type", ""))
+    if "charset=" in content_type.lower():
+        return response.text
+    return content.decode("utf-8", errors="replace")
 
 
 def tag_http_failure(

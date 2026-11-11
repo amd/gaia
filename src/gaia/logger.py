@@ -8,16 +8,22 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
+from typing import Optional
 
+from gaia.home import gaia_home
 from gaia.log_rotation import SharedRotatingFileHandler
 from gaia.tool_cancellation import AbandonedWorkerLogFilter
 
 #: Env override for the log file of an agent run from the CLI (`gaia chat`).
 AGENT_LOG_ENV = "GAIA_AGENT_LOG"
+#: Env override for every GAIA process's log file, instead of ``~/.gaia/gaia.log``.
+LOG_FILE_ENV = "GAIA_LOG_FILE"
 
 
 def _home_log_file():
-    """Return ``~/.gaia/gaia.log``, or ``None`` when the home dir is unresolvable.
+    """Return ``<gaia_home>/gaia.log``, or ``None`` when the home dir is unresolvable.
+
+    ``GAIA_HOME`` relocates it with the rest of GAIA's state.
 
     ``Path.home()`` raises ``RuntimeError`` on Windows when neither ``USERPROFILE``
     nor ``HOMEDRIVE``+``HOMEPATH`` is set -- common for services, scheduled tasks
@@ -25,7 +31,7 @@ def _home_log_file():
     ``import gaia`` at all.
     """
     try:
-        return Path.home() / ".gaia" / "gaia.log"
+        return gaia_home() / "gaia.log"
     except RuntimeError:
         return None
 
@@ -40,24 +46,36 @@ def configure_console_encoding():
             # capture mechanism (causes "I/O operation on closed file" errors).
             for stream_name in ("stdout", "stderr"):
                 stream = getattr(sys, stream_name)
-                if stream and not stream.closed and hasattr(stream, "reconfigure"):
+                # A replacement stream (a tee, a capture) may lack .closed.
+                if (
+                    stream
+                    and not getattr(stream, "closed", False)
+                    and hasattr(stream, "reconfigure")
+                ):
                     stream.reconfigure(encoding="utf-8", errors="replace")
 
             # Also try to set the console code page to UTF-8
             try:
                 # chcp is a cmd.exe builtin; invoke via cmd /c so we avoid shell=True
+                # Not our stdin: cmd.exe would move a redirected file to its end.
                 subprocess.run(
                     ["cmd", "/c", "chcp", "65001"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     shell=False,
                     check=False,
+                    timeout=10,
                 )
-            except (subprocess.SubprocessError, OSError, FileNotFoundError):
-                pass  # Ignore if chcp command fails
+            except (subprocess.SubprocessError, OSError) as e:
+                logging.getLogger(__name__).debug(
+                    "chcp 65001 failed; console code page unchanged: %s", e
+                )
 
-        except Exception:
-            # If configuration fails, fall back to original streams
-            pass
+        except (OSError, ValueError, LookupError, AttributeError, TypeError) as e:
+            # The streams keep their original encoding; output still works.
+            logging.getLogger(__name__).debug(
+                "UTF-8 console setup failed; using the original streams: %s", e
+            )
 
 
 class GaiaLogger:
@@ -69,7 +87,8 @@ class GaiaLogger:
         # current working directory with gaia.log files and don't crash
         # when CWD is not writable (e.g. /, system dirs, read-only mounts).
         if log_file is None:
-            log_file = _home_log_file()
+            override = os.environ.get(LOG_FILE_ENV, "").strip()
+            log_file = Path(override).expanduser() if override else _home_log_file()
             if log_file is None:
                 # No resolvable home dir -- use the tempdir the handler
                 # fallback below would have picked anyway.
@@ -358,18 +377,68 @@ class GaiaLogger:
         self.log_file = path
 
 
-# Create a global instance
-log_manager = GaiaLogger()
+#: Set by :func:`configure`. Importing this module must have no side effect on
+#: the host process's logging.
+log_manager: Optional[GaiaLogger] = None
 
 
-# Convenience function to get a logger
+def configure(log_file=None):
+    """Install GAIA's logging configuration in this process, explicitly.
+
+    Importing ``gaia.logger`` (directly or via ``gaia``, which imports
+    ``gaia.agents.base``) no longer reconfigures the root logger or opens log
+    files; entry points that own the process (``gaia.cli:main``, the
+    ``gaia-mcp`` console script, ``gaia.ui.server:main``, the eval tools, the
+    LLM app runner) call this first, so an application embedding the SDK
+    keeps its own logging setup intact. Idempotent: calls after the
+    first return the already-installed manager.
+    """
+    global log_manager
+    if log_manager is not None:
+        return log_manager
+    log_manager = GaiaLogger(log_file)
+    # Loggers created before configure() ran (any module-level ``get_logger``
+    # in the import graph) come back inert, with no level of their own. Apply
+    # the per-module defaults to the ones still unset so ``set_level`` sees
+    # the same population the memoized path always did, and register them
+    # in ``self.loggers`` so ``set_level`` can update them too.
+    for name, state in list(logging.Logger.manager.loggerDict.items()):
+        if (
+            isinstance(state, logging.Logger)
+            and (name == "gaia" or name.startswith("gaia."))
+            and state.level == logging.NOTSET
+        ):
+            state.setLevel(log_manager._get_level_for_module(name))
+            log_manager.loggers[name] = state
+    return log_manager
+
+
 def get_logger(name):
+    """Return the named logger.
+
+    Before :func:`configure` the returned logger is untouched: it carries no
+    handlers and no level of its own, and this function touches nothing but
+    it. After :func:`configure` the manager supplies default levels and
+    memoization, as it always did.
+    """
+    if log_manager is None:
+        return logging.getLogger(name)
     return log_manager.get_logger(name)
 
 
 def route_console_logging_to_stderr():
     """Redirect stdout console logging to stderr (stdio-transport safety).
 
-    See :meth:`GaiaLogger.route_console_logging_to_stderr`.
+    See :meth:`GaiaLogger.route_console_logging_to_stderr`. Operates on the
+    root logger's handlers, so it is safe both before and after
+    :func:`configure` (before it there is nothing to move; moves by some
+    other library are still caught).
     """
-    log_manager.route_console_logging_to_stderr()
+    for handler in logging.getLogger().handlers:
+        # FileHandler subclasses StreamHandler but its stream is the log
+        # file, so the ``is sys.stdout`` identity check skips it.
+        if (
+            isinstance(handler, logging.StreamHandler)
+            and getattr(handler, "stream", None) is sys.stdout
+        ):
+            handler.setStream(sys.stderr)

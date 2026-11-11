@@ -1,0 +1,12 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* A summary with its English gloss wraps; a button would centre the lines. */
+.msg-stats-summary {
+    text-align: start;
+}
+
+/* The footer is 10.5 px; the gloss's 11 px floor would set the English above the Arabic. */
+.msg-stats .i18n-gloss.i18n-gloss {
+    font-size: inherit;
+}

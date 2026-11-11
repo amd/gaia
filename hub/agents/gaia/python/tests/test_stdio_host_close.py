@@ -183,9 +183,7 @@ def test_a_broken_history_never_sends_a_second_terminal_event(agent, monkeypatch
     stdio.run_turn(agent, "hello", out)
 
     events = [json.loads(line) for line in out.getvalue().splitlines() if line]
-    assert [e["type"] for e in events if e["type"] in ("final", "error")] == [
-        "error"
-    ]
+    assert [e["type"] for e in events if e["type"] in ("final", "error")] == ["error"]
 
 
 def test_a_history_that_cannot_open_the_turn_still_ends_it(agent, monkeypatch):
@@ -199,9 +197,7 @@ def test_a_history_that_cannot_open_the_turn_still_ends_it(agent, monkeypatch):
     stdio.run_turn(agent, "hello", out)
 
     events = [json.loads(line) for line in out.getvalue().splitlines() if line]
-    assert [e["type"] for e in events if e["type"] in ("final", "error")] == [
-        "error"
-    ]
+    assert [e["type"] for e in events if e["type"] in ("final", "error")] == ["error"]
     assert not agent.started.is_set()
 
 

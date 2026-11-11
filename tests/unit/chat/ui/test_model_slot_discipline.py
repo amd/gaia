@@ -18,6 +18,7 @@ import threading
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
+import anyio.from_thread
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -277,8 +278,8 @@ def test_title_runs_on_the_side_slot_under_the_lease(title_client):
 
 
 def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
-    """A title waits at most 30 s for the model, then returns None instead of
-    holding a worker thread behind a long turn."""
+    """A title waits at most 30 s for the model, then says it is busy instead
+    of holding a worker thread behind a long turn."""
     client, _made, _posts = title_client
     limits = []
 
@@ -293,13 +294,13 @@ def test_title_gives_up_on_a_long_model_queue(title_client, monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", busy_lease)
 
-    title = asyncio.run(
-        helpers._generate_session_title(
-            _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+    with pytest.raises(helpers._TitleModelBusy):
+        asyncio.run(
+            helpers._generate_session_title(
+                _URL, "Gemma-4-E4B-it-GGUF", "plan a trip", "ok"
+            )
         )
-    )
 
-    assert title is None
     assert limits == [30.0]
     client.chat_completions.assert_not_called()
     # The cap is the title's alone; it does not leak into the caller's scope.
@@ -356,7 +357,11 @@ def ui(monkeypatch):
 
     monkeypatch.setattr(broker_client, "model_lease", lease)
     app = create_app(db_path=":memory:")
-    return TestClient(app), loads, held, order
+    test_client = TestClient(app)
+    # One event loop for the client's life, without app startup: a per-request
+    # loop cancels the background load task when the request returns.
+    with anyio.from_thread.start_blocking_portal() as test_client.portal:
+        yield test_client, loads, held, order
 
 
 def _wait_for(predicate):
@@ -381,6 +386,84 @@ def test_settings_load_goes_through_the_model_client_and_load_lock(ui):
     assert held == [True]
     # Lease first, then the lock: the order every load in this process uses.
     assert order == ["lease", "lock"]
+
+
+@pytest.mark.allow_network
+def test_settings_load_without_a_size_uses_the_chat_window(ui, monkeypatch):
+    client, loads, _held, _order = ui
+    asked = []
+
+    def resolve(model, *_a, **_k):
+        asked.append(model)
+        return 131072
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", resolve)
+
+    resp = client.post("/api/system/load-model", json={"model_name": "Mine-GGUF"})
+
+    assert resp.status_code == 202
+    assert resp.json()["ctx_size"] == 131072
+    _wait_for(lambda: loads)
+    assert loads == [("Mine-GGUF", 131072)]
+    assert asked == ["Mine-GGUF"]
+
+
+@pytest.mark.allow_network
+def test_settings_load_with_a_size_keeps_it(ui, monkeypatch):
+    client, loads, _held, _order = ui
+
+    def resolve(*_a, **_k):
+        raise AssertionError("an explicit ctx_size must not be re-resolved")
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", resolve)
+
+    resp = client.post(
+        "/api/system/load-model", json={"model_name": "Mine-GGUF", "ctx_size": 8192}
+    )
+
+    assert resp.status_code == 202
+    _wait_for(lambda: loads)
+    assert loads == [("Mine-GGUF", 8192)]
+
+
+@pytest.mark.allow_network
+def test_settings_load_with_a_bad_ctx_override_fails_loudly(ui, monkeypatch):
+    client, loads, _held, _order = ui
+    monkeypatch.setenv("GAIA_CTX_SIZE", "lots")
+
+    resp = client.post("/api/system/load-model", json={"model_name": "Mine-GGUF"})
+
+    assert resp.status_code == 500
+    assert "GAIA_CTX_SIZE" in resp.json()["detail"]
+    assert loads == []
+
+
+@pytest.mark.allow_network
+def test_load_after_download_uses_the_chat_window(ui, monkeypatch):
+    from gaia.ui.routers import system
+
+    _client, loads, _held, _order = ui
+    monkeypatch.setattr(
+        lemonade_client, "resolve_ctx_size", lambda model, *_a, **_k: 131072
+    )
+
+    asyncio.run(system._auto_load_after_download("Mine-GGUF"))
+
+    assert loads == [("Mine-GGUF", 131072)]
+
+
+@pytest.mark.allow_network
+def test_load_after_download_with_a_bad_ctx_override_reports_it(ui, monkeypatch):
+    from gaia.ui.routers import system
+
+    _client, loads, _held, _order = ui
+    monkeypatch.setenv("GAIA_CTX_SIZE", "lots")
+    monkeypatch.setattr(system, "_last_load_failure", None)
+
+    asyncio.run(system._auto_load_after_download("Mine-GGUF"))
+
+    assert loads == []
+    assert "GAIA_CTX_SIZE" in system._last_load_failure
 
 
 @pytest.mark.allow_network

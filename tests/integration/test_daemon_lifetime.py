@@ -92,6 +92,29 @@ def test_daemon_exits_with_the_process_it_is_tied_to(daemon, monkeypatch):
             parent.kill()
 
 
+def test_daemon_exits_once_the_app_that_started_it_is_deleted(
+    daemon, monkeypatch, tmp_path
+):
+    app = tmp_path / "GAIA.AppImage"
+    app.write_text("app", encoding="utf-8")
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(app))
+    inst = daemon()
+    time.sleep(lifetime.CHECK_SECONDS + 1)
+    assert instance.is_live(inst), "exited while its app was installed"
+    app.unlink()
+    assert _exits(inst), "the daemon outlived the app it was started by"
+    assert f"the GAIA app that started it ({app}) was removed" in _log()
+
+
+def test_daemon_refuses_to_start_for_an_app_already_deleted(
+    daemon, monkeypatch, tmp_path
+):
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(tmp_path / "GAIA.AppImage"))
+    with pytest.raises(DaemonError, match="exited early"):
+        daemon()
+    assert "the GAIA app that launched this daemon was removed" in _log()
+
+
 def test_daemon_refuses_a_malformed_exit_with_pid(daemon, monkeypatch):
     monkeypatch.setenv(lifetime.EXIT_WITH_PID_ENV, "not-a-pid")
     with pytest.raises(DaemonError, match="exited early"):
@@ -146,10 +169,11 @@ def test_a_test_session_fails_and_stops_a_daemon_left_running():
 def test_tests_cannot_act_on_the_real_gaia_home():
     result = _child_pytest("probe_real_home.py", "-v")
     out = result.stdout + result.stderr
-    assert "2 failed, 2 passed" in out, out
+    assert "3 failed, 3 passed" in out, out
     for name in (
         "test_embedded_stop_on_the_real_home_is_refused",
         "test_daemon_spawn_without_gaia_home_is_refused",
+        "test_lemonade_start_via_the_real_daemon_is_refused",
     ):
         assert re.search(rf"{name} FAILED", out), out
     assert out.count("your real home") >= 2, out
