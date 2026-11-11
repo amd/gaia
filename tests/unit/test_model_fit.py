@@ -333,6 +333,37 @@ class TestMuseGlimmer:
         assert lc.requested_thinking(lc.MUSE_GLIMMER_MODEL_NAME) is None
         assert lc.requested_reasoning_effort(lc.MUSE_GLIMMER_MODEL_NAME) is None
 
+    def test_side_calls_ask_for_its_least_reasoning(self):
+        """It cannot stop reasoning: "low" took ~160 tokens on a one-line
+        question where the default took ~450 (measured)."""
+        assert lc.no_thinking_kwargs(lc.MUSE_GLIMMER_MODEL_NAME) == {
+            "chat_template_kwargs": {"reasoning_strength": "low"}
+        }
+        assert lc.reasoning_headroom(lc.MUSE_GLIMMER_MODEL_NAME) >= 256
+        assert lc.reasoning_headroom(lc.LARGE_DEFAULT_MODEL_NAME) == 0
+        assert lc.reasoning_headroom(None) == 0
+
+    def test_reads_images_itself(self):
+        """Handing an image to Gemma evicted it and took ~2.5 min (measured);
+        its own encoder read the same kind of image in ~12 s."""
+        from gaia.installer import model_choice
+
+        assert lc.MUSE_GLIMMER_MODEL_NAME in lc.VISION_CHAT_MODELS
+        assert model_choice.reads_images(lc.MUSE_GLIMMER_MODEL_NAME)
+
+    @pytest.mark.parametrize(
+        "info,offered",
+        [
+            (STRIX_HALO_128, True),
+            (STRIX_HALO_64, True),
+            (DGPU_32, True),
+            (DGPU, False),
+        ],
+    )
+    def test_offered_for_download_only_where_it_fits(self, info, offered):
+        fits = lc.optional_chat_models_that_fit(capacity_from_system_info(info))
+        assert (lc.MUSE_GLIMMER_MODEL_NAME in fits) is offered
+
 
 class TestDefaultFollowsTheGpu:
     """Qwen3.6 35B is the default on any PC whose GPU holds it; Gemma elsewhere."""

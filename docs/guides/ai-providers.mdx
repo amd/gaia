@@ -56,7 +56,7 @@ For **Local**, the list shows every chat model Lemonade offers, downloaded or no
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
 **Recommended** models come first — Qwen3.6 35B A3B, Qwen3.8 Flash Next,
-Gemma 4 E4B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
+Gemma 4 E4B, Muse Glimmer 30B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
 much memory this PC has for models and how much disk is free, both read from
 Lemonade:
 
@@ -108,15 +108,24 @@ the embedding models, but the next launch asks for the default again unless
 ### Muse Glimmer 30B
 
 Meta's open-weight model built for local agents, a supported local model that is
-never picked for you. It reads images and calls tools natively, and always reasons
-before it answers, at the "high" strength Meta benchmarks it with. It needs ~24 GB
+never picked for you. It reads images itself, so an image question loads no second
+model, and calls tools natively. It always reasons before it answers, at the "high"
+strength Meta benchmarks it with; GAIA asks for "low" on side tasks (naming a chat,
+summarizing a document, memory upkeep) and on `gaia llm`. It needs ~24 GB
 for models at a 64K window (21 GB of weights, vision projector and draft model, plus
 a small context cache), so a 32 GB GPU or a 64 GB+ Strix Halo holds it at its full
 128K window; a 24 GB card does not. It is dense rather than a mixture of experts, so
 on a Strix Halo it reads prompts about 3x and writes about 2x more slowly than Qwen3.6.
-Choose it with
-`gaia config set default_model Muse-Glimmer-30B-GGUF`, then run `gaia init` to
-download it.
+The first reply after GAIA starts takes longest: on a 128 GB Strix Halo, reading GAIA's
+instructions into the model took about four minutes, and the app says so while it waits.
+On GAIA's task suites it passed about as many tasks as Qwen3.6 (33 of 56 against 31)
+in about 1.3x the time, and it more often saved plain text under a `.docx` or `.xlsx`
+name instead of a real Office file.
+
+The TUI's model picker lists it and marks it **won't fit** on a PC that cannot hold
+it. The Agent UI offers it in Settings for download only on a PC that holds it.
+Or choose it with `gaia config set default_model Muse-Glimmer-30B-GGUF`, then run
+`gaia init` to download it.
 
 ### gpt-oss 20B and 120B
 

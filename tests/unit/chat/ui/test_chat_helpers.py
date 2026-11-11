@@ -1188,6 +1188,15 @@ class TestSessionTitleRequest:
         assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
         assert sent["max_tokens"] > 24
 
+    def test_a_model_that_grades_reasoning_its_own_way_gets_room_too(self):
+        """Muse Glimmer reasoned for ~160 tokens at its lowest strength
+        (measured), so 24 tokens named no chat."""
+        from gaia.llm.lemonade_client import MUSE_GLIMMER_MODEL_NAME
+
+        sent = self._sent_kwargs(MUSE_GLIMMER_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"reasoning_strength": "low"}
+        assert sent["max_tokens"] >= 256
+
     @pytest.mark.parametrize("content", [None, "", "  \n "])
     def test_reasoning_that_eats_the_budget_is_a_failed_try(self, content):
         """If gpt-oss reasons past the budget, the reply carries no title text;

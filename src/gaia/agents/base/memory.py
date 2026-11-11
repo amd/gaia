@@ -99,6 +99,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -3514,7 +3515,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3591,11 +3593,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
