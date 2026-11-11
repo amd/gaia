@@ -112,11 +112,39 @@ deployment, a message to the operator. No case falls back to web search or model
 - Add an update path that takes a list of changed and deleted files, instead of
   re-reading the tree.
 - Store the lookup by file so matching unchanged files is linear, not files times chunks.
-- Replace the 5,000-file cut-off with a refusal for followed repositories: a repository
-  over the limit fails with its size and the limit, instead of being indexed in part.
-- Per-repository include and exclude patterns (for example, leave out `tests/`).
 - Results and status return `owner/repo` plus a repository-relative path. Absolute
   paths never leave the indexer.
+
+### Large repositories and what is left out
+
+This repository is already large for the current design: its metadata is one 128 MB JSON
+file loaded whole, and search compares the query against every vector. To scale past it:
+
+- **Budget by chunks, not files.** The 5,000-file cut-off goes. A repository is indexed
+  in priority order (source, then docs, then tests) up to a chunk budget, and a
+  repository that does not fit says exactly which folders were left out, in status and
+  in answers that touch them. Never a silent partial index.
+- **Stop storing chunk text twice.** Metadata keeps path and line range and reads the
+  text from the checkout, moving from one JSON file to SQLite so a sync writes only the
+  rows that changed.
+- **Smaller, faster vectors when needed.** Exact search is fine at this size. Past a
+  measured threshold, switch to a compressed or clustered FAISS index; Phase 0 finds
+  that threshold rather than guessing it.
+- **Resumable first index.** A 30-minute build that is interrupted continues from the
+  last saved batch instead of starting over.
+
+Left out by default, before anything is read:
+
+| Kind | Rule |
+|---|---|
+| Dependency and build folders | `node_modules`, `vendor`, `third_party`, `dist`, `build`, `target`, `.venv`, `__pycache__` and the like, even when committed (extends today's `always_skip` list) |
+| Binary files | By extension (images, archives, fonts, models, compiled objects) and by a null-byte check, as today |
+| Generated files | Lockfiles, minified and bundled files (`*.min.js`, source maps), snapshots, files marked `linguist-generated` in `.gitattributes`, and files with a "generated, do not edit" header |
+| Oversized files | Over 1 MB, as today |
+
+`git ls-files` already drops everything untracked or ignored, so these rules matter only
+for what a repository commits. Each repository can add its own include and exclude
+patterns (for example, leave out `tests/`), and status lists what was skipped and why.
 
 ### Updates stored in memory
 
@@ -205,6 +233,8 @@ request state stays there, under the same citation rule: this index copies no is
 - digest: one per commit range, retry writes none, size cap holds, month roll-up
 - git commands asserted by argument list (depth, no credentials, no submodules)
 - citation link shape, each freshness line, no absolute path in any tool response
+- committed `node_modules`, binaries, lockfiles and generated files are skipped and listed
+- a repository over the chunk budget names the folders it left out; an interrupted build resumes
 
 **Integration (embedder only, `require_lemonade`).** A retrieval benchmark: about 50
 questions with the file that answers each, against `amd/gaia` at a pinned commit, scored
@@ -236,7 +266,7 @@ Existing categories to watch on every phase, since tools and memory writes chang
 | Phase | Delivers | Exit |
 |---|---|---|
 | 0. Measure | Full first index and a real sync timed on a GPU PC and a CPU-only PC; the retrieval benchmark on today's index, with and without tests | Numbers recorded; decision on default exclusions |
-| 1. Git-aware index | Commit in metadata, changed-files update path, linear matching, size refusal, relative paths | Unit tests above; `gaia_code` unchanged; a one-file sync under 10 s |
+| 1. Git-aware index | Commit in metadata, changed-files update path, linear matching, default exclusions, chunk budget, relative paths | Unit tests above; `gaia_code` unchanged; a one-file sync under 10 s |
 | 2. Follow and sync | Clone folder, daemon-clock job, failure handling, `state.json`, citation and freshness in tool output | Sync unit tests; `gaia_repo` code and staleness scenarios |
 | 3. Memory digests | Template digest, dedup by range, month roll-up | Digest tests; `gaia_memory` unchanged; "what changed" scenario |
 | 4. Public deployment | Fixed repository list, general index tools off, path-leak and injection tests | Isolation scenarios pass on the Discord sandbox |
