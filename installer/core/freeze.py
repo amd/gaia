@@ -79,7 +79,10 @@ NOT_SHIPPED = ["gaia_agent", "gaia_agent_email"]
 FREEZE_EXTRAS = ("ui", "mcp", "talk", "notify")
 
 # reportlab: the pdf skills' scripts need it, and no gaia module imports it.
-COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic", "reportlab", "mcp"]
+COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic", "reportlab"]
+#: Collected without the subpackages listed. ``mcp.cli`` exits the import when
+#: its optional typer is missing, which kills a plain --collect-submodules.
+FILTERED_SUBMODULES = {"mcp": ("mcp.cli",)}
 COLLECT_ALL = ["faiss"]
 COPY_METADATA = ["amd-gaia", "keyring"]
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
@@ -88,7 +91,7 @@ if sys.platform == "win32":
     HIDDEN_IMPORTS.append("plyer.platforms.win.notification")
 
 #: Imported only inside functions, so a missing one would still build.
-REQUIRED_MODULES = ["fastapi", "pypdf", "pypdfium2", "sounddevice", "plyer"]
+REQUIRED_MODULES = ["fastapi", "pypdf", "pypdfium2", "sounddevice", "plyer", "mcp"]
 
 # Same as the agent's freeze: GPL code GAIA must not ship, and the ML stack no
 # GAIA path runs in-process.
@@ -114,6 +117,7 @@ EXCLUDES = [
     "scipy",
     "sympy",
     "tkinter",
+    "mcp.cli",
     *GPL_EXCLUDES,
     *NOT_SHIPPED,
 ]
@@ -160,6 +164,21 @@ def _verify_freeze_env() -> None:
 def install_command() -> str:
     """How to set up the freeze environment, as build_core.yml runs it."""
     return f'uv pip install -e ".[{",".join(FREEZE_EXTRAS)}]" pyinstaller'
+
+
+def filtered_submodules(collect=None) -> list[str]:
+    """:data:`FILTERED_SUBMODULES`, never importing a skipped subpackage."""
+    if collect is None:
+        from PyInstaller.utils.hooks import collect_submodules as collect
+    names = []
+    for package, skipped in FILTERED_SUBMODULES.items():
+        names += collect(
+            package,
+            filter=lambda name, skipped=skipped: not any(
+                name == s or name.startswith(s + ".") for s in skipped
+            ),
+        )
+    return names
 
 
 def gaia_hidden_imports() -> list[str]:
@@ -217,7 +236,8 @@ def build(clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
-    for mod in sorted(set(HIDDEN_IMPORTS + gaia_hidden_imports())):
+    hidden = HIDDEN_IMPORTS + filtered_submodules() + gaia_hidden_imports()
+    for mod in sorted(set(hidden)):
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]

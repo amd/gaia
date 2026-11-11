@@ -98,8 +98,34 @@ def test_freeze_refuses_an_environment_without_them(tmp_path, monkeypatch):
 
 
 def test_freeze_collects_what_is_imported_by_name():
-    assert "mcp" in freeze.COLLECT_SUBMODULES
-    assert {"sounddevice", "plyer"} <= set(freeze.REQUIRED_MODULES)
+    assert "mcp" in freeze.FILTERED_SUBMODULES
+    assert {"sounddevice", "plyer", "mcp"} <= set(freeze.REQUIRED_MODULES)
+
+
+def test_mcp_is_collected_without_its_cli():
+    """``mcp.cli`` calls sys.exit(1) on import without typer: the rc18 fix build died."""
+    assert "mcp" not in freeze.COLLECT_SUBMODULES
+    assert "mcp.cli" in freeze.EXCLUDES
+    seen = {}
+
+    def fake_collect(package, filter):  # noqa: A002 - PyInstaller's keyword
+        seen[package] = filter
+        return [package]
+
+    assert freeze.filtered_submodules(collect=fake_collect) == ["mcp"]
+    keep = seen["mcp"]
+    for name in ("mcp", "mcp.server", "mcp.server.stdio", "mcp.client"):
+        assert keep(name), name
+    for name in ("mcp.cli", "mcp.cli.cli", "mcp.cli.claude"):
+        assert not keep(name), name
+
+
+def test_real_collect_skips_mcp_cli():
+    pytest.importorskip("mcp")
+    pytest.importorskip("PyInstaller")
+    names = freeze.filtered_submodules()
+    assert "mcp.server" in names
+    assert not [n for n in names if n == "mcp.cli" or n.startswith("mcp.cli.")]
 
 
 def test_smoke_imports_the_new_modules_in_the_executable():
