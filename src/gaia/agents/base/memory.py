@@ -554,6 +554,7 @@ EXTRACTION_IDLE_S = 3.0
 #: change there makes the server re-read the whole ~19K-token prompt (~45 s).
 #: Reused only while every line of it is still current.
 _SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
+_OMITTED_COUNT_LINE = re.compile(r"^\(\d+ more stored .+ not listed here;")
 _SHARED_STABLE_GUARD = threading.Lock()
 #: Facts learned since reach new chats through per-turn recall meanwhile.
 SHARED_STABLE_TTL_S = 3600.0
@@ -3653,8 +3654,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if (
                 shared is not None
                 and time.monotonic() - shared[0] < SHARED_STABLE_TTL_S
-                # Only additions since: a removed or edited memory never shows.
-                and set(shared[1].splitlines()) <= set(fresh.splitlines())
+                and self._shared_section_still_true(shared, fresh)
             ):
                 _, prompt, memory_ids, lesson_ids = shared
                 self._stable_memory_ids = set(memory_ids)
@@ -3671,6 +3671,32 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
             self._stable_memory_model = model
         return self._stable_memory_prompt
+
+    def _shared_section_still_true(self, shared: tuple, fresh: str) -> bool:
+        """Whether a new chat may show *shared* instead of *fresh*.
+
+        A line missing from the fresh render is fine only when its memory was
+        pushed out by a section's size cap and still exists unchanged; a
+        removed, forgotten or edited memory must never reach a new chat.
+        """
+        missing = {
+            line
+            for line in set(shared[1].splitlines()) - set(fresh.splitlines())
+            # The "(N more stored memories ...)" count may be stale; it names none.
+            if not _OMITTED_COUNT_LINE.match(line)
+        }
+        if not missing:
+            return True
+        shown_now = getattr(self, "_stable_memory_ids", set()) | getattr(
+            self, "_stable_lesson_ids", set()
+        )
+        kept = []
+        for knowledge_id in (shared[2] | shared[3]) - shown_now:
+            item = self._memory_store.get_item(knowledge_id)
+            if item is None or item.get("superseded_by"):
+                return False
+            kept.append(item["content"])
+        return all(any(content in line for content in kept) for line in missing)
 
     def _shared_stable_key(self) -> tuple:
         store = self._memory_store

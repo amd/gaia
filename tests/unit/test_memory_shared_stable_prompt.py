@@ -102,3 +102,33 @@ def test_each_chat_model_gets_its_own_section(store):
     b._refresh_stable_memory_prompt(share=True)
     b.get_memory_system_prompt()
     assert len(memory_mod._SHARED_STABLE_PROMPTS) == 2
+
+
+_WORDS = (
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima "
+    "mike november oscar papa quebec romeo sierra tango uniform victor whiskey "
+    "xray yankee zulu"
+).split()
+
+
+def test_a_memory_pushed_out_by_the_size_cap_still_shares(store):
+    """New facts displace older shown ones; that is not a removal."""
+    for n in range(30):
+        store.store(
+            "fact",
+            f"The {_WORDS[n % 26]} {n} project uses {_WORDS[(n * 7) % 26]} widgets.",
+            source="user",
+        )
+    first = _new_chat(store).get_memory_system_prompt()
+    store.store("fact", "The zebra crossing project uses granite slabs.", source="user")
+    fresh = _Host(store)._build_stable_memory_prompt()
+    assert set(first.splitlines()) - set(fresh.splitlines())  # lines were displaced
+    assert _new_chat(store).get_memory_system_prompt() == first
+
+
+def test_an_edited_memory_is_not_shown_from_the_shared_copy(store):
+    item = store.store("fact", "The user's office is in building 7.", source="user")
+    _new_chat(store).get_memory_system_prompt()
+    store.update(item, content="The user's office is in building 9.")
+    later = _new_chat(store).get_memory_system_prompt()
+    assert "building 9" in later and "building 7" not in later
