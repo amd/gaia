@@ -136,7 +136,9 @@ def _arg_strings(value: Any) -> Iterable[str]:
 
 #: Arguments that hold code a tool runs: its literals are not findings.
 _CODE_ARGS = ("code", "script", "command", "cmd")
-_CODE_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w]|\.\d)")
+_CODE_NUMBER = re.compile(
+    r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w]|\.\d)"
+)
 _OUTPUT_NUMBER = re.compile(
     r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?"
 )
@@ -165,7 +167,10 @@ def evidence_text(record: Dict[str, Any], code_literals: bool = False) -> str:
         for key in _CODE_ARGS:
             code = args.get(key) if isinstance(args, dict) else None
             if isinstance(code, str):
-                literals.update(float(m) for m in _CODE_NUMBER.findall(code))
+                for match in _CODE_NUMBER.findall(code):
+                    # ``5,000`` is 5000 in a string, and 5 and 0 in a tuple.
+                    literals.add(float(match.replace(",", "")))
+                    literals.update(float(part) for part in match.split(","))
         literals -= {0.0, 1.0}
         if literals:
             text = _OUTPUT_NUMBER.sub(

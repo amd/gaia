@@ -11,8 +11,10 @@ quantities the user stated.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -490,6 +492,19 @@ def test_figures_a_script_computed_into_the_report_itself_are_sourced():
     assert findings == []
 
 
+def test_a_year_in_a_heading_the_script_writes_is_not_a_figure():
+    code = GM15_CODE.replace(
+        "with open(report_path, 'w') as out:\n",
+        "with open(report_path, 'w') as out:\n"
+        "    out.write('# Top orders 2026\\n\\n')\n",
+    )
+    report, records = _gm15_turn(code)
+
+    findings = file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    assert findings == []
+
+
 def test_prices_typed_into_a_script_that_writes_the_report_are_still_flagged():
     code = GM15_CODE.replace(
         "    rows = list(csv.DictReader(f))\n",
@@ -584,6 +599,32 @@ def test_a_report_rewritten_after_the_computing_script_is_checked_again(tool):
         else {"code": f"open(r'{report}', 'w').write('| 492 | 1410.00 |')"}
     )
     records.insert(3, _rec(tool, args, {"status": "success"}))
+
+    assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        "print(open(r'{report}').read())",
+        "from pathlib import Path\nprint(Path(r'{report}').read_text())",
+        "open(r'C:\\gtest\\fx\\work\\final_report_gm15.md', 'w').write('x')",
+    ],
+    ids=["read-back", "path-read-back", "other-file"],
+)
+def test_a_later_script_that_leaves_the_report_alone_keeps_its_credit(later):
+    report, records = _gm15_turn()
+    records.insert(3, _run_python(later.format(report=report), GM15_TABLE))
+
+    assert (
+        file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY) == []
+    )
+
+
+def test_a_later_script_that_reads_and_rewrites_the_report_is_checked_again():
+    report, records = _gm15_turn()
+    code = f"rep = open(r'{report}').read()\nopen(r'{report}', 'w').write(rep)"
+    records.insert(3, _run_python(code))
 
     assert file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
 
@@ -862,6 +903,12 @@ CORRECT_ANALYSES = [
     "rows = [r for r in rows if r['date'].startswith(YEAR)][:TOP]\n"
     + _REV
     + "print(rev)",
+    _CSV + "for r in rows: print(r['order_id'].ljust(20), r['units'].rjust(12))",
+    _PD + "pd.set_option('display.width', 200)\nprint(df.nlargest(3, 'units'))",
+    "import pandas as pd\n"
+    "df = pd.read_csv('orders.csv', dtype={'units': 'int64'})\n"
+    "print(df.units.sum())",
+    _PD + "print(df.astype({'units': 'float64', 'unit_price': 'float32'}).sum())",
 ]
 
 #: Scripts that type a price themselves: their output sources nothing.
@@ -904,6 +951,13 @@ INVENTED_FIGURES = [
     _CSV + "price = 95\nprint(rows[:price], len(rows) * price)",
     _CSV + "print('=' * 40, len(rows) * 40)",
     _CSV + "for x in ['CM5108032-95']:\n" "    print(int(x.split('-')[1]) * len(rows))",
+    _CSV + "print('Shipping budget: $7,000', len(rows))",
+    _CSV + "print(int('5,000'.replace(',', '')) // len(rows))",
+    _CSV + "print(len(''.ljust(95)) * len(rows))",
+    _CSV + "open('o.md', 'w').write('Unit price: 95')",
+    _CSV + _REV + "print(rev / 1000)",
+    _CSV + _REV + "print(rev * 0.5)",
+    _PD + "print(df.units.sum() * 12)",
 ]
 
 
@@ -932,6 +986,73 @@ def test_folding_a_scripts_names_stays_cheap():
     )
 
     assert _script_opens(_run_python(code)) == ["orders.csv"]
+
+
+@pytest.mark.parametrize(
+    "blowup",
+    [
+        "s0 = 'x' * 1000\n" + "".join(f"s{i + 1} = s{i} + s{i}\n" for i in range(16)),
+        "a = 'x' * 1000\nb = a.join([a] * 10)\nc = b.join([b] * 10)\n"
+        "d = c.join([c] * 10)\ne = d.join([d] * 10)",
+        "y = '{:>200000000}'.format('a')",
+        "y = '%200000000s' % 'a'",
+        "y = '{:{}}'.format('a', 10 ** 8)",
+        "y = 'a'.ljust(10 ** 8)",
+        "from decimal import Decimal\ny = int(Decimal('1e10000000'))",
+    ],
+    ids=["concat", "join", "format", "percent", "nested-width", "pad", "decimal"],
+)
+def test_folding_a_huge_literal_stays_cheap(blowup):
+    code = _CSV + blowup + "\nprint(len(rows))"
+
+    started = time.perf_counter()
+    _script_opens(_run_python(code))
+
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_script_is_parsed_once_per_record():
+    report, records = _gm15_turn(GM15_CODE + "# parsed once\n")
+
+    with patch("ast.parse", wraps=ast.parse) as parse:
+        file_findings({report: _md(GM15_TABLE)}, records, query=TOP_ORDERS_QUERY)
+
+    parsed = [c for c in parse.call_args_list if "# parsed once" in c.args[0]]
+    assert len(parsed) == 1
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["s = '\ud800'", "y = " + "-" * 5000 + "1", "y = " + "+".join(["1"] * 20000)],
+    ids=["lone-surrogate", "deep-unary", "deep-binop"],
+)
+def test_a_script_that_cannot_be_parsed_is_not_credited(tail, caplog):
+    code = "rows = open('orders.csv').read()\n" + tail
+    table = "| Order | Revenue |\n|---|---|\n| 492 | 1410.00 |\n"
+    records = [_read("orders.csv", ORDERS_CSV), _run_python(code, "492 1410.00\n")]
+
+    with caplog.at_level("WARNING", logger="gaia.agents.base.deliverables"):
+        findings = _check(_md(table), records, name="r.md")
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "Cannot analyse" in caplog.text
+
+
+def test_a_round_figure_with_thousands_separators_is_not_computed():
+    code = _CSV + (
+        "with open('plan.md', 'w') as out:\n"
+        "    out.write('# Plan\\n\\nShipping budget: $7,000\\n')\n"
+    )
+    plan = _md("# Plan\n\nShipping budget: $7,000\n")
+    records = [_read("orders.csv", ORDERS_CSV), _run_python(code)]
+
+    findings = _check(
+        plan, records, query="Write plan.md from orders.csv", name="plan.md"
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+    record = {"args": {"code": "b = '5,000'"}, "observed": "budget 5,000"}
+    assert "5,000" not in evidence_text(record, code_literals=True)
 
 
 def test_dates_ids_and_quantities_the_user_stated_are_not_figures():
