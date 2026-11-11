@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Greeting widget</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <p id="greeting">No greeting yet.</p>
+  <label>Name <input id="name" type="text"></label>
+  <button id="hello" type="button">Say hello</button>
+  <script>
+    document.getElementById("hello").addEventListener("click", () => {
+      const name = document.getElementById("name").value || "stranger";
+      document.getElementById("greeting").textContent = "Hello, " + name + "!";
+    });
+  </script>
+</body>
+</html>

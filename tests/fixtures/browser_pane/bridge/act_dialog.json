@@ -1,0 +1,12 @@
+{
+  "tabId": "tab-1",
+  "url": "http://127.0.0.1:5000/dialogs.html",
+  "title": "Pane fixture boxes",
+  "dialog": {
+    "type": "confirm",
+    "message": "Delete account? This cannot be undone.",
+    "defaultText": "",
+    "url": "http://127.0.0.1:5000/dialogs.html",
+    "openedBy": "agent"
+  }
+}

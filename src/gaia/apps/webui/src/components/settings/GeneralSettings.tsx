@@ -9,6 +9,7 @@ import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
+import { browserPaneApi } from '../../stores/browserPaneStore';
 import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
@@ -40,6 +41,9 @@ const SHORTCUTS: Array<[string, MessageKey]> = [
     ['Mod+B', 'settings.shortcut.sidebar'],
     ['Mod+,', 'settings.shortcut.settings'],
 ];
+
+/** The desktop app also has the browser pane. */
+const DESKTOP_SHORTCUTS: Array<[string, MessageKey]> = [['Mod+Shift+B', 'settings.shortcut.browserPane']];
 
 export function GeneralSettings() {
     const t = useT();
@@ -158,7 +162,7 @@ export function GeneralSettings() {
             <UpdatesSection />
             <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
-                    {SHORTCUTS.map(([keys, what]) => (
+                    {[...SHORTCUTS, ...(browserPaneApi() ? DESKTOP_SHORTCUTS : [])].map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
                             <dd>{t(what)}</dd>

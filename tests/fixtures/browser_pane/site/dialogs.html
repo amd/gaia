@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture boxes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Browser boxes</h1>
+  <p id="status">No box answered yet.</p>
+  <button id="alert" type="button">Show notice</button>
+  <button id="confirm" type="button">Save draft</button>
+  <button id="prompt" type="button">Set nickname</button>
+  <button id="delete" type="button">Remove my data</button>
+  <script>
+    const status = document.getElementById("status");
+    document.getElementById("alert").addEventListener("click", () => {
+      alert("Your trial ends in 3 days.");
+      status.textContent = "The notice was closed.";
+    });
+    document.getElementById("confirm").addEventListener("click", () => {
+      status.textContent = confirm("Save this draft?") ? "Draft saved." : "Draft not saved.";
+    });
+    document.getElementById("prompt").addEventListener("click", () => {
+      const name = prompt("What should we call you?", "friend");
+      status.textContent = name === null ? "No nickname set." : "Nickname: " + name;
+    });
+    // The button's own label is harmless; only the box names the irreversible action.
+    document.getElementById("delete").addEventListener("click", () => {
+      status.textContent = confirm("Delete account? This cannot be undone.") ? "Account deleted." : "Account kept.";
+    });
+  </script>
+</body>
+</html>

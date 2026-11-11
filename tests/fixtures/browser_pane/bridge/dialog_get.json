@@ -1,0 +1,10 @@
+{
+  "tabId": "tab-1",
+  "dialog": {
+    "type": "confirm",
+    "message": "Delete account? This cannot be undone.",
+    "defaultText": "",
+    "url": "http://127.0.0.1:5000/dialogs.html",
+    "openedBy": "agent"
+  }
+}

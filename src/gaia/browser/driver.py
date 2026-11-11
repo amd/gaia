@@ -21,7 +21,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
-import re
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
@@ -36,7 +35,14 @@ from gaia.browser.errors import (
     NavigationBlocked,
     NavigationFailed,
 )
-from gaia.browser.snapshot import _SNAPSHOT_JS, ref_selector, snapshot_args
+from gaia.browser.snapshot import (
+    _FIND_JS,
+    _SNAPSHOT_JS,
+    in_frame_ref,
+    merge_frames,
+    ref_selector,
+    snapshot_args,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -134,6 +140,10 @@ class PlaywrightDriver:
         self._page = None
 
     # ---------------------------------------------------------------- lifecycle
+
+    @property
+    def where(self) -> str:
+        return "(headless browser)" if self._headless else "(browser window)"
 
     @property
     def started(self) -> bool:
@@ -405,37 +415,7 @@ class PlaywrightDriver:
         """
 
         def _find() -> Dict[str, Any]:
-            return self._page.evaluate(
-                r"""([q, ctx]) => {
-                    // Include shadow roots: a web component's content is not
-                    // part of body.innerText, so searching without it misses
-                    // exactly the text a snapshot could not show either.
-                    const shadow = (root) => {
-                      let out = '';
-                      for (const el of root.querySelectorAll('*')) {
-                        if (el.shadowRoot) {
-                          out += ' ' + (el.shadowRoot.textContent || '')
-                               + shadow(el.shadowRoot);
-                        }
-                      }
-                      return out;
-                    };
-                    const text = ((document.body && document.body.innerText) || '')
-                               + shadow(document);
-                    const hay = text.toLowerCase();
-                    const needle = q.toLowerCase();
-                    const hits = [];
-                    let i = hay.indexOf(needle);
-                    while (i !== -1 && hits.length < 10) {
-                      hits.push(text.slice(Math.max(0, i - ctx), i + needle.length + ctx)
-                                    .replace(/\s+/g, ' ').trim());
-                      i = hay.indexOf(needle, i + needle.length);
-                    }
-                    return {matches: hits, total: hits.length,
-                            page_chars: text.length};
-                }""",
-                [query, context],
-            )
+            return self._page.evaluate(_FIND_JS, [query, context])
 
         return self._submit(_find)
 
@@ -839,23 +819,16 @@ class PlaywrightDriver:
         if self._pending_dialog:
             snap["dialog"] = self._pending_dialog
             self._pending_dialog = None
-        self._frames_by_ref = {}
-
         frames = [f for f in self._page.frames if f is not self._page.main_frame]
+        readable = []
         for index, frame in enumerate(frames, 1):
             try:
-                sub = frame.evaluate(_SNAPSHOT_JS, snapshot_args(gen))
+                readable.append(
+                    (frame, frame.evaluate(_SNAPSHOT_JS, snapshot_args(gen)))
+                )
             except Exception as e:  # noqa: BLE001 — cross-origin or detached
                 logger.debug("Frame %s not readable: %s", index, e)
-                continue
-            for el in sub.get("elements") or []:
-                # g4e3 -> g4f1e3, so the click knows which frame to look in.
-                el["ref"] = el["ref"].replace(f"g{gen}e", f"g{gen}f{index}e", 1)
-                self._frames_by_ref[el["ref"]] = frame
-                snap["elements"].append(el)
-            if sub.get("text"):
-                snap["text"] = (snap.get("text") or "") + "\n" + sub["text"]
-            snap.setdefault("tables", []).extend(sub.get("tables") or [])
+        snap, self._frames_by_ref = merge_frames(snap, readable, gen)
         return snap
 
     def _locator_for(self, ref: str):
@@ -867,8 +840,7 @@ class PlaywrightDriver:
         """
         ref_selector(ref)  # validate the caller-supplied form
         frame = (getattr(self, "_frames_by_ref", None) or {}).get(ref)
-        in_page = re.sub(r"^g(\d+)f\d+e(\d+)$", r"g\1e\2", ref)
-        return (frame or self._page).locator(ref_selector(in_page))
+        return (frame or self._page).locator(ref_selector(in_frame_ref(ref)))
 
 
 def installed() -> bool:

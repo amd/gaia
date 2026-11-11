@@ -4,6 +4,7 @@
 import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { ArrowUp, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
+import { ElementChips, useElementChipsBlock } from './browser-pane/ElementChip';
 import { useT } from '../i18n/useT';
 import { isVideoFile } from '../utils/mediaFiles';
 import type { Attachment } from '../types';
@@ -54,7 +55,8 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
+    const chipsBlock = useElementChipsBlock(streaming);
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !chipsBlock;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
 
@@ -100,6 +102,7 @@ export function Composer({
             onDrop={handleDrop}
             onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
         >
+            <ElementChips />
             {attachments.attachments.length > 0 && (
                 <ul className="composer-attachments" aria-label={t('composer.attached')}>
                     {attachments.attachments.map((a) => {
@@ -185,7 +188,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label={t('composer.queue')}
-                            title={t('composer.queueTitle')}
+                            title={chipsBlock ?? t('composer.queueTitle')}
                         >
                             <ArrowUp size={16} />
                         </button>
@@ -208,7 +211,7 @@ export function Composer({
                             onClick={onSubmit}
                             disabled={!canSend}
                             aria-label={t('composer.send')}
-                            title={t.hint(t('composer.send'), 'Enter')}
+                            title={chipsBlock ?? t.hint(t('composer.send'), 'Enter')}
                         >
                             <ArrowUp size={16} />
                         </button>

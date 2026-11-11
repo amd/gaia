@@ -26,6 +26,7 @@ export interface ApiSchemas {
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   CommitRequest: CommitRequest;
+  Component: Component;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
@@ -83,9 +84,11 @@ export interface ApiSchemas {
   ModelStatus: ModelStatus;
   NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
+  PageElement: PageElement;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PickedRect: PickedRect;
   PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
@@ -114,6 +117,7 @@ export interface ApiSchemas {
   SetupRunRequest: SetupRunRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SourceLoc: SourceLoc;
   SpeakRequest: SpeakRequest;
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
@@ -360,8 +364,54 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  page_elements?:
+    | []
+    | [PageElement]
+    | [PageElement, PageElement]
+    | [PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | null;
   session_id: string;
   stream?: boolean;
+}
+/**
+ * One composer chip as the renderer sends it. A toggle that is off sends null.
+ */
+export interface PageElement {
+  component?: Component | null;
+  cropUrl?: string | null;
+  label: string;
+  name: string;
+  outerHTML?: string | null;
+  rect: PickedRect;
+  ref: string;
+  role: string;
+  selector: string;
+  styles?: {
+    [k: string]: string | undefined;
+  } | null;
+  tag: string;
+  text: string;
+  title: string;
+  url: string;
+}
+export interface Component {
+  name: string;
+  source?: SourceLoc | null;
+}
+export interface SourceLoc {
+  file: string;
+  line: number;
+}
+export interface PickedRect {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 export interface CommitRequest {
   /**
@@ -820,6 +870,7 @@ export interface MessageResponse {
   created_at: string;
   id: number;
   library_notices?: string[] | null;
+  page_elements?: PageElement[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;

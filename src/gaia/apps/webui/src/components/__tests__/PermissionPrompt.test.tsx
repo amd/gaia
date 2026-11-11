@@ -30,6 +30,15 @@ afterEach(() => {
 });
 
 describe('PermissionPrompt', () => {
+    it('names the site a browser pane read would show the model', () => {
+        useNotificationStore.getState().addNotification(request({
+            tool: 'browser_snapshot', toolLabel: 'running browser snapshot',
+            toolArgs: { _site: 'https://example.org' },
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('https://example.org');
+    });
+
     it.each([
         ['from the args', 'send_now', { _exact_text: 'To: a@b.co\nSubject: Hi\n\nFull body' }, ''],
         ['from a relayed summary', 'send_now', {}, 'To: a@b.co\nSubject: Hi\n\nFull body'],

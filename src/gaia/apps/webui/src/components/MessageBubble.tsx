@@ -24,6 +24,7 @@ import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { SentElementChips } from './browser-pane/ElementChip';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
@@ -658,6 +659,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {(message.cards ?? cards)?.map((card, i) => (
                         <RenderCard key={i} render={card.render} data={card.data} />
                     ))}
+                    {message.page_elements && message.page_elements.length > 0 && (
+                        <SentElementChips elements={message.page_elements} />
+                    )}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
                     {collapsibleUser ? (

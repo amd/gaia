@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture permissions</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>Permissions, popups and file: links</h1>
+  <p>Camera: <output id="camera">asking</output></p>
+  <p>Location: <output id="location">asking</output></p>
+  <p>Notifications: <output id="notifications">unknown</output></p>
+  <p><button id="popup" type="button">Open a popup</button></p>
+  <p><a id="blank-link" href="second.html" target="_blank">Second page in a new tab</a></p>
+  <p><a id="file-link" href="file:///etc/hosts">A file: link</a></p>
+  <script>
+    const show = (id, text) => { document.getElementById(id).textContent = text; };
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(() => show("camera", "granted"))
+      .catch((err) => show("camera", "denied: " + err.name));
+    navigator.geolocation.getCurrentPosition(
+      () => show("location", "granted"),
+      (err) => show("location", "denied: " + err.code)
+    );
+    show("notifications", Notification.permission);
+    document.getElementById("popup").addEventListener("click", () => {
+      window.open("second.html", "fixture-popup", "width=400,height=300");
+    });
+  </script>
+</body>
+</html>

@@ -43,6 +43,10 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
 #: over two hours to a suite already being split for length.
 DEFERRED: dict[str, str] = {
+    "browser-pane": (
+        "Needs GAIA desktop's browser pane, which the eval lanes don't run; "
+        "its gating is covered end to end against a recorded pane bridge."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."

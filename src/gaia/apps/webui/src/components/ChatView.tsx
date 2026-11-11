@@ -566,6 +566,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // Build message text with attachment references
         let messageText = text;
         let optimisticUser: Message | null = null;
+        const page_elements = reattach || fromQueue ? undefined : attach.takeElements();
         if (!reattach) {
             messageText = takeDraft();
 
@@ -581,6 +582,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 content: messageText,
                 created_at: new Date().toISOString(),
                 rag_sources: null,
+                page_elements,
             };
             addMessage(userMsg);
             optimisticUser = userMsg;
@@ -1206,7 +1208,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         const controller = reattach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks);
+            : api.sendMessageStream(sessionId, messageText, { ...streamCallbacks, pageElements: page_elements });
 
         streamController = controller;
         abortRef.current = controller;

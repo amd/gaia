@@ -83,6 +83,7 @@ from gaia.agents.base.tool_grants import (
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
     SCRATCH_ARG,
+    SITE_ARG,
 )
 from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
 from gaia.ui.event_narration import (
@@ -609,6 +610,8 @@ class CanonicalTranslator:
             prompt_context["working_directory"] = str(folder)
         if args.get(RISK_NOTE_ARG):
             prompt_context["risk_note"] = str(args[RISK_NOTE_ARG])
+        if args.get(SITE_ARG):
+            prompt_context["site"] = str(args[SITE_ARG])
         # A calendar card shows the checked values: the addresses as notified,
         # the event's real title, text with its hidden characters as codes.
         if tool in CALENDAR_WRITE_TOOLS:
@@ -841,7 +844,7 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG})
+PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG, SITE_ARG})
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:

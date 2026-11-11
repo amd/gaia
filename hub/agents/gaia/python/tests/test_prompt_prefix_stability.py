@@ -33,6 +33,7 @@ from gaia.agents.base.skill_synthesis import DistilledProcedure, load_synthesis_
 from gaia.agents.base.tool_loader import THIN_DESCRIPTION_CHARS, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_metrics import count_tokens
+from gaia.agents.tools.browser_use_tools import BrowserUseToolsMixin
 from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.llm.lemonade_client import FULL_TOOLS_SLOT
 
@@ -295,6 +296,50 @@ def test_the_fixed_prefix_stays_inside_its_budget(flagship, on_core):
     prefix = count_tokens(agent.system_prompt)
     prefix += count_tokens(json.dumps(agent._openai_tools))
     assert prefix < MAX_FIXED_PREFIX_TOKENS, f"fixed prefix is {prefix} tokens"
+
+
+@pytest.fixture
+def flagship_beside_the_pane(monkeypatch, request):
+    """The flagship in a chat open in GAIA desktop's browser pane: the BROWSER
+    PANE prompt line, the browser-pane skill's catalog line and all eight
+    live-browser tools are in the prefix, Playwright or not."""
+    monkeypatch.setattr(
+        BrowserUseToolsMixin, "_pane_at_startup", lambda self: (True, True)
+    )
+    return request.getfixturevalue("flagship")
+
+
+@pytest.mark.parametrize("on_core", [True, False], ids=["core", "full"])
+def test_the_fixed_prefix_stays_inside_its_budget_beside_the_pane(
+    flagship_beside_the_pane, on_core
+):
+    agent, _model, _doc = flagship_beside_the_pane
+    assert agent._browser_pane_attached
+    assert "**BROWSER PANE:**" in agent.system_prompt
+    assert "- browser-pane: " in agent.system_prompt
+    assert {
+        "browser_open",
+        "browser_snapshot",
+        "browser_click",
+        "browser_type",
+        "browser_login",
+        "browser_back",
+        "browser_find",
+        "browser_sessions",
+    } <= set(agent._tools_registry)
+    if on_core:
+        agent._refresh_active_tool_filter("hello")
+    prefix = count_tokens(agent.system_prompt)
+    prefix += count_tokens(json.dumps(agent._openai_tools))
+    assert prefix < MAX_FIXED_PREFIX_TOKENS, f"fixed prefix is {prefix} tokens"
+
+
+def test_a_chat_with_no_pane_neither_lists_nor_loads_the_pane_skill(flagship):
+    agent, _model, _doc = flagship
+    assert not agent._browser_pane_attached
+    assert "browser-pane" not in agent.system_prompt
+    with pytest.raises(Exception, match="browser-pane"):
+        agent.load_skill("browser-pane")
 
 
 def test_a_session_that_needs_nothing_more_keeps_one_list(flagship):

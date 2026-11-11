@@ -306,6 +306,28 @@ account, through the mailbox the flagship's reading tools use.
 - **Configure** — connect Google or Microsoft with mail write access; see the
   [Email guide](/guides/email).
 
+### browser-pane
+
+Looks at and drives the page in GAIA desktop's
+[browser pane](/guides/agent-ui#gaia-uses-the-pane) beside the chat, and serves
+a site you built there.
+
+- **Demonstrates** — a skill whose tools exist for one surface: it is offered
+  only in a chat open in GAIA desktop with the pane, and anywhere else its tools
+  refuse and change nothing. Its tools run through the agent's own browser
+  mixin, which keeps asking before a site you haven't approved and before a
+  control that may not be undoable. `browser_eval` is marked
+  `requires_confirmation: true` and shows the whole script every time. It and
+  starting a dev server need a person even under Full access, like sending
+  mail.
+- **Provides** — `browser-pane/browser_screenshot`, `browser-pane/browser_logs`,
+  `browser-pane/browser_press`, `browser-pane/browser_viewport`,
+  `browser-pane/browser_tabs`, `browser-pane/browser_dialog`,
+  `browser-pane/browser_eval`, `browser-pane/browser_batch`,
+  `browser-pane/dev_server`.
+- **Configure** — nothing. See [Browser use](/guides/browser-use) for what each
+  tool asks before it runs.
+
 ### image-gen
 
 Turns "draw me a red bicycle" into a prompt worth generating, runs it through

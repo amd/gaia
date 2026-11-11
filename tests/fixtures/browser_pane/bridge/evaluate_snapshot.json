@@ -1,0 +1,68 @@
+{
+  "_doc": "A snapshot of a page with one readable iframe and one that is not. snapshot_frames below is the same page as PlaywrightDriver sees it, for the parity test.",
+  "tabId": "tab-1",
+  "url": "http://127.0.0.1:5000/form.html",
+  "frames": [
+    {
+      "frameId": null,
+      "url": "http://127.0.0.1:5000/form.html",
+      "ok": true,
+      "value": {
+        "url": "http://127.0.0.1:5000/form.html",
+        "title": "Pane fixture form",
+        "tables": [
+          [
+            [
+              "Plan",
+              "Price"
+            ],
+            [
+              "Basic",
+              "$5"
+            ]
+          ]
+        ],
+        "elements": [
+          {
+            "ref": "g1e1",
+            "role": "textbox",
+            "name": "Email"
+          },
+          {
+            "ref": "g1e2",
+            "role": "button",
+            "name": "Sign up"
+          }
+        ],
+        "truncated": false,
+        "text": "Sign up Email Plan Price Basic $5"
+      }
+    },
+    {
+      "frameId": "4:7",
+      "url": "http://127.0.0.1:5000/frame.html",
+      "ok": true,
+      "value": {
+        "url": "http://127.0.0.1:5000/frame.html",
+        "title": "Embedded",
+        "tables": [],
+        "elements": [
+          {
+            "ref": "g1e1",
+            "role": "checkbox",
+            "name": "Remember me",
+            "checked": true
+          }
+        ],
+        "truncated": false,
+        "text": "Remember me"
+      }
+    },
+    {
+      "frameId": "5:2",
+      "url": "https://ads.example/x",
+      "ok": false,
+      "error": "Script failed to execute"
+    }
+  ]
+}

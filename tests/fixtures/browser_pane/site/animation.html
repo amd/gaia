@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture animation</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .spinner { width: 80px; height: 80px; margin: 24px 0; border-radius: 12px; background: #3b82f6; animation: turn 2s linear infinite; }
+    @keyframes turn { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>Animated page</h1>
+  <div class="spinner" aria-hidden="true"></div>
+  <p>Frames drawn: <output id="frames">0</output></p>
+  <p><label>Type something that must survive hiding <input id="keep" type="text"></label></p>
+  <script>
+    let frames = 0;
+    const out = document.getElementById("frames");
+    (function tick() { frames += 1; out.textContent = String(frames); requestAnimationFrame(tick); })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "tabId": "tab-1",
+  "applied": false,
+  "viewport": {
+    "size": {
+      "width": 820,
+      "height": 1180,
+      "mobile": true
+    },
+    "colorScheme": null,
+    "source": "user"
+  }
+}

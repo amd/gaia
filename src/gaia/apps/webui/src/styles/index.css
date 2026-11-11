@@ -175,6 +175,11 @@
     --content-w: 760px;
     /* The desktop app's top band, where the window controls sit (TITLE_BAR_HEIGHT in services/window-frame.cjs). */
     --titlebar-h: 48px;
+    /* Width of the docked browser pane; set while it is open. */
+    --browser-pane-inset: 0px;
+    /* The chat's and the pane's narrowest widths while both show (CHAT_MIN_WIDTH, PANE_MIN_WIDTH in browserPaneStore.ts). */
+    --chat-min-w: 560px;
+    --pane-min-w: 360px;
     /* Motion — every animation and transition takes its timing from here
        (enforced by styles/__tests__/motion.test.ts). */
     --ease: cubic-bezier(0.22, 1, 0.36, 1);       /* things arriving or settling */
@@ -584,7 +589,8 @@ textarea:focus-visible {
 .toast {
     position: fixed;
     bottom: 24px;
-    left: 50%;
+    /* Centred on the chat when the browser pane takes the right of the window. */
+    left: calc(50% - var(--browser-pane-inset) / 2);
     transform: translateX(-50%);
     z-index: 200;
     padding: 12px 16px;
@@ -597,6 +603,10 @@ textarea:focus-visible {
     box-shadow: var(--shadow-md);
     animation: toastIn var(--duration-spring) var(--ease-spring), toastOut var(--duration) var(--ease) var(--toast-hold) forwards;
     pointer-events: none;
+}
+/* Right to left the pane takes the window's left, so the chat's centre moves right. */
+:root[dir="rtl"] .toast {
+    left: calc(50% + var(--browser-pane-inset) / 2);
 }
 
 /* An error someone has to read and act on: it stays until they dismiss it, up
@@ -835,7 +845,7 @@ textarea:focus-visible {
 :root[data-titlebar="overlay"] {
     --titlebar-controls-w: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
-:root[data-titlebar="overlay"] .task-header {
+:root[data-titlebar="overlay"] :is(.task-header, .new-chat-actions) {
     min-height: var(--titlebar-h);
     padding-right: calc(var(--titlebar-controls-w) + 12px);
 }
@@ -848,9 +858,27 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb-top {
     padding-left: 84px;
 }
+/* The collapsed rail is narrower than the lights: its icons go below them. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed .sb-top {
+    padding: 44px 10px 8px;
+}
+/* The 56px rail ends under the lights, so the chat title starts past them. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) .app:has(.sb.is-collapsed) .task-header {
+    padding-left: 40px;
+}
+/* A closed drawer leaves the window's top-left to the lights: the toggle and
+ * every top row start right of them. */
+@media (max-width: 768px) {
+    :root[data-titlebar="mac"]:not([dir="rtl"]) {
+        --sidebar-toggle-clearance: 136px;
+    }
+    :root[data-titlebar="mac"]:not([dir="rtl"]) .sidebar-toggle {
+        left: 86px;
+    }
+}
 /* Right to left the sidebar is on the right: it makes room for the Windows
    controls, and the chat header for the macOS ones. */
-:root[data-titlebar="overlay"][dir="rtl"] .task-header {
+:root[data-titlebar="overlay"][dir="rtl"] :is(.task-header, .new-chat-actions) {
     padding-right: 12px;
 }
 :root[data-titlebar="overlay"][dir="rtl"] .sb-top {

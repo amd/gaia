@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture cross-site frame</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    #spacer { height: 1400px; }
+    #widget { width: 420px; height: 220px; border: 7px solid #6b7280; padding: 13px 0 0 19px; }
+  </style>
+</head>
+<body>
+  <h1>Page with a frame from another site</h1>
+  <p id="site"></p>
+  <div id="spacer">The frame is further down.</div>
+  <iframe id="widget" title="Greeting widget"></iframe>
+  <script>
+    // 127.0.0.1 and localhost are different sites, so the frame gets its own process.
+    const other = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
+    const src = location.protocol + "//" + other + ":" + location.port + "/frame-inner.html";
+    document.getElementById("widget").src = src;
+    document.getElementById("site").textContent = "This page is on " + location.host + "; the frame is on " + other + ":" + location.port + ".";
+  </script>
+</body>
+</html>
