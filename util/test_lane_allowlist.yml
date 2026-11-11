@@ -137,8 +137,3 @@ module_skips:
       - tests/unit/test_mcp2_server.py
       - tests/unit/test_mcp_bridge_protocol.py
 
-  - reason: Needs reportlab, which the email unit lane collects tests/unit/eval/ without.
-    runs_in: test_unit.yml
-    paths:
-      - tests/unit/eval/test_pdf_document_generator.py
-

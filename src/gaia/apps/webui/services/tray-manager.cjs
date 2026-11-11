@@ -357,7 +357,11 @@ class TrayManager {
     }
     this._host = { available: host.available, reason: host.available ? null : host.reason };
     if (host.available && host.via) this._host.via = host.via;
-    if (!host.available) {
+    if (host.via === "background-apps") {
+      console.log("[tray] No tray icon host, but GNOME's Background Apps lists GAIA; closing the window hides it");
+    } else if (host.available) {
+      console.log("[tray] Tray icon host available; closing the window follows the minimize-to-tray setting");
+    } else {
       console.log(
         `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
       );

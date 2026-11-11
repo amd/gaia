@@ -703,7 +703,6 @@ class ToolExecutionTimeout(Exception):
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
-    "run_cli_command",
     # Installs software, and signs a CLI in to the user's account. Both mutate
     # the machine on the user's behalf, and neither can ever be pre-authorized:
     # the only grant that skips this gate covers ``run_shell_command`` reads
@@ -4204,6 +4203,10 @@ Do NOT wrap conversational replies in JSON.
             None if self._active_tool_filter is None else list(self._active_tool_filter)
         )
         return schemas
+
+    def _history_tool_schemas(self):
+        """The tool schemas history is budgeted against."""
+        return self._openai_tools
 
     def _thin_tool_schemas(self) -> bool:
         """True when ``tools=`` carries thin schemas, with full docs on request.
@@ -10342,7 +10345,7 @@ Do NOT wrap conversational replies in JSON.
             return []
         records = getattr(self, "_turn_tool_executions", None) or []
         written_keys = {evidence.key(p) for p in written}
-        inputs = []
+        inputs, input_names = [], []
         for raw in input_paths(records) + mentioned_paths(query):
             path = path_locator(roots)(raw)
             if path is None or evidence.key(path) in written_keys:
@@ -10353,7 +10356,10 @@ Do NOT wrap conversational replies in JSON.
                 and not validator.validate_read(path, prompt_user=False)[0]
             ):
                 continue
-            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            text = blocks_text(self._deliverable_blocks(path))
+            inputs.append(text)
+            if text.strip():
+                input_names.append(path)
             if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
                 break
         return file_findings(
@@ -10362,6 +10368,7 @@ Do NOT wrap conversational replies in JSON.
             query=query,
             context=history,
             inputs=inputs,
+            input_names=input_names,
             answer=answer,
         )
 
@@ -11010,6 +11017,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         stopped_on_announced_step = False
         look_first_reprompted = False
+        save_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         corrected_test_claims: set = set()
@@ -12557,7 +12565,6 @@ Do NOT wrap conversational replies in JSON.
                     _QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
-                        "query_indexed_documents",
                     )
                     if tool_name in _QUERY_TOOLS:
                         result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12840,7 +12847,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
-                    "query_indexed_documents",
                 )
                 if tool_name in _QUERY_TOOLS:
                     result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -13023,8 +13029,7 @@ Do NOT wrap conversational replies in JSON.
                 # This is a known failure pattern — the agent stops mid-workflow.
                 _INDEX_TOOLS = (
                     "index_document",
-                    "index_documents",
-                    "index_dir",
+                    "index_directory",
                     "index_folder",
                 )
                 _PLANNING_PHRASES = (
@@ -13062,7 +13067,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
-                    "query_indexed_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1
@@ -13231,6 +13235,23 @@ Do NOT wrap conversational replies in JSON.
                         )
                         messages.append({"role": "user", "content": correction})
                         conversation.append({"role": "user", "content": correction})
+                        continue
+
+                # "Please remember this" answered with "noted" and no save.
+                unsaved = getattr(self, "_unsaved_memory_request", None)
+                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
+                    called = {name for name, _ in tool_call_log} | {
+                        record.get("tool") for record in self._turn_tool_executions
+                    }
+                    nudge = unsaved(called)
+                    if nudge:
+                        save_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Asked to remember, nothing saved; asking "
+                            "the agent to save it"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        conversation.append({"role": "user", "content": nudge})
                         continue
 
                 # Universal planning-text guard: catch any short response that is

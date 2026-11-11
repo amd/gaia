@@ -1670,6 +1670,137 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const LOG_LINES = [
+    { text: '2026-11-04 10:05:37.798 [Info] (main) Starting Lemonade Server...', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:05:37.799 [Info] (main)   Cache dir: C:\\Users\\you\\.gaia\\lemonade\\cache', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:06:11.730 [Warn] (FastFlowLM) NPU is busy with another process; retrying the load', severity: 'warning', tag: 'FastFlowLM' },
+    { text: `2026-11-04 10:06:12.004 [Info] (Process) Tools JSON: [{"function":{"description":"${'List the skills installed on this machine. '.repeat(12)}"}}]`, severity: 'info', tag: 'Process' },
+    { text: '2026-11-04 10:06:15.512 [Error] (FLM) flm serve exited with code 1: device or resource busy', severity: 'error', tag: 'FLM' },
+];
+
+const LOG_STATES: Array<[string, Record<string, unknown>]> = [
+    ['gaia', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 1200, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: true, reason: null, detail: null }],
+    ['gaia-down', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 0, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: false, reason: null, detail: null }],
+    ['yours', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: 'stream', available: true, lines: LOG_LINES, cursor: '5', reset: false, dropped: 0, log_path: null, server_answering: true, reason: null, detail: null }],
+    ['yours-down', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: false, reason: 'not_running', detail: 'Lemonade not reachable at http://localhost:13305/api/v1: connection refused' }],
+    ['remote', { owner: 'remote', base_url: 'http://10.0.0.7:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: true, reason: 'remote', detail: 'ws://10.0.0.7:9000/logs/stream: ClientConnectorError' }],
+];
+
+const GAIA_LINES = [
+    { text: '[2026-11-04 11:48:15,102] | INFO | gaia.ui.server | server.py:991 | Agent UI backend listening on 127.0.0.1:4200', severity: 'info', tag: null },
+    { text: '[2026-11-04 11:48:16,311] | WARNING | gaia.llm.lemonade_client | lemonade_client.py:5828 | Model load took 41.2 s', severity: 'warning', tag: null },
+    { text: "[2026-11-04 11:48:17,004] | ERROR | gaia.ui.routers.chat | chat.py:412 | Turn failed: Couldn't reach the local LLM", severity: 'error', tag: null },
+    { text: 'Traceback (most recent call last):', severity: null, tag: null },
+    { text: '  File "C:\\Users\\you\\gaia\\llm\\providers\\lemonade.py", line 450, in chat', severity: null, tag: null },
+];
+
+const LOG_FILES = {
+    sources: [
+        { id: 'model_server', files: [] },
+        { id: 'gaia', files: [{ name: 'gaia.log', path: 'C:\\Users\\you\\.gaia\\gaia.log', size_bytes: 9_700_000, modified: 1 }] },
+        { id: 'service', files: [{ name: 'daemon.log', path: 'C:\\Users\\you\\.gaia\\host\\daemon.log', size_bytes: 120_000, modified: 1 }] },
+        {
+            id: 'agent',
+            files: [
+                { name: 'gaia-agent.log', path: 'C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', size_bytes: 2_048_000, modified: 2 },
+                { name: 'gaia/sidecar-54747.log', path: 'C:\\Users\\you\\.gaia\\agents\\gaia\\logs\\sidecar-54747.log', size_bytes: 51_200, modified: 1 },
+            ],
+        },
+        { id: 'desktop', files: [{ name: 'electron-main.log', path: 'C:\\Users\\you\\.gaia\\electron-main.log', size_bytes: 30_000, modified: 1 }] },
+        { id: 'other', files: [] },
+    ],
+};
+
+const fileRead = (path: string, lines: unknown[]) => ({
+    owner: null, base_url: null, source: 'file', available: true, lines, cursor: '400', reset: false,
+    dropped: 0, log_path: path, server_answering: null, reason: null, detail: null,
+});
+
+/** Every log route: each log whole once, then no new lines, so following doesn't repeat it. */
+async function withLogs(page: Page, server: Record<string, unknown>): Promise<void> {
+    await page.route('**/api/providers/local/status', (route) => route.fulfill({ json: LOCAL_STATUS }));
+    await page.route(/\/api\/logs(\/|\?|$)/, (route) => {
+        const url = new URL(route.request().url());
+        const source = url.pathname.split('/api/logs/')[1];
+        if (!source) return route.fulfill({ json: LOG_FILES });
+        const body = source === 'model_server' ? server
+            : source === 'gaia' ? fileRead('C:\\Users\\you\\.gaia\\gaia.log', GAIA_LINES)
+            : source === 'agent' ? fileRead('C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', GAIA_LINES)
+            : { ...fileRead('', []), available: false, source: null, log_path: null, reason: 'no_file' };
+        return route.fulfill({ json: url.searchParams.has('after') ? { ...body, lines: [], reset: false } : body });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, body] of LOG_STATES) {
+        test(`model server log from the model popover: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withLogs(p, body));
+            await page.locator('.sb-location').click();
+            await page.locator('.popover .model-status').getByRole('button', { name: locale === 'ar' ? /سجلّ خادم النماذج/ : /Model server log/ }).click();
+            const dialog = page.locator('.log-viewer');
+            await expect(dialog).toBeVisible();
+            await expect(dialog.locator('.spin')).toHaveCount(0);
+            if (body.available) {
+                const lines = dialog.locator('.log-viewer-lines');
+                await expect(lines).toBeVisible();
+                // Log text reads left to right in every language.
+                expect(await lines.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+                await expect(dialog.locator('.log-viewer-lines')).toHaveCount(0);
+            }
+            await shot(page, `log-viewer-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+            // No sideways scroll: a long line wraps inside the box.
+            expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        });
+    }
+
+    test(`model server log at phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withLogs(p, LOG_STATES[1][1]));
+        const sidebar = page.getByRole('button', { name: /Open sidebar|فتح الشريط الجانبي/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.locator('.sb-location').click();
+        await page.locator('.popover .model-status .btn-secondary').filter({ has: page.locator('svg.lucide-scroll-text') }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.locator('.log-viewer-lines')).toBeVisible();
+        // Opens on the newest line, whole.
+        await expect.poll(() => dialog.locator('.log-viewer-lines').evaluate((el) =>
+            JSON.stringify({ gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), sh: el.scrollHeight, ch: el.clientHeight, st: el.scrollTop }))).toContain('"gap":0');
+        await shot(page, `log-viewer-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    });
+
+    test(`GAIA's logs from Settings › Advanced, then the agent's files (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withLogs(p, LOG_STATES[0][1]); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('region', { name: locale === 'ar' ? /السجلات/ : 'Logs' });
+        await expect(card).toBeVisible();
+        await shot(page, `log-viewer-${locale}-settings-card`);
+        expect(await audit(page)).toEqual([]);
+        await card.getByRole('button', { name: locale === 'ar' ? /عرض السجلات/ : 'View logs' }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.getByRole('tab', { selected: true })).toHaveText(locale === 'ar' ? /GAIA/ : 'GAIA');
+        await expect(dialog.locator('.log-viewer-lines')).toContainText('Turn failed');
+        await shot(page, `log-viewer-${locale}-gaia-tab`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /الوكيل/ : 'Agent' }).click();
+        await expect(dialog.getByRole('combobox')).toHaveValue('gaia-agent.log');
+        await shot(page, `log-viewer-${locale}-agent-tab`);
+        expect(await audit(page)).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /تطبيق سطح المكتب/ : 'Desktop app' }).click();
+        await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+        await shot(page, `log-viewer-${locale}-nothing-written`);
+        expect(await audit(page)).toEqual([]);
+        expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    });
+}
+
 const RAW_SERVER_ERROR = "The local model server is not reachable at http://127.0.0.1:59987/api/v1 (HTTPConnectionPool(host='127.0.0.1', port=59987): Max retries exceeded)";
 
 for (const locale of ['ar', 'en']) {

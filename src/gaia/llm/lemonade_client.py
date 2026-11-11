@@ -4020,10 +4020,6 @@ class DownloadTask:
         """Check if download was cancelled."""
         return self.cancel_event.is_set()
 
-    def elapsed_time(self) -> float:
-        """Get elapsed time in seconds."""
-        return time.time() - self.start_time
-
 
 def _supports_unicode() -> bool:
     """
