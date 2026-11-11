@@ -223,6 +223,29 @@ describe('voice mode turn loop', () => {
         expect(oldSocket.speak).not.toHaveBeenCalled();
     });
 
+    it('new words while GAIA is thinking stop that turn and are sent next', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'check my calendar' });
+        expect(h.sendTurn).toHaveBeenCalledTimes(1);
+        serve({ type: 'final', text: 'actually, check my email' });
+        expect(h.stopTurn).toHaveBeenCalledOnce();
+        // The stopped turn ends; what was said goes next, with no "stopped" notice.
+        tap!.done({ type: 'done', cancelled: true } as StreamEvent);
+        expect(h.sendTurn).toHaveBeenCalledTimes(2);
+        expect(h.sendTurn.mock.calls[1][0]).toBe('actually, check my email');
+        expect(state().log.some((r) => r.kind === 'note')).toBe(false);
+    });
+
+    it('"mm-hm" while GAIA is thinking changes nothing', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'check my calendar' });
+        serve({ type: 'final', text: 'Mm-hmm.' });
+        expect(h.stopTurn).not.toHaveBeenCalled();
+        expect(state().log.filter((r) => r.kind === 'user')).toHaveLength(1);
+    });
+
     it('the big button stops a running turn the normal way', async () => {
         const h = await open();
         serve({ type: 'ready', speech: true });
