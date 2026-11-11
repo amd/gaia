@@ -123,12 +123,9 @@ export interface ApiSchemas {
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
   SpeechSettingsUpdate: SpeechSettingsUpdate;
-  StartAgentServerRequest: StartAgentServerRequest;
   SystemStatus: SystemStatus;
   TargetRequest: TargetRequest;
   TaskCreate: TaskCreate;
-  TaskListResponse: TaskListResponse;
-  TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
   TurnSummaryCost: TurnSummaryCost;
@@ -1385,10 +1382,6 @@ export interface SpeechSettingsUpdate {
   speed?: number | null;
   voice?: string | null;
 }
-export interface StartAgentServerRequest {
-  backend_url?: string;
-  port?: number;
-}
 /**
  * System readiness status.
  */
@@ -1455,21 +1448,6 @@ export interface TargetRequest {
 export interface TaskCreate {
   description: string;
   order_index?: number;
-}
-/**
- * List of background tasks.
- */
-export interface TaskListResponse {
-  tasks: TaskResponse[];
-}
-/**
- * A single background task visible to the frontend.
- */
-export interface TaskResponse {
-  error?: string | null;
-  id: string;
-  name: string;
-  status: string;
 }
 export interface TaskStatusUpdate {
   result?: string | null;

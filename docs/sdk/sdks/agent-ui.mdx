@@ -143,7 +143,6 @@ class ChatDatabase:
 | `count_sessions` | `() -> int` | Count total sessions |
 | `update_session` | `(session_id, title?, system_prompt?) -> Optional[Dict]` | Update session title and/or system prompt |
 | `delete_session` | `(session_id) -> bool` | Delete a session and its messages (cascading) |
-| `touch_session` | `(session_id) -> None` | Update the session's `updated_at` timestamp |
 
 **Example:**
 
@@ -1535,22 +1534,6 @@ of that router's connector types.
     Runtime MCP client status from the most recent chat session — connected
     servers, aggregate tool count, last-error details.
   </Accordion>
-
-  <Accordion title="GET /api/mcp/agent-server/status">
-    Status of GAIA's own MCP server — whether it's running, its port, and the
-    URL MCP clients connect to.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/agent-server/start">
-    Start GAIA's MCP server as a background subprocess so external MCP
-    clients (e.g. Claude Code) can call Agent UI tools (sessions, chat, files,
-    memory). Optional JSON body `{"port": <int>}`; defaults to
-    `AGENT_UI_MCP_PORT`.
-  </Accordion>
-
-  <Accordion title="POST /api/mcp/agent-server/stop">
-    Stop GAIA's MCP server, if it was started by the UI.
-  </Accordion>
 </AccordionGroup>
 
 ### Session environment, outputs and agent info
@@ -1836,10 +1819,6 @@ Used to reach the UI from a phone.
     `detail.message` says what to do.
   </Accordion>
 
-  <Accordion title="GET /api/documents/monitor/status">
-    Status of the background `document_monitor.py` file-watcher.
-  </Accordion>
-
   <Accordion title="GET /api/documents/{doc_id}/status">
     Indexing state for a single document. While it indexes, `progress` is
     `{"phase", "done", "total"}`: `reading` counts PDF pages read (`total` is
@@ -1880,15 +1859,6 @@ Used to reach the UI from a phone.
   <Accordion title="DELETE /api/sessions/{session_id}/messages/{message_id}/and-below">
     Delete a message and every message after it (the "resend from here"
     pattern).
-  </Accordion>
-</AccordionGroup>
-
-### System (advanced)
-
-<AccordionGroup>
-  <Accordion title="GET /api/system/tasks">
-    Inspect the background dispatch queue (model downloads, indexing jobs,
-    etc.) used by `src/gaia/ui/dispatch.py`.
   </Accordion>
 </AccordionGroup>
 
@@ -2170,20 +2140,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     chain (`superseded_by`).
   </Accordion>
 
-  <Accordion title="GET /api/memory/contexts">
-    List every distinct context tag with its knowledge count.
-  </Accordion>
-
   <Accordion title="GET /api/memory/entities/{entity}">
     All knowledge linked to one entity name.
-  </Accordion>
-
-  <Accordion title="GET /api/memory/errors">
-    Recent tool errors across every tool, most recent first.
-  </Accordion>
-
-  <Accordion title="GET /api/memory/tools/{tool_name}/history">
-    Recent call history for a single tool (arguments, result, latency).
   </Accordion>
 
   <Accordion title="GET /api/memory/conversations/search">
@@ -3136,8 +3094,8 @@ model with no known price reads as unknown, never $0. Cloud models from
 
 ### Hub
 
-Install and uninstall agents from the download server catalog — the backend for
-the desktop app's `gaia://hub/install/<id>` deep link.
+Install and uninstall agents from the download server catalog. The app uses
+these to install the GAIA agent when it is missing.
 
 <AccordionGroup>
   <Accordion title="GET /api/agents/catalog">

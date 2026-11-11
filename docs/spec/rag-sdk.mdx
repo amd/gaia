@@ -165,6 +165,12 @@ class RAGSDK:
                 Two booleans come with it: "lemonade_unreachable" (Lemonade
                 Server could not be reached at all) and "embedder_busy" (the
                 server timed out, busy with another model or app).
+            "vision_model_failed": the vision model failed twice in a row
+                before reading any image in a PDF or PowerPoint, so indexing
+                stopped instead of storing the pages as blank. "error" names
+                the model and its last error. Fix the model, then index again.
+                A model that reads some images and fails on others still
+                indexes, with those pages listed in "degraded_pages".
         """
         ...
 
