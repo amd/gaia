@@ -128,3 +128,53 @@ def test_stalled_directory_read_returns_partial_results_at_the_deadline(
     assert elapsed < 5.0
     assert data["truncated"] is True
     assert [r["name"] for r in data["results"]] == ["plan_a.txt"]
+
+
+def test_slow_setup_does_not_eat_budget(client, fake_home, monkeypatch):
+    monkeypatch.setattr(files_router, "SEARCH_TIME_BUDGET_SEC", 0.3)
+    monkeypatch.setattr(files_router, "SEARCH_STALL_GRACE_SEC", 0.3)
+    (fake_home / "Documents").mkdir()
+    (fake_home / "Documents" / "plan_a.txt").write_text("a")
+
+    def slow_docs(home):
+        time.sleep(0.5)
+        return home / "Documents"
+
+    monkeypatch.setattr(files_router, "documents_dir", slow_docs)
+
+    data = _search(client, "plan_")
+
+    assert [r["name"] for r in data["results"]] == ["plan_a.txt"]
+
+
+def test_search_walks_a_redirected_documents_folder_first(
+    client, fake_home, monkeypatch
+):
+    redirected = fake_home / "OneDrive - Contoso" / "Documents"
+    redirected.mkdir(parents=True)
+    (redirected / "quarterly_plan.txt").write_text("kfm")
+    monkeypatch.setattr(files_router, "documents_dir", lambda _home: redirected)
+
+    data = _search(client, "quarterly_plan")
+
+    assert [r["path"] for r in data["results"]] == [
+        str(redirected / "quarterly_plan.txt")
+    ]
+    assert data["searched_locations"][0] == str(redirected)
+
+
+def test_search_never_walks_documents_redirected_outside_the_roots(
+    client, fake_home, tmp_path, monkeypatch
+):
+    # A redirect (or a traversal like $HOME/../x) must not widen what search reads.
+    outside = tmp_path / "outside-documents"
+    outside.mkdir()
+    (outside / "secret_plan.txt").write_text("not browseable")
+    monkeypatch.setattr(
+        files_router, "documents_dir", lambda _home: fake_home / ".." / outside.name
+    )
+
+    data = _search(client, "secret_plan")
+
+    assert data["results"] == []
+    assert not any("outside-documents" in loc for loc in data["searched_locations"])

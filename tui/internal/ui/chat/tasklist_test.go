@@ -20,7 +20,6 @@ func threeSteps() event.CanonicalTaskListEvent {
 			{ID: 2, Content: "Fix the off-by-one in the pager", Status: event.TaskInProgress, StartedAt: t0 + 12},
 			{ID: 3, Content: "Run the tests", Status: event.TaskPending},
 		},
-		Source:          "agent",
 		CurrentAction:   "Running command: go test ./...",
 		ActionStartedAt: t0 + 20,
 		UpdatedAt:       t0 + 20,

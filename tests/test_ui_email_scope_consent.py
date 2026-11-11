@@ -257,12 +257,12 @@ class TestAgentNotGranted:
         with patch(
             "gaia.connectors.api.check_agent_grant", return_value=False
         ) as mock_grant:
-            with patch("gaia.connectors.api.get_provider"):
-                with patch("gaia.connectors.api.load_connection", return_value=None):
-                    with pytest.raises(AuthRequiredError) as exc_info:
-                        get_access_token_sync(
-                            provider="google", scopes=list(GMAIL_SCOPES)
-                        )
+            with patch(
+                "gaia.connectors.api.load_current_connection",
+                return_value=(None, None),
+            ):
+                with pytest.raises(AuthRequiredError) as exc_info:
+                    get_access_token_sync(provider="google", scopes=list(GMAIL_SCOPES))
 
         # The error should be NOT_CONNECTED (from load_connection → None),
         # not AGENT_NOT_GRANTED.
@@ -308,19 +308,21 @@ class TestMissingCalendarScope:
             # Patch at the import site in api.py — check_agent_grant returns True
             # (agent is granted), so we proceed to the OAuth scope coverage check.
             with patch("gaia.connectors.api.check_agent_grant", return_value=True):
-                with patch("gaia.connectors.api.get_provider"):
-                    with patch(
-                        "gaia.connectors.api.load_connection",
-                        return_value={
+                with patch(
+                    "gaia.connectors.api.load_current_connection",
+                    return_value=(
+                        None,
+                        {
                             "scopes": self.MAIL_ONLY_SCOPES,
                             "account_email": "user@example.com",
                         },
-                    ):
-                        with pytest.raises(AuthRequiredError) as exc_info:
-                            get_access_token_sync(
-                                provider="google",
-                                scopes=[calendar_scope],
-                            )
+                    ),
+                ):
+                    with pytest.raises(AuthRequiredError) as exc_info:
+                        get_access_token_sync(
+                            provider="google",
+                            scopes=[calendar_scope],
+                        )
         err = exc_info.value
         assert (
             err.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES

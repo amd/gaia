@@ -533,8 +533,8 @@ const (
 	// readinessEnsureTimeout bounds start-or-attach of the background service and
 	// the spawn of the agent's sidecar. It matches the gate's own ensureTimeout
 	// and the daemon client's ensure budget on purpose: a first run may still
-	// fetch the sidecar binary here, and a bound tighter than the hub's would
-	// refuse a cold start the hub completes on the same machine.
+	// fetch the sidecar binary here, and a bound tighter than the gate's would
+	// refuse a cold start the interactive TUI completes on the same machine.
 	readinessEnsureTimeout = 15 * time.Minute
 	// readinessCheckTimeout bounds the readiness probe. Same value as the gate's
 	// CheckTimeout, over the same call — two paths asking the same question must

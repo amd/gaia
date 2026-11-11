@@ -17,6 +17,7 @@ Coverage:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -27,6 +28,18 @@ from tests.unit.connectors.conftest import make_fake_agent_registry
 # ---------------------------------------------------------------------------
 
 UI_HEADER = {"x-gaia-ui": "1"}
+
+
+@pytest.fixture
+def fresh_google_provider():
+    """Drop the cached Google provider; restore the whole cache on teardown."""
+    from gaia.connectors.providers import _registry
+
+    saved = dict(_registry)
+    _registry.pop("google", None)
+    yield
+    _registry.clear()
+    _registry.update(saved)
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +107,8 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+    # A caller's GAIA_HOME outranks Path.home, and mcp_servers.json follows it.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     yield fresh
 
 
@@ -121,6 +136,29 @@ class TestListConnectors:
         assert "configured" in entry
         assert "description" in entry
 
+    def test_a_failing_summary_is_listed_by_name_as_unavailable(
+        self, ui_api_client, monkeypatch
+    ):
+        from gaia.ui.routers import connectors as router
+
+        real = router._connector_summary
+
+        def summary(connector_id):
+            if connector_id == "google":
+                raise RuntimeError("keyring locked")
+            return real(connector_id)
+
+        monkeypatch.setattr(router, "_connector_summary", summary)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = {e["id"]: e for e in resp.json()["connectors"]}
+        assert rows["google"] == {
+            "id": "google",
+            "display_name": "Google",
+            "error": "unavailable",
+        }
+        assert rows["mcp-test"]["display_name"] == "MCP Test"
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")
@@ -136,14 +174,9 @@ class TestConfigurableField:
     """
 
     def test_configurable_false_when_provider_missing_env(
-        self, ui_api_client, monkeypatch
+        self, ui_api_client, monkeypatch, fresh_google_provider
     ):
-        # Ensure the provider can't init: clear the env var AND the
-        # cached provider instance from any earlier test that primed it.
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
-        from gaia.connectors.providers import _registry
-
-        _registry.pop("google", None)
 
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.status_code == 200
@@ -151,11 +184,10 @@ class TestConfigurableField:
         assert body["configurable"] is False
         assert "GAIA_GOOGLE_CLIENT_ID" in (body["config_error"] or "")
 
-    def test_configurable_true_when_provider_ok(self, ui_api_client, monkeypatch):
+    def test_configurable_true_when_provider_ok(
+        self, ui_api_client, monkeypatch, fresh_google_provider
+    ):
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-        from gaia.connectors.providers import _registry
-
-        _registry.pop("google", None)
 
         resp = ui_api_client.get("/api/connectors/google")
         body = resp.json()
@@ -314,6 +346,50 @@ class TestConfigureEndpoint:
 # ---------------------------------------------------------------------------
 
 
+class TestAuthorizeColdPath:
+    """#3326: a never-connected account, through the real route and flow.
+
+    The other authorize tests stub ``start_authorization`` so they can check
+    what the route passes it. This one runs the real PKCE flow behind the
+    route, from an empty keyring, and checks the URL the user is sent to.
+    """
+
+    _SCOPES = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+
+    def test_authorize_from_an_empty_keyring_returns_a_pkce_url(
+        self, ui_api_client, google_provider, no_browser
+    ):
+        from gaia.connectors.store import list_connections
+
+        assert list_connections() == [], "the test must start never-connected"
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": self._SCOPES},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        info = resp.json()
+        try:
+            url = urlparse(info["authorization_url"])
+            assert info["authorization_url"].startswith(google_provider.auth_url)
+            params = parse_qs(url.query)
+            assert params["code_challenge_method"] == ["S256"]
+            assert params["code_challenge"][0], "no PKCE challenge in the URL"
+            assert params["client_id"] == ["test.apps.example"]
+            assert params["state"][0]
+            assert set(self._SCOPES) <= set(params["scope"][0].split())
+            assert urlparse(params["redirect_uri"][0]).hostname == "127.0.0.1"
+        finally:
+            # Close the flow's loopback listener; nothing completes it here.
+            cancel = ui_api_client.delete(
+                f"/api/connectors/_flows/{info['flow_id']}", headers=UI_HEADER
+            )
+            assert cancel.status_code == 204, cancel.text
+
+        assert list_connections() == [], "starting a flow must not store anything"
+
+
 class TestAuthorizeGrantAgents:
     _SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -356,7 +432,13 @@ class TestAuthorizeGrantAgents:
         assert kwargs["grant_agents"] is None
 
     @pytest.mark.allow_network
-    def test_authorize_explicit_scope_outside_catalog_is_rejected(self, ui_api_client):
+    def test_authorize_explicit_scope_outside_catalog_is_rejected(
+        self, ui_api_client, monkeypatch, fresh_google_provider
+    ):
+        # A configured client, so the request reaches the scope check rather
+        # than the "client not configured" 503 that comes first.
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "test-secret")
         bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
 
         resp = ui_api_client.post(

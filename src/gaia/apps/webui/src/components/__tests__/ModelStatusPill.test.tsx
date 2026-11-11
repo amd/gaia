@@ -9,6 +9,7 @@ import { ModelStatusPill } from '../ModelStatusPill';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
+import { stripIsolates } from '../../i18n/registry';
 import type { LocalModelStatus, Session, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
@@ -44,7 +45,7 @@ beforeEach(() => {
         names: {},
     });
     useChatStore.setState({
-        sessions: [SESSION], currentSessionId: SESSION.id, settingsSection: null,
+        sessions: [SESSION], currentSessionId: SESSION.id, settingsSection: null, locale: 'en',
         systemStatus: { lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as SystemStatus,
     });
     mockedApi.restartLocalModel.mockResolvedValue({ status: 'restarting', model: 'Gemma-4-E4B-it-GGUF', starting_server: false });
@@ -61,6 +62,42 @@ describe('ModelStatusPill', () => {
         expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model loaded' })).toBeInTheDocument();
         act(() => useChatStore.setState({ systemStatus: { lemonade_running: false, model_loaded: null } as SystemStatus }));
         expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model stopped' })).toBeInTheDocument();
+    });
+
+    it('does not show loaded while a different model is the one loaded', () => {
+        useModelStore.setState({
+            active: {
+                provider: 'local', model: 'gemma4-it-e4b-FLM', display_name: 'Gemma 4 E4B NPU', label: 'Gemma', remote: false,
+                is_default: false, inference_remote: false,
+            },
+        });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+        act(() => useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: 'user.GEMMA4-IT-E4B-FLM' } as SystemStatus }));
+        expect(screen.getByRole('button', { name: 'Local · Gemma 4 E4B NPU, model loaded' })).toBeInTheDocument();
+    });
+
+    it('does not show loaded when Lemonade runs with nothing loaded', () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: true, model_loaded: null } as SystemStatus });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: 'Local · Gemma 4 E4B, model not loaded' });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
+    it('does not show loaded before the chat has an active model', () => {
+        useModelStore.setState({ active: null });
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /model not loaded$/ });
+        expect(pill.querySelector('.sb-location-dot')).not.toHaveClass('is-loaded');
+    });
+
+    it('shows the place and the model on separate lines and keeps the full name in the tooltip', () => {
+        render(<ModelStatusPill />);
+        const pill = screen.getByRole('button', { name: /Local · Gemma 4 E4B/ });
+        expect(pill.querySelector('.sb-location-place')).toHaveTextContent('Local');
+        expect(pill.querySelector('.sb-location-name')).toHaveTextContent('Gemma 4 E4B');
+        expect(pill.title).toMatch(/^Local · Gemma 4 E4B\./);
     });
 
     it('opens the live status instead of Settings', async () => {
@@ -176,5 +213,26 @@ describe('ModelStatusPill', () => {
         const dialog = await open();
         fireEvent.click(within(dialog).getByRole('button', { name: /Model settings/ }));
         expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('reads in Arabic, with each size kept whole and left to right', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, active_remote: true, active_display_name: 'DeepSeek V4' });
+        render(<ModelStatusPill />);
+        fireEvent.click(screen.getByRole('button', { name: /Local · Gemma 4 E4B/ }));
+        const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
+        await within(dialog).findByText(/محمّل/);
+        const labels = [...dialog.querySelectorAll('dt')].map((dt) => stripIsolates(dt.textContent ?? ''));
+        expect(labels).toEqual([
+            'النموذج (Model)', 'يعمل على (Runs on)', 'الذاكرة (Memory)', 'نافذة السياق (Context window)',
+        ]);
+        const memory = dialog.querySelectorAll('dd')[2].textContent ?? '';
+        expect(memory).toContain('\u2068~8.2 GB\u2069');
+        expect(memory).toContain('\u206880.5 GB\u2069');
+        const cloud = dialog.querySelector('.settings-hint')?.textContent ?? '';
+        expect(cloud).toContain('\u2068DeepSeek V4\u2069');
+        expect(stripIsolates(cloud)).toMatch(/^تستخدم الرسائل الجديدة DeepSeek V4 في السحابة\. النموذج المحلي أدناه\./);
+        expect(within(dialog).getByRole('button', { name: /إعدادات النموذج/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('button', { name: /إعادة التشغيل/ })).toHaveAttribute('title', expect.stringMatching(/^\u2067?إعادة تحميل النموذج/));
     });
 });

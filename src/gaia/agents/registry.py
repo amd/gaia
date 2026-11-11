@@ -27,7 +27,8 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_client import (
     GPU_CTX_SIZE,
-    NPU_CTX_SIZE,
+    NPU_DEFAULT_MODEL_NAME,
+    npu_default_ctx,
 )
 from gaia.logger import get_logger
 
@@ -46,6 +47,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "code_index": ("gaia.agents.tools.code_index_tools", "CodeIndexToolsMixin"),
     "file_search": ("gaia.agents.tools.file_tools", "FileSearchToolsMixin"),
     "file_io": ("gaia.agents.tools.file_io_tools", "FileIOToolsMixin"),
+    "file_monitor": (
+        "gaia.agents.tools.file_monitor_tools",
+        "FileToolsMixin",
+    ),
     "shell": ("gaia.agents.tools.shell_tools", "ShellToolsMixin"),
     "cli_setup": ("gaia.agents.tools.cli_setup_tools", "CliSetupToolsMixin"),
     "screenshot": ("gaia.agents.tools.screenshot_tools", "ScreenshotToolsMixin"),
@@ -65,6 +70,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
         "SkillLearningToolsMixin",
     ),
     "audio": ("gaia.agents.tools.audio_tools", "AudioToolsMixin"),
+    "audio_generation": (
+        "gaia.agents.tools.audio_generation_tools",
+        "AudioGenerationToolsMixin",
+    ),
     "wait": ("gaia.agents.tools.wait_tools", "WaitToolsMixin"),
     "reasoning_effort": (
         "gaia.agents.tools.reasoning_tools",
@@ -361,11 +370,11 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
     ),
     DeviceConfig(
         device="npu",
-        model="gemma4-it-e2b-FLM",
+        model=NPU_DEFAULT_MODEL_NAME,
         recipe="flm",
         backend="flm:npu",
         verified=True,
-        ctx_size=NPU_CTX_SIZE,
+        ctx_size=npu_default_ctx(NPU_DEFAULT_MODEL_NAME),
         # FLM-native embedder so chat + embeddings stay co-resident on the NPU
         # backend and don't thrash NPU<->Vulkan every turn (#1744).
         embedding_model="embed-gemma-300m-FLM",
@@ -459,6 +468,12 @@ def build_model_tiers(full_label: str) -> List[ModelTier]:
     ]
 
 
+def _distribution_version(entry_point: Any) -> Optional[str]:
+    """The version of the installed package *entry_point* comes from, if known."""
+    dist = getattr(entry_point, "dist", None)
+    return dist.version if dist is not None else None
+
+
 @dataclass
 class AgentRegistration:
     """Metadata and factory for a registered agent."""
@@ -505,6 +520,9 @@ class AgentRegistration:
     #: this is how a caller tells "instantiate it here" from "relay to the
     #: daemon" without keeping a second list of agent ids (#4161).
     is_sidecar: bool = False
+    #: The installed package's version for an agent found through an entry
+    #: point (a ``pip install``), so ``gaia agent status`` can show it.
+    version: Optional[str] = None
     category: str = "general"
     tags: List[str] = field(default_factory=list)
     icon: str = ""  # lucide icon name (e.g. "message-circle", "zap")
@@ -548,13 +566,17 @@ class AgentRegistry:
     # those sessions working without a DB migration. All lookups (``get``,
     # ``create_agent``, ``resolve_model``) honour the map.
     #
-    # ``gaia-lite`` historically aliased ``doc-lite`` (doc profile, ~4B model),
-    # so it resolves to ``doc`` with the lite tier.
+    # The ChatAgent profiles ``chat``, ``doc`` and ``file`` were folded into the
+    # flagship package (#6099), so they and their ``-lite`` forms resolve to
+    # ``gaia``; a stored session naming one reopens on the flagship.
     _LEGACY_ID_ALIASES: Dict[str, str] = {
-        "chat-lite": "chat",
-        "doc-lite": "doc",
-        "file-lite": "file",
-        "gaia-lite": "doc",
+        "chat": "gaia",
+        "doc": "gaia",
+        "file": "gaia",
+        "chat-lite": "gaia",
+        "doc-lite": "gaia",
+        "file-lite": "gaia",
+        "gaia-lite": "gaia",
     }
 
     # Model tier implied by each legacy "-lite" alias. ``create_agent`` and
@@ -607,12 +629,21 @@ class AgentRegistry:
     # Legacy ID resolution
     # ------------------------------------------------------------------
 
+    @classmethod
+    def legacy_alias(cls, agent_id: str) -> Optional[str]:
+        """The id a retired *agent_id* now resolves to, or ``None``.
+
+        Static: it reads only the alias table, never what is registered, so a
+        caller without a discovered registry can ask it.
+        """
+        return cls._LEGACY_ID_ALIASES.get(agent_id)
+
     def canonical_id(self, agent_id: str) -> str:
         """Return the current canonical ID for *agent_id*, resolving aliases.
 
         Returns the input unchanged when no alias exists so callers can use
-        the result as a stable cache key — both ``chat`` and the legacy
-        ``chat-lite`` resolve to ``chat``, so the per-session agent cache
+        the result as a stable cache key — both ``gaia`` and the legacy
+        ``chat-lite`` resolve to ``gaia``, so the per-session agent cache
         doesn't thrash when a client mixes the old and new names.
         """
         if agent_id in self._agents:
@@ -630,7 +661,12 @@ class AgentRegistry:
         # 1. Scan <gaia_home>/agents/
         agents_dir = gaia_agents_dir()
         if agents_dir.exists():
-            subdirs = sorted(d for d in agents_dir.iterdir() if d.is_dir())
+            # Dot-names are never agents: the install backup and lock queues.
+            subdirs = sorted(
+                d
+                for d in agents_dir.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            )
             logger.info(
                 "registry: Found %d agent directories: %s",
                 len(subdirs),
@@ -767,6 +803,10 @@ class AgentRegistry:
 
         registered = 0
         for entry_point in agent_entry_points:
+            # A leftover gaia-agent-chat install must not take over a retired id.
+            if entry_point.name in self._LEGACY_ID_ALIASES:
+                self._warn_retired_entry_point(entry_point, entry_point.name)
+                continue
             try:
                 registration = self._load_entry_point_registration(entry_point)
             except Exception as exc:
@@ -776,6 +816,10 @@ class AgentRegistry:
                     exc,
                     exc_info=True,
                 )
+                continue
+
+            if registration.id in self._LEGACY_ID_ALIASES:
+                self._warn_retired_entry_point(entry_point, registration.id)
                 continue
 
             if registration.id in self._agents:
@@ -791,6 +835,17 @@ class AgentRegistry:
         if registered:
             logger.info("registry: Registered %d entry point agent(s)", registered)
 
+    def _warn_retired_entry_point(self, entry_point: Any, agent_id: str) -> None:
+        dist = getattr(entry_point, "dist", None)
+        logger.warning(
+            "registry: ignoring installed agent %r from %s — that id is "
+            "retired and now opens %r; uninstall the package to clear "
+            "this warning",
+            agent_id,
+            getattr(dist, "name", None) or entry_point.value,
+            self._LEGACY_ID_ALIASES[agent_id],
+        )
+
     def _load_entry_point_registration(
         self, entry_point: importlib.metadata.EntryPoint
     ) -> AgentRegistration:
@@ -798,7 +853,7 @@ class AgentRegistry:
 
         # Spec form (docs/spec/agent-hub-restructure.mdx): the entry point may
         # target the Agent subclass directly, e.g.
-        # ``chat = "gaia_agent_chat.agent:ChatAgent"``. Build a registration
+        # ``gaia = "gaia_agent.agent:GaiaAgent"``. Build a registration
         # from its class attributes in that case.
         from gaia.agents.base.agent import Agent as BaseAgent
 
@@ -818,6 +873,7 @@ class AgentRegistry:
             registration,
             namespaced_agent_id=namespaced_id,
             source="installed",
+            version=registration.version or _distribution_version(entry_point),
             factory=_wrap_factory_with_namespaced_id(
                 registration.factory, namespaced_id
             ),
@@ -1190,7 +1246,7 @@ class AgentRegistry:
     def get(self, agent_id: str) -> Optional[AgentRegistration]:
         """Return the registration for *agent_id*, or ``None``.
 
-        Legacy aliases (e.g. ``chat-lite`` → ``gaia-lite``) are resolved
+        Legacy aliases (e.g. ``chat-lite`` → ``gaia``) are resolved
         transparently so existing persisted sessions keep working after a
         rename.
         """
@@ -1207,6 +1263,7 @@ class AgentRegistry:
         category: str = "",
         tags: Optional[List[str]] = None,
         icon: str = "",
+        consumes_mcp_servers: bool = False,
     ) -> None:
         """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
 
@@ -1224,6 +1281,8 @@ class AgentRegistry:
         the package's own registration. Without them the UI renders a
         generated "<Name> agent" line and falls back to its generic starter
         prompts — what a hub-installed flagship showed before #4161.
+        *consumes_mcp_servers* likewise comes from the spec; without it the
+        UI shows no switch to let the agent use an MCP connector.
 
         Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
         one) is already registered — protects a real wheel/custom-agent
@@ -1258,6 +1317,7 @@ class AgentRegistry:
                 category=category or "general",
                 tags=list(tags or []),
                 icon=icon,
+                consumes_mcp_servers=consumes_mcp_servers,
             )
         )
         logger.info(
@@ -1280,7 +1340,7 @@ class AgentRegistry:
         Raises:
             ValueError: If *agent_id* is not registered.
         """
-        # Route through get() so legacy aliases (e.g. chat-lite → chat)
+        # Route through get() so legacy aliases (e.g. chat-lite → gaia)
         # resolve consistently with lookups.
         reg = self.get(agent_id)
         if reg is None:

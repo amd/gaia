@@ -36,21 +36,15 @@ def _one_running(items):
     return s.count(IN_PROGRESS) == (1 if (PENDING in s or IN_PROGRESS in s) else 0)
 
 
-def test_a_200_step_plan_is_refused_whole_and_a_200_step_envelope_plan_stays_bounded():
+def test_a_200_step_plan_is_refused_whole_and_changes_nothing():
     tl = TaskList()
     with pytest.raises(ValueError, match="too many"):
         tl.update(items=[f"step {i}" for i in range(200)])
-    tl.begin_turn()
-    steps = [f"step {i}" for i in range(200)]
-    for current in range(0, 201, 7):
-        tl.mirror_plan(steps, current)
-        items = tl.items
-        assert len(items) <= MAX_ITEMS
-        assert _one_running(items)
-        if current < 200:
-            assert any(
-                i["id"] == current + 1 and i["status"] == IN_PROGRESS for i in items
-            )
+    assert tl.items == []
+    tl.update(items=[f"step {i}" for i in range(MAX_ITEMS)])
+    with pytest.raises(ValueError, match="too many"):
+        tl.update(items=[f"step {i}" for i in range(200)])
+    assert len(tl.items) == MAX_ITEMS
 
 
 def test_a_burst_of_updates_arrives_complete_and_in_order():

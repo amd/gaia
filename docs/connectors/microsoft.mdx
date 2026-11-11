@@ -41,6 +41,15 @@ itself with an **App registration** that you create once in the Azure portal,
 credentials; do not reuse one registration's client ID for both). For a
 single-developer machine each registration takes a few minutes and is free.
 
+<Warning>
+  Microsoft no longer lets an Outlook.com, Hotmail or Live account register an
+  app on its own. The Azure portal refuses until the account has a directory,
+  which means signing up for Azure (a card and phone number are required, even
+  on the free account) or qualifying for the Microsoft 365 Developer Program.
+  GAIA does not ship a client ID yet, so personal accounts need one of these, or
+  a client ID from someone who has already registered an app.
+</Warning>
+
 You will register an app and paste a single value into the GAIA Agent UI: an
 **Application (client) ID**. Unlike Google, the standard desktop flow needs
 **no client secret** — Microsoft forbids secrets for public (desktop) clients.
@@ -83,7 +92,7 @@ You do **not** need to create a client secret for the standard flow.
 ## Step 3 — Paste the Client ID into GAIA
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. Click **Settings** (gear) → **Connections**.
+2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Microsoft Personal** or **Microsoft Work or School** tile to
    expand it, matching the account type you registered in Step 1.
 4. Paste the **Application (client) ID**. Leave **Client Secret** blank.
@@ -130,14 +139,13 @@ You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:
 
 ```bash
-# Grant an agent read-only Outlook mail access (personal connector)
-gaia connectors grants grant microsoft builtin:chat \
-  --scopes https://graph.microsoft.com/Mail.Read
-
-# Same, for the work/school connector
-gaia connectors grants grant microsoft_work builtin:chat \
+# Grant the flagship read-only Outlook mail access (personal connector)
+gaia connectors grants grant microsoft installed:gaia \
   --scopes https://graph.microsoft.com/Mail.Read
 ```
+
+Mail tools only read the personal `microsoft` connector. A grant on
+`microsoft_work` is stored, but it does not unlock Outlook for the flagship.
 
 The scopes a connection can request are identical for both connectors (they
 share one scope list in the catalog spec) and are listed at
@@ -151,6 +159,13 @@ share one scope list in the catalog spec) and are listed at
 | `https://graph.microsoft.com/Calendars.Read` | Read your calendar events |
 | `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
 
+The flagship [`gaia` agent](/guides/gaia) uses `Mail.ReadWrite` and `Mail.Send`
+for mail (`Mail.Send` for its bundled `send-email` skill, which asks before
+anything is sent), and `Calendars.ReadWrite` for its calendar tools, which read your calendar and, once
+you approve each change, create, change or cancel events. A connection made before
+the calendar tools keeps reading mail; a calendar request names the command that
+adds the scope.
+
 ## Device-code sign-in
 
 The device-code flow skips the Azure app registration and the loopback
@@ -158,7 +173,7 @@ redirect entirely — useful for headless machines, or when a public **client
 ID** is already available (e.g. an org-published GAIA app registration).
 
 **In the Agent UI:** with a client ID configured (env or the OAuth-client
-form), each Microsoft tile in Settings → Connections shows a **Sign in with a
+form), each Microsoft tile in Settings → Connectors shows a **Sign in with a
 code** button next to **Connect**. Click it, then enter the displayed code at
 the Microsoft URL — the tile flips to **Connected** automatically when you
 finish. No browser redirect, no app registration.
@@ -182,7 +197,7 @@ browser flow from that point on. Grant an agent afterward:
 
 ```bash
 gaia connectors grants grant microsoft installed:gaia \
-  --scopes https://graph.microsoft.com/Mail.ReadWrite
+  --scopes https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send
 ```
 
 <Note>
@@ -241,7 +256,7 @@ restart the flow with the full default scope set.
 
 Two places — both work, per connector:
 
-- **From GAIA**: Settings → Connections → the connector tile →
+- **From GAIA**: Settings → Connectors → the connector tile →
   **Disconnect**. Removes that connector's refresh token from the keyring;
   the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
   connector (if connected) is unaffected.

@@ -45,15 +45,13 @@ TAG_PREFIX = "agent-pkg-gaia-v"
 REQUIRED_PLATFORMS = ("win32-x64", "darwin-arm64", "linux-x64")
 
 # What the flagship freeze bundles. Tests, eval data and the web frontend are
-# not in it; bundled skill prompts (*.md) and gaia.apps.llm are, so they stay.
+# not in it; bundled skill prompts (*.md) are, so they stay.
 FROZEN_INPUTS = (
     "src/gaia",
     ":(exclude)src/gaia/apps/webui",
     "hub/agents/gaia/python",
     ":(exclude)hub/agents/gaia/python/tests",
     ":(exclude)hub/agents/gaia/python/eval_baselines",
-    "hub/agents/chat/python",
-    ":(exclude)hub/agents/chat/python/tests",
     "setup.py",
 )
 
@@ -69,7 +67,7 @@ HOW_TO_FIX = (
     f"pins is not on the hub yet, tag {TAG_PREFIX}<version> on the release "
     "commit, approve "
     "release_agent_gaia.yml, merge the 'pin flagship agent <version>'s published "
-    "hashes' PR it opens (branch release/flagship-lock-v<version>), and tag the "
+    "hashes' PR it opens (branch flagship-lock/v<version>), and tag the "
     "core release on that commit. See the gaia-release skill."
 )
 

@@ -7,9 +7,11 @@ scaffolding a new agent package, bumping its version, and running the quality
 gates that publishing requires:
 
 * ``gaia agent init <name> --language python|cpp`` — scaffold a package that
-  mirrors ``hub/agents/hello-world/python/`` (the canonical reference layout).
+  mirrors ``tests/fixtures/agents/hello-world/`` (the SDK reference package).
 * ``gaia agent version <patch|minor|major>`` — bump the SemVer in
-  ``gaia-agent.yaml`` (and keep ``pyproject.toml`` / ``__init__.py`` in sync).
+  ``gaia-agent.yaml`` and every other version file of the package (via its
+  ``packaging/stamp_version.py`` for the npm side), or fail naming the ones it
+  cannot move.
 * ``gaia agent test`` — quality gates in two modes:
   * ``--lint`` (default, CI-safe, no LLM): manifest valid + complete, package
     structure sound, Python sources parse, ``black``/``isort`` clean.
@@ -379,7 +381,7 @@ def cmd_init(args) -> None:
 
 
 def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
-    """Write the Python package layout (mirrors hub/agents/hello-world/python)."""
+    """Write the Python package layout (mirrors tests/fixtures/agents/hello-world)."""
     description = f"{names.display_name} — a GAIA agent (edit this description)"
     code_dir = pkg_dir / names.package
     tests_dir = pkg_dir / "tests"
@@ -462,7 +464,15 @@ def _scaffold_cpp(pkg_dir: Path, names: _Names) -> None:
 
 
 def cmd_version(args) -> None:
-    """Bump the SemVer version in gaia-agent.yaml (and keep siblings in sync)."""
+    """Bump the SemVer in gaia-agent.yaml and every other file that declares it.
+
+    The manifest, ``pyproject.toml`` and the Python package's version literal
+    are moved here. A package that ships a ``packaging/stamp_version.py`` (the
+    hub agents) then has that stamper move everything downstream — npm
+    ``package.json`` / ``package-lock.json``, ``binaries.lock.json``, pinned doc
+    links — and its ``--check`` must pass. Any declaration that cannot be moved
+    fails the command, naming it, before a single file is written.
+    """
     pkg_dir = Path(args.path).expanduser().resolve()
     manifest_path = pkg_dir / "gaia-agent.yaml" if pkg_dir.is_dir() else pkg_dir
     if not manifest_path.exists():
@@ -479,20 +489,103 @@ def cmd_version(args) -> None:
         )
     new = _bump_semver(old, args.bump)
 
-    _replace_yaml_scalar(manifest_path, "version", new)
-    print(f"{manifest_path.name}: {old} -> {new}")
-
-    # Keep the package's other version declarations in sync so they don't drift.
     base = manifest_path.parent
     pyproject = base / "pyproject.toml"
-    if pyproject.exists() and _replace_pyproject_version(pyproject, new):
-        print(f"pyproject.toml: -> {new}")
+    stamper = base / "packaging" / "stamp_version.py"
+    npm_package = base.parent / "npm" / "package.json"
+    sources, unmovable = _python_version_sources(base)
+    pyproject_text = pyproject.read_text(encoding="utf-8") if pyproject.exists() else ""
+    pyproject_static = bool(_PYPROJECT_VERSION_RE.search(pyproject_text))
+    if (
+        pyproject.exists()
+        and not pyproject_static
+        and not _PYPROJECT_DYNAMIC_VERSION_RE.search(pyproject_text)
+    ):
+        unmovable.append(f"{pyproject}: no 'version = \"...\"' line")
+    if npm_package.exists() and not stamper.exists():
+        unmovable.append(
+            f"{npm_package.parent}: package.json and package-lock.json are only "
+            f"moved by a packaging/stamp_version.py, and {base} has none"
+        )
+    if unmovable:
+        raise AgentWorkflowError(
+            f"cannot bump {manifest_path.name} to {new}: these version "
+            f"declarations cannot be moved with it, so the package would ship "
+            f"mismatched versions. Nothing was changed.\n  "
+            + "\n  ".join(unmovable)
+            + '\nDeclare each as a plain literal (e.g. __version__ = "0.1.0") '
+            "or remove it, then re-run."
+        )
 
-    names_id = _read_yaml_scalar(manifest_path, "id")
-    if names_id:
-        init_py = base / f"gaia_agent_{names_id.replace('-', '_')}" / "__init__.py"
-        if init_py.exists() and _replace_dunder_version(init_py, new):
-            print(f"{init_py.name}: -> {new}")
+    _replace_yaml_scalar(manifest_path, "version", new)
+    print(f"{manifest_path.name}: {old} -> {new}")
+    if pyproject_static:
+        _replace_pyproject_version(pyproject, new)
+        print(f"pyproject.toml: -> {new}")
+    for source in sources:
+        _replace_python_version(source, new)
+        print(f"{source.relative_to(base)}: -> {new}")
+
+    if stamper.exists():
+        for extra in ([], ["--check"]):
+            try:
+                run = subprocess.run(
+                    [sys.executable, str(stamper), *extra],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=_STAMPER_TIMEOUT_S,
+                )
+            except subprocess.TimeoutExpired as e:
+                raise AgentWorkflowError(
+                    f"{stamper} {' '.join(extra)} did not finish within "
+                    f"{_STAMPER_TIMEOUT_S}s after bumping to {new}; the package's "
+                    f"version files may now disagree. Run it by hand to see where "
+                    f"it hangs."
+                ) from e
+            if run.returncode != 0:
+                raise AgentWorkflowError(
+                    f"{stamper} {' '.join(extra)} failed after bumping to {new} "
+                    f"(exit {run.returncode}); the package's version files now "
+                    f"disagree. Fix what it names below, then re-run the "
+                    f"stamper.\n{run.stdout}{run.stderr}"
+                )
+        print(f"{stamper.name}: every target -> {new}")
+
+
+# A stamper only rewrites a handful of local files; anything longer is a hang.
+_STAMPER_TIMEOUT_S = 60
+_PYPROJECT_VERSION_RE = re.compile(r'(?m)^version\s*=\s*"[^"]*"\s*$')
+_PYPROJECT_DYNAMIC_VERSION_RE = re.compile(r'(?m)^dynamic\s*=\s*\[[^\]]*"version"')
+_PY_VERSION_RE = re.compile(r'(?m)^((?:__version__|AGENT_VERSION)\s*=\s*)"[^"]*"')
+
+
+def _python_version_sources(base: Path) -> Tuple[List[Path], List[str]]:
+    """Files holding each top-level package's version literal, plus failures.
+
+    A package declares its version in ``version.py`` (re-exported by
+    ``__init__``) and/or as ``__version__`` in ``__init__.py``; both are moved.
+    A package whose ``__init__`` mentions ``__version__`` without a literal in
+    either file is returned as unmovable — a declaration the bump would miss.
+    """
+    sources: List[Path] = []
+    unmovable: List[str] = []
+    for pkg in sorted(p for p in base.iterdir() if (p / "__init__.py").is_file()):
+        if pkg.name == "tests":
+            continue
+        found = [
+            f
+            for f in (pkg / "version.py", pkg / "__init__.py")
+            if f.is_file() and _PY_VERSION_RE.search(f.read_text(encoding="utf-8"))
+        ]
+        if found:
+            sources.extend(found)
+        elif "__version__" in (pkg / "__init__.py").read_text(encoding="utf-8"):
+            unmovable.append(
+                f"{pkg / '__init__.py'}: __version__ is not a plain string literal "
+                f"here or in {pkg.name}/version.py"
+            )
+    return sources, unmovable
 
 
 def _bump_semver(version: str, part: str) -> str:
@@ -778,11 +871,22 @@ def _run_live_gates(pkg_dir: Path, timeout: int) -> None:
                 f"agent crashed on prompt {prompt!r}: {error}. Fix the agent "
                 f"and re-run 'gaia agent test --live'."
             ) from error
+        failure = _failed_response(result)
+        if failure:
+            reason, remedy = failure
+            raise AgentWorkflowError(
+                f"agent failed on prompt {prompt!r}: {reason}. {remedy}, then "
+                f"re-run 'gaia agent test --live'."
+            )
         if not _nonempty_response(result):
             raise AgentWorkflowError(
                 f"agent returned an empty response for prompt {prompt!r}. "
-                f"Check the agent's logic and model availability."
+                f"Return the answer as a string, or in a dict under one of "
+                f"{', '.join(_ANSWER_KEYS)}, and check model availability."
             )
+        note = _failed_turn_note(result)
+        if note:
+            _warn(f"prompt {i}: the agent marked its turn failed ({note})")
         _ok(f"responded to prompt {i}")
     print("\nAll live gates passed.")
 
@@ -1118,9 +1222,7 @@ def _instantiate_agent(pkg_dir: Path, parsed):
 
 
 def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
-    # Best-effort: if the manifest omits conversation_starters we try the
-    # package's build_registration(). Any failure here just yields [], and the
-    # caller raises a loud "no conversation_starters" error — no silent success.
+    # Raise load failures so they aren't misreported as missing starters.
     import importlib
 
     try:
@@ -1130,8 +1232,14 @@ def _starters_from_init(pkg_dir: Path, module_name: str) -> List[str]:
         if reg is None:
             return []
         return list(reg().conversation_starters or [])
-    except Exception:  # pylint: disable=broad-exception-caught
-        return []
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        raise AgentWorkflowError(
+            f"could not load {module_name}: {exc}. Fix the package so it imports "
+            f"and build_registration() runs, then re-run 'gaia agent test --live'."
+        ) from exc
+
+
+_ANSWER_KEYS = ("result", "response", "text", "answer", "final_answer")
 
 
 def _nonempty_response(result) -> bool:
@@ -1140,13 +1248,91 @@ def _nonempty_response(result) -> bool:
     if isinstance(result, str):
         return bool(result.strip())
     if isinstance(result, dict):
-        for key in ("result", "response", "text", "answer", "final_answer"):
+        for key in _ANSWER_KEYS:
             val = result.get(key)
             if isinstance(val, str) and val.strip():
                 return True
-        # A dict with any truthy content counts as a response.
-        return any(bool(v) for v in result.values())
+        # Metadata (system_prompt, conversation, ...) is always present on an
+        # Agent result, so only the answer keys above count as a response.
+        return False
     return True
+
+
+_MODEL_REMEDY = "Check that Lemonade Server is running and the model is loaded"
+_UNUSABLE_REMEDY = (
+    "The model replied but its output could not be used: try a larger or "
+    "tool-calling model, or raise max_tokens if replies were cut off"
+)
+
+
+def _failed_response(result) -> Optional[Tuple[str, str]]:
+    """``(reason, remedy)`` when a process_query result is a failure, else None.
+
+    Agent.process_query reports a failed model call in the result dict instead
+    of raising, and still fills ``result`` with the error text, so a non-empty
+    answer alone does not mean the agent worked. ``status == "failed"`` alone is
+    not a failure here: it is also set by errors the turn recovered from (e.g. a
+    trimmed context overflow), so the answer can still be valid.
+    """
+    if not isinstance(result, dict):
+        return None
+    if result.get("model_unreachable"):
+        return "the model was unreachable", _MODEL_REMEDY
+    if result.get("model_failed"):
+        reason = "the model call failed"
+        detail = _last_error(result)
+        remedy = (
+            _UNUSABLE_REMEDY
+            if _last_error_type(result) == "output_truncated"
+            else _MODEL_REMEDY
+        )
+        return (f"{reason} ({detail})" if detail else reason), remedy
+    unusable = _unrecovered_unusable_reply(result)
+    if unusable:
+        return f"the model never gave a usable reply ({unusable})", _UNUSABLE_REMEDY
+    if result.get("status") == "error":
+        detail = result.get("error") or _last_error(result)
+        reason = "status 'error'" + (f" ({detail})" if detail else "")
+        return reason, "Fix the agent"
+    return None
+
+
+def _unrecovered_unusable_reply(result: dict) -> Optional[str]:
+    """The last unparsable or cut-off reply the turn never recovered from, else None."""
+    from gaia.agents.base.agent import _RECOVERABLE_ERROR_TYPES
+
+    errors = result.get("error_history")
+    if not isinstance(errors, list):
+        return None
+    for entry in reversed(errors):
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") in _RECOVERABLE_ERROR_TYPES
+            and not entry.get("recovered")
+        ):
+            return str(entry.get("error") or entry["type"])
+    return None
+
+
+def _failed_turn_note(result) -> Optional[str]:
+    """Why a ``status: failed`` turn that still answered failed, else None."""
+    if not isinstance(result, dict) or result.get("status") != "failed":
+        return None
+    return _last_error(result) or "no error recorded"
+
+
+def _last_error_type(result: dict) -> Optional[str]:
+    errors = result.get("error_history")
+    last = errors[-1] if isinstance(errors, list) and errors else None
+    return last.get("type") if isinstance(last, dict) else None
+
+
+def _last_error(result: dict) -> Optional[str]:
+    errors = result.get("error_history")
+    last = errors[-1] if isinstance(errors, list) and errors else None
+    if isinstance(last, dict):
+        last = last.get("error") or last.get("message")
+    return str(last) if last else None
 
 
 def _ensure_on_path(pkg_dir: Path) -> None:
@@ -1233,18 +1419,12 @@ def _replace_pyproject_version(path: Path, value: str) -> bool:
     return False
 
 
-def _replace_dunder_version(path: Path, value: str) -> bool:
-    pattern = re.compile(r'^(__version__\s*=\s*)"[^"]*"(\s*)$')
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        stripped = line.rstrip("\n")
-        m = pattern.match(stripped)
-        if m:
-            newline = "\n" if line.endswith("\n") else ""
-            lines[i] = f'{m.group(1)}"{value}"{newline}'
-            path.write_text("".join(lines), encoding="utf-8")
-            return True
-    return False
+def _replace_python_version(path: Path, value: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    path.write_text(
+        _PY_VERSION_RE.sub(lambda m: f'{m.group(1)}"{value}"', text, count=1),
+        encoding="utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------

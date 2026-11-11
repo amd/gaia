@@ -10,6 +10,7 @@ Every test runs from a cold state: roots live under ``tmp_path`` and the real
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -88,8 +89,22 @@ def test_only_three_roots_in_v1(tmp_path):
 
 
 def test_user_root_honors_gaia_config_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("GAIA_HOME", raising=False)
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "custom"))
     assert user_skills_dir() == tmp_path / "custom" / "skills"
+
+
+def test_user_root_honors_gaia_home_over_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "portable"))
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "custom"))
+    assert user_skills_dir() == tmp_path / "portable" / "skills"
+
+
+def test_user_root_ignores_a_blank_gaia_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_HOME", "  ")
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert user_skills_dir() == tmp_path / ".gaia" / "skills"
 
 
 def test_discovers_skills_from_every_root(roots):
@@ -198,6 +213,25 @@ def test_invalid_skill_is_reported_not_silently_dropped(roots):
     assert "broken" in next(iter(errors))
 
 
+def test_invalid_claude_import_warns_once_and_is_tagged_as_import(roots):
+    write_skill_dir(roots["claude"], "theirs", "not a skill file\n")
+    write_skill_dir(roots["user"], "mine", "not a skill file\n")
+
+    with (
+        patch("gaia.skills.manager.log") as log,
+        patch("gaia.skills.manager._WARNED_IMPORT_ERRORS", set()),
+    ):
+        manager = make_manager(roots)
+        manager.reload()
+        manager.reload()
+        make_manager(roots).reload()
+
+    assert len(manager.discovery_errors) == 2
+    assert list(manager.import_discovery_errors) == [str(roots["claude"] / "theirs")]
+    assert log.warning.call_count == 1  # the import, once across rescans
+    assert log.error.call_count == 3  # the user's own skill, every rescan
+
+
 def test_reload_picks_up_a_new_skill(roots):
     manager = make_manager(roots)
     assert manager.list_skills() == []
@@ -240,7 +274,7 @@ def test_local_capability_permission_is_refused_with_an_actionable_error():
     message = str(excinfo.value)
     assert "deferred to a later phase" in message
     assert "filesystem" in message
-    assert "1019" in message  # where to look next
+    assert "issues/2863" in message  # the open sandbox issue, where to look next
 
 
 @pytest.mark.parametrize(
@@ -364,6 +398,25 @@ def test_a_skill_tool_may_shadow_an_existing_registry_name(roots):
     assert _TOOL_REGISTRY["search_web"] is original
     # …and the skill's is reachable under its namespace.
     assert _TOOL_REGISTRY["web-search/search_web"]["skill"] == "web-search"
+
+
+def test_a_skill_tool_may_shadow_a_tool_of_the_agent_build_under_way(roots):
+    """A skill loaded while an agent registers its tools is not a name collision."""
+    from gaia.agents.base.tools import tool, tool_build
+
+    copy_fixture("web-search", roots["user"])
+    skill = make_manager(roots).load("web-search")
+    with tool_build():
+
+        @tool
+        def search_web(query: str) -> dict:
+            """The framework's search."""
+            return {}
+
+        registered = register_skill_tools(skill)
+
+    assert set(registered) == {"web-search/search_web"}
+    assert _TOOL_REGISTRY["search_web"]["function"] is search_web
 
 
 def test_unregister_removes_only_that_skills_tools(roots):
@@ -553,6 +606,7 @@ class _StubAgent:
     _pin_skill_body = Agent._pin_skill_body
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     get_skills_system_prompt = Agent.get_skills_system_prompt
 
     def __init__(self):
@@ -655,6 +709,10 @@ def test_agent_load_skill_puts_a_missing_commands_substitute_in_the_prompt(
         "version: 1.0.0\nmetadata:\n  gaia:\n    security_tier: community\n"
         "    permissions:\n      - shell:execute:pytest\n---\n\nRun the suite.\n",
     )
+    from gaia.skills.drift import relock
+
+    # The author's own skill: recorded as local, so no ceiling holds it.
+    relock(roots["user"])
     monkeypatch.setattr("gaia.skills.binaries.shutil.which", lambda _name: None)
     agent = _StubAgent()
 

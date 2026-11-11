@@ -65,6 +65,21 @@ from tests.unit.skills_helpers import make_key
         ("1.5.0", ">=1.2.0, <2.0.0", True),
         ("2.0.0", ">=1.2.0, <2.0.0", False),
         ("1.1.0", ">=1.2.0, <2.0.0", False),
+        ("2.0.0-beta.1", ">=1.0.0, <2.0.0", False),
+        ("1.2.5-rc.1", "1.2", False),
+        ("1.3.0-rc.2", "^1.3.0-rc.1", True),
+        ("1.3.0-rc.2", "~1.3.0-rc.1", True),
+        ("1.3.0-rc.2", "~=1.3.0-rc.1", True),
+        ("1.3.0-rc.2", ">=1.3.0-rc.1, <2.0.0", True),
+        ("1.3.0-rc.1", ">=1.3.0-rc.2", False),
+        ("1.3.0-rc.1", "1.3.0-rc.1", True),
+        ("1.3.0-rc.1", "==1.3.0-rc.1", True),
+        ("1.5.0-rc.1", ">=1.2.3-beta.1", False),
+        ("1.3.1-rc.1", ">=1.3.0-rc.1", False),
+        ("1.3.0", ">=1.3.0-rc.1", True),
+        ("1.2.3+build-5", ">=1.2.3", True),
+        ("1.2.3-rc.1", ">=1.0.0+build-5", False),
+        ("2.0.0-beta.1", "*", True),
     ],
 )
 def test_semver_range_matching(version, spec, expected):
@@ -74,7 +89,7 @@ def test_semver_range_matching(version, spec, expected):
 
 
 def test_resolve_picks_the_highest_satisfying_version():
-    """'Highest satisfying' matches how the hub resolves agent dependencies."""
+    """Stable versions still follow the requested range."""
     from gaia.skills.versions import resolve
 
     published = ["0.9.0", "1.0.0", "1.2.0", "1.4.7", "2.0.0"]
@@ -84,15 +99,42 @@ def test_resolve_picks_the_highest_satisfying_version():
     assert resolve(published, ">=3.0.0") is None
 
 
+@pytest.mark.parametrize("spec", [None, "", "*", "latest", "any", " LATEST "])
+def test_resolve_prefers_stable_and_accepts_prerelease_only_catalogs(spec):
+    from gaia.skills.versions import resolve
+
+    assert resolve(iter(["1.9.0", "2.0.0-beta.1"]), spec) == "1.9.0"
+    assert resolve(iter(["2.0.0-beta.1", "2.0.0-beta.2"]), spec) == "2.0.0-beta.2"
+    assert resolve(iter(["1.9.0+build-5", "2.0.0-beta.1"]), spec) == "1.9.0+build-5"
+    assert resolve(iter([]), spec) is None
+
+
+@pytest.mark.parametrize(
+    "published,spec,expected",
+    [
+        (["1.9.0", "2.0.0-beta.1"], ">=1.0.0", "1.9.0"),
+        (["1.2.0", "1.3.0-rc.1"], "^1.2", "1.2.0"),
+        (["2.0.0-beta.1"], ">=1.0.0", None),
+        (["1.3.0-rc.1", "1.3.0-rc.2"], ">=1.3.0-rc.1", "1.3.0-rc.2"),
+    ],
+)
+def test_resolve_requires_explicit_prerelease_opt_in(published, spec, expected):
+    from gaia.skills.versions import resolve
+
+    assert resolve(iter(published), spec) == expected
+
+
+@pytest.mark.parametrize("version", ["1.5.0", "1.5.0-rc.1"])
 @pytest.mark.parametrize("spec", ["1.0.0 || 2.0.0", "1.0.0 - 2.0.0"])
-def test_unsupported_range_syntax_raises_rather_than_matching_everything(spec):
+def test_unsupported_range_syntax_raises_rather_than_matching_everything(version, spec):
     """An unreadable pin must never degrade to 'any' — that would silently widen it."""
     from gaia.skills.versions import matches
 
     with pytest.raises(SkillValidationError, match="does not support"):
-        matches("1.5.0", spec)
+        matches(version, spec)
 
 
+@pytest.mark.parametrize("version", ["1.5.0", "1.5.0-rc.1"])
 @pytest.mark.parametrize(
     "spec",
     [
@@ -108,7 +150,7 @@ def test_unsupported_range_syntax_raises_rather_than_matching_everything(spec):
         "abc.def.ghi",
     ],
 )
-def test_a_comparator_target_that_is_not_a_version_raises(spec):
+def test_a_comparator_target_that_is_not_a_version_raises(version, spec):
     """``compare_versions`` is a lenient *sort* comparator (#2864).
 
     It coerces unreadable text to a sortable key rather than raising, so
@@ -120,7 +162,7 @@ def test_a_comparator_target_that_is_not_a_version_raises(spec):
     from gaia.skills.versions import matches
 
     with pytest.raises(SkillValidationError, match="does not name a version number"):
-        matches("1.5.0", spec)
+        matches(version, spec)
 
 
 def test_validate_spec_accepts_every_supported_range_shape():
@@ -850,6 +892,159 @@ def test_search_matches_name_description_and_tool_names(tmp_path):
     assert search("nothing-matches-this") == []
 
 
+def _word_search_hub(tmp_path):
+    """Hub whose skills overlap on words, so ranking and ties are observable."""
+    import json as json_mod
+
+    from tests.unit.skills_helpers import fake_hub
+
+    hub = fake_hub(tmp_path)
+    skills = {
+        "document-brief": "Brief a long document or file in one page",
+        "inbox-triage": "Triage an email inbox and draft replies",
+        "rss-digest": "Summarize new posts from feeds",
+        "summarize": "Summarize a document, meeting transcript, or email",
+        "transcribe-meeting": "Turn a meeting recording into notes",
+    }
+    for name, description in skills.items():
+        hub.put_manifest(
+            name, "1.0.0", filename=f"{name}.zip", sha256=name, description=description
+        )
+    key = f"{hub.BASE_URL}/skills/rss-digest/manifest.json"
+    manifest = json_mod.loads(hub.objects[key])
+    manifest["tools"] = [{"name": "fetch_feed"}]
+    hub.objects[key] = json_mod.dumps(manifest).encode("utf-8")
+    hub.rebuild_index()
+
+    def search(query):
+        from gaia.skills.hub import search_skills
+
+        return [
+            entry["id"]
+            for entry in search_skills(
+                query,
+                base_url=hub.BASE_URL,
+                fetcher=hub.fetcher,
+                cache_path=tmp_path / "catalog-cache.json",
+                force=True,
+            )
+        ]
+
+    return search
+
+
+def test_search_matches_any_word_of_a_multi_word_query(tmp_path):
+    """The whole phrase never appears verbatim, but each word does somewhere."""
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarize documents") == [
+        "summarize",
+        "document-brief",
+        "rss-digest",
+    ]
+    assert search("meeting notes") == ["transcribe-meeting", "summarize"]
+    assert search("email triage") == ["inbox-triage", "summarize"]
+
+
+def test_search_ranks_by_distinct_words_matched(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    # summarize hits all three words; the other three hit one each, in catalog order.
+    assert search("summarize document meeting") == [
+        "summarize",
+        "document-brief",
+        "rss-digest",
+        "transcribe-meeting",
+    ]
+    # A repeated word counts once, so it cannot outrank a two-word match.
+    assert search("brief brief brief document") == ["document-brief", "summarize"]
+
+
+def test_search_uses_conservative_word_stems_after_exact_match(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarization") == ["rss-digest", "summarize"]
+    assert search("summarizing") == ["rss-digest", "summarize"]
+    assert search("summaries") == ["rss-digest", "summarize"]
+
+
+def test_search_stems_plural_e_words_and_still_rejects_short_words(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("files") == ["document-brief"]
+    assert search("notes") == ["transcribe-meeting"]
+    assert search("pages") == ["document-brief"]
+    assert search("pdf") == []
+    assert search("pr") == []
+
+
+def test_search_ties_keep_catalog_order(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarize") == ["rss-digest", "summarize"]
+    assert search("email") == ["inbox-triage", "summarize"]
+
+
+def test_search_empty_or_blank_query_lists_everything_in_catalog_order(tmp_path):
+    search = _word_search_hub(tmp_path)
+    everything = [
+        "document-brief",
+        "inbox-triage",
+        "rss-digest",
+        "summarize",
+        "transcribe-meeting",
+    ]
+
+    assert search("") == everything
+    assert search("   ") == everything
+    assert search(" \t\n ") == everything
+
+
+def test_search_with_no_matching_word_is_empty(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("kubernetes helm chart") == []
+    assert search("summarization") == ["rss-digest", "summarize"]
+    assert search("!!! ??? ...") == []
+
+
+def test_search_is_case_insensitive(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("MEETING Notes") == search("meeting notes")
+    assert search("Inbox") == ["inbox-triage"]
+
+
+def test_search_still_matches_tool_names(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    assert search("fetch_feed") == ["rss-digest"]
+    assert search("FETCH_FEED unrelatedword") == ["rss-digest"]
+
+
+def test_search_short_words_only_count_when_nothing_longer_was_typed(tmp_path):
+    """'a' is in every description; it must not drag the whole catalog in."""
+    search = _word_search_hub(tmp_path)
+
+    assert search("summarize a pdf") == ["rss-digest", "summarize"]
+    assert search("into") == ["transcribe-meeting"]
+    # Alone, a short word is still a real search (think "pr" or "ai").
+    assert search("in") == [
+        "document-brief",
+        "inbox-triage",
+        "summarize",
+        "transcribe-meeting",
+    ]
+
+
+def test_search_survives_a_very_long_query(tmp_path):
+    search = _word_search_hub(tmp_path)
+
+    noise = " ".join(f"zzz{i}" for i in range(5000))
+    assert search(noise) == []
+    assert search(noise + " meeting") == ["summarize", "transcribe-meeting"]
+
+
 def test_search_flags_a_result_served_from_the_offline_cache(tmp_path):
     """A stale catalog read as current is how a user installs something gone.
 
@@ -915,3 +1110,58 @@ def test_publish_request_parts_match_the_worker_contract():
         audit_json='{"verdict":"ALLOW"}',
     )
     assert set(full.parts()) == {"skill", "artifact", "changelog", "audit"}
+
+
+# ----------------------------------------------------------------------
+# Hub errors name commands that exist
+# ----------------------------------------------------------------------
+
+
+def _parse_quoted_gaia_commands(message: str) -> list:
+    """Parse every single-quoted ``gaia skill ...`` command in *message*."""
+    import argparse
+    import re
+    import shlex
+
+    from gaia.skills import cli as skills_cli
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    skills_cli.add_subparser(parser.add_subparsers(dest="action"))
+    commands = re.findall(r"'(gaia skill [^']+)'", message)
+    assert commands, message
+    return [parser.parse_args(shlex.split(c)[1:]) for c in commands]
+
+
+def test_an_unsatisfiable_pin_names_a_command_that_runs():
+    from gaia.skills.errors import SkillNotFoundError
+    from gaia.skills.hub import RemoteSkill
+
+    remote = RemoteSkill(name="demo", latest_version="1.0.0", versions={"1.0.0": {}})
+    with pytest.raises(SkillNotFoundError) as excinfo:
+        remote.resolve("^9.0")
+
+    message = str(excinfo.value)
+    assert "--remote" not in message
+    assert "1.0.0" in message
+    (parsed,) = _parse_quoted_gaia_commands(message)
+    assert (parsed.skill_action, parsed.reference) == ("install", "demo")
+
+
+def test_a_missing_manifest_names_commands_that_run():
+    from gaia.skills.hub import SkillHubError, fetch_skill_doc
+
+    def _unreachable(_url):
+        raise OSError("connection refused")
+
+    with pytest.raises(SkillHubError) as excinfo:
+        fetch_skill_doc(
+            "demo", "1.0.0", base_url="https://hub.invalid", fetcher=_unreachable
+        )
+
+    message = str(excinfo.value).replace("<version>", "1.0.0")
+    assert "--remote" not in message
+    actions = [
+        (p.skill_action, getattr(p, "reference", None) or p.query)
+        for p in _parse_quoted_gaia_commands(message)
+    ]
+    assert actions == [("install", "demo@1.0.0"), ("search", "demo")]

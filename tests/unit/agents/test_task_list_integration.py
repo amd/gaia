@@ -21,8 +21,6 @@ from gaia.agents.tools.task_list_tools import (
     COMPLETED,
     IN_PROGRESS,
     PENDING,
-    SOURCE_AGENT,
-    SOURCE_PLAN,
     TaskListMixin,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
@@ -268,45 +266,6 @@ def test_stop_mid_step_keeps_the_step_unfinished(clean_registry):
     assert _statuses(final)[0] == IN_PROGRESS
     assert COMPLETED not in _statuses(final)
     assert final["current_action"] is None
-
-
-def test_the_plan_field_and_the_tool_together_leave_the_tool_in_charge():
-    from gaia.agents.tools.task_list_tools import TaskList
-
-    tl = TaskList()
-    tl.begin_turn()
-    tl.mirror_plan(["Plan a", "Plan b"], 0)
-    assert tl.state()["source"] == SOURCE_PLAN
-    tl.update(items=["Mine 1", "Mine 2"])
-    tl.mirror_plan(["Plan a", "Plan b"], 1)
-    assert [i["content"] for i in tl.items] == ["Mine 1", "Mine 2"]
-    assert tl.state()["source"] == SOURCE_AGENT
-
-
-def test_a_later_turns_plan_does_not_overwrite_an_unfinished_kept_list():
-    from gaia.agents.tools.task_list_tools import TaskList
-
-    tl = TaskList()
-    tl.begin_turn()
-    tl.update(items=STEPS)
-    tl.begin_turn()
-    tl.mirror_plan(["Something else"], 0)
-    assert [i["content"] for i in tl.items] == STEPS
-    # Once everything is done, a new plan may take over.
-    tl.update(done=[1, 2, 3])
-    tl.begin_turn()
-    tl.mirror_plan(["Something else"], 0)
-    assert tl.state()["source"] == SOURCE_PLAN
-
-
-def test_clearing_the_list_stops_the_plan_from_rebuilding_it():
-    from gaia.agents.tools.task_list_tools import TaskList
-
-    tl = TaskList()
-    tl.begin_turn()
-    tl.clear(by_model=True)
-    tl.mirror_plan(["a"], 0)
-    assert tl.items == []
 
 
 def test_a_mid_turn_follow_up_does_not_disturb_the_list(clean_registry):

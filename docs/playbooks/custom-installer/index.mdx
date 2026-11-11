@@ -1,6 +1,6 @@
 ---
 title: "Custom Installer Playbook"
-description: "Ship the Example Agent pre-loaded in a branded GAIA installer. Three-OS walkthrough."
+description: "Ship your own agent pre-loaded in a branded GAIA installer. Three-OS walkthrough."
 icon: "play"
 ---
 
@@ -12,7 +12,7 @@ icon: "play"
 </Info>
 
 **Time to complete:** 45–75 minutes
-**What you'll build:** A branded GAIA installer for Windows, macOS, or Ubuntu with the **Example Agent** preloaded
+**What you'll build:** A branded GAIA installer for Windows, macOS, or Ubuntu with the **Acme Assistant** agent preloaded
 **What you'll learn:** How bundled agents flow from a staging directory through `electron-builder` into the first-launch seeder, plus how to share agents between existing GAIA installations without rebuilding an installer
 
 ---
@@ -30,7 +30,7 @@ Two paths are covered:
 
 ## Path A — Branded installer
 
-The running example is the **Example Agent** — the same minimal Python agent that ships preloaded in the stock GAIA installer.
+The running example is the **Acme Assistant** — a minimal Python agent you stage yourself. The stock GAIA installer bundles no agents, so the staging directory holds only a README until you add one.
 
 <Steps>
 
@@ -56,17 +56,17 @@ All subsequent steps assume your working directory is `gaia/src/gaia/apps/webui/
 
 </Step>
 
-<Step title="Create the Example Agent">
+<Step title="Create your agent">
 
 Create the bundled-agent staging directory and drop in a Python `agent.py`:
 
 ```bash
-mkdir -p build/bundled-agents/example-agent
+mkdir -p build/bundled-agents/acme-assistant
 ```
 
-Create `build/bundled-agents/example-agent/agent.py`:
+Create `build/bundled-agents/acme-assistant/agent.py`:
 
-```python title="build/bundled-agents/example-agent/agent.py"
+```python title="build/bundled-agents/acme-assistant/agent.py"
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
@@ -74,24 +74,20 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 
 
-class ExampleAgent(Agent):
-    AGENT_ID = "example-agent"
-    AGENT_NAME = "Example Agent"
-    AGENT_DESCRIPTION = (
-        "A bundled example agent that shows how installer-seeded custom agents work"
-    )
+class AcmeAssistant(Agent):
+    AGENT_ID = "acme-assistant"
+    AGENT_NAME = "Acme Assistant"
+    AGENT_DESCRIPTION = "Acme's preloaded assistant, seeded by the installer"
     CONVERSATION_STARTERS = [
-        "What are you an example of?",
-        "How do I build my own agent like you?",
+        "What are you?",
+        "How did you get onto this PC?",
     ]
 
     def _get_system_prompt(self) -> str:
         return (
-            "You are GAIA's bundled Example Agent — a working demonstration of a "
-            "custom agent seeded by the installer. Explain plainly that you exist "
-            "to show how custom agents are packaged and loaded, and point anyone "
-            "who wants to build their own to "
-            "https://amd-gaia.ai/docs/guides/custom-agent."
+            "You are the Acme Assistant, preloaded by Acme's GAIA installer. "
+            "Answer helpfully and concisely. If asked how you got here, explain "
+            "that the installer copied you into ~/.gaia/agents/ on first launch."
         )
 
     def _create_console(self) -> AgentConsole:
@@ -120,7 +116,7 @@ At install time the contents end up under `process.resourcesPath/agents/<agent-i
 
 <Step title="Build the installer">
 
-Pick your target platform. Each command builds the full GAIA Agent UI installer with your Example Agent baked in.
+Pick your target platform. Each command builds the full GAIA Agent UI installer with your agent baked in.
 
 <Tabs>
   <Tab title="Windows">
@@ -189,14 +185,14 @@ Pick your target platform. Each command builds the full GAIA Agent UI installer 
 **Verify the seeder ran:**
 
 1. Open the Agent UI. On first launch, `seedBundledAgents()` copies every directory under `<resources>/agents/` into `~/.gaia/agents/`, writing a `.seeded` sentinel in each agent directory and a per-agent marker under `~/.gaia/seeder/` so each agent is seeded at most once per machine.
-2. Open the agent dropdown in the UI header — **Example Agent** should appear alongside the built-in agents.
-3. Select **Example Agent** and send "What are you an example of?". It should introduce itself as the bundled example and point you at the custom-agent guide.
+2. Open the agent dropdown in the UI header — **Acme Assistant** should appear alongside the built-in agents.
+3. Select **Acme Assistant** and send "How did you get onto this PC?". It should explain that the installer seeded it.
 
 If the agent does not appear:
 
-- Confirm `~/.gaia/agents/example-agent/agent.py` exists on the target machine.
-- Confirm `~/.gaia/agents/example-agent/.seeded` exists — if it's missing, the seeder did not run; check the Electron main-process logs and `~/.gaia/logs/seeder.log`.
-- To force a fresh seed (for example after a bad or incomplete copy), delete **both** `~/.gaia/agents/example-agent/` and the marker `~/.gaia/seeder/example-agent.seeded`, then relaunch. Deleting the agent directory alone will NOT re-seed — the surviving marker means "the user deleted this agent" and the seeder honors that permanently.
+- Confirm `~/.gaia/agents/acme-assistant/agent.py` exists on the target machine.
+- Confirm `~/.gaia/agents/acme-assistant/.seeded` exists — if it's missing, the seeder did not run; check the Electron main-process logs and `~/.gaia/logs/seeder.log`.
+- To force a fresh seed (for example after a bad or incomplete copy), delete **both** `~/.gaia/agents/acme-assistant/` and the marker `~/.gaia/seeder/acme-assistant.seeded`, then relaunch. Deleting the agent directory alone will NOT re-seed — the surviving marker means "the user deleted this agent" and the seeder honors that permanently.
 
 </Step>
 

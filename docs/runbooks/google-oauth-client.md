@@ -99,7 +99,7 @@ detects the mismatch and clears entries on next read.
    files, internal docs).
 3. Restart all GAIA processes. The lifespan tripwire sweep clears
    stored entries that were bound to the old `client_id_hash`.
-4. Users see a "Reconnect" prompt in AgentUI Settings → Connections (or
+4. Users see a "Reconnect" prompt in AgentUI Settings → Connectors (or
    `gaia connectors connect google` from the CLI). They re-authorize.
 5. Once all known users have reconnected (or after the soak window),
    delete the old client in Cloud Console.

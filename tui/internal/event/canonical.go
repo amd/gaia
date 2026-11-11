@@ -70,8 +70,8 @@ type CanonicalStatusEvent struct {
 	AgentVersion string `json:"agent_version,omitempty"`
 	GaiaVersion  string `json:"gaia_version,omitempty"`
 	// Phase names what the model is doing while nothing else is on the wire:
-	// "loading_model", "downloading_model", "reading", "reasoning" or
-	// "tool_call". Empty on narration and on agents that predate it. Words
+	// "loading_model", "downloading_model", "reading", "loading_tools",
+	// "reasoning" or "tool_call". Empty on narration and on agents that predate it. Words
 	// (reasoning) and Chars (tool_call) count the progress so far.
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`
@@ -109,7 +109,7 @@ type CanonicalToolCallEvent struct {
 // CanonicalToolResultEvent — a tool's structured result.
 //
 // Render is the sidecar's declared card key (e.g. "email_pre_scan", or one of the
-// generic primitives "table" / "key_value" / "list" / "image" / "diff"). Data is
+// generic primitives "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff"). Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
 //
@@ -187,7 +187,6 @@ const (
 type CanonicalTaskListEvent struct {
 	Type            string         `json:"type"`
 	Items           []TaskListItem `json:"items"`
-	Source          string         `json:"source,omitempty"`
 	CurrentAction   string         `json:"current_action,omitempty"`
 	ActionStartedAt float64        `json:"action_started_at,omitempty"`
 	// StepsSinceUpdate counts tool calls since the model last changed the list.
@@ -338,6 +337,9 @@ type CanonicalErrorEvent struct {
 	Detail string `json:"detail"`
 	Status int    `json:"status,omitempty"`
 	Source string `json:"source,omitempty"`
+	// RawDetail is the wire detail when Detail was reworded for the user, kept
+	// for the log so the cause is not lost.
+	RawDetail string `json:"-"`
 }
 
 // CanonicalUnsupportedEvent — a top-level `type` outside the frozen seven, from a

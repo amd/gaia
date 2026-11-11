@@ -98,9 +98,6 @@ func (m ChatModel) renderTaskList(maxRows int) string {
 		}
 	}
 	title := "Tasks"
-	if tl.Source == "plan" {
-		title = "Plan"
-	}
 	total := len(tl.Items) + m.taskHidden
 	count := fmt.Sprintf("%d of %d", done, total)
 	allDone := done == len(tl.Items) && m.taskHidden == 0

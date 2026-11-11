@@ -191,9 +191,8 @@ class StdioTransport(MCPTransport):
         self._stderr_reader: Optional[threading.Thread] = None
         #: Descendants seen so far, by PID, so a dead parent's are still found.
         self._children: Dict[int, "psutil.Process"] = {}
-        self._started_at = 0.0
-        #: The server process as psutil sees it; None when it can't be
-        #: confirmed as the one this connect() started.
+        #: The server process as psutil sees it; None when it cannot be
+        #: inspected after launch.
         self._ps_server: Optional["psutil.Process"] = None
         self._secret_values: Optional[List[str]] = None
 
@@ -401,7 +400,6 @@ class StdioTransport(MCPTransport):
             # credentials into the server.
             merged_env = child_env(self.env)
 
-            self._started_at = time.time()
             self._process = subprocess.Popen(
                 argv,
                 shell=False,
@@ -508,18 +506,20 @@ class StdioTransport(MCPTransport):
         finally:
             self._process = None
 
-    def _own_process(self, pid: Any) -> Optional["psutil.Process"]:
-        """*pid* as a psutil process, if it is the one this connect() started."""
+    @staticmethod
+    def _own_process(pid: Any) -> Optional["psutil.Process"]:
+        """Return a just-launched child process when psutil can inspect its PID.
+
+        ``Popen`` retains the child until it is reaped, so this PID cannot be
+        recycled while the transport still owns that launch.
+        """
         if not isinstance(pid, int):
             return None
         try:
-            candidate = psutil.Process(pid)
-            # A PID that already existed before the launch is someone else's.
-            if candidate.create_time() >= self._started_at - 1:
-                return candidate
+            return psutil.Process(pid)
         except psutil.Error as e:
             logger.debug("MCP server PID %s not visible to psutil: %s", pid, e)
-        return None
+            return None
 
     def _track_children(self) -> None:
         """Remember the processes the server has started so far.
@@ -712,6 +712,32 @@ class StdioTransport(MCPTransport):
         finally:
             self._request_lock.release()
             self._track_children()
+
+    def send_notification(self, method: str, params: Dict[str, Any] = None) -> None:
+        """Write a JSON-RPC notification to stdin; servers never answer one.
+
+        Raises:
+            RuntimeError: If not connected or the process died
+            TimeoutError: If the server stops reading its input
+        """
+        proc = self._process
+        if proc is None:
+            raise RuntimeError("Transport not connected")
+        if proc.poll() is not None:
+            raise self._process_died_error()
+
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params:
+            message["params"] = params
+        deadline = time.monotonic() + self.timeout
+        # A write racing a request's write would interleave the two lines.
+        self._take_request_lock(method, self.timeout, deadline)
+        try:
+            if self.debug:
+                logger.debug(f"Sending notification: {json.dumps(message, indent=2)}")
+            self._write(proc, message, deadline)
+        finally:
+            self._request_lock.release()
 
     def _take_request_lock(self, method: str, wait_s: float, deadline: float) -> None:
         """Wait for the request in flight to finish, honouring Stop and the deadline."""

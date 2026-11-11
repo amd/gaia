@@ -76,10 +76,6 @@ class CodeAnalysis:
         """The distinct domains the code touches."""
         return {use.domain for use in self.domain_uses}
 
-    def levels_for(self, domain: str) -> set[str]:
-        """The distinct levels observed for one domain."""
-        return {use.level for use in self.domain_uses if use.domain == domain}
-
     def merge(self, other: "CodeAnalysis") -> "CodeAnalysis":
         """Combine two analyses (used to fold per-file results together)."""
         return CodeAnalysis(
@@ -368,6 +364,11 @@ SINKS: dict[str, Sink] = {
         "Narrow the deletion to specific files you created, or drop it. A "
         "recursive delete driven by a tool argument can erase a user's data.",
     ),
+    # --- gaia.skills.context: the declared, runtime-checked routes -------
+    "gaia.skills.context.run_program": Sink("program", "run"),
+    "gaia.skills.context.temp_dir": Sink("scratch", "write"),
+    "gaia.skills.context.write_temp_file": Sink("scratch", "write"),
+    "gaia.skills.context.copy_to_temp": Sink("scratch", "write"),
     # --- environment ---------------------------------------------------
     "os.getenv": Sink("env", "read"),
     # --- database ------------------------------------------------------

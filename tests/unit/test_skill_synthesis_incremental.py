@@ -25,6 +25,7 @@ import pytest
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.agents.base.skill_synthesis import reconcile_and_store
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -181,6 +182,27 @@ class TestWatermark:
         prompt = host.chat.prompts[0]
         assert "Rename the screenshots" in prompt
         assert "weekly sales report" not in prompt
+
+    def test_a_consumed_chat_with_newer_work_is_read_again(self, host, store):
+        """An Agent UI chat keeps its id, so work done after it was consumed
+        must re-enter the window instead of being dropped by its mark."""
+        _seed_cluster(store, "chat_", "Triage an inbound support ticket")
+        host._synthesize_skills()
+        assert "chat_0" in store.get_synthesis_marks()
+
+        for i in range(4):
+            store.log_tool_call("chat_0", f"tool_{i}", {"x": i}, "ok", True)
+        window = [
+            s
+            for s in store.iter_sessions(since=store.get_synthesis_watermark())
+            if s["session_id"] == "chat_0"
+        ]
+        assert window, "the newer tool calls fell behind the watermark"
+
+        pending, consumed = host._drop_consumed_episodes(store, window, force=False)
+
+        assert [s["session_id"] for s in pending] == ["chat_0"]
+        assert consumed == set()
 
     def test_watermark_never_moves_backwards(self, host, store):
         """An explicit older `since` cannot re-open consumed history."""
@@ -396,7 +418,7 @@ class TestOldStore:
             version = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             ).fetchone()[0]
-            assert version == 7
+            assert version == 8
             assert store.get_synthesis_watermark() is None
             assert store.get_synthesis_marks() == {}
             assert len(store.iter_sessions()) == 3  # history survived
@@ -567,3 +589,245 @@ class TestDistillationThinking:
         assert sent, "the qualifying cluster was never distilled"
         for kwargs in sent:
             assert kwargs.get("chat_template_kwargs") == expected
+
+
+# ---------------------------------------------------------------------------
+# "Forget everything" while a pass is in flight (#6559)
+# ---------------------------------------------------------------------------
+
+_GOAL = "Triage an inbound support ticket"
+
+
+def _assert_pass_left_nothing(store, result) -> None:
+    assert result["stored"] == 0
+    assert store.search_skills(include_superseded=True) == []
+    assert store.get_synthesis_marks() == {}, "the erased goal text came back"
+    assert store.get_synthesis_watermark() is None
+
+
+class TestForgetEverythingMidPass:
+    def test_erase_during_distillation_writes_nothing(self, store):
+        def _reply(_n):
+            store.clear_all()
+            return _distilled_md()
+
+        host = _SynthesisHost(store, _RecordingChat(_reply))
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        result = host._synthesize_skills()
+
+        assert host.chat.calls == 1
+        _assert_pass_left_nothing(store, result)
+
+    def test_erase_during_an_unusable_distillation_writes_no_goal(self, store):
+        def _reply(_n):
+            store.clear_all()
+            return "SKIP"
+
+        host = _SynthesisHost(store, _RecordingChat(_reply))
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        _assert_pass_left_nothing(store, host._synthesize_skills())
+
+    def test_erase_during_embedding_writes_nothing(self, host, store):
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        def _embed_then_erase(text):
+            if str(text).startswith("Handle the recurring"):
+                store.clear_all()
+            return _embed(text)
+
+        host._embed_text = _embed_then_erase
+        host._proc_faiss_add = MagicMock()
+
+        result = host._synthesize_skills()
+
+        _assert_pass_left_nothing(store, result)
+        host._proc_faiss_add.assert_not_called()
+
+    def test_erase_after_the_last_check_is_still_refused_by_the_store(
+        self, host, store
+    ):
+        """An erase landing between the pass's own check and the write."""
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        def _erase_then_reconcile(*args, **kwargs):
+            store.clear_all()
+            return reconcile_and_store(*args, **kwargs)
+
+        with patch(
+            "gaia.agents.base.procedural_memory.reconcile_and_store",
+            side_effect=_erase_then_reconcile,
+        ):
+            result = host._synthesize_skills()
+
+        _assert_pass_left_nothing(store, result)
+
+    def test_erase_mid_pass_does_not_supersede_an_existing_procedure(self, host, store):
+        _seed_cluster(store, "old_", _GOAL)
+        host._synthesize_skills()
+        (prior,) = store.search_skills()
+
+        _seed_cluster(store, "new_", _GOAL)
+
+        def _reply(_n):
+            store.clear_all()
+            return _distilled_md()
+
+        host.chat = _RecordingChat(_reply)
+        result = host._synthesize_skills()
+
+        assert result["stored"] == 0
+        (still,) = store.search_skills(include_superseded=True)
+        assert still["id"] == prior["id"]
+        assert not still.get("superseded_by")
+        assert all(m["goal"] is None for m in store.get_synthesis_marks().values())
+
+    def test_store_writes_refuse_a_stale_erase_count(self, store):
+        before = store.erase_count()
+        store.clear_all()
+
+        assert (
+            store.put_skill(
+                name="triage",
+                when_to_use="Triage a ticket.",
+                markdown_body="1. Triage.",
+                erase_count=before,
+            )
+            is None
+        )
+        assert (
+            store.mark_sessions_synthesized(
+                ["s1"], "distilled", goal=_GOAL, erase_count=before
+            )
+            == 0
+        )
+        assert store.search_skills(include_superseded=True) == []
+        assert store.get_synthesis_marks() == {}
+
+    def test_learning_after_an_earlier_erase_is_kept(self, host, store):
+        """No erase during the pass: a non-zero counter must not drop work."""
+        store.clear_all()
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        result = host._synthesize_skills()
+
+        assert result["stored"] == 1
+        assert len(store.search_skills()) == 1
+        marks = store.get_synthesis_marks()
+        assert {m["goal"] for m in marks.values()} == {_GOAL}
+        assert store.get_synthesis_watermark() is not None
+
+
+# ---------------------------------------------------------------------------
+# A goal the embedder refuses stays that session's problem (#4729)
+# ---------------------------------------------------------------------------
+
+# Verbatim llama-server reply for a goal over the embedder's batch.
+_TOO_LARGE = (
+    "Embedding failed: Error generating embeddings: Request failed with status "
+    '500: {"error":{"code":500,"message":"input (513 tokens) is too large to '
+    'process. increase the physical batch size (current batch size: 512)"}}'
+)
+
+
+class _SmallBatchEmbedder:
+    """An embedder loaded at llama-server's default 512 batch."""
+
+    def __init__(self, limit: int = 512):
+        self.limit = limit
+        self.calls = []
+
+    def __call__(self, text):
+        self.calls.append(text)
+        if len(text) > self.limit:
+            raise RuntimeError(_TOO_LARGE)
+        return _embed(text)
+
+
+_LONG_GOAL = "Please migrate these records: " + "4" * 600
+
+
+class TestRejectedGoal:
+    @pytest.fixture
+    def embedder(self, host):
+        embedder = _SmallBatchEmbedder()
+        host._embed_text = embedder
+        return embedder
+
+    def test_one_long_first_message_does_not_abort_the_pass(
+        self, host, store, embedder
+    ):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        result = host._synthesize_skills()
+
+        assert result["stored"] == 1
+        marks = store.get_synthesis_marks()
+        assert marks["pasted"]["outcome"] == "unusable"
+        assert "too large" in marks["pasted"]["detail"]
+
+    def test_the_next_startup_does_not_retry_it(self, host, store, embedder):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        host._synthesize_skills()
+        embedder.calls.clear()
+
+        host._synthesize_skills()
+
+        assert _LONG_GOAL not in embedder.calls
+        assert store.get_synthesis_watermark() is not None
+
+    def test_sessions_sharing_the_goal_are_tried_once_and_all_marked(
+        self, host, store, embedder
+    ):
+        _seed_cluster(store, "pasted_", _LONG_GOAL)
+
+        host._synthesize_skills()
+
+        assert embedder.calls.count(_LONG_GOAL) == 1
+        marks = store.get_synthesis_marks()
+        assert {marks[f"pasted_{n}"]["outcome"] for n in range(3)} == {"unusable"}
+
+    def test_force_reopens_a_rejected_session(self, host, store, embedder):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        host._synthesize_skills()
+        embedder.calls.clear()
+
+        host._synthesize_skills(force=True)
+
+        assert _LONG_GOAL in embedder.calls
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "Embedding failed: Connection refused",
+            "Embedding failed: Request failed with status 500: model not loaded",
+            "Embedding failed: Request failed with status 404: too large a model",
+        ],
+    )
+    def test_an_outage_still_aborts_the_pass_and_marks_nothing(
+        self, host, store, error
+    ):
+        def down(_text):
+            raise RuntimeError(error)
+
+        host._embed_text = down
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        with pytest.raises(RuntimeError, match="Embedding failed"):
+            host._synthesize_skills()
+        assert store.get_synthesis_marks() == {}
+        assert store.get_synthesis_watermark() is None
+
+    def test_cluster_by_goal_without_a_handler_still_raises(self):
+        from gaia.agents.base.skill_synthesis import GoalEmbedRejected, cluster_by_goal
+
+        def rejects(_text):
+            raise GoalEmbedRejected("too large")
+
+        with pytest.raises(GoalEmbedRejected):
+            cluster_by_goal(
+                [{"session_id": "s", "goal": "g", "steps": [], "success": True}],
+                rejects,
+            )

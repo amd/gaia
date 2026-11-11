@@ -6,6 +6,7 @@ import { Loader2, Shuffle } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { displayModelName } from '../stores/modelStore';
+import { useT } from '../i18n/useT';
 
 interface LocalModel { id: string; name: string }
 
@@ -24,6 +25,7 @@ async function localModels(): Promise<LocalModel[]> {
 /** "Retry with…": pick another local model to answer the same question. */
 export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | null; onPick: (model: string) => void }) {
     const anchor = useRef<HTMLButtonElement>(null);
+    const t = useT();
     const [open, setOpen] = useState(false);
     const [models, setModels] = useState<LocalModel[] | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -48,15 +50,15 @@ export function RetryWithMenu({ answeredBy, onPick }: { answeredBy?: string | nu
                 type="button"
                 className="msg-action-btn"
                 onClick={() => setOpen((v) => !v)}
-                title="Retry with another model"
-                aria-label="Retry with another model"
+                title={t('retry.button')}
+                aria-label={t('retry.button')}
                 aria-expanded={open}
             >
                 <Shuffle size={12} />
             </button>
             <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Retry with" placement="below" align="end">
                 <div className="retry-menu">
-                    <div className="retry-menu-head">Retry with…</div>
+                    <div className="retry-menu-head">{t('retry.head')}</div>
                     {error && <div className="retry-menu-error" role="alert">{error}</div>}
                     {!error && models === null && (
                         <div className="retry-menu-empty"><Loader2 size={12} className="spin" aria-hidden="true" /> Loading models…</div>

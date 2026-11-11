@@ -167,16 +167,6 @@ func (l *liveTUI) screen() string {
 	return text
 }
 
-func (l *liveTUI) state() map[string]any {
-	l.t.Helper()
-	status, body := l.call(http.MethodGet, "/status", nil)
-	if status != http.StatusOK {
-		l.t.Fatalf("GET /status: status %d (%v)", status, body)
-	}
-	st, _ := body["state"].(map[string]any)
-	return st
-}
-
 // frameContaining returns the first recorded frame holding text, or "" when
 // none did. A screen that is on for one render can only be proven from here.
 func (l *liveTUI) frameContaining(text string) string {

@@ -16,15 +16,19 @@ Spec: docs/plans/skill-synthesis.mdx
 """
 
 import functools
+import re
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
+    MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
     GoalCluster,
+    GoalEmbedRejected,
     SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
@@ -36,6 +40,32 @@ from gaia.llm.lemonade_client import SIDE_SLOT, no_thinking_kwargs
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: llama-server's reply to an input longer than the embedder's batch.
+_EMBED_TOO_LARGE = "too large to process"
+
+_INCOMPLETE_MARKER = (
+    "… INCOMPLETE — the remaining steps were cut to fit; this is not the "
+    "full procedure."
+)
+# Line starts of a numbered step, a bullet, or a markdown heading.
+_STEP_START_RE = re.compile(r"^[ \t]*(?:\d+[.)]|[-*+]|#{1,6})[ \t]", re.MULTILINE)
+_PARAGRAPH_BREAK_RE = re.compile(r"\n[ \t]*\n")
+
+
+def _cut_at_step_boundary(body: str, cap: int) -> str:
+    """Return the longest prefix of ``body`` (at most ``cap`` chars) ending at a step.
+
+    Cuts only where a step, bullet or heading begins, or at a blank line, so
+    every step shown is whole.  Returns ``""`` when no boundary falls inside
+    the cap (a single step longer than the whole budget).
+    """
+    window = body[: cap + 1]
+    cuts = [m.start() for m in _STEP_START_RE.finditer(window)]
+    cuts += [m.start() for m in _PARAGRAPH_BREAK_RE.finditer(window)]
+    cuts = [c for c in cuts if 0 < c <= cap]
+    return body[: max(cuts)].rstrip() if cuts else ""
+
 
 #: Serializes every touch of a procedures FAISS index. Synthesis now writes to
 #: it from a background thread while the live turn searches it, and the native
@@ -55,7 +85,7 @@ class ProceduralMemoryMixin:
     """
 
     # ==================================================================
-    # Procedures FAISS Index (v3 — procedural memory, #887)
+    # Procedures FAISS Index (v3 — procedural memory)
     # ==================================================================
 
     def _rebuild_proc_faiss_index(self) -> None:
@@ -218,7 +248,7 @@ class ProceduralMemoryMixin:
         return results
 
     # ==================================================================
-    # Skill Recall (procedural memory, #887 — RECALL)
+    # Skill Recall (procedural memory — RECALL)
     # ==================================================================
 
     def recall_skill(
@@ -339,6 +369,7 @@ class ProceduralMemoryMixin:
                     when_to_use=row["when_to_use"],
                     body=row["markdown_body"],
                     tools_required=row.get("tools_required") or [],
+                    skill_id=procedure_id,
                 )
             )
             recalled_ids.append(procedure_id)
@@ -430,21 +461,48 @@ class ProceduralMemoryMixin:
         Pure renderer over the already-recalled ``skills`` (and the ``config``
         resolved alongside them by ``_recall_skills_for_turn``) — the recall and
         the single settings read happen once upstream and feed both this block
-        and the loader's ``_recalled_skill_tools`` signal.  Each body is capped at
-        ``config.max_recall_body_chars`` (default 1500) with an explicit
-        ``… (truncated)`` marker; the full body always stays in the
-        ``procedures`` row.  Returns ``""`` when ``skills`` is empty, so a turn
-        with no recall carries nothing extra.
+        and the loader's ``_recalled_skill_tools`` signal.  Returns ``""`` when
+        ``skills`` is empty, so a turn with no recall carries nothing extra.
+
+        A body within ``config.max_recall_body_chars`` (default 1500) is shown
+        whole.  A longer one is never sliced mid-step: if a complete procedure
+        ranks above it, it is dropped; otherwise it is cut at the last step,
+        bullet, heading or paragraph boundary inside the cap, marked
+        INCOMPLETE, and the header tells the model to plan the missing steps
+        itself.  The full body always stays in the ``procedures`` row, and each
+        drop or cut is logged so its frequency is observable.
         """
         if not skills:
             return ""
 
         cap = config.max_recall_body_chars
         blocks: List[str] = []
+        shown_complete = False
+        any_cut = False
         for skill in skills:
             body = skill.body
-            if len(body) > cap:
-                body = body[:cap].rstrip() + "\n… (truncated)"
+            if len(body) <= cap:
+                shown_complete = True
+            elif shown_complete:
+                logger.info(
+                    "[MemoryMixin] recall: dropped procedure %r (%d chars, cap "
+                    "%d) — a complete higher-ranked procedure is already shown",
+                    skill.name,
+                    len(body),
+                    cap,
+                )
+                continue
+            else:
+                kept = _cut_at_step_boundary(body, cap)
+                body = f"{kept}\n{_INCOMPLETE_MARKER}" if kept else _INCOMPLETE_MARKER
+                any_cut = True
+                logger.info(
+                    "[MemoryMixin] recall: truncated procedure %r (%d chars, cap "
+                    "%d) at a step boundary and marked it INCOMPLETE",
+                    skill.name,
+                    len(skill.body),
+                    cap,
+                )
             blocks.append(
                 f"## {skill.name}\nWhen to use: {skill.when_to_use}\n\n{body}"
             )
@@ -455,6 +513,12 @@ class ProceduralMemoryMixin:
             "procedure(s) below instead of re-planning from scratch; adapt the "
             "steps to the current request."
         )
+        if any_cut:
+            header += (
+                " A procedure marked INCOMPLETE is missing its later steps — it "
+                "is not proven as shown. Use its steps only as a start and plan "
+                "the rest, including any cleanup and verification, yourself."
+            )
         return header + "\n\n" + "\n\n".join(blocks)
 
     def _recalled_skill_tools(self) -> List[str]:
@@ -496,9 +560,86 @@ class ProceduralMemoryMixin:
         skills, config = self._recall_skills_for_turn(goal)
         self._recalled_skills = skills
         self._recalled_skill_prompt = self._build_recalled_skills_prompt(skills, config)
+        # A body the prompt dropped was never in context, so its outcome is not its own.
+        self._recalled_skill_ids = [
+            s.skill_id
+            for s in skills
+            if s.skill_id and f"## {s.name}\n" in self._recalled_skill_prompt
+        ]
+
+    def _note_person_decision(self, tool_name: str, approved: bool) -> None:
+        """Record a person's answer to a confirmation prompt for *tool_name*.
+
+        Called by the agent loop. Ignored outside a turn (no list to add to).
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        if decisions is not None:
+            decisions.append((tool_name, bool(approved)))
+
+    def _record_procedure_outcome(self) -> None:
+        """Count this turn on each procedure recalled into it (#2865).
+
+        A procedure's outcome is a person's answers to this turn's prompts for
+        the tools it lists in ``tools_required``: any decline makes it a failed
+        attempt, approvals with no decline a successful one. A prompt for some
+        other tool, and a turn nobody was asked about, count nothing. Once a
+        procedure has ``MIN_OUTCOMES_TO_RETIRE`` outcomes since it was learned,
+        a failure that leaves it below the success rate it was learned at
+        disables it.
+
+        Consumes the turn's decisions, so a turn is counted once.
+        """
+        decisions = getattr(self, "_turn_person_decisions", None)
+        self._turn_person_decisions = None
+        store = getattr(self, "_memory_store", None)
+        if not decisions or store is None or getattr(self, "_incognito", False):
+            return
+        in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
+        by_outcome: Dict[bool, List[str]] = {True: [], False: []}
+        for skill in getattr(self, "_recalled_skills", []):
+            if skill.skill_id not in in_context:
+                continue
+            tools = set(skill.tools_required)
+            answers = [ok for tool, ok in decisions if tool in tools]
+            if answers:
+                by_outcome[all(answers)].append(skill.skill_id)
+        if not (by_outcome[True] or by_outcome[False]):
+            return
+
+        from gaia.agents.base.memory import (
+            _load_memory_settings,  # deferred (cycle break)
+        )
+
+        erase_count = getattr(self, "_turn_erase_count", None)
+        if by_outcome[True]:
+            done = store.record_skill_outcome(
+                by_outcome[True], True, erase_count=erase_count
+            )
+            logger.info("[MemoryMixin] procedure outcome: success for %s", sorted(done))
+        if not by_outcome[False]:
+            return
+        failed = store.record_skill_outcome(
+            by_outcome[False], False, erase_count=erase_count
+        )
+        logger.info("[MemoryMixin] procedure outcome: failure for %s", sorted(failed))
+        bar = load_synthesis_config(_load_memory_settings()).min_success_rate
+        for skill_id, (successes, attempts, outcomes) in failed.items():
+            if outcomes < MIN_OUTCOMES_TO_RETIRE or successes / attempts >= bar:
+                continue
+            if store.disable_skill(skill_id):
+                logger.warning(
+                    "[MemoryMixin] procedure %s disabled: its record fell to "
+                    "%d/%d, below the %.0f%% it was learned at, after people "
+                    "declined its steps. It is no longer recalled; a new run "
+                    "of the same goal can learn a replacement",
+                    skill_id,
+                    successes,
+                    attempts,
+                    bar * 100,
+                )
 
     # ==================================================================
-    # Skill Synthesis (procedural memory, #887)
+    # Skill Synthesis (procedural memory)
     # ==================================================================
 
     def _side_request_kwargs(self) -> Dict[str, Any]:
@@ -643,6 +784,9 @@ class ProceduralMemoryMixin:
         unmarked so the next pass retries them.  No smaller-model fallback in
         any path.
 
+        "Forget everything" mid-pass voids the pass: no procedure, mark, or
+        watermark derived from the erased history is written.
+
         Args:
             since: ISO 8601 watermark override; only ``tool_history`` newer than
                 this is considered.  None reads the stored watermark.
@@ -684,6 +828,10 @@ class ProceduralMemoryMixin:
             logger.info("[MemoryMixin] no chat SDK available; skipping skill synthesis")
             return result
 
+        # Read before the window: an erase from another chat mid-pass voids
+        # every write derived from it, so each write re-checks under the lock.
+        erase_count = store.erase_count()
+
         # DETECT — cheap SQL; no LLM, no embedder.  The watermark bounds it to
         # what no previous pass has consumed.
         watermark = since
@@ -701,24 +849,32 @@ class ProceduralMemoryMixin:
         # A session with no user turn has no goal, so CLUSTER can never take it.
         # Left unmarked it pins the watermark and every later pass re-reads the
         # whole history behind it.
-        pending, consumed_now = self._mark_unclusterable_episodes(store, pending)
+        pending, consumed_now = self._mark_unclusterable_episodes(
+            store, pending, erase_count
+        )
 
-        # CLUSTER — embedder failure RE-RAISES here (fail-loud).
+        # CLUSTER — embedder failure RE-RAISES here (fail-loud), except a goal
+        # the embedder refuses as too long, which only that session pays for.
+        rejected: List[Tuple[Dict, GoalEmbedRejected]] = []
         clusters = (
             cluster_by_goal(
                 pending,
-                self._embed_text,
+                self._embed_goal,
                 similarity_tau=config.similarity_tau,
                 min_occurrences=config.min_occurrences,
                 min_success_rate=config.min_success_rate,
+                on_rejected=lambda session, err: rejected.append((session, err)),
             )
             if pending
             else []
         )
+        consumed_now.update(self._mark_rejected_goals(store, rejected, erase_count))
         result["clusters"] = len(clusters)
 
         calls = 0
         for cluster in clusters[: config.max_clusters_per_pass]:
+            if store.erased_since(erase_count):
+                break
             if calls >= config.max_distill_calls_per_pass:
                 result["capped"] = True
                 logger.info(
@@ -748,6 +904,9 @@ class ProceduralMemoryMixin:
                 )
                 break
 
+            if store.erased_since(erase_count):
+                break
+
             if candidate is None:
                 # SKIP sentinel, malformed, or truncated at the model's output
                 # cap. Marked, so it is not re-attempted every session start.
@@ -757,6 +916,7 @@ class ProceduralMemoryMixin:
                         store,
                         cluster,
                         "unusable",
+                        erase_count,
                         detail=(
                             "distiller returned SKIP or a document that did not "
                             "parse (a response truncated at the output cap lands "
@@ -776,21 +936,32 @@ class ProceduralMemoryMixin:
 
             # Embed when_to_use (its own corpus).  Embedder failure RE-RAISES.
             vec = self._embed_text(candidate.when_to_use)
+            if store.erased_since(erase_count):
+                break
             res = reconcile_and_store(
                 candidate,
                 cluster,
                 store,
                 embedding=_embedding_to_blob(vec),
                 similarity_tau=config.similarity_tau,
+                erase_count=erase_count,
             )
+            if res.action == "erased":
+                break
             consumed_now.update(
-                self._mark_cluster_consumed(store, cluster, "distilled")
+                self._mark_cluster_consumed(store, cluster, "distilled", erase_count)
             )
             if res.action in ("add", "update") and res.skill_id:
                 self._proc_faiss_add(res.skill_id, vec)
                 result["stored"] += 1
 
         result["consumed"] = len(consumed_now)
+        if store.erased_since(erase_count):
+            logger.info(
+                "[MemoryMixin] skill synthesis: all memory was erased during the "
+                "pass; nothing from it was kept"
+            )
+            return result
         self._advance_synthesis_watermark(
             store, window, already_consumed | consumed_now
         )
@@ -804,8 +975,10 @@ class ProceduralMemoryMixin:
 
         An episode is done once a pass handed it to the distiller, whatever the
         outcome — that is what stops a cluster the model could not distil from
-        being re-attempted on every session start.  ``force`` ignores the marks
-        so the whole window is re-read.
+        being re-attempted on every session start.  A marked episode with tool
+        calls newer than its mark is pending again: an Agent UI chat keeps its
+        id, so work done after it was consumed would otherwise never be read.
+        ``force`` ignores the marks so the whole window is re-read.
 
         Returns:
             ``(pending, already_consumed_ids)``.
@@ -814,6 +987,14 @@ class ProceduralMemoryMixin:
             return list(window), set()
 
         marks = store.get_synthesis_marks([s["session_id"] for s in window])
+        # Parsed, not compared as text: the stored local offset changes with DST.
+        marks = {
+            s["session_id"]: marks[s["session_id"]]
+            for s in window
+            if s["session_id"] in marks
+            and datetime.fromisoformat(s["last_at"])
+            <= datetime.fromisoformat(marks[s["session_id"]]["marked_at"])
+        }
         if not marks:
             return list(window), set()
 
@@ -834,7 +1015,7 @@ class ProceduralMemoryMixin:
 
     @staticmethod
     def _mark_unclusterable_episodes(
-        store, pending: List[Dict]
+        store, pending: List[Dict], erase_count: Optional[int] = None
     ) -> Tuple[List[Dict], Set[str]]:
         """Consume the episodes CLUSTER is structurally unable to take.
 
@@ -862,6 +1043,7 @@ class ProceduralMemoryMixin:
             ids,
             "unusable",
             detail="no user turn, so there is no goal to cluster on",
+            erase_count=erase_count,
         )
         logger.debug(
             "[MemoryMixin] skill synthesis: %d episode(s) have no goal to "
@@ -871,14 +1053,74 @@ class ProceduralMemoryMixin:
         consumed = set(ids)
         return [s for s in pending if s["session_id"] not in consumed], consumed
 
+    def _embed_goal(self, goal: str) -> np.ndarray:
+        """Embed a session goal; raise ``GoalEmbedRejected`` if it is too long.
+
+        Any other failure (Lemonade down, model missing) re-raises unchanged.
+        """
+        try:
+            return self._embed_text(goal)
+        except RuntimeError as e:
+            if _EMBED_TOO_LARGE not in str(e):
+                raise
+            raise GoalEmbedRejected(str(e)) from e
+
+    @staticmethod
+    def _mark_rejected_goals(
+        store,
+        rejected: List[Tuple[Dict, GoalEmbedRejected]],
+        erase_count: Optional[int] = None,
+    ) -> Set[str]:
+        """Consume the episodes whose goal the embedder refused.
+
+        Left pending, each would be re-sent and refused on every session
+        start and would pin the watermark below it.
+
+        Returns:
+            The consumed session ids.
+        """
+        by_goal: Dict[str, Tuple[List[str], GoalEmbedRejected]] = {}
+        for session, err in rejected:
+            by_goal.setdefault(str(session["goal"]), ([], err))[0].append(
+                session["session_id"]
+            )
+        consumed: Set[str] = set()
+        for goal, (ids, err) in by_goal.items():
+            store.mark_sessions_synthesized(
+                ids,
+                "unusable",
+                goal=goal,
+                detail=f"the embedder refused the goal as too long: {str(err)[:300]}",
+                erase_count=erase_count,
+            )
+            consumed.update(ids)
+        if consumed:
+            logger.warning(
+                "[MemoryMixin] skill synthesis: the embedder refused %d goal(s) as "
+                "too long (e.g. %r); %d episode(s) skipped. "
+                "MemoryStore.reset_synthesis_progress() retries them",
+                len(by_goal),
+                next(iter(by_goal))[:80],
+                len(consumed),
+            )
+        return consumed
+
     @staticmethod
     def _mark_cluster_consumed(
-        store, cluster: GoalCluster, outcome: str, detail: Optional[str] = None
+        store,
+        cluster: GoalCluster,
+        outcome: str,
+        erase_count: Optional[int] = None,
+        detail: Optional[str] = None,
     ) -> List[str]:
         """Record a cluster's episodes as consumed; return their session ids."""
         session_ids = cluster.from_sessions
         store.mark_sessions_synthesized(
-            session_ids, outcome, goal=cluster.goal, detail=detail
+            session_ids,
+            outcome,
+            goal=cluster.goal,
+            detail=detail,
+            erase_count=erase_count,
         )
         return session_ids
 

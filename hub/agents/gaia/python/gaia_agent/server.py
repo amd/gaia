@@ -15,7 +15,10 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14) and ``/sessions/{session_id}/bypass``. ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
+``/sessions/{session_id}/tools`` (contract >= 2.27).
+``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -48,6 +51,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
+from gaia_agent.session import validate_session_id
 from gaia_agent.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
@@ -56,14 +60,17 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
+from gaia.agents.base import file_snapshots
+from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
+from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia.ui.turn_insights import turn_record
 from gaia.version import LEMONADE_MIN_VERSION
 
 logger = get_logger(__name__)
@@ -80,7 +87,24 @@ AGENT_ID = "gaia"
 #: 2.16 (#4166) added ``/query``'s ``documents`` field.
 #: 2.17 added ``GET /skills`` for the Agent UI's Skills settings.
 #: 2.18 added ``/query``'s ``allowed_paths`` and ``memory`` fields.
-API_VERSION = "2.18"
+#: 2.19 added ``/query``'s ``changes_turn_id`` field.
+#: 2.20 added ``/query``'s ``surface`` field.
+#: 2.21 added ``context`` to ``/query``'s ``final`` event.
+#: 2.22 added ``/query``'s ``reasoning`` field.
+#: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
+#: 2.24 added ``working_directory`` to ``/query``.
+#: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
+#: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
+#: session's "always" answers, and ``/skills``' ``claude-project`` source.
+#: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
+API_VERSION = "2.27"
+
+#: How long ``final`` waits for the turn's context measurement before going without.
+_CONTEXT_WAIT_SECONDS = 15.0
+
+#: Budget for counting with the model's own tokenizer before the estimate stands in,
+#: so a busy model server never holds up the answer.
+_EXACT_COUNT_SECONDS = 2.0
 
 #: A run parked with nothing to say still has to reset the client's read-idle
 #: watchdog, or a long tool call reads as a dead stream.
@@ -189,10 +213,31 @@ class QueryRequest(_Strict):
             ">= 2.18), so the agent works where the caller's UI says it does. "
             "Absolute paths. Builds a new session with exactly this scope; a "
             "retained session gains any entry it lacks and keeps what the user "
-            "granted. GAIA_ALLOWED_PATHS still narrows it. Omit for the agent's "
-            "default scope."
+            "granted. GAIA_ALLOWED_PATHS still narrows it. This is an access "
+            "allowlist, not a relative-path working directory. Omit for the "
+            "agent's default scope."
         ),
     )
+    working_directory: Optional[str] = Field(
+        default=None,
+        description=(
+            "Absolute chat workspace used to resolve relative file paths on this "
+            "turn (contract >= 2.24). It is separate from allowed_paths: an "
+            "allowlist grants access but does not choose which folder a bare "
+            "file name belongs in."
+        ),
+    )
+
+    @field_validator("working_directory")
+    @classmethod
+    def _working_directory_absolute(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and (not v or not Path(v).is_absolute()):
+            raise ValueError(
+                "working_directory must be an absolute path; the agent's working "
+                "directory is not the caller's, so a relative path would name a "
+                "different folder."
+            )
+        return v
 
     @field_validator("allowed_paths")
     @classmethod
@@ -219,6 +264,94 @@ class QueryRequest(_Strict):
             "leave memory as the agent has it."
         ),
     )
+
+    internet_off: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether this turn may reach the internet (contract >= 2.23). True "
+            "refuses web search, page fetches, the browser, connector, mailbox "
+            "and Agent Hub tools and commands that contact another host, with a "
+            "plain message the model relays; false allows them. Send it every "
+            "turn: a retained session keeps the last value. Omit it to leave the "
+            "agent as it is."
+        ),
+    )
+
+    changes_turn_id: Optional[str] = Field(
+        default=None,
+        pattern=file_snapshots.TURN_ID_PATTERN,
+        description=(
+            "Record this turn's file changes for undo, under this turn of the "
+            "session (contract >= 2.19). Needs session_id. A copy of each file "
+            "the agent writes is saved first, in the snapshot store of the "
+            "agent's GAIA home, keyed by session_id and this id, and the "
+            "recording is complete before the terminal event is sent. Use "
+            "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    surface: Optional[Literal["agent_ui", "tui", "cli"]] = Field(
+        default=None,
+        description=(
+            "The front-end this turn comes from (contract >= 2.20). 'agent_ui' "
+            "tells the agent that features like Scheduled tasks are in the "
+            "caller's sidebar, and each front-end gets model-provider errors "
+            "worded for its own settings. Fixed when a session is built; omit "
+            "it for a headless caller, whose provider advice then points at "
+            "the model server this GAIA host uses."
+        ),
+    )
+
+    turns: Optional[List[List[Dict[str, Any]]]] = Field(
+        default=None,
+        description=(
+            "Earlier turns as the model saw them, oldest first (contract >= "
+            "2.25): each is that turn's `final.model_messages`, tool calls and "
+            "results included, or a user/assistant text pair for a turn that "
+            "recorded none. Replaces `context` when sent, and `[]` means no "
+            "earlier turns and clears a retained session's history; the agent "
+            "keeps the newest whole turns that fit its context window. Sent, "
+            "even as `[]`, it makes `final` carry `model_messages`."
+        ),
+    )
+
+    @field_validator("turns")
+    @classmethod
+    def _turn_roles_known(
+        cls, v: Optional[List[List[Dict[str, Any]]]]
+    ) -> Optional[List[List[Dict[str, Any]]]]:
+        for turn in v or []:
+            for message in turn:
+                if message.get("role") not in {"user", "assistant", "system", "tool"}:
+                    raise ValueError(f"unknown role {message.get('role')!r} in turns")
+        return v
+
+    @model_validator(mode="after")
+    def _turns_replace_context(self) -> "QueryRequest":
+        if self.turns is not None and self.context:
+            raise ValueError(
+                "send `turns` or `context`, not both: with `turns`, `context` "
+                "must be [] (contract >= 2.25)."
+            )
+        return self
+
+    reasoning: bool = Field(
+        default=False,
+        description=(
+            "Stream the model's reasoning as `reasoning` events with a `delta` "
+            "(contract >= 2.22), for a client that shows it apart from status "
+            "lines. Without it, reasoning folds into `status` lines as before."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _changes_need_a_session(self) -> "QueryRequest":
+        if self.changes_turn_id is not None and not self.session_id:
+            raise ValueError(
+                "changes_turn_id needs session_id: a turn's file changes are "
+                "recorded under the session they belong to."
+            )
+        return self
 
     @field_validator("documents")
     @classmethod
@@ -367,6 +500,47 @@ class BypassResponse(_Strict):
     enabled: bool
 
 
+class InternetRequest(_Strict):
+    """Body of ``POST /v1/gaia/sessions/{session_id}/internet``."""
+
+    internet_off: bool
+
+
+class InternetResponse(_Strict):
+    session_id: str
+    internet_off: bool
+
+
+class GrantView(_Strict):
+    key: str = Field(description="The grant's handle, for revoking it.")
+    label: str = Field(description="What it allows, as the prompt worded it.")
+
+
+class GrantsResponse(_Strict):
+    """A session's "always" answers (contract >= 2.26)."""
+
+    session_id: str
+    grants: List[GrantView]
+
+
+class ToolView(_Strict):
+    name: str = Field(description="The tool's registered name.")
+    description: str = Field(description="What it does, as the model is told.")
+    category: str = Field(
+        description=(
+            "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), "
+            "mcp, skill, or agent for a tool the agent defines itself."
+        )
+    )
+
+
+class ToolsResponse(_Strict):
+    """The tools a session's agent can call (contract >= 2.27)."""
+
+    session_id: str
+    tools: List[ToolView]
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -379,6 +553,13 @@ class _QueryRun:
         #: step boundary; see Agent._drain_followups.
         self.followups: "queue.Queue[str]" = queue.Queue()
         self.result: Optional[Dict[str, Any]] = None
+        #: Records the run's file changes when the caller asked for it.
+        self.recorder: Optional[file_snapshots.TurnRecorder] = None
+        #: What the next model call holds, measured once the turn ends.
+        self.context: Optional[Dict[str, Any]] = None
+        #: Why measuring failed, when it did.
+        self.context_error: Optional[str] = None
+        self.context_done = threading.Event()
 
 
 class DuplicateRunError(RuntimeError):
@@ -485,30 +666,49 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _wording_surface(request: QueryRequest) -> str:
+    """The front-end *request*'s errors are worded for; a headless caller is ``service``."""
+    return request.surface or "service"
+
+
+def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
+    """*event* with the agent's TUI provider advice reworded for *surface*."""
+    return {
+        key: surface_wording(value, surface) if isinstance(value, str) else value
+        for key, value in event.items()
+    }
+
+
 def _terminal_error_detail(exc: BaseException) -> str:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is by far the most common failure and its raw
-    urllib3 repr tells a user nothing, so it gets named copy with the fix.
-    Anything else is surfaced verbatim — a generic 'something went wrong' would
-    hide the one detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix in
+    the caller's front-end. Anything else is surfaced verbatim — a generic
+    'something went wrong' would hide the one detail that makes a bug
+    reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    if any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return model_server_message(typed)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _start_failure(exc: BaseException, surface: str) -> HTTPException:
+    """The HTTP error for a run that failed before its loop started."""
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is None:
+        return HTTPException(
+            status_code=500, detail=f"Failed to start the query run: {exc}"
         )
-    ):
-        return (
-            f"Local Lemonade Server is not reachable. {start_advice()} "
-            f"See {_DOCS_URL}. (underlying error: {text})"
-        )
-    return text
+    logger.warning("%s /query could not start: %s", AGENT_ID, exc)
+    # Not the caller's fault and not a bug: the model server is unavailable.
+    return HTTPException(
+        status_code=503, detail=surface_wording(model_server_message(typed), surface)
+    )
 
 
 def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -518,13 +718,21 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     message rather than raising, so a run can finish with no ``answer`` event.
     Surfacing that message beats inventing a generic error.
     """
+    from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+
     if isinstance(result, dict):
+        if result.get("status") == "cancelled":
+            # Stopped mid-generation: the loop returns no text by design, and
+            # the stdio transport ends the same turn with an empty final.
+            return {"type": "final", "answer": ""}
         for key in ("answer", "response", "result", "output"):
             value = result.get(key)
             if isinstance(value, str) and value.strip():
                 final: Dict[str, Any] = {"type": "final", "answer": value}
                 if result.get("model_failed"):
                     final["failed"] = True
+                    if result.get("model_server_down"):
+                        final["failure"] = MODEL_SERVER_DOWN
                 return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
@@ -537,6 +745,73 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         ),
         "status": 500,
     }
+
+
+def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The answer text a finished run returned, or None when it has none."""
+    if not isinstance(result, dict) or result.get("status") == "cancelled":
+        return None
+    if result.get("model_failed"):
+        # The failure notice is not a turn the next push carries.
+        return None
+    for key in ("answer", "response", "result", "output"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _measure_turn_context(
+    agent: Any,
+    pushed: List[Dict[str, Any]],
+    query: str,
+    result: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """What the next model call holds: the pushed history plus this turn.
+
+    None for a turn with no answer (stopped, or the model failed), which adds
+    nothing the caller's next push would carry.
+    """
+    from gaia.ui.turn_insights import panel_context
+
+    answer = _run_answer(result)
+    if answer is None:
+        return None
+    messages = list(pushed) + [
+        {"role": "user", "content": query},
+        {"role": "assistant", "content": answer},
+    ]
+    turns = pushed_turns(messages)
+    model_id = getattr(agent, "model_id", None)
+    box: Dict[str, Any] = {}
+
+    deadline = time.monotonic() + _EXACT_COUNT_SECONDS
+
+    def _exact() -> None:
+        try:
+            box["usage"] = panel_context(agent, turns, model_id, deadline=deadline)
+        except Exception as exc:  # re-raised below, on the run's thread
+            box["error"] = exc
+
+    counter = threading.Thread(target=_exact, name="context-count", daemon=True)
+    counter.start()
+    counter.join(_EXACT_COUNT_SECONDS)
+    if "error" in box:
+        raise box["error"]
+    if "usage" in box:
+        return box["usage"]
+    logger.info(
+        "Tokenizer count took over %ss; sending the estimate", _EXACT_COUNT_SECONDS
+    )
+    return panel_context(
+        agent,
+        turns,
+        model_id,
+        estimate_reason=(
+            f"The model server didn't count tokens within {_EXACT_COUNT_SECONDS:g}s, "
+            "so these are estimates."
+        ),
+    )
 
 
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
@@ -628,6 +903,14 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
 
 
+def _declare_who_answers(handler: Any, session: Any, request: "QueryRequest") -> None:
+    """Tell *handler* whether a person can answer a confirmation on this turn."""
+    handler.answers_confirmations = (
+        session is not None and request.can_answer_questions is not False
+    )
+    handler.nobody_answers = not handler.answers_confirmations
+
+
 def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
     """Turn *agent*'s memory writes off or back on for this turn (>= 2.18).
 
@@ -643,6 +926,12 @@ def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
         return
     agent._incognito = True
     agent._incognito_reason = "private" if mode == "private" else "memory_off"
+
+
+def _apply_internet_switch(agent: Any, internet_off: Optional[bool]) -> None:
+    """Turn *agent*'s internet guard on or off for this turn (>= 2.23)."""
+    if internet_off is not None:
+        agent.internet_off = internet_off
 
 
 def build_query_agent(**config_kwargs: Any):
@@ -773,10 +1062,12 @@ async def init() -> Dict[str, Any]:
             f"See {_DOCS_URL}."
         )
     elif compatible is False:
+        from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
+        upgrade = await asyncio.to_thread(describe_upgrade_hint, probe["base_url"])
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
-            "re-check."
+            f"{LEMONADE_MIN_VERSION}. {upgrade}"
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
@@ -868,12 +1159,12 @@ async def skills() -> Dict[str, Any]:
     from gaia_agent.agent import ENGINEERING_SKILL, GaiaAgent
 
     from gaia.skills.errors import SkillError
-    from gaia.skills.listing import skills_listing
+    from gaia.skills.listing import skills_listing_for_agent
 
     try:
         # Off the event loop: discovery reads every skill folder.
         return await asyncio.to_thread(
-            skills_listing, GaiaAgent.SKILL_DIRS, (ENGINEERING_SKILL,)
+            skills_listing_for_agent, GaiaAgent, (ENGINEERING_SKILL,)
         )
     except SkillError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1025,7 +1316,120 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
-@router.post("/query")
+#: How long a ``final`` waits for the loop to return its turn record. The
+#: answer is already streamed; only the record for later turns waits on it.
+_TURN_RECORD_WAIT_SECONDS = 15.0
+
+
+def _history_from_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
+) -> List[Dict[str, Any]]:
+    """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
+    from gaia.agents.base.history import (
+        history_budget,
+        select_history,
+        text_tool_history,
+    )
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        turns = text_tool_history(turns)
+    return select_history(
+        turns,
+        history_budget(agent, query),
+        lambda cut: handler._emit({"type": "status", "message": cut.notice}),
+    )
+
+
+async def _with_turn_record(
+    event: Dict[str, Any], run: _QueryRun, thread: threading.Thread, wanted: bool
+) -> Dict[str, Any]:
+    """*event* with the turn's ``model_messages`` when it is a ``final``.
+
+    Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
+    every tool result in full, so it can outgrow a reader's frame limit.
+    The answer streams before the loop returns, so this waits for the record.
+    """
+    if not wanted or event.get("type") != "final":
+        return event
+    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
+    if thread.is_alive():
+        logger.warning(
+            "run_id=%s: the run had not finished %.0fs after its answer; this "
+            "turn is sent without its tool record, so later turns see only its text",
+            run.run_id,
+            _TURN_RECORD_WAIT_SECONDS,
+        )
+        return event
+    messages = (
+        run.result.get("model_messages") if isinstance(run.result, dict) else None
+    )
+    if messages is None:
+        return event
+    return {**event, "model_messages": messages}
+
+
+async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
+    """Complete the run's undo recording ahead of its terminal event.
+
+    The caller reads the recording as soon as the stream ends. Returns the
+    status event to send first when it could not be saved.
+    """
+    if run.recorder is None:
+        return []
+    try:
+        await asyncio.to_thread(run.recorder.finish)
+    except OSError as exc:
+        logger.error("Undo history for run_id=%s: %s", run.run_id, exc)
+        return [
+            {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+        ]
+    return []
+
+
+#: The documented stream, so the OpenAPI contract names the SSE events rather
+#: than an empty application/json body.
+_QUERY_SSE_RESPONSES = {
+    200: {
+        "description": (
+            "Server-Sent Events stream (text/event-stream). Each `data:` line is "
+            "one canonical event discriminated on `type`: status {message, "
+            "phase?, queue?, retracts_answer?} | token {delta} | "
+            "reasoning {delta, retracts_answer?} | "
+            "tool_call {tool, args} | tool_result {tool, data, render?} | "
+            "needs_confirmation {run_id, action, summary, confirm_id?, "
+            "always_scope?, risk?, tool_label?, args?, args_truncated?, "
+            "prompt_context?} | needs_input {run_id, request_id, question, "
+            "options, allow_free_text, sensitive, respond_url, "
+            "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
+            "performance?, context?, context_error?, model_messages?} | "
+            "error {detail, status}. A needs_confirmation's `args` are exactly "
+            "the arguments the model sent for the gated call, each value capped "
+            "at 64,000 characters (`args_truncated: true` when one was cut); "
+            "what the agent adds to its prompt is in `prompt_context` "
+            "{working_directory?, risk_note?, file_path?}, never in `args`. The "
+            "stream ends "
+            "with exactly one `final` or `error`. `:`-prefixed heartbeat "
+            "comments carry no payload."
+        ),
+        "content": {
+            "text/event-stream": {
+                "schema": {
+                    "type": "string",
+                    "example": (
+                        'data: {"type": "needs_confirmation", "run_id": "…", '
+                        '"action": "run_shell_command", "summary": "git push", '
+                        '"confirm_id": "…", "risk": "execute", '
+                        '"args": {"command": "git push"}}\n\n'
+                    ),
+                }
+            }
+        },
+    }
+}
+
+
+@router.post("/query", response_class=StreamingResponse, responses=_QUERY_SSE_RESPONSES)
 async def query(request: QueryRequest):
     """Run the flagship agent loop for one request, streaming canonical SSE."""
     from gaia.ui.sse_handler import SSEOutputHandler
@@ -1071,6 +1475,9 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
+        warm_up = _startup_warm_up
+        if not warm_up.done.is_set():
+            await asyncio.to_thread(warm_up.note_turn, _turn_model(request))
         kwargs: Dict[str, Any] = {}
         if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
@@ -1083,6 +1490,10 @@ async def query(request: QueryRequest):
             kwargs["model_id"] = request.model
         if request.allowed_paths is not None:
             kwargs["allowed_paths"] = request.allowed_paths
+        if request.working_directory is not None:
+            kwargs["working_directory"] = request.working_directory
+        if request.surface is not None:
+            kwargs["surface"] = request.surface
         if request.session_id:
             # Cross-turn document retention: ChatAgent persists its indexed-doc
             # set per UI session, so dropping this makes the agent forget a
@@ -1127,10 +1538,11 @@ async def query(request: QueryRequest):
                     # session.
                     raise HTTPException(
                         status_code=409,
-                        detail=(
+                        detail=surface_wording(
                             f"could not switch session {request.session_id} to "
                             f"{target!r}: {exc}. The session is still "
-                            f"running {session.model_id or 'its previous model'}."
+                            f"running {session.model_id or 'its previous model'}.",
+                            _wording_surface(request),
                         ),
                     ) from exc
                 logger.info(
@@ -1139,6 +1551,10 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            if request.working_directory is not None:
+                config = getattr(agent, "config", None)
+                if config is not None:
+                    config.working_directory = request.working_directory
             if request.allowed_paths:
                 # Built on an earlier turn's scope; this turn's may hold more.
                 validator = getattr(agent, "path_validator", None)
@@ -1176,24 +1592,33 @@ async def query(request: QueryRequest):
             )
             one_shot_agent = agent
         agent.console = handler
+        # Streamed model calls are what put ``token`` events on this wire and let
+        # Stop cut a call short. Set per turn so a retained agent can't drift.
+        agent.streaming = True
         # A confirmation can only be carried when somebody is there to answer it
         # AND there is a session to hold the grant. ``can_answer_questions`` is
         # the caller's own declaration that a human is watching (spec >= 2.6); a
         # one-shot sets it False precisely so the agent never parks on a prompt.
-        handler.answers_confirmations = (
-            session is not None and request.can_answer_questions is not False
-        )
+        _declare_who_answers(handler, session, request)
         _apply_memory_mode(agent, request.memory)
+        _apply_internet_switch(agent, request.internet_off)
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.
             handler.answers_questions = False
 
         # Pushed context, never pulled (spec §2.4).
-        if request.context and hasattr(agent, "conversation_history"):
+        # Recorded turns are fitted on the run's thread, with the context.
+        pushed = bool(request.turns) or bool(request.context)
+        if (
+            request.context
+            and request.turns is None
+            and hasattr(agent, "conversation_history")
+        ):
             agent.conversation_history = [
                 {"role": c.role, "content": c.content} for c in request.context
             ]
+        if pushed and hasattr(agent, "conversation_history"):
             # The caller chose this text, not the user — so it must not count as
             # the user speaking when the agent decides what it is allowed to
             # learn permanently (Agent.turn_content_provenance).
@@ -1229,24 +1654,80 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _unwind_setup()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
-        ) from exc
+        raise _start_failure(exc, _wording_surface(request)) from exc
 
-    def _run_agent() -> None:
+    def _process() -> None:
+        if request.documents:
+            _index_attached_documents(agent, request.documents, handler)
+        if request.turns is not None and hasattr(agent, "conversation_history"):
+            # Sizing them can ask the model server for its window: never on the loop.
+            agent.conversation_history = _history_from_turns(
+                agent, request.turns, request.query, handler
+            )
+        elif request.context and hasattr(agent, "conversation_history"):
+            # The caller sized this without our prompt and tools; re-fit it.
+            agent.conversation_history = fit_pushed_history(
+                agent,
+                agent.conversation_history,
+                request.query,
+                lambda cut: handler.print_warning(cut.notice),
+            )
+        pushed = list(getattr(agent, "conversation_history", None) or [])
         try:
-            if request.documents:
-                _index_attached_documents(agent, request.documents, handler)
             if request.max_steps is not None:
                 run.result = agent.process_query(
                     request.query, max_steps=request.max_steps
                 )
             else:
                 run.result = agent.process_query(request.query)
+            try:
+                run.context = _measure_turn_context(
+                    agent, pushed, request.query, run.result
+                )
+            except Exception as exc:  # the answer stands; the meter says why it's blank
+                logger.exception("Context measurement failed for run_id=%s", run.run_id)
+                run.context_error = f"GAIA couldn't measure this chat's context: {exc}"
+        finally:
+            run.context_done.set()
+
+    def _run_agent() -> None:
+        process_error: Optional[Exception] = None
+        try:
+            if request.changes_turn_id is None:
+                _process()
+            else:
+                # Tools find the recorder through a context variable set here.
+                with file_snapshots.recording_turn(
+                    request.session_id, request.changes_turn_id
+                ) as recorder:
+                    run.recorder = recorder
+                    try:
+                        _process()
+                    except Exception as exc:
+                        process_error = exc
+                        raise
+        except file_snapshots.SnapshotError as exc:
+            logger.exception("Undo history for run_id=%s: %s", run.run_id, exc)
+            handler._emit(
+                {"type": "status", "message": f"Undo may not work for this turn: {exc}"}
+            )
+            if process_error is not None:
+                logger.error(
+                    "%s /query run failed for run_id=%s",
+                    AGENT_ID,
+                    run.run_id,
+                    exc_info=(
+                        type(process_error),
+                        process_error,
+                        process_error.__traceback__,
+                    ),
+                )
+                handler.print_error(_terminal_error_detail(process_error))
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
             handler.print_error(_terminal_error_detail(exc))
         finally:
+            run.context_done.set()
             handler.signal_done()
             # Unwire the follow-up queue the moment the loop stops draining it.
             # Left wired, a follow-up arriving in the window before the run
@@ -1301,8 +1782,39 @@ async def query(request: QueryRequest):
 
     can_confirm = handler.answers_confirmations
 
+    def _emit(event: Dict[str, Any]) -> str:
+        return _sse(_worded(event, _wording_surface(request)))
+
+    async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
+        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
+        if final.get("type") != "final":
+            return final
+        # ``final`` is printed inside process_query; the measurement follows it.
+        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
+        while not run.context_done.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        performance = turn_record(run.result)
+        if performance is not None:
+            final = {**final, "performance": performance}
+        if not run.context_done.is_set():
+            logger.warning(
+                "run_id=%s: no context measurement within %ss; final goes without it",
+                run.run_id,
+                _CONTEXT_WAIT_SECONDS,
+            )
+            return final
+        if run.context_error is not None:
+            return {**final, "context_error": run.context_error}
+        if run.context is None:
+            return final
+        return {**final, "context": run.context}
+
     async def _stream():
-        translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)
+        translator = CanonicalTranslator(
+            request.run_id,
+            agent_id=AGENT_ID,
+            reasoning=request.reasoning,
+        )
         terminated = False
         last_write = time.monotonic()
         try:
@@ -1325,7 +1837,19 @@ async def query(request: QueryRequest):
 
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
-                    yield _sse(canonical)
+                    if ctype == "token" and run.cancel_event.is_set():
+                        # A stopped answer's tail, e.g. a half-written JSON
+                        # reply flushed at teardown, is not answer text.
+                        continue
+                    if ctype in TERMINAL_TYPES:
+                        for warning in await _finish_changes(run):
+                            yield _emit(warning)
+                        canonical = await _with_context(
+                            await _with_turn_record(
+                                canonical, run, thread, request.turns is not None
+                            )
+                        )
+                    yield _emit(canonical)
                     last_write = time.monotonic()
                     if ctype == "needs_input":
                         # Answerable, so the run stays alive: keep draining while
@@ -1342,7 +1866,9 @@ async def query(request: QueryRequest):
                         # Nobody can answer — refusing is the honest end, and
                         # far better than parking a run on a prompt no one will
                         # ever see.
-                        yield _sse(_confirmation_refusal(canonical.get("action", "")))
+                        for warning in await _finish_changes(run):
+                            yield _emit(warning)
+                        yield _emit(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
                         terminated = True
@@ -1354,11 +1880,28 @@ async def query(request: QueryRequest):
             # Queue closed. Flush any buffered tool_call, then guarantee the one
             # terminal event the contract mandates.
             for canonical in translator.flush():
-                yield _sse(canonical)
+                if canonical.get("type") in TERMINAL_TYPES:
+                    for warning in await _finish_changes(run):
+                        yield _emit(warning)
+                    canonical = await _with_context(
+                        await _with_turn_record(
+                            canonical, run, thread, request.turns is not None
+                        )
+                    )
+                yield _emit(canonical)
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                yield _sse(_terminal_from_run_result(run.result))
+                yield _emit(
+                    await _with_context(
+                        await _with_turn_record(
+                            _terminal_from_run_result(run.result),
+                            run,
+                            thread,
+                            request.turns is not None,
+                        )
+                    )
+                )
         finally:
             # A client that disconnected mid-run should not leave the loop running.
             handler.cancelled.set()
@@ -1531,6 +2074,95 @@ async def set_bypass(session_id: str, body: BypassRequest):
     return BypassResponse(session_id=session_id, enabled=body.enabled)
 
 
+@router.post("/sessions/{session_id}/internet", response_model=InternetResponse)
+async def set_internet(session_id: str, body: InternetRequest):
+    """Turn a session's internet on or off from its agent's next tool call.
+
+    ``/query``'s ``internet_off`` covers the turns that start after a change;
+    this reaches a turn already running, so a switch flipped mid-turn stops the
+    next web search rather than the one after the turn ends. An unknown session
+    is a 404, as for bypass.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists. Send a query on that "
+                "session first; the internet switch applies to a conversation, "
+                "not to the server."
+            ),
+        )
+    session.agent.internet_off = body.internet_off
+    return InternetResponse(session_id=session_id, internet_off=body.internet_off)
+
+
+def _existing_session(session_id: str) -> Any:
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it holds no grants. It "
+                "may have ended or been evicted; its grants went with it."
+            ),
+        )
+    return session
+
+
+@router.get("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def list_grants(session_id: str) -> GrantsResponse:
+    """The calls the user answered "always" to in this session, so far.
+
+    Includes answers given in a turn still running, which is where a caller
+    shows the user what it may now do without asking.
+    """
+    session = _existing_session(session_id)
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
+@router.get("/sessions/{session_id}/tools", response_model=ToolsResponse)
+async def list_tools(session_id: str) -> ToolsResponse:
+    """The tools the session's agent can call now, skills loaded so far included.
+
+    Read from the session's own agent, so it is what the next turn is offered.
+    An unknown session is a 404: building an agent just to list tools would
+    describe a different agent than the one the chat talks to.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it has no agent to list "
+                "tools for. Send a query on that session first."
+            ),
+        )
+    tools = await asyncio.to_thread(session.agent.describe_tools)
+    return ToolsResponse(session_id=session_id, tools=tools)
+
+
+@router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
+    """Revoke one "always" answer (``?key=``), or all of them.
+
+    Applies from the very next gated call, including one in a running turn.
+    An unknown key is a 404 rather than a quiet success: a caller that thinks
+    it revoked something must not be left believing it.
+    """
+    session = _existing_session(session_id)
+    removed = session.permissions.revoke(key)
+    if key is not None and removed == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id!r} has no grant {key!r}.",
+        )
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
 def _log_caller_auth_state(auth_config: Any) -> None:
     """Report which caller-auth channel this server came up on.
 
@@ -1589,9 +2221,12 @@ def build_app() -> FastAPI:
         Without this the first turn pays the model load *and* the first pass
         over a large system prompt, which reads as a 60-90s "Getting started"
         hang on a freshly opened chat. Backgrounded so readiness is not
-        delayed, and never fatal — a cold first turn is slow, not broken.
+        delayed, and never fatal — a cold first turn is slow, not broken. A
+        turn on another model stops it (:class:`_StartupWarmUp`).
         """
         _log_caller_auth_state(auth_config)
+        global _startup_warm_up
+        _startup_warm_up = _StartupWarmUp()
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
@@ -1632,30 +2267,103 @@ def build_app() -> FastAPI:
     return app
 
 
-def _default_model_is_servable() -> bool:
-    """Whether warming the default model would load it rather than download it.
+def _model_to_warm() -> Optional[str]:
+    """The model the first turn runs on, or None when the warm-up should skip.
 
-    Building the warm-up agent preloads its model, and Lemonade downloads a
-    missing one on load — gigabytes the user never asked for when they chose
-    a cloud model and skipped the local one.
+    That is the model chat reopens on (``last_model``, else ``default_model``),
+    as in the Agent UI and TUI: warming any other one makes Lemonade, which
+    keeps one chat model loaded, evict the user's pick for it. Skipped like the
+    Agent UI's own warm-up on a PC small enough to load on the first message,
+    for Claude, and for a model not downloaded: Lemonade downloads a missing
+    one on load, gigabytes the user never asked for.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         cloud_model_provider,
-        resolve_default_chat_model,
+        resolve_chat_model,
     )
+    from gaia.ui.warmup import preload_skip_reason
 
-    model = resolve_default_chat_model()
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("GAIA sidecar: warm-up skipped (%s)", low_memory)
+        return None
+    model = resolve_chat_model()
+    if model.startswith("claude-"):
+        logger.info("GAIA sidecar: warm-up skipped (chat runs on Claude, %s)", model)
+        return None
     if cloud_model_provider(model):
-        return True
+        return model
     if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
         logger.info(
             "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
             "uses it downloads it)",
             model,
         )
-        return False
-    return True
+        return None
+    return model
+
+
+class _StartupWarmUp:
+    """The start-up warm-up's model, and the switch that stops it for a turn
+    on any other model.
+
+    The model server reads one prompt at a time, so a turn on a cloud or other
+    local model would wait out the whole warm-up, and a warm-up that then loads
+    its model would evict the one that turn uses. A turn on the warmed model
+    leaves it running and reads the prefix it caches.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._model: Optional[str] = None
+        self._turn_models: List[str] = []
+        self.cancel = threading.Event()
+        self.done = threading.Event()
+
+    def aim(self, model: str) -> None:
+        """Record the model the warm-up loads."""
+        with self._lock:
+            self._model = model
+            self._stop_for_another_model()
+
+    def note_turn(self, model: Optional[str]) -> None:
+        """A turn starts on *model*; None runs ``default_model``, which need not
+        be the warm-up's (that follows the user's last pick)."""
+        if self.done.is_set():
+            return
+        if model is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            model = resolve_default_chat_model()
+        with self._lock:
+            self._turn_models.append(model)
+            self._stop_for_another_model()
+
+    def _stop_for_another_model(self) -> None:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        if self._model is None or self.cancel.is_set():
+            return
+        for model in self._turn_models:
+            if not _model_ids_match(model, self._model):
+                logger.info(
+                    "GAIA sidecar: stopping the warm-up of %s; a turn uses %s",
+                    self._model,
+                    model,
+                )
+                self.cancel.set()
+                return
+
+
+_startup_warm_up = _StartupWarmUp()
+
+
+def _turn_model(request: "QueryRequest") -> Optional[str]:
+    """The model *request* runs on, or None for the sidecar's default."""
+    if _effective_provider(request) == _CLAUDE_PROVIDER:
+        return f"{_CLAUDE_PROVIDER}:{request.model or ''}"
+    return request.model or None
 
 
 def _warmup_blocking() -> None:
@@ -1669,14 +2377,33 @@ def _warmup_blocking() -> None:
     the first question in any session reads it from Lemonade's cache.
 
     Never fatal — a cold first turn is slow, not broken — but a failure is
-    logged as a warning with its cause, not hidden.
+    logged as a warning with its cause, not hidden. Stops as soon as a turn
+    starts on another model (:class:`_StartupWarmUp`).
     """
+    state = _startup_warm_up
+    try:
+        _warm_chat_model(state)
+    finally:
+        state.done.set()
+
+
+def _warm_chat_model(state: _StartupWarmUp) -> None:
     from gaia_agent.session_registry import build_session_agent
 
+    from gaia.chat.sdk import LLMCallCancelled
+    from gaia.llm.lemonade_client import cloud_model_provider
+
     try:
-        if not _default_model_is_servable():
+        model = _model_to_warm()
+        if model is None:
             return
-        agent = build_session_agent()
+        state.aim(model)
+        if state.cancel.is_set():
+            return
+        # No preload while building: only warm_up's load can be stopped by a turn.
+        agent = build_session_agent(
+            model_id=model, skip_lemonade=not cloud_model_provider(model)
+        )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(
             "GAIA sidecar: warm-up failed before the model was reached (%s). "
@@ -1687,13 +2414,27 @@ def _warmup_blocking() -> None:
         )
         return
     try:
-        result = agent.warm_up()
+        result = agent.warm_up(cancel=state.cancel)
+        if result.get("primed") is False:
+            logger.info(
+                "GAIA sidecar: loaded %s in %ss (its prompt is read by the first "
+                "turn: FastFlowLM keeps no cache a new chat can reuse)",
+                getattr(agent, "model_id", "?"),
+                result.get("seconds"),
+            )
+            return
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),
             result.get("seconds"),
             result.get("cached_tokens", "?"),
             result.get("prompt_tokens", "?"),
+        )
+    except LLMCallCancelled as e:
+        logger.info(
+            "GAIA sidecar: warm-up of %s stopped for a turn on another model (%s)",
+            getattr(agent, "model_id", "?"),
+            e,
         )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(

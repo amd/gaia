@@ -34,17 +34,15 @@ describe('parseTaskListEvent rejects what it cannot trust', () => {
         expect('error' in parseTaskListEvent(raw)).toBe(true);
     });
 
-    it('coerces bad numbers and an unknown source instead of drawing NaN', () => {
+    it('coerces bad numbers instead of drawing NaN', () => {
         const state = ok({
             items: [{ content: 'a', status: 'pending', started_at: 'soon', completed_at: Infinity }],
-            source: 'evil',
             current_action: 12,
             action_started_at: 'x',
             steps_since_update: -3,
         });
         expect(state.items[0].started_at).toBeNull();
         expect(state.items[0].completed_at).toBeNull();
-        expect(state.source).toBe('agent');
         expect(state.current_action).toBeNull();
         expect(state.steps_since_update).toBe(0);
     });

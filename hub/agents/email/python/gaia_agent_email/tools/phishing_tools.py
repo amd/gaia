@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool

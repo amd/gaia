@@ -1,11 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A llama.cpp chat model loads with a second slot and no host prompt cache.
+"""A llama.cpp chat model loads with three slots and no host prompt cache.
 
 With one slot, a side request carrying its own prompt (memory extraction)
 first copied the conversation's KV cache to host RAM — 87s per switch for a
 30K-token Qwen3-30B context on a Radeon 8060S — and the user's next turn
-waited behind it.
+waited behind it. The third slot holds the full tool list primed, out of the
+side jobs' way, for a session that moves to it.
 """
 
 import json
@@ -18,6 +19,9 @@ import responses
 from gaia.llm.lemonade_client import (
     CHAT_LLAMACPP_ARGS,
     CONVERSATION_SLOT,
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDER_LLAMACPP_ARGS,
+    FULL_TOOLS_SLOT,
     SIDE_SLOT,
     LemonadeAuthError,
     LemonadeClient,
@@ -33,6 +37,7 @@ CATALOG = [
         "downloaded": True,
     },
     {"id": "gemma4-it-e2b-FLM", "recipe": "flm", "downloaded": True},
+    {"id": "user.embeddinggemma-300m-GGUF", "recipe": "llamacpp", "downloaded": True},
 ]
 
 
@@ -51,17 +56,24 @@ def _sent_load(client, model, **kwargs):
     return post.call_args.args[1]
 
 
-def test_a_llamacpp_chat_load_gets_two_slots_and_no_ram_cache(client):
+def test_a_llamacpp_chat_load_gets_three_slots_and_no_ram_cache(client):
     sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536)
     assert sent["llamacpp_args"] == CHAT_LLAMACPP_ARGS
-    for flag in ("--parallel 2", "--kv-unified", "--cache-ram 0"):
+    for flag in ("--parallel 3", "--kv-unified", "--cache-ram 0"):
         assert flag in sent["llamacpp_args"]
+
+
+def test_the_load_has_a_slot_for_every_pinned_request():
+    # llama.cpp defers a request for a slot it lacks until the caller gives up.
+    flags = CHAT_LLAMACPP_ARGS.split()
+    slots = int(flags[flags.index("--parallel") + 1])
+    assert sorted((CONVERSATION_SLOT, SIDE_SLOT, FULL_TOOLS_SLOT)) == list(range(slots))
 
 
 def test_each_slot_keeps_the_whole_memory_sized_window(client):
     # Without --kv-unified llama.cpp splits n_ctx across slots (n_ctx_seq =
     # n_ctx / n_parallel), silently halving the window the fit math sized.
-    # Unified, both slots share one n_ctx-token pool: each sees the full window
+    # Unified, all slots share one n_ctx-token pool: each sees the full window
     # and the KV memory is n_ctx tokens, which is what context_for_capacity charges.
     sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=262144)
     flags = sent["llamacpp_args"].split()
@@ -88,14 +100,15 @@ def test_other_loads_keep_their_flags(client, model, kwargs):
     assert sent.get("llamacpp_args") == kwargs.get("llamacpp_args")
 
 
-def test_an_embedder_load_never_saves_the_chat_flags(client):
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_an_embedder_load_never_saves_the_chat_flags(client, system):
     with (
-        patch("gaia.llm.lemonade_client.manages_embedder_backend", return_value=True),
+        patch("gaia.llm.lemonade_client.platform.system", return_value=system),
         patch.object(client, "_default_llamacpp_backend", return_value="cpu"),
     ):
-        sent = _sent_load(client, "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=8192)
+        sent = _sent_load(client, DEFAULT_EMBEDDING_MODEL, ctx_size=8192)
     assert sent["save_options"] is True
-    assert "llamacpp_args" not in sent
+    assert sent["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
 
 
 def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
@@ -111,8 +124,9 @@ def test_an_unreadable_catalog_loads_without_the_chat_flags(client, caplog):
     assert sent == {
         "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
         "ctx_size": 65536,
+        "save_options": True,
     }
-    assert "without the two-slot chat flags" in caplog.text
+    assert "without the multi-slot chat flags" in caplog.text
 
 
 def test_an_auth_failure_on_the_catalog_still_fails_the_load(client):
@@ -126,16 +140,18 @@ def test_an_auth_failure_on_the_catalog_still_fails_the_load(client):
     post.assert_not_called()
 
 
-def test_a_known_recipe_skips_the_catalog_round_trip(client):
+def test_a_known_recipe_reads_the_catalog_once_for_saved_args(client):
+    # The recipe comes from the cache; the user's saved args are read fresh.
     client._model_metadata["Qwen3-30B-A3B-Instruct-2507-GGUF"] = {"recipe": "llamacpp"}
-    with responses.RequestsMock() as rsps:  # any GET would raise ConnectionError
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, f"{BASE}/models", json={"data": CATALOG})
         with patch.object(
             client, "_post_load_with_transient_retry", return_value={}
         ) as post:
             client.load_model(
                 "Qwen3-30B-A3B-Instruct-2507-GGUF", ctx_size=65536, prompt=False
             )
-        assert len(rsps.calls) == 0
+        assert len(rsps.calls) == 1
     assert post.call_args.args[1]["llamacpp_args"] == CHAT_LLAMACPP_ARGS
 
 
@@ -210,6 +226,13 @@ def _health(entry):
                 "model_name": "Qwen3-30B-A3B-Instruct-2507-GGUF",
                 "recipe_options": {"llamacpp_args": CHAT_LLAMACPP_ARGS},
             },
+            3,
+        ),
+        (
+            {
+                "id": "Qwen3-30B-A3B-Instruct-2507-GGUF",
+                "launch_command": ["llama-server", "--parallel", "2"],
+            },
             2,
         ),
         (
@@ -236,7 +259,7 @@ def test_slot_count_reads_what_the_loaded_model_was_launched_with(client, entry,
         assert client.slot_count("Qwen3-30B-A3B-Instruct-2507-GGUF") == slots
 
 
-def _side_request(slots):
+def _side_request(slots, slot=SIDE_SLOT):
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
         backend.return_value.chat_completions.return_value = {
             "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]
@@ -244,7 +267,7 @@ def _side_request(slots):
         backend.return_value.cloud_model_provider.return_value = None
         backend.return_value.slot_count.return_value = slots
         provider = LemonadeProvider(model="Qwen3-30B-A3B-Instruct-2507-GGUF")
-        provider.chat([{"role": "user", "content": "q"}], id_slot=SIDE_SLOT)
+        provider.chat([{"role": "user", "content": "q"}], id_slot=slot)
         return backend.return_value.chat_completions.call_args.kwargs
 
 
@@ -255,6 +278,17 @@ def test_a_side_request_uses_the_side_slot_when_the_model_has_one():
 def test_a_side_request_never_pins_a_slot_a_one_slot_model_lacks():
     # llama.cpp defers a request for a missing slot until the caller gives up.
     assert _side_request(1)["id_slot"] == CONVERSATION_SLOT
+
+
+def test_a_full_list_request_uses_its_slot_when_the_model_has_one():
+    assert _side_request(3, slot=FULL_TOOLS_SLOT)["id_slot"] == FULL_TOOLS_SLOT
+
+
+@pytest.mark.parametrize("slots", [1, 2])
+def test_a_full_list_request_never_pins_a_slot_the_model_lacks(slots):
+    # A model loaded before --parallel 3, or by another program, has fewer.
+    sent = _side_request(slots, slot=FULL_TOOLS_SLOT)
+    assert sent["id_slot"] == CONVERSATION_SLOT
 
 
 # Side requests run on a background thread (memory extraction starts after the

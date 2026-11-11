@@ -16,6 +16,20 @@ if (typeof HTMLElement !== 'undefined') {
     });
 }
 
+// jsdom has no 2D canvas and prints "Not implemented" for every getContext.
+// A context that accepts every call and draws nothing keeps canvas components
+// (the new-chat backdrop) quiet; a suite that inspects drawing installs its own.
+if (typeof HTMLCanvasElement !== 'undefined') {
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+        configurable: true,
+        value: () => new Proxy({} as Record<PropertyKey, unknown>, {
+            // Not `then`: a context must not look like a promise to an `await`.
+            get: (store, key) => (key in store ? store[key] : key === 'then' ? undefined : () => undefined),
+            set: (store, key, value) => { store[key] = value; return true; },
+        }),
+    });
+}
+
 // `waitFor` keeps its own clock, so vitest's testTimeout does not cover it.
 // One second is a scheduling accident away on a contended runner.
 configure({ asyncUtilTimeout: 10_000 });
@@ -24,4 +38,10 @@ configure({ asyncUtilTimeout: 10_000 });
 // we register the cleanup hook explicitly.
 afterEach(() => {
     cleanup();
+    // Saved drafts and the last open chat outlive a render by design; one
+    // test's typing must not prefill the next test's text box.
+    if (typeof localStorage === 'undefined') return; // node-environment test files
+    for (const key of Object.keys(localStorage)) {
+        if (key.startsWith('gaia:draft:') || key === 'gaia:last-session') localStorage.removeItem(key);
+    }
 });

@@ -54,7 +54,7 @@
       ]
     },
     "task_list": {
-      "fields": ["items", "source", "current_action", "action_started_at", "steps_since_update", "updated_at"],
+      "fields": ["items", "current_action", "action_started_at", "steps_since_update", "updated_at"],
       "item_fields": ["id", "content", "status", "started_at", "completed_at"]
     },
     "final": { "fields": ["answer", "usage"] },

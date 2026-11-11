@@ -60,7 +60,7 @@ func (m ChatModel) relayedSwitcher() (client.TurnModelSwitcher, bool) {
 // opens the picker, which lists what Lemonade serves.
 func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string) (tea.Model, tea.Cmd) {
 	if target == "" {
-		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend))
+		panel := providers.New(m.lemonadeBaseURL, m.width, m.height).WithCurrent(providerOfBackend(m.modelBackend)).WithCurrentModel(m.modelID)
 		m.providerPanel = &panel
 		m.palette.open = false
 		return m, panel.Init()
@@ -85,6 +85,9 @@ func (m ChatModel) switchRelayedModel(sw client.TurnModelSwitcher, target string
 // checkRelayedSwitch returns Lemonade's id for target, or why it cannot be
 // switched to.
 func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, provider, target string) (string, error) {
+	if lemonade.LocalOnly() && (provider != "local" || client.IsClaudeModelID(target)) {
+		return "", errors.New("Local only is on, so cloud models are off. " + lemonade.LocalOnlyHint)
+	}
 	if client.IsClaudeModelID(target) {
 		return "", errors.New("Claude is not available when GAIA runs through the background service")
 	}
@@ -99,7 +102,7 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 		return "", err
 	}
 	for _, mdl := range models {
-		if strings.EqualFold(mdl.ID, target) {
+		if strings.EqualFold(mdl.ID, target) || (provider == "local" && lemonade.SameLocalID(mdl.ID, target)) {
 			return mdl.ID, nil
 		}
 	}

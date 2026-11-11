@@ -59,7 +59,6 @@ export function parseTaskListEvent(raw: unknown): { state: TaskListState } | { e
         state: {
             items,
             hidden: Math.max(0, ev.items.length - items.length),
-            source: ev.source === 'plan' ? 'plan' : 'agent',
             current_action: typeof ev.current_action === 'string' ? ev.current_action.slice(0, MAX_CONTENT_CHARS) : null,
             action_started_at: timeOrNull(ev.action_started_at),
             steps_since_update: steps,
@@ -143,7 +142,7 @@ export function TaskListCard({ taskList, running }: TaskListCardProps) {
     const staleSteps = running ? taskList.steps_since_update ?? 0 : 0;
     const stale = staleSteps >= STALE_AFTER_STEPS;
     const oneLine = actionLine ?? (allDone ? null : current?.content ?? null);
-    const title = taskList.source === 'plan' ? 'Plan' : 'Tasks';
+    const title = 'Tasks';
 
     return (
         <section

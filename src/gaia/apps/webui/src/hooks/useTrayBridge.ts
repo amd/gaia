@@ -35,6 +35,7 @@ export function useTrayBridge(actions: TrayBridgeActions): void {
                 systemStatus: chat.systemStatus,
                 sessions: chat.sessions,
                 runningSessionIds: chat.runningSessionIds,
+                awaitingBySession: chat.awaitingBySession,
                 currentSessionId: chat.currentSessionId,
                 isStreaming: chat.isStreaming,
                 awaitingUser: chat.awaitingUser,

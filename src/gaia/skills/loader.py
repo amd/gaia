@@ -24,7 +24,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional
 
-from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool_build
 from gaia.logger import get_logger
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.format import SKILL_TOOLS_FILENAME, Skill, SkillTool
@@ -102,7 +102,10 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
         try:
             if added_syspath:
                 sys.path.insert(0, skill_dir)
-            module = _import_tools_module(module_name, tools_path, skill)
+            # Its own scope: the bare names are swapped for namespaced ones below,
+            # so sharing one with the agent's tools is not a collision.
+            with tool_build():
+                module = _import_tools_module(module_name, tools_path, skill)
             # A skill tool may share an unqualified name with a registry tool
             # (a skill providing ``search_web`` alongside BrowserToolsMixin is
             # exactly what the ``<skill>/<tool>`` namespace exists for), and the
@@ -290,7 +293,21 @@ def _validate_signature(
 def _namespace_entries(
     skill: Skill, discovered: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
-    """Re-key the discovered entries under ``<skill-name>/<tool>``."""
+    """Re-key the discovered entries under ``<skill-name>/<tool>``.
+
+    A skill that may start a program (``program:run:<name>``) has every tool
+    confirmed per call through the agent's usual permission prompt, unless it
+    shipped inside GAIA: a bundled skill's declared capabilities are approved
+    by the audit it passed before release. A tool the manifest marks
+    ``requires_confirmation`` is confirmed on every call, wherever it came from.
+    """
+    from gaia.skills.manager import ROOT_AGENT_BUNDLED
+
+    runs_programs = any(
+        p.domain == "program" and p.level == "run" for p in skill.parsed_permissions()
+    )
+    confirm = runs_programs and skill.root != ROOT_AGENT_BUNDLED
+    declared_confirm = {t.name for t in skill.gaia.tools if t.requires_confirmation}
     namespaced: dict[str, dict[str, Any]] = {}
     for tool_name, entry in discovered.items():
         key = skill.namespaced_tool_name(tool_name)
@@ -300,4 +317,6 @@ def _namespace_entries(
             "display_name": f"{tool_name} ({skill.name})",
             "skill": skill.name,
         }
+        if confirm or tool_name in declared_confirm:
+            namespaced[key]["requires_confirmation"] = True
     return namespaced

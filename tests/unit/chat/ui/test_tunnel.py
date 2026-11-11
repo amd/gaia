@@ -32,6 +32,8 @@ class TestTunnelManager:
         assert status["token"] is None
         assert status["startedAt"] is None
         assert status["error"] is None
+        assert status["reason"] is None
+        assert status["installCommands"] == []
         assert status["publicIp"] is None
 
     def test_validate_token_inactive(self):
@@ -95,6 +97,88 @@ class TestTunnelManager:
         assert "https://ngrok.com/download" in error
         for other in ("brew", "snap", "apt"):
             assert other not in error
+
+    def test_missing_ngrok_is_a_setup_step_not_a_failure(self, monkeypatch):
+        """The UI gets a reason and this OS's command to copy (#1577)."""
+        from gaia.ui import tunnel as tunnel_mod
+
+        monkeypatch.setattr(tunnel_mod.platform, "system", lambda: "Windows")
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+
+        status = asyncio.run(manager.start())
+
+        assert status["active"] is False
+        assert status["reason"] == "ngrok_not_installed"
+        assert status["installCommands"] == ["choco install ngrok"]
+        # API callers that only read ``error`` still learn why.
+        assert "choco install ngrok" in status["error"]
+        assert manager.get_status()["reason"] == "ngrok_not_installed"
+
+    def test_missing_ngrok_on_linux_lists_each_route_separately(self, monkeypatch):
+        from gaia.ui import tunnel as tunnel_mod
+
+        monkeypatch.setattr(tunnel_mod.platform, "system", lambda: "Linux")
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+
+        commands = asyncio.run(manager.start())["installCommands"]
+
+        assert commands[0] == "sudo snap install ngrok"
+        assert "sudo apt install ngrok" in commands[1]
+        assert all("\n" not in c for c in commands)
+
+    def test_missing_ngrok_on_an_unlisted_os_has_no_commands(self, monkeypatch):
+        from gaia.ui import tunnel as tunnel_mod
+
+        monkeypatch.setattr(tunnel_mod.platform, "system", lambda: "FreeBSD")
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+
+        status = asyncio.run(manager.start())
+
+        assert status["reason"] == "ngrok_not_installed"
+        assert status["installCommands"] == []
+
+    def test_install_commands_are_copies(self, monkeypatch):
+        """A caller mutating the list cannot change what the next status says."""
+        from gaia.ui import tunnel as tunnel_mod
+
+        monkeypatch.setattr(tunnel_mod.platform, "system", lambda: "Darwin")
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+        asyncio.run(manager.start())["installCommands"].append("rm -rf /")
+
+        assert manager.get_status()["installCommands"] == ["brew install ngrok"]
+
+    def test_installing_ngrok_clears_the_setup_reason(self, monkeypatch):
+        """Retry after installing reports the next problem, not the old one."""
+        from gaia.ui import tunnel as tunnel_mod
+
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+        asyncio.run(manager.start())
+
+        manager._find_ngrok = lambda: "/fake/ngrok"
+        monkeypatch.setattr(
+            tunnel_mod, "_check_ngrok_authtoken_configured", lambda: False
+        )
+        status = asyncio.run(manager.start())
+
+        assert status["reason"] is None
+        assert status["installCommands"] == []
+        assert "authtoken" in status["error"]
+
+    def test_stop_clears_the_setup_reason(self):
+        manager = TunnelManager(port=4200)
+        manager._find_ngrok = lambda: None
+        asyncio.run(manager.start())
+
+        asyncio.run(manager.stop())
+
+        status = manager.get_status()
+        assert status["reason"] is None
+        assert status["installCommands"] == []
 
     def test_install_hint_keeps_both_linux_routes(self):
         from gaia.ui.tunnel import _ngrok_install_hint

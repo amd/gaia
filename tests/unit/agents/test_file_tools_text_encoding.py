@@ -101,6 +101,39 @@ class TestBomTextReadsAsText:
         assert result["status"] == "success"
         assert result["content"] == "     2\tsecond line\n"
 
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    def test_size_is_the_file_on_disk(self, request, tools, bom_file, tmp_path):
+        cp1252 = tmp_path / "note.txt"
+        cp1252.write_bytes("Café budget: €250 for the “team lunch”.\n".encode("cp1252"))
+        crlf = tmp_path / "windows.txt"
+        crlf.write_bytes(b"first line\r\nsecond line\r\n")
+        for path in (bom_file[0], cp1252, crlf):
+            result = request.getfixturevalue(tools)["read_file"](str(path))
+            assert result["status"] == "success"
+            assert result["size_bytes"] == path.stat().st_size
+
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"",
+            "Ω≈ç√ 日本語 🚀\n".encode("utf-8"),
+            ("x" * 120 + "\r\n").encode("utf-8") * 2000,
+        ],
+        ids=["empty", "utf8-multibyte", "crlf-over-truncation-budget"],
+    )
+    def test_size_matches_disk_and_paged_read(self, request, tools, raw, tmp_path):
+        path = tmp_path / "edge.txt"
+        path.write_bytes(raw)
+        read_file = request.getfixturevalue(tools)["read_file"]
+        full = read_file(str(path))
+        assert full["status"] == "success"
+        assert full["size_bytes"] == len(raw)
+        if raw:
+            paged = read_file(str(path), offset=0, limit=10)
+            assert paged["status"] == "success"
+            assert paged["size_bytes"] == full["size_bytes"]
+
     def test_plain_utf8_result_is_unchanged(self, search_tools, tmp_path):
         path = tmp_path / "plain.txt"
         path.write_text(SECRET, encoding="utf-8")
@@ -196,3 +229,50 @@ class TestMatchExcerpt:
     def test_offsets_account_for_stripped_indentation(self):
         line = " " * 50 + "a" * 1000 + "NEEDLE" + "b" * 1000
         assert "NEEDLE" in match_excerpt(line, 1050, 1056)
+
+
+MENU = "Tasting menu: €1.250 – café “maison”\nsecond line\n"
+
+
+class TestWindowsAnsiTextReadsAsText:
+    """CP1252 text came back as binary or a raw codec error (#5764)."""
+
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    def test_read_file_decodes_cp1252(self, request, tools, tmp_path):
+        path = tmp_path / "menu.txt"
+        path.write_bytes(MENU.encode("cp1252"))
+        result = request.getfixturevalue(tools)["read_file"](str(path))
+        assert result["status"] == "success"
+        assert result.get("is_binary") is not True
+        assert result["content"] == MENU
+        assert result["encoding"] == "cp1252"
+
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    def test_read_file_pages_cp1252(self, request, tools, tmp_path):
+        path = tmp_path / "menu.txt"
+        path.write_bytes(MENU.encode("cp1252"))
+        result = request.getfixturevalue(tools)["read_file"](
+            str(path), offset=14, limit=6
+        )
+        assert result["status"] == "success"
+        assert result["content"] == MENU[14:20]
+
+    @pytest.mark.parametrize(
+        "data",
+        [b"caf\xe9 \x81 is undefined in cp1252", b"caf\xe9\x00\x01\x02"],
+        ids=["undefined-byte", "control-bytes"],
+    )
+    def test_bytes_that_are_not_cp1252_text_stay_binary(
+        self, search_tools, data, tmp_path
+    ):
+        path = tmp_path / "blob.dat"
+        path.write_bytes(data)
+        result = search_tools["read_file"](str(path))
+        assert result["is_binary"] is True
+
+    def test_utf8_cut_at_the_sniff_limit_is_still_utf8(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "long.txt"
+        path.write_bytes(b"a" * (text_files._SNIFF_BYTES - 1) + "€".encode("utf-8"))
+        assert text_files.text_encoding(path) == "utf-8"

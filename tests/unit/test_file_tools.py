@@ -773,6 +773,19 @@ def test_search_file_count_matches_returned_files(
     assert result["count"] == 10
 
 
+@pytest.mark.parametrize("extension", [".epub", ".pptx"])
+def test_search_file_finds_indexable_documents_by_default(
+    search_file_fn, tmp_path, monkeypatch, extension
+):
+    (tmp_path / f"handbook{extension}").write_bytes(b"PK\x03\x04")
+    monkeypatch.chdir(tmp_path)
+
+    result = search_file_fn("handbook", deep_search=False)
+
+    assert result["status"] == "success"
+    assert [Path(f).name for f in result["files"]] == [f"handbook{extension}"]
+
+
 # ===========================================================================
 # 9. read_file: binary document guard
 # ===========================================================================
@@ -788,21 +801,11 @@ def read_file_fn():
 class TestReadFileBinaryGuard:
     """Tests for the binary document early-exit guard in read_file."""
 
-    @pytest.mark.parametrize(
-        "extension",
-        [
-            ".doc",
-            ".pptx",
-            ".ppt",
-            ".xls",
-            ".odt",
-            ".ods",
-            ".odp",
-            ".epub",
-        ],
-    )
-    def test_binary_extension_returns_error(self, read_file_fn, extension, tmp_path):
-        """read_file must return an error dict for formats it cannot extract."""
+    @pytest.mark.parametrize("extension", [".pptx", ".epub"])
+    def test_index_only_extension_points_at_index_document(
+        self, read_file_fn, extension, tmp_path
+    ):
+        """read_file must send formats only RAG can parse to index_document."""
         fake_doc = tmp_path / f"document{extension}"
         fake_doc.write_bytes(b"%PDF-1.4 fake content")
 
@@ -811,6 +814,23 @@ class TestReadFileBinaryGuard:
         assert result["status"] == "error"
         assert "index_document" in result["error"]
         assert extension in result["error"]
+
+    @pytest.mark.parametrize(
+        "extension", [".doc", ".ppt", ".xls", ".odt", ".ods", ".odp"]
+    )
+    def test_unreadable_extension_says_to_convert(
+        self, read_file_fn, extension, tmp_path
+    ):
+        """Formats no GAIA tool parses must not be sent to index_document."""
+        fake_doc = tmp_path / f"document{extension}"
+        fake_doc.write_bytes(b"%PDF-1.4 fake content")
+
+        result = read_file_fn(str(fake_doc))
+
+        assert result["status"] == "error"
+        assert "index_document" not in result["error"]
+        assert extension in result["error"]
+        assert "Re-save it as" in result["error"]
 
     def test_text_file_not_blocked(self, read_file_fn, tmp_path):
         """Plain .txt files must pass through the binary guard."""
@@ -910,18 +930,34 @@ class TestReadToolsSandbox:
         assert self._denied(result)
         assert "not found" not in result.get("error", "").lower()
 
-    def test_search_file_content_rejects_a_file_as_directory(
+    def test_search_file_content_searches_inside_a_file_path(
         self, sandboxed_read_tools
     ):
-        """A file passed as the search directory is an error, not 0 matches."""
+        """A file passed as the search directory is searched, not refused."""
         tools, safe_dir, _ = sandboxed_read_tools
-        target = safe_dir / "notes.txt"
-        target.write_text("TOKEN=abc\n", encoding="utf-8")
+        target = safe_dir / "notes.weird-ext"
+        target.write_text("one\nTOKEN=abc\n", encoding="utf-8")
+        (safe_dir / "other.txt").write_text("TOKEN=elsewhere\n", encoding="utf-8")
 
         result = tools["search_file_content"]("TOKEN", directory=str(target))
 
-        assert result["status"] == "error"
-        assert "not a directory" in result["error"].lower()
+        assert result["status"] == "success"
+        assert [(Path(m["file"]).name, m["line"]) for m in result["matches"]] == [
+            ("notes.weird-ext", 2)
+        ]
+        assert result["files_searched"] == 1
+
+    def test_search_file_content_file_path_outside_sandbox_denied(
+        self, sandboxed_read_tools
+    ):
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "creds.txt"
+        secret.write_text("TOKEN=abc123\n", encoding="utf-8")
+
+        result = tools["search_file_content"]("TOKEN", directory=str(secret))
+
+        assert self._denied(result)
+        assert "abc123" not in str(result)
 
     def test_get_file_info_outside_sandbox_denied(self, sandboxed_read_tools):
         tools, _, secret_dir = sandboxed_read_tools
@@ -1039,6 +1075,10 @@ class TestParseDateRange:
             ("Q1'98", ("1998-01", "1998-03")),
             ("first quarter 2025", ("2025-01", "2025-03")),
             ("4th quarter of 2024", ("2024-10", "2024-12")),
+            ("Quarter 3 2025", ("2025-07", "2025-09")),
+            ("Qtr 3 2025", ("2025-07", "2025-09")),
+            ("3Q 2025", ("2025-07", "2025-09")),
+            ("3Q25", ("2025-07", "2025-09")),
             ("2025", ("2025-01", "2025-12")),
             ("2025-03", ("2025-03", "2025-03")),
             ("2025-03-15", ("2025-03", "2025-03")),
@@ -1208,6 +1248,74 @@ def test_recent_files_below_limit_is_complete(tmp_path, monkeypatch):
     assert result["total_found"] == result["count"] == 1
     assert result["truncated"] is False
     assert "omitted" not in result["display_message"]
+    assert "other_types_not_listed" not in result
+    assert "Not listed" not in result["display_message"]
+
+
+def test_recent_files_says_what_the_type_filter_left_out(tmp_path, monkeypatch):
+    """A .dmg the default filter skips is reported, so "only one file" isn't claimed."""
+    from unittest.mock import patch
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "notes.txt").write_text("fact")
+    (downloads / "installer.dmg").write_bytes(b"\0")
+    (downloads / "setup.pkg").write_bytes(b"\0")
+    (downloads / "other.pkg").write_bytes(b"\0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert result["total_found"] == 1
+    assert result["other_types_not_listed"] == {".pkg": 2, ".dmg": 1}
+    assert "Not listed: 3 other recent file(s)" in result["display_message"]
+    assert "2 .pkg, 1 .dmg" in result["display_message"]
+
+
+def test_recent_files_an_explicit_filter_lists_what_it_asked_for(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    (tmp_path / "Downloads").mkdir()
+    (tmp_path / "Downloads" / "installer.dmg").write_bytes(b"\0")
+    (tmp_path / "Downloads" / "notes.txt").write_text("fact")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"](file_types="dmg")
+    assert [f["file_name"] for f in result["files"]] == ["installer.dmg"]
+    assert result["other_types_not_listed"] == {".txt": 1}
+
+
+def test_recent_files_bounds_the_skipped_type_counts(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    for index in range(30):
+        (downloads / f"report.v{index:02}").write_bytes(b"\0")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert len(result["other_types_not_listed"]) == 20
+    assert "Not listed: 30 other recent file(s)" in result["display_message"]
+
+
+def test_recent_files_does_not_count_old_files_of_other_types(tmp_path, monkeypatch):
+    import os
+    import time
+    from unittest.mock import patch
+
+    (tmp_path / "Downloads").mkdir()
+    old = tmp_path / "Downloads" / "old.dmg"
+    old.write_bytes(b"\0")
+    stale = time.time() - 90 * 86400
+    os.utime(old, (stale, stale))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        _StubMixin().register_file_search_tools()
+        result = _TOOL_REGISTRY["list_recent_files"]["function"]()
+    assert "other_types_not_listed" not in result
 
 
 def test_unreadable_content_search_reports_reason(tmp_path, caplog):
@@ -1224,6 +1332,112 @@ def test_unreadable_content_search_reports_reason(tmp_path, caplog):
                 "find", directory=str(tmp_path)
             )
     assert "test permission denial" in caplog.text
+
+
+def _analyze_csv(tmp_path, text, **kwargs):
+    f = tmp_path / "data.csv"
+    f.write_text(text, encoding="utf-8")
+    _StubMixin().register_file_search_tools()
+    return _TOOL_REGISTRY["analyze_data_file"]["function"](str(f), **kwargs)
+
+
+def _quarterly_sales(quarter_of):
+    """Four regions over 2025; West grows the most from Q1 to Q4 (#5024)."""
+    revenue = {
+        "East": (100, 110, 120, 130),
+        "West": (100, 120, 150, 174.1),
+        "North": (100, 100, 105, 110),
+        "South": (100, 90, 95, 120),
+    }
+    lines = ["quarter,region,revenue"]
+    for region, values in revenue.items():
+        for q, value in enumerate(values, 1):
+            lines.append(f"{quarter_of(q)},{region},{value}")
+    return "\n".join(lines) + "\n"
+
+
+class TestAnalyzeDataFileDateCells:
+    """Date cells are read in the same forms date_range accepts (#5024)."""
+
+    @pytest.mark.parametrize(
+        "quarter_of",
+        [
+            lambda q: f"2025-Q{q}",
+            lambda q: f"Q{q} 2025",
+            lambda q: f"Q{q}-2025",
+            lambda q: f"2025 Q{q}",
+            lambda q: f"Q{q}'25",
+        ],
+        ids=["2025-Q1", "Q1 2025", "Q1-2025", "2025 Q1", "Q1'25"],
+    )
+    def test_quarter_cells_filter_and_group_by_region(self, tmp_path, quarter_of):
+        text = _quarterly_sales(quarter_of)
+
+        q1 = _analyze_csv(tmp_path, text, date_range="2025-Q1", group_by="region")
+        q4 = _analyze_csv(tmp_path, text, date_range="2025-Q4", group_by="region")
+
+        assert q1["status"] == q4["status"] == "success", (q1, q4)
+        assert q1["row_count"] == q4["row_count"] == 4
+        assert "date_rows_unreadable" not in q1
+        first = {g["region"]: g["revenue_total"] for g in q1["group_by_results"]}
+        last = {g["region"]: g["revenue_total"] for g in q4["group_by_results"]}
+        growth = {r: last[r] / first[r] - 1 for r in first}
+        assert max(growth, key=growth.get) == "West"
+        assert round(growth["West"] * 100, 1) == 74.1
+
+    def test_a_quarter_cell_needs_its_whole_quarter_in_range(self, tmp_path):
+        text = _quarterly_sales(lambda q: f"2025-Q{q}")
+
+        assert _analyze_csv(tmp_path, text, date_range="2025")["row_count"] == 16
+        h1 = _analyze_csv(tmp_path, text, date_range="2025-01 to 2025-06")
+        assert h1["row_count"] == 8
+        assert _analyze_csv(tmp_path, text, date_range="2025-02")["row_count"] == 0
+
+    @pytest.mark.parametrize(
+        "cells",
+        [
+            ("2025-01-10", "2025-02-14", "2025-04-01"),
+            ("01/10/2025", "02/14/2025", "04/01/2025"),
+            ("Jan 10, 2025", "Feb 14, 2025", "Apr 1, 2025"),
+            ("2025-01-10 09:30:00", "2025-02-14 17:00:00", "2025-04-01 08:00:00"),
+            ("2025-01", "2025-02", "2025-04"),
+        ],
+    )
+    def test_regular_dates_still_filter(self, tmp_path, cells):
+        rows = "".join(f'"{c}",{n}\n' for c, n in zip(cells, (100, 200, 400)))
+
+        result = _analyze_csv(tmp_path, "date,amount\n" + rows, date_range="2025-Q1")
+
+        assert result["status"] == "success", result
+        assert result["row_count"] == 2
+        assert result["summary"]["amount"]["sum"] == 300
+
+    def test_year_cells_and_numeric_columns_are_unchanged(self, tmp_path):
+        text = "year,units,price\n2024,3,1.5\n2025,4,2.25\n2025,5,-1\n"
+
+        result = _analyze_csv(tmp_path, text, date_range="2025")
+
+        assert result["row_count"] == 2
+        assert result["summary"]["units"]["sum"] == 9
+        assert result["summary"]["price"]["sum"] == 1.25
+
+    def test_cells_that_are_not_dates_are_an_error_not_zero_rows(self, tmp_path):
+        text = "quarter,revenue\nQ1,100\nQ2,200\n"
+
+        result = _analyze_csv(tmp_path, text, date_range="2025-Q1")
+
+        assert result["status"] == "error"
+        assert result["has_errors"] is True
+        assert "'Q1'" in result["error"]
+        assert "group_by='quarter'" in result["error"]
+
+    def test_unreadable_cells_are_counted_not_dropped_silently(self, tmp_path):
+        text = "date,amount\n2025-01-10,100\nsoon,50\n2025-04-01,400\n"
+
+        result = _analyze_csv(tmp_path, text, date_range="2025-Q1")
+
+        assert result["row_count"] == 1
+        assert result["date_rows_unreadable"] == 1
 
 
 class TestDataSummaryPointsAtGroupBy:
@@ -1380,6 +1594,82 @@ class TestSpreadsheetHeaderBelowATitle:
         assert result["row_count"] == 2
 
 
+class TestMultiSheetWorkbook:
+    """Every sheet of a workbook is reachable, and the result says which was read.
+
+    analyze_data_file read only the active sheet and never said others existed,
+    so asked for total assets in a workbook whose second sheet is a balance
+    sheet, the agent told the user the file had no balance sheet.
+    """
+
+    @pytest.fixture
+    def workbook(self, sandboxed_read_tools):
+        openpyxl = pytest.importorskip("openpyxl")
+        tools, safe_dir, _ = sandboxed_read_tools
+        wb = openpyxl.Workbook()
+        income = wb.active
+        income.title = "Income Statement"
+        for row in (("Period", "Revenue"), ("Q1", 100), ("Q2", 120)):
+            income.append(list(row))
+        balance = wb.create_sheet("Balance Sheet")
+        for row in (("Item", "Amount"), ("Total Assets", 186010000)):
+            balance.append(list(row))
+        path = safe_dir / "financials.xlsx"
+        wb.save(path)
+        return tools, path
+
+    def test_the_result_names_every_sheet(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["sheet"] == "Income Statement"
+        assert result["sheets"] == ["Income Statement", "Balance Sheet"]
+        assert "'Balance Sheet'" in result["other_sheets_note"]
+        assert result["columns"] == ["Period", "Revenue"]
+
+    def test_a_named_sheet_is_read(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path), sheet="balance sheet")
+
+        assert result["sheet"] == "Balance Sheet"
+        assert result["columns"] == ["Item", "Amount"]
+        assert result["row_count"] == 1
+
+    def test_an_unknown_sheet_is_an_error_naming_the_real_ones(self, workbook):
+        tools, path = workbook
+
+        result = tools["analyze_data_file"](str(path), sheet="Cash Flow")
+
+        assert result["status"] == "error"
+        assert "Income Statement" in result["error"]
+        assert "Balance Sheet" in result["error"]
+
+    def test_a_one_sheet_workbook_has_no_note(self, sandboxed_read_tools):
+        openpyxl = pytest.importorskip("openpyxl")
+        tools, safe_dir, _ = sandboxed_read_tools
+        wb = openpyxl.Workbook()
+        wb.active.append(["region", "revenue"])
+        wb.active.append(["East", 1])
+        path = safe_dir / "one.xlsx"
+        wb.save(path)
+
+        result = tools["analyze_data_file"](str(path))
+
+        assert result["sheets"] == ["Sheet"]
+        assert "other_sheets_note" not in result
+
+    def test_csv_results_carry_no_sheet_fields(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        data = safe_dir / "plain.csv"
+        data.write_text("a,b\n1,2\n", encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(data))
+
+        assert "sheets" not in result and "sheet" not in result
+
+
 def test_browse_directory_status_counts_read_naturally(tmp_path):
     _StubMixin().register_file_search_tools()
     browse = _TOOL_REGISTRY["browse_directory"]["function"]
@@ -1390,3 +1680,294 @@ def test_browse_directory_status_counts_read_naturally(tmp_path):
     assert result["status"] == "success", result
     assert result["display_message"].endswith("(1 folder, 2 files)")
     assert result["display_message"].startswith("Listing 3 items in ")
+
+
+_SECRET = "ghp_SECRETTOKEN_12345"
+
+
+def _guarded_search(root, pattern, directory=None, **kwargs):
+    """Content search on a mixin sandboxed to *root*, as a real agent runs it."""
+    from unittest.mock import patch
+
+    from gaia.security import PathValidator
+
+    inst = _StubMixin()
+    inst.path_validator = PathValidator(allowed_paths=[str(root)])
+    with patch.dict(_TOOL_REGISTRY, clear=True):
+        inst.register_file_search_tools()
+        return _TOOL_REGISTRY["search_file_content"]["function"](
+            pattern, directory=str(directory or root), **kwargs
+        )
+
+
+def _hit_names(result):
+    return sorted(Path(m["file"]).name for m in result["matches"])
+
+
+def _symlink_or_skip(link, target):
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted on this host")
+
+
+@pytest.fixture
+def no_prompt(monkeypatch):
+    from gaia import security as _security
+
+    monkeypatch.setattr(_security, "_is_interactive", lambda: False)
+
+
+class TestContentSearchNeverReadsSecrets:
+    """Grep refuses every file read_file refuses, before opening a byte."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            ".env",
+            ".ENV",
+            ".Env.Local",
+            "id_rsa",
+            "ID_RSA",
+            "server.pem",
+            "TLS.KEY",
+            "credentials.json",
+            ".npmrc",
+        ],
+    )
+    def test_secret_contents_never_returned_and_counted(
+        self, tmp_path, no_prompt, name
+    ):
+        (tmp_path / name).write_text(f"TOKEN={_SECRET}\n", encoding="utf-8")
+        (tmp_path / "ok.txt").write_text("TOKEN=public\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "TOKEN")
+        assert result["status"] == "success"
+        assert _SECRET not in str(result)
+        assert _hit_names(result) == ["ok.txt"]
+        assert result["files_skipped_protected"] == 1
+        assert "credentials or keys" in result["message"]
+
+    def test_secret_is_never_opened_even_by_the_binary_sniff(
+        self, tmp_path, no_prompt, monkeypatch
+    ):
+        import builtins
+
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        (tmp_path / "ok.go").write_text("TOKEN\n", encoding="utf-8")
+        opened = []
+        real_open = builtins.open
+
+        def spy(file, *args, **kwargs):
+            opened.append(Path(str(file)).name)
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", spy)
+        # "$14.2M" compiles but misses, so the plain-text retry walks again.
+        _guarded_search(tmp_path, "$14.2M")
+        assert "id_rsa" not in opened and "ok.go" in opened
+
+    def test_regex_miss_retry_counts_a_secret_once(self, tmp_path, no_prompt):
+        (tmp_path / ".env").write_text("price $14.2M\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "$14.2M")
+        assert result["matches"] == []
+        assert result["files_skipped_protected"] == 1
+
+    def test_file_pattern_aimed_at_a_secret_is_still_blocked(self, tmp_path, no_prompt):
+        (tmp_path / "server.pem").write_text(_SECRET, encoding="utf-8")
+        result = _guarded_search(tmp_path, "ghp", file_pattern="*.pem")
+        assert result["matches"] == [] and _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    def test_secret_nested_deep_is_blocked(self, tmp_path, no_prompt):
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        (deep / "credentials.json").write_text(f'{{"k": "{_SECRET}"}}')
+        result = _guarded_search(tmp_path, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    @pytest.mark.parametrize("name", [".env", ".ENV", "id_rsa"])
+    def test_a_secret_passed_as_the_path_is_refused(self, tmp_path, no_prompt, name):
+        (tmp_path / name).write_text(_SECRET, encoding="utf-8")
+        result = _guarded_search(tmp_path, "ghp", tmp_path / name)
+        assert result["status"] == "error" and _SECRET not in str(result)
+
+    def test_innocent_name_linked_to_a_secret_is_blocked(self, tmp_path, no_prompt):
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(tmp_path / "notes.txt", tmp_path / "id_rsa")
+        result = _guarded_search(tmp_path, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 2
+
+    def test_a_link_to_a_secret_passed_as_the_path_is_refused(
+        self, tmp_path, no_prompt
+    ):
+        (tmp_path / "id_rsa").write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(tmp_path / "notes.txt", tmp_path / "id_rsa")
+        result = _guarded_search(tmp_path, "ghp", tmp_path / "notes.txt")
+        assert _SECRET not in str(result)
+        assert result.get("matches", []) == []
+
+    def test_link_out_of_the_sandbox_is_blocked(self, tmp_path, no_prompt):
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text(_SECRET, encoding="utf-8")
+        _symlink_or_skip(root / "inside.txt", outside)
+        result = _guarded_search(root, "ghp")
+        assert _SECRET not in str(result)
+        assert result["files_skipped_protected"] == 1
+
+    def test_lookalike_names_are_still_searched(self, tmp_path, no_prompt):
+        """The gate is the read gate, not a broader guess."""
+        for name in (".env.example", "id_rsa.pub.md", "credentials.md"):
+            (tmp_path / name).write_text("needle\n", encoding="utf-8")
+        result = _guarded_search(tmp_path, "needle")
+        assert "files_skipped_protected" not in result
+        assert len(result["matches"]) == 3
+
+
+class TestContentSearchFilePathAndText:
+    def test_utf16_text_with_an_unlisted_extension_is_searched(self, tmp_path):
+        (tmp_path / "a.ts").write_bytes("needle\n".encode("utf-16"))
+        (tmp_path / "b.go").write_bytes("needle\n".encode("utf-32"))
+        assert _hit_names(_guarded_search(tmp_path, "needle")) == ["a.ts", "b.go"]
+
+    def test_a_utf16_bom_does_not_launder_binary(self, tmp_path):
+        (tmp_path / "fake.ts").write_bytes(
+            "needle".encode("utf-16") + bytes(2) + "x".encode("utf-16-le")
+        )
+        assert _guarded_search(tmp_path, "needle")["matches"] == []
+
+    def test_a_file_path_ignores_the_entry_budget(self, tmp_path, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        target = tmp_path / "one.txt"
+        target.write_text("needle\n", encoding="utf-8")
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 0)
+        result = _guarded_search(tmp_path, "needle", target)
+        assert _hit_names(result) == ["one.txt"]
+        assert "truncated" not in result
+
+    def test_an_empty_file_path_reports_no_matches(self, tmp_path):
+        target = tmp_path / "empty.txt"
+        target.write_text("", encoding="utf-8")
+        result = _guarded_search(tmp_path, "needle", target)
+        assert result["status"] == "success" and result["files_searched"] == 1
+        assert result["matches"] == []
+
+    def test_entry_budget_of_one_stops_and_says_so(self, tmp_path, monkeypatch):
+        from gaia.agents.tools import search_scope
+
+        for i in range(5):
+            (tmp_path / f"f{i}.txt").write_text("other\n", encoding="utf-8")
+        monkeypatch.setattr(search_scope, "SEARCH_ENTRY_BUDGET", 1)
+        result = _guarded_search(tmp_path, "needle")
+        assert result["status"] == "success" and result["truncated"] is True
+        assert result["files_searched"] < 5
+
+
+def _analyze_breakdowns(tmp_path, text):
+    f = tmp_path / "ledger.csv"
+    f.write_text(text, encoding="utf-8")
+    _StubMixin().register_file_search_tools()
+    return _TOOL_REGISTRY["analyze_data_file"]["function"](str(f), analysis_type="full")
+
+
+class TestAnalyzeDataFileBreakdownPeriods:
+    """Quarter cells are reported by quarter, never filed under a month (#7127)."""
+
+    def test_quarter_cells_go_to_their_quarter(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\nQ3 2025,-10\n2025-Q1,-5\nQ1'25,-2\n"
+        )
+
+        spending = result["spending_analysis"]
+        trends = result["trends_analysis"]
+        assert "monthly_breakdown" not in spending
+        assert spending["quarterly_breakdown"] == [
+            {"quarter": "2025-Q1", "net": -7, "spending": 7, "income": 0},
+            {"quarter": "2025-Q3", "net": -10, "spending": 10, "income": 0},
+        ]
+        assert "monthly" not in trends and "weekly" not in trends
+        assert [(q["period"], q["total"]) for q in trends["quarterly"]] == [
+            ("2025-Q1", -7),
+            ("2025-Q3", -10),
+        ]
+        assert "date_rows_unplaced" not in spending
+        assert "date_rows_unplaced" not in trends
+
+    def test_dates_and_quarters_are_kept_apart(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\n2025-03-15,-4\n2025-03-20,6\nQ1 2025,-1\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-03", "net": 2, "spending": 4, "income": 6}
+        ]
+        assert [q["quarter"] for q in spending["quarterly_breakdown"]] == ["2025-Q1"]
+        assert [m["period"] for m in result["trends_analysis"]["monthly"]] == [
+            "2025-03"
+        ]
+
+    def test_unplaceable_dates_are_counted(self, tmp_path):
+        result = _analyze_breakdowns(
+            tmp_path, "Date,Amount\n2025-01-10,-3\nsoon,-1\n,-2\nQ2,-8\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-01", "net": -3, "spending": 3, "income": 0}
+        ]
+        assert "quarterly_breakdown" not in spending
+        assert spending["date_rows_unplaced"] == 3
+        assert result["trends_analysis"]["date_rows_unplaced"] == 3
+
+    @pytest.mark.parametrize(
+        "cell",
+        [
+            "Quarter 3 2025",
+            "Qtr 3 2025",
+            "Qtr. 3 2025",
+            "3Q 2025",
+            "3Q2025",
+            "3Q25",
+            "3Q'25",
+            "Q3/2025",
+            "2025/Q3",
+            "third quarter 2025",
+        ],
+    )
+    def test_quarter_spellings_go_to_their_quarter(self, tmp_path, cell):
+        result = _analyze_breakdowns(tmp_path, f"Date,Amount\n{cell},-10\n")
+
+        spending = result["spending_analysis"]
+        assert "monthly_breakdown" not in spending
+        assert spending["quarterly_breakdown"] == [
+            {"quarter": "2025-Q3", "net": -10, "spending": 10, "income": 0}
+        ]
+        assert [q["period"] for q in result["trends_analysis"]["quarterly"]] == [
+            "2025-Q3"
+        ]
+
+    @pytest.mark.parametrize("cell", ["Q3 FY25", "FY25 Q3", "Q3 25", "3Q", "2025"])
+    def test_ambiguous_periods_are_counted_not_misplaced(self, tmp_path, cell):
+        result = _analyze_breakdowns(
+            tmp_path, f"Date,Amount\n2025-01-10,-3\n{cell},-10\n"
+        )
+
+        spending = result["spending_analysis"]
+        assert spending["monthly_breakdown"] == [
+            {"month": "2025-01", "net": -3, "spending": 3, "income": 0}
+        ]
+        assert "quarterly_breakdown" not in spending
+        assert spending["date_rows_unplaced"] == 1
+        assert result["trends_analysis"]["date_rows_unplaced"] == 1
+
+    def test_a_month_cell_has_no_week(self, tmp_path):
+        result = _analyze_breakdowns(tmp_path, "Date,Amount\n2025-03,-4\n")
+
+        trends = result["trends_analysis"]
+        assert [m["period"] for m in trends["monthly"]] == ["2025-03"]
+        assert "weekly" not in trends

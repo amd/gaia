@@ -29,7 +29,8 @@ import pytest
 import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
-from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
+from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
+from gaia.ui._chat_helpers import _dispatch_sidecar_query
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -38,6 +39,7 @@ from gaia.ui.email_sidecar.profiles import (
 )
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy, SidecarProxy
 from gaia.ui.models import ChatRequest
+from gaia.ui.turn_summary import TurnLedger
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -109,8 +111,6 @@ def _registered_tool_names() -> set:
         "src/gaia/agents/tools",
         "src/gaia/sd",
         "src/gaia/vlm",
-        "src/gaia/agents/code_index",
-        "hub/agents/chat/python",
         "hub/agents/gaia/python",
     ]
 
@@ -134,6 +134,14 @@ def _registered_tool_names() -> set:
                     _is_tool_decorator(d) for d in node.decorator_list
                 ):
                     names.add(node.name)
+    # A bundled skill's tools register as ``<skill>/<tool>`` once it loads.
+    for path in (REPO_ROOT / "hub" / "skills").glob("*/tools.py"):
+        tree = ast.parse(path.read_text(errors="replace"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                _is_tool_decorator(d) for d in node.decorator_list
+            ):
+                names.add(f"{path.parent.name}/{node.name}")
     return names | _PROGRAMMATIC_TOOLS
 
 
@@ -214,9 +222,23 @@ class _FakeSSEHandler:
     def __init__(self):
         self.events = []
         self.cancelled = threading.Event()
+        self.turn_ledger = TurnLedger()
+        self.relay_question = None
 
     def _emit(self, event):
         self.events.append(event)
+
+    def set_relay_question(self, request_id):
+        self.relay_question = request_id
+
+    def record_tool_started(self, tool_name):
+        pass
+
+    def record_tool_args(self, args):
+        pass
+
+    def record_tool_result(self, data, success):
+        pass
 
 
 class _FakeProxy:
@@ -225,6 +247,9 @@ class _FakeProxy:
 
     def init(self):
         return self._init_result
+
+
+_NO_FOLLOWUPS = {"type": "followup_unavailable"}
 
 
 class _FakeHandle:
@@ -271,8 +296,12 @@ class TestGaiaDispatch:
         _, kwargs = calls[0]
         assert kwargs["profile"] is GAIA_PROFILE
         assert kwargs["session_id"] == "sess-1"
-        assert kwargs["context"] == _query_context_from_history([("a", "b")])
-        assert handler.events == []
+        assert kwargs["context"] == [
+            {"role": "user", "content": "a"},
+            {"role": "assistant", "content": "b"},
+        ]
+        # 2.13 takes no mid-turn messages, so the chat is told not to offer one.
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_old_binary_is_refused_with_gaia_copy(self, monkeypatch):
         _, calls = self._patch(monkeypatch, _FakeHandle(api_version="2.11"))
@@ -306,7 +335,7 @@ class TestGaiaDispatch:
         _dispatch_sidecar_query(handler, request, [], "m", "gaia")
 
         assert len(calls) == 1, "a not-ready probe must not cancel the turn"
-        assert len(handler.events) == 1
+        assert handler.events[1:] == [_NO_FOLLOWUPS]
         assert handler.events[0]["type"] == "status"
         message = handler.events[0]["message"]
         # Framed as a probe result, not asserted as fact — it is wrong often
@@ -345,7 +374,7 @@ class TestGaiaDispatch:
         )
 
         assert len(calls) == 1
-        assert handler.events == []
+        assert handler.events == [_NO_FOLLOWUPS]
 
     def test_a_missing_model_the_turn_uses_still_blocks(self, monkeypatch):
         body = self._init_body(reachable=True, present=False, hint="not downloaded")
@@ -400,25 +429,6 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
 
-    def test_a_stale_start_command_is_replaced_with_this_hosts_answer(
-        self, monkeypatch
-    ):
-        """An older agent package still says `lemonade-server serve`, a CLI
-        Lemonade 10.7 removed. Relaying it verbatim hands the user a command
-        that does not exist."""
-        body = self._init_body(
-            reachable=False,
-            hint="not reachable — start it with `lemonade-server serve`",
-        )
-        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
-
-        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
-
-        assert len(calls) == 1
-        assert "lemonade-server serve" not in handler.events[0]["message"]
-
     def test_email_not_ready_still_blocks(self, monkeypatch):
         """Email's /init IS a gate — provisioning is a step the user finishes
         on the agent card, and a triage against an unprovisioned mailbox
@@ -451,7 +461,7 @@ class TestGaiaDispatch:
                 raise raises
             return True
 
-        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+        monkeypatch.setattr(cloud_keys, "reconnect_provider", _ensure)
 
     def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
         """After Lemonade restarts it has forgotten the key, and /init would
@@ -497,6 +507,40 @@ class TestGaiaDispatch:
         assert len(calls) == 1
         assert handler.events[0]["type"] == "status"
         assert "token rejected" in handler.events[0]["message"]
+
+    @pytest.mark.parametrize(
+        "failure",
+        ["ConnectionError", "ReadTimeout"],
+        ids=["refused", "hung"],
+    )
+    def test_an_agent_that_stopped_answering_is_not_blamed_on_the_model(
+        self, tmp_path, monkeypatch, failure
+    ):
+        """rc11: a refused connection to the agent read "Couldn't reach the
+        local LLM" to a user on Fireworks."""
+        import requests
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        self._record_replays(monkeypatch, [])
+        handle = _FakeHandle()
+        handle._proxy.base_url = "http://127.0.0.1:57532"
+
+        def _refused():
+            raise getattr(requests.exceptions, failure)("no answer")
+
+        handle._proxy.init = _refused
+        _, calls = self._patch(monkeypatch, handle)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(
+            handler, request, [], "fireworks.deepseek-v4p1-flash", "gaia"
+        )
+
+        [error] = [e["content"] for e in handler.events if e["type"] == "agent_error"]
+        assert error == GAIA_PROFILE.start_failed_text()
+        assert "LLM" not in error
+        assert calls == []
 
 
 # ── A relayed tool step reports what the tool actually did ───────────────────
@@ -610,11 +654,44 @@ class TestSessionIdGating:
     def test_gaia_sends_session_id(self):
         assert self._body_for(GAIA_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_email_does_not(self):
-        assert "session_id" not in self._body_for(EMAIL_PROFILE, "sess-9")
+    def test_email_sends_it_too(self):
+        # #2834: without it a follow-up can't name the thread the last turn
+        # showed — the sidecar builds a fresh agent per turn.
+        assert self._body_for(EMAIL_PROFILE, "sess-9")["session_id"] == "sess-9"
 
-    def test_gaia_omits_it_when_absent(self):
-        assert "session_id" not in self._body_for(GAIA_PROFILE, None)
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_omitted_when_absent(self, empty):
+        for profile in (GAIA_PROFILE, EMAIL_PROFILE):
+            assert "session_id" not in self._body_for(profile, empty)
+
+    def test_a_profile_without_the_field_never_sends_it(self):
+        from dataclasses import replace
+
+        bare = replace(EMAIL_PROFILE, min_session_id_api_version=None)
+        assert "session_id" not in self._body_for(bare, "sess-9")
+
+    @pytest.mark.parametrize(
+        "version,expected",
+        [
+            ("2.11", False),
+            ("2.12", True),
+            ("2.14", True),
+            ("3.0", True),
+            (None, False),
+            ("", False),
+            ("garbage", False),
+        ],
+    )
+    def test_email_takes_it_only_from_contract_2_12(self, version, expected):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        assert session_id_supported(EMAIL_PROFILE, version) is expected
+
+    def test_gaia_takes_it_at_its_own_floor(self):
+        from gaia.ui.email_sidecar.profiles import session_id_supported
+
+        floor = ".".join(str(n) for n in GAIA_PROFILE.min_api_version)
+        assert session_id_supported(GAIA_PROFILE, floor)
 
 
 # ── Per-agent copy never says "email" for the flagship ───────────────────────
@@ -622,11 +699,13 @@ class TestSessionIdGating:
 
 class TestCopyIsAgentSpecific:
     def test_stream_ended_message_names_gaia(self):
-        assert GAIA_PROFILE.stream_ended_message.startswith("GAIA agent stream ended")
+        assert GAIA_PROFILE.stream_ended_message.startswith(
+            "GAIA stopped unexpectedly while answering."
+        )
 
-    def test_email_keeps_its_pinned_string(self):
-        assert EMAIL_PROFILE.stream_ended_message == (
-            relay_module.STREAM_ENDED_UNEXPECTEDLY
+    def test_email_crash_copy_names_the_email_agent(self):
+        assert EMAIL_PROFILE.stream_ended_message.startswith(
+            "The email agent stopped unexpectedly while working."
         )
 
     def test_the_lemonade_hint_names_the_right_agent(self):
@@ -655,12 +734,262 @@ class TestCopyIsAgentSpecific:
         )
         assert handler.events[0]["detail"] == "Searching the web"
 
+    @pytest.mark.parametrize(
+        "tool, label",
+        [
+            ("guides/show_recipe", "Showing recipe"),
+            ("guides/show_workout", "Showing workout"),
+            ("guides/show_how_to", "Showing how-to"),
+            ("guides/show_checklist", "Showing checklist"),
+            ("guides/show_itinerary", "Showing itinerary"),
+            ("calculators/show_tip_calculator", "Showing tip calculator"),
+            ("calculators/show_loan_calculator", "Showing loan calculator"),
+        ],
+    )
+    def test_a_card_skill_tool_shows_its_plain_label(self, tool, label):
+        """A skill tool's name carries a slash; humanizing it would show
+        ``guides/show recipe`` in the step list."""
+        handler = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            handler, {"type": "tool_call", "tool": tool}, GAIA_PROFILE
+        )
+        assert handler.events[0]["detail"] == label
+
+    def test_every_card_skill_tool_has_a_relay_label(self):
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        card_tools = {
+            tool
+            for tool in SSEOutputHandler._RENDER_TOOL_TO_LANG
+            if tool.startswith(("guides/", "calculators/"))
+        }
+        assert card_tools
+        assert card_tools <= set(GAIA_PROFILE.tool_labels)
+
     def test_unlisted_tool_humanizes_rather_than_showing_a_raw_name(self):
         handler = _FakeSSEHandler()
         relay_module._dispatch_one(
             handler, {"type": "tool_call", "tool": "some_new_tool"}, GAIA_PROFILE
         )
         assert handler.events[0]["detail"] == "some new tool"
+
+
+# ── Crash and out-of-date copy is plain, with a real log path ────────────────
+
+_USER_COPY_FIELDS = (
+    "stream_ended_message",
+    "version_upgrade_message",
+    "documents_upgrade_message",
+    "skills_upgrade_message",
+    "memory_upgrade_message",
+    "start_failed_message",
+)
+
+
+class TestPlainUserCopy:
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    @pytest.mark.parametrize("field_name", _USER_COPY_FIELDS)
+    def test_no_internal_jargon_or_hub(self, profile, field_name):
+        text = getattr(profile, field_name).lower()
+        for word in ("sidecar", "stream", "hub", "contract", "~/"):
+            assert word not in text, f"{profile.agent_id}.{field_name}: {text!r}"
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_crash_copy_keeps_the_partial_answer_and_asks_to_resend(self, profile):
+        text = profile.stream_ended_message
+        assert "stopped unexpectedly" in text
+        assert "kept above" in text
+        assert "Send your message again." in text
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_start_failure_copy_says_what_to_try(self, profile):
+        text = profile.start_failed_message
+        assert "couldn't start" in text
+        assert "Send your message again." in text
+        assert "restart GAIA" in text
+        assert "update GAIA to the latest version or reinstall it" in text
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_upgrade_copy_says_update_gaia(self, profile):
+        assert "Update GAIA" in profile.version_upgrade_message
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_crash_text_names_the_real_log_folder(self, profile, tmp_path, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / profile.agent_id / "logs"
+        log_dir.mkdir(parents=True)
+
+        text = profile.stream_ended_text()
+
+        assert text.startswith(profile.stream_ended_message)
+        assert text.endswith(str(log_dir))
+        assert log_dir.is_absolute()
+        assert "~" not in text
+
+    def test_crash_text_omits_a_log_folder_that_does_not_exist(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert GAIA_PROFILE.stream_ended_text() == GAIA_PROFILE.stream_ended_message
+
+    def test_relay_shows_the_crash_text_when_the_stream_just_stops(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / "gaia" / "logs"
+        log_dir.mkdir(parents=True)
+
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "status", "message": "thinking"}])
+
+            def cancel_query(self, run_id):
+                return None
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [
+            f"{GAIA_PROFILE.stream_ended_message} "
+            f"The details are in this log folder: {log_dir}"
+        ]
+
+    def test_relay_replaces_the_daemons_api_wording(self, tmp_path, monkeypatch):
+        """The daemon's synthetic crash frame names an HTTP endpoint for API
+        callers; a chat user gets the profile's plain copy instead."""
+        from gaia.daemon.relay import stream_ended_unexpectedly_detail
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        daemon_frame = {
+            "type": "error",
+            "detail": stream_ended_unexpectedly_detail("gaia"),
+            "source": "daemon_relay",
+        }
+
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "status", "message": "x"}, daemon_frame])
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [GAIA_PROFILE.stream_ended_message]
+        assert errors[0]["fatal"] is True
+
+    def test_a_failed_start_shows_plain_words_and_logs_the_detail(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """The daemon's start failure names its internals and carries the
+        agent's raw log tail; the chat gets plain words, the log gets it all."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        log_dir = tmp_path / "agents" / "gaia" / "logs"
+        log_dir.mkdir(parents=True)
+        detail = (
+            "the daemon refused to ensure the 'gaia' sidecar: gaia sidecar failed "
+            "to start after 3 attempts. Last failure: gaia sidecar exited early "
+            "(code 1) before becoming healthy. Last log output: "
+            "\u001b[37mINFO\u001b[0m | faiss.loader\n"
+            "Traceback (most recent call last):\n"
+            '  File "server.py", line 55, in <module>\n'
+        )
+
+        def _acquire(agent_id):
+            raise SidecarSpawnError(detail)
+
+        monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        with caplog.at_level("ERROR", logger=chat_helpers_module.logger.name):
+            _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [
+            f"{GAIA_PROFILE.start_failed_message} "
+            f"The details are in this log folder: {log_dir}"
+        ]
+        visible = errors[0]["content"].lower()
+        for word in ("sidecar", "daemon", "ensure", "traceback", "\u001b"):
+            assert word not in visible, word
+        assert any(detail in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("kind", "next_step"),
+        [
+            ("capacity", "Restart your PC to stop them"),
+            ("mode_conflict", "Close that copy, or restart your PC"),
+            ("not_installed", "update GAIA to the latest version or reinstall it"),
+            ("service_unreachable", "Restart GAIA, then send your message again."),
+            ("service_outdated", "Update GAIA to the latest version, then restart"),
+        ],
+    )
+    def test_a_start_failure_outside_the_agent_names_its_own_fix(
+        self, tmp_path, monkeypatch, kind, next_step
+    ):
+        """Resending can't fix these, and the agent's log never saw them, so
+        each gets its own next step and points at GAIA's service log."""
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "host"))
+        (tmp_path / "agents" / "gaia" / "logs").mkdir(parents=True)
+        service_log = tmp_path / "host" / "daemon.log"
+        service_log.parent.mkdir()
+        service_log.write_text("", encoding="utf-8")
+
+        def _acquire(agent_id):
+            raise SidecarError("the daemon refused to ensure the sidecar", kind=kind)
+
+        monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
+
+        [error] = [e["content"] for e in handler.events if e["type"] == "agent_error"]
+        assert next_step.lower() in error.lower()
+        assert error.endswith(f"The details are in this log: {service_log}")
+        assert GAIA_PROFILE.start_failed_message not in error
+        message = error.split(" The details are in")[0].lower()
+        for word in ("sidecar", "daemon", "ensure"):
+            assert word not in message, word
+
+    @pytest.mark.parametrize("profile", [GAIA_PROFILE, EMAIL_PROFILE])
+    def test_an_out_of_date_agent_says_update_gaia(self, profile):
+        assert profile.start_failed_text("out_of_date") == (
+            profile.version_upgrade_message
+        )
+
+    @pytest.mark.parametrize("kind", ["start_failed", ""])
+    def test_a_crash_or_an_unnamed_failure_keeps_the_generic_wording(
+        self, tmp_path, monkeypatch, kind
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        assert GAIA_PROFILE.start_failed_text(kind) == (
+            GAIA_PROFILE.start_failed_message
+        )
+
+    def test_a_sidecar_error_detail_still_passes_through(self):
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "error", "detail": "Model not found"}])
+
+        handler = _FakeSSEHandler()
+        relay_module.relay_query(
+            handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+        )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == ["Model not found"]
 
 
 @pytest.mark.skipif(

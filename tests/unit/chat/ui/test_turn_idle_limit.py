@@ -574,3 +574,22 @@ async def test_silence_after_waking_still_stops_the_turn(runtime, clock):
         events = await _stream(runtime, session, agent)
 
     assert "without progress" in _done(events)["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_broken_time_limit_clock_tells_the_user_to_restart_gaia(runtime):
+    """Not "try again": every resend would hit the same broken clock."""
+    from gaia.utils.awake_clock import AwakeClockError
+
+    message = "GAIA's time-limit clock stopped working. Restart GAIA."
+
+    def broken():
+        raise AwakeClockError(message)
+
+    agent = _ScriptedAgent(lambda _agent: "done")
+    session = _seed(runtime, agent)
+    with patch.object(helpers, "_awake_clock", SimpleNamespace(monotonic=broken)):
+        events = await _stream(runtime, session, agent)
+    errors = [e for e in events if e.get("type") == "error"]
+    assert errors, events
+    assert errors[-1]["content"] == message

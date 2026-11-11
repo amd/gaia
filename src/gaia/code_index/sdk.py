@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.security import PathValidator
@@ -28,6 +28,15 @@ def _missing_deps_msg() -> str:
     from gaia.agents.install_hints import missing_extra_hint
 
     return f"code_index dependencies missing. {missing_extra_hint('rag')}"
+
+
+def _check_dependencies() -> None:
+    """Fail before embedding when the code-index runtime is incomplete."""
+    try:
+        import faiss  # noqa: F401  # pylint: disable=unused-import
+        import numpy  # noqa: F401  # pylint: disable=unused-import
+    except ImportError as exc:
+        raise ImportError(_missing_deps_msg()) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +58,14 @@ _SENSITIVE_PREFIXES = (".env.",)
 
 # Extensions that are always sensitive
 _SENSITIVE_EXTENSIONS = {".pem", ".key", ".pfx", ".p12", ".jks", ".keystore"}
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _is_sensitive_file(filename: str) -> bool:
@@ -147,6 +164,15 @@ class IndexResult:
 # the version bump forces a one-time full re-index.
 _CACHE_VERSION = 2
 
+# Tries, and the pause between them, for a batch the embedder answers with no
+# vectors while it is still loading. The same as RAG's EMBED_WARMUP_* values.
+_EMBED_WARMUP_ATTEMPTS = 3
+_EMBED_WARMUP_PAUSE_S = 2
+
+
+class CodeIndexCacheError(RuntimeError):
+    """The on-disk index and its metadata do not belong together."""
+
 
 # ---------------------------------------------------------------------------
 # CodeIndexSDK
@@ -191,6 +217,8 @@ class CodeIndexSDK:
         self._metadata: Optional[Dict[str, Any]] = None
         self._embedder = None
         self._llm_client = None
+        #: Chunks embedded so far by the running index build, of how many.
+        self.progress: Dict[str, int] = {"embedded": 0, "to_embed": 0}
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,9 +229,13 @@ class CodeIndexSDK:
         Index the repository: discover files, parse, embed, build FAISS index,
         persist atomically.
         """
+        self.progress = {"embedded": 0, "to_embed": 0}
         start = time.time()
 
         self.log.info(f"Indexing repository: {self._repo_root}")
+
+        # Fail before the embedding pass, not after it at index construction.
+        _check_dependencies()
 
         # Load existing metadata (for incremental indexing)
         existing_meta = self._load_metadata()
@@ -335,7 +367,13 @@ class CodeIndexSDK:
                     "chunks missed the embedding cache — re-embedding only "
                     "those"
                 )
-            if reused_indices and self._ensure_index_loaded():
+            try:
+                cache_loaded = bool(reused_indices) and self._ensure_index_loaded()
+            except CodeIndexCacheError as e:
+                # Rebuilding is the remedy; the unchanged chunks re-embed below.
+                self.log.warning(f"Not reusing embeddings: {e}")
+                cache_loaded = False
+            if cache_loaded:
                 try:
                     reused_embeddings = np.array(
                         [self._faiss_index.reconstruct(i) for i in reused_indices],
@@ -410,6 +448,8 @@ class CodeIndexSDK:
                 f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
 
+        # Embedding raises rather than dropping a chunk, so this is now a guard;
+        # chunks_dropped stays in IndexResult for the callers that report it.
         # A file that lost even one chunk to a failed embedding must NOT have
         # its hash recorded: the hash marks it "indexed", every later run
         # would skip it as unchanged, and the missing chunks would stay
@@ -500,7 +540,7 @@ class CodeIndexSDK:
         self._load_embedder()
         try:
             query_emb = self._encode_texts([query])
-        except (RuntimeError, ConnectionError, TimeoutError) as e:
+        except (RuntimeError, ConnectionError, TimeoutError, LemonadeClientError) as e:
             raise RuntimeError(
                 f"Query encoding failed against "
                 f"{self.config.embedding_model!r}: {e}. "
@@ -554,10 +594,19 @@ class CodeIndexSDK:
         return self._meta_path.exists() and self._index_path.exists()
 
     def get_status(self) -> Dict[str, Any]:
-        """Return index statistics."""
-        meta = self._load_metadata()
-        if not meta:
+        """Return index statistics; "indexed" means loadable and consistent."""
+        try:
+            loaded = self._ensure_index_loaded()
+        except RuntimeError as e:
+            return {
+                "indexed": False,
+                "repo_path": str(self._repo_root),
+                "error": str(e),
+                "cache_path": str(self._cache_dir),
+            }
+        if not loaded:
             return {"indexed": False, "repo_path": str(self._repo_root)}
+        meta = self._metadata
 
         chunks = meta.get("chunks", [])
         code_count = sum(1 for c in chunks if c.get("chunk_type") == "code")
@@ -634,6 +683,12 @@ class CodeIndexSDK:
             ".h",
             ".cpp",
             ".hpp",
+            ".v",
+            ".vh",
+            ".sv",
+            ".svh",
+            ".vhd",
+            ".vhdl",
             ".cs",
             ".rb",
             ".php",
@@ -844,7 +899,7 @@ class CodeIndexSDK:
                     self.config.embedding_model,
                     llamacpp_args="--ubatch-size 2048 --split-mode none",
                 )
-        except (ConnectionError, TimeoutError, RuntimeError) as e:
+        except (ConnectionError, TimeoutError, RuntimeError, LemonadeClientError) as e:
             # Re-raise with an actionable hint. Swallowing this caused
             # opaque downstream encode failures — surface the root cause
             # so the caller knows whether Lemonade is down vs. the model
@@ -867,54 +922,51 @@ class CodeIndexSDK:
         )
         return [item.get("embedding", []) for item in (response or {}).get("data", [])]
 
-    def _embed_batch_resilient(self, batch: List[str]) -> List[list]:
-        """Embed one batch, retrying transport errors and short/empty responses.
+    def _embed_batch(self, batch: List[str]) -> List[list]:
+        """One embeddings call for *batch*: a vector for every text, or an error.
 
-        Lemonade occasionally answers HTTP 200 with fewer (or zero) vectors
-        than requested while the model is still warming up — no exception is
-        raised, so a naive caller can't distinguish that from "embeddings
-        legitimately came back empty". Retrying the *same batch* a couple of
-        times resolves the transient case without callers paying the ~25x
-        cost of a one-by-one fallback for what is usually a load race.
-
-        Returns whatever the backend produced — may be shorter than *batch*
-        if retries are exhausted. Callers decide whether that's fatal.
+        The only repeat is a short wait while the model is still loading
+        (no vectors at all, no error), as RAG does. A failed call or a short
+        batch is raised at once: sending it again won't fix a dead backend
+        or a wrong model name.
         """
-        max_retries = 2
-        result: List[list] = []
-        for attempt in range(max_retries + 1):
+        model = self.config.embedding_model
+        attempt = 1
+        while True:
             try:
-                result = self._embed_batch_call(batch)
-            except Exception as e:
-                if attempt < max_retries:
-                    self.log.warning(
-                        f"Embedding batch attempt {attempt + 1} failed: {e}"
-                    )
-                    time.sleep(2)
-                    continue
-                raise
-
-            if len(result) == len(batch):
-                return result
-
-            if attempt < max_retries:
+                vectors = self._embed_batch_call(batch)
+            except Exception as e:  # noqa: BLE001 — re-raised with the remedy
+                reason = str(e).rstrip(". ") or type(e).__name__
+                raise RuntimeError(
+                    f"Embedding a batch of {len(batch)} chunk(s) with {model!r} "
+                    f"failed: {reason}. Check that Lemonade Server is reachable "
+                    f"and that {model!r} is loaded. "
+                    f"{describe_client_hint('load', model).instruction}"
+                ) from e
+            if not any(vectors) and attempt < _EMBED_WARMUP_ATTEMPTS:
+                attempt += 1
                 self.log.warning(
-                    f"Embedding batch returned {len(result)}/{len(batch)} vectors "
-                    f"(no error) — backend likely still loading "
-                    f"{self.config.embedding_model!r}, retrying batch "
-                    f"(attempt {attempt + 1}/{max_retries})"
+                    f"No embeddings back from {model!r}: it is still loading; "
+                    f"try {attempt}/{_EMBED_WARMUP_ATTEMPTS} in "
+                    f"{_EMBED_WARMUP_PAUSE_S}s."
                 )
-                time.sleep(2)
-
-        return result
+                time.sleep(_EMBED_WARMUP_PAUSE_S)
+                continue
+            if len(vectors) != len(batch) or not all(vectors):
+                got = sum(1 for v in vectors if v)
+                raise RuntimeError(
+                    f"Embedding backend returned {got}/{len(batch)} vectors from "
+                    f"{model!r}. Verify Lemonade Server is reachable and the "
+                    "model is fully loaded, then index again. No partial batch "
+                    "was kept."
+                )
+            return vectors
 
     def _encode_texts(self, texts: List[str]):
         """Encode texts using Lemonade embeddings. Returns numpy array.
 
-        Fails loudly if the backend cannot produce a vector for every text
-        after retries — this is the query-encode path used by search(),
-        which must never silently hand back fewer vectors than requested
-        (that previously surfaced as "no matches" instead of a real error).
+        Raises RuntimeError when a batch can't be embedded, so search() never
+        mistakes a dead backend for "no matches".
         """
         import numpy as np
 
@@ -929,23 +981,16 @@ class CodeIndexSDK:
         for batch_start in range(0, len(safe_texts), BATCH_SIZE):
             raise_if_cancelled()
             batch = safe_texts[batch_start : batch_start + BATCH_SIZE]
-            batch_embeddings = self._embed_batch_resilient(batch)
-            if len(batch_embeddings) != len(batch):
-                raise RuntimeError(
-                    f"Embedding backend returned {len(batch_embeddings)}/"
-                    f"{len(batch)} vectors after retries against "
-                    f"{self.config.embedding_model!r}. Verify Lemonade "
-                    "Server is reachable and the model is fully loaded "
-                    "(not mid-warm-up)."
-                )
-            all_embeddings.extend(batch_embeddings)
+            all_embeddings.extend(self._embed_batch(batch))
 
         return np.array(all_embeddings, dtype=np.float32)
 
     def _encode_texts_with_sync(self, texts: List[str], chunks: List):
         """
-        Encode texts and return (embeddings, valid_chunks) in lockstep.
-        Filters out chunks whose embedding failed (empty vector).
+        Encode texts and return (embeddings, chunks) in lockstep.
+
+        Raises RuntimeError on the first batch that can't be embedded, so an
+        index is never built with chunks silently missing.
         """
         import numpy as np
 
@@ -955,58 +1000,21 @@ class CodeIndexSDK:
 
         BATCH_SIZE = 25
 
-        valid_chunks = []
-        valid_embeddings = []
+        embeddings: List[list] = []
+        self.progress = {"embedded": 0, "to_embed": len(texts)}
 
         for batch_start in range(0, len(texts), BATCH_SIZE):
             raise_if_cancelled()
+            self.progress["embedded"] = batch_start
             batch_texts = texts[batch_start : batch_start + BATCH_SIZE]
-            batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
+            embeddings.extend(self._embed_batch(safe_texts))
 
-            try:
-                batch_embeddings = self._embed_batch_resilient(safe_texts)
-            except Exception as e:
-                self.log.error(f"Batch embedding failed after retries: {e}")
-                batch_embeddings = []
-
-            # Last-resort one-by-one fallback — only reached once the whole-batch
-            # retries above (transient "still loading") are exhausted, so this
-            # is now the rare path instead of the common one.
-            if len(batch_embeddings) != len(batch_chunks):
-                self.log.warning(
-                    f"Batch embedding still short ({len(batch_embeddings)}/"
-                    f"{len(batch_chunks)}) after retries — falling back to "
-                    "one-by-one for this batch"
-                )
-                batch_embeddings = []
-                for single_text in safe_texts:
-                    try:
-                        resp = self._embedder.embeddings(
-                            [single_text], model=self.config.embedding_model, timeout=60
-                        )
-                        data = resp.get("data", [])
-                        batch_embeddings.append(
-                            data[0].get("embedding", []) if data else []
-                        )
-                    except Exception as e:
-                        self.log.warning(f"Single embedding failed: {e}")
-                        batch_embeddings.append([])
-
-            # Sync: only keep chunks with valid (non-empty) embeddings
-            for emb, chunk in zip(batch_embeddings, batch_chunks):
-                if emb:
-                    valid_chunks.append(chunk)
-                    valid_embeddings.append(emb)
-                else:
-                    self.log.debug(
-                        f"Skipping chunk with no embedding: {getattr(chunk, 'file_path', '?')}"
-                    )
-
-        if not valid_embeddings:
+        self.progress["embedded"] = len(texts)
+        if not embeddings:
             return np.array([], dtype=np.float32), []
 
-        return np.array(valid_embeddings, dtype=np.float32), valid_chunks
+        return np.array(embeddings, dtype=np.float32), list(chunks)
 
     def _build_faiss_index(self, embeddings):
         """Build a FAISS IndexFlatL2 from embeddings array."""
@@ -1035,15 +1043,16 @@ class CodeIndexSDK:
 
         try:
             faiss.write_index(faiss_index, str(tmp_index))
+            meta["index_sha256"] = _file_sha256(tmp_index)
             tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-            # Rename index first — if crash happens between renames,
-            # _load_metadata will detect stale metadata via ntotal check.
+            # Metadata first: a crash between the renames leaves new metadata
+            # whose index_sha256 the old index fails, never an unchecked pair.
             # Path.replace (not .rename) — on Windows, rename() raises
             # FileExistsError when the destination already exists, so every
             # re-index after the first would crash here. replace() atomically
             # overwrites on both Windows and POSIX.
-            tmp_index.replace(self._index_path)
             tmp_meta.replace(self._meta_path)
+            tmp_index.replace(self._index_path)
             self.log.debug(f"Index saved to {self._cache_dir}")
         except Exception as e:
             self.log.error(f"Failed to save index: {e}")
@@ -1075,7 +1084,11 @@ class CodeIndexSDK:
             return None
 
     def _ensure_index_loaded(self) -> bool:
-        """Load FAISS index into memory if not already loaded."""
+        """Load the index into memory; False when none exists.
+
+        Raises CodeIndexCacheError when the index and metadata on disk do not
+        match, so a corrupt cache is never reported as "no results".
+        """
         if self._faiss_index is not None and self._metadata is not None:
             return True
 
@@ -1089,7 +1102,9 @@ class CodeIndexSDK:
         except ImportError as e:
             raise ImportError(_missing_deps_msg()) from e
 
+        stored_sha = meta.get("index_sha256")
         try:
+            actual_sha = _file_sha256(self._index_path) if stored_sha else None
             index = faiss.read_index(str(self._index_path))
         except (RuntimeError, OSError) as e:
             # FAISS raises RuntimeError on a corrupt/incompatible binary,
@@ -1100,16 +1115,28 @@ class CodeIndexSDK:
                 "The cache may be corrupt; run `clear_index()` and re-index."
             ) from e
 
+        if stored_sha and actual_sha != stored_sha:
+            raise CodeIndexCacheError(
+                self._cache_error("the index file does not match its metadata")
+            )
         expected = len(meta.get("chunks", []))
         if index.ntotal != expected:
-            self.log.warning(
-                f"Index/metadata mismatch: FAISS has {index.ntotal} vectors "
-                f"but metadata has {expected} chunks — cache corrupt, ignoring"
+            raise CodeIndexCacheError(
+                self._cache_error(
+                    f"the index holds {index.ntotal} vectors but the metadata "
+                    f"lists {expected} chunks"
+                )
             )
-            return False
         self._faiss_index = index
         self._metadata = meta
         return True
+
+    def _cache_error(self, detail: str) -> str:
+        return (
+            f"Code index cache at {self._cache_dir} is inconsistent: {detail}. "
+            "Re-index the repository (the index_codebase tool, or "
+            "CodeIndexSDK.index_repository()) to rebuild it."
+        )
 
     # ------------------------------------------------------------------
     # Serialization helpers

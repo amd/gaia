@@ -23,6 +23,8 @@ export interface SessionEnvironment {
     internet: boolean;
     /** False when the chat's agent keeps its own file scope (a relayed sidecar). */
     enforced: boolean;
+    /** False when the chat's agent keeps its own network rules (the email agent). */
+    internet_enforced: boolean;
 }
 
 export type OutputKind = 'file' | 'export' | 'image' | 'document' | 'memory' | 'schedule';
@@ -45,6 +47,31 @@ export interface OutputItem {
 export interface SessionOutputs {
     session_id: string;
     items: OutputItem[];
+}
+
+/** One tool the chat's agent can call (#440). */
+export interface AgentTool {
+    name: string;
+    /** The description the model is given. */
+    description: string;
+    /** A KNOWN_TOOLS mixin name (`rag`, `file_io`, ...), `mcp`, `skill` or `agent`. */
+    category: string;
+}
+
+/** How a skill came to be loaded in a chat. */
+export type SkillOrigin = 'model' | 'auto' | 'always';
+
+export interface ActiveSkill {
+    name: string;
+    how: SkillOrigin;
+}
+
+export interface AgentCapabilities {
+    session_id: string;
+    agent_type: string;
+    tools: AgentTool[];
+    /** Loaded skills, in load order; null when the agent runs elsewhere and doesn't report them. */
+    skills?: ActiveSkill[] | null;
 }
 
 export interface ChatFileChange {
@@ -102,9 +129,4 @@ export interface SessionGit {
     available: boolean;
     repos: GitRepo[];
     reason?: string;
-}
-
-export interface TunnelDevice {
-    name: string;
-    lastSeen: string;
 }

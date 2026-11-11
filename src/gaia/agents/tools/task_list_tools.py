@@ -19,7 +19,7 @@ import re
 import sqlite3
 import threading
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia.logger import get_logger
 
@@ -30,22 +30,10 @@ IN_PROGRESS = "in_progress"
 COMPLETED = "completed"
 STATUSES = (PENDING, IN_PROGRESS, COMPLETED)
 
-#: The model keeps the list; ``plan`` is the fallback derived from the reply
-#: envelope's ``plan`` field when the model never called ``update_tasks``.
-SOURCE_AGENT = "agent"
-SOURCE_PLAN = "plan"
-
 MAX_ITEMS = 12
 MAX_ITEM_CHARS = 120
 
 TOOL_NAME = "update_tasks"
-
-#: The whole prompt cost of the feature; local models pay for every token.
-PROMPT_RULES = (
-    "\n**TASK LIST:** For work of three or more steps, list them first with "
-    "`update_tasks` and advance it as each finishes. Never repeat the list in "
-    "your reply.\n"
-)
 
 #: Most items a single ``items`` argument may carry before it is refused
 #: without being read further — a guard against a runaway model, not a limit
@@ -67,11 +55,11 @@ NUDGE_ADVANCE = (
 )
 
 # A list marker the model typed into the step text ("- ", "2. ", "3) ").
-_LIST_MARKER = re.compile(r"^(?:[-*•]|\d{1,2}[.)])\s+")
+_LIST_MARKER = re.compile(r"^(?:[-*\u2022]|\d{1,2}[.)])\s+")
 # Terminal escape sequences (CSI, OSC) and control or bidi characters: step
 # text reaches a terminal verbatim.
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 def _now() -> float:
@@ -187,7 +175,6 @@ class TaskList:
     ) -> None:
         self._lock = threading.RLock()
         self._items: List[Dict[str, Any]] = []
-        self._source = SOURCE_AGENT
         self._current_action: Optional[str] = None
         self._action_started_at: Optional[float] = None
         self._updated_at: Optional[float] = None
@@ -205,7 +192,7 @@ class TaskList:
     def nudge(self) -> Optional[str]:
         """A one-line reminder for the model's next step, or ``None``.
 
-        The prompt rule alone is often skipped, so the agent reminds the model
+        The tool description alone is often skipped, so the agent reminds the model
         once a request has proved itself multi-step, and once when a kept list
         has fallen behind. At most one reminder per turn.
         """
@@ -235,7 +222,6 @@ class TaskList:
         with self._lock:
             return {
                 "items": [dict(item) for item in self._items],
-                "source": self._source,
                 "current_action": self._current_action,
                 "action_started_at": self._action_started_at,
                 "steps_since_update": self._steps_since_update,
@@ -331,14 +317,11 @@ class TaskList:
             self._kept_this_turn = True
             was_stale = self._steps_since_update > 0
             self._steps_since_update = 0
-            unchanged = self._source == SOURCE_AGENT and _shape(items_after) == _shape(
-                self._items
-            )
+            unchanged = _shape(items_after) == _shape(self._items)
             if unchanged and not was_stale:
                 # A repeated call is not news; re-sending it would only churn.
                 return self.state()
             self._items = items_after
-            self._source = SOURCE_AGENT
             self._touch()
         return self._changed()
 
@@ -389,78 +372,13 @@ class TaskList:
         with self._lock:
             self._calls_this_turn += 1
             # An earlier request's list, finished or not, is not this turn's
-            # work until the model touches it (or the plan fallback rebuilds it).
-            this_turns = self._kept_this_turn or (
-                self._source == SOURCE_PLAN and self.is_active()
-            )
-            if not self._items or not this_turns:
+            # work until the model touches it.
+            if not self._items or not self._kept_this_turn:
                 return
             self._current_action = label
             self._action_started_at = _now()
             self._steps_since_update += 1
             self._touch()
-        self._changed()
-
-    def mirror_plan(self, steps: Sequence[str], current: int) -> None:
-        """Derive the list from the reply envelope's ``plan`` field.
-
-        Used only when the model has not kept the list itself this turn, and
-        never over an unfinished list the model kept in an earlier turn: the
-        list belongs to the conversation, and a follow-up's plan is not a
-        reason to throw its progress away.
-        """
-        with self._lock:
-            if self._kept_this_turn or not steps:
-                return
-            if self._source == SOURCE_AGENT and any(
-                item["status"] != COMPLETED for item in self._items
-            ):
-                return
-            now = _now()
-            previous = (
-                {item["id"]: item for item in self._items}
-                if self._source == SOURCE_PLAN
-                else {}
-            )
-            items = []
-            # A plan longer than the card keeps the running step in view.
-            first = max(0, min(current - 1, len(steps) - MAX_ITEMS))
-            for i, text in enumerate(steps):
-                if not first <= i < first + MAX_ITEMS:
-                    continue
-                text = _clean_text(text)[:MAX_ITEM_CHARS] or f"Step {i + 1}"
-                old = previous.get(i + 1)
-                same = old is not None and old["content"] == text
-                if i < current:
-                    status = COMPLETED
-                elif i == current:
-                    status = IN_PROGRESS
-                else:
-                    status = PENDING
-                started = old["started_at"] if same and old["started_at"] else None
-                if status != PENDING and started is None:
-                    started = now
-                completed = (
-                    (old["completed_at"] if same and old["completed_at"] else now)
-                    if status == COMPLETED
-                    else None
-                )
-                items.append(
-                    {
-                        "id": i + 1,
-                        "content": text,
-                        "status": status,
-                        "started_at": started,
-                        "completed_at": completed,
-                    }
-                )
-            self._items = items
-            self._source = SOURCE_PLAN
-            self._steps_since_update = 0
-            self._touch()
-        logger.info(
-            "Task list derived from the reply's plan field (%d steps)", len(steps)
-        )
         self._changed()
 
     def restore(self, state: Optional[Mapping[str, Any]]) -> None:
@@ -469,12 +387,8 @@ class TaskList:
             self.clear(emit=False)
             return
         restored = _validated_items(state.get("items"))
-        source = state.get("source") or SOURCE_AGENT
-        if source not in (SOURCE_AGENT, SOURCE_PLAN):
-            raise ValueError(f"saved task list has an unknown source {source!r}")
         with self._lock:
             self._items = restored
-            self._source = source
             self._steps_since_update = 0
             # A restored list was saved by a finished or interrupted turn;
             # nothing of it is running now.
@@ -486,7 +400,7 @@ class TaskList:
         """Forget the list. ``emit=False`` when the host clears its own view too.
 
         ``by_model``: the model cleared it, which counts as keeping the list
-        this turn, so the plan fallback does not rebuild it.
+        this turn, so the reminder does not ask it to start one again.
         """
         with self._lock:
             if by_model:
@@ -494,7 +408,6 @@ class TaskList:
             if not self._items:
                 return
             self._items = []
-            self._source = SOURCE_AGENT
             self._current_action = None
             self._action_started_at = None
             self._touch()
@@ -586,22 +499,6 @@ def _start_next(items: List[Dict[str, Any]], now: float, after: int = -1) -> Non
             return
 
 
-def plan_step_text(step: Any) -> str:
-    """One readable line for a reply-envelope plan step."""
-    if isinstance(step, Mapping):
-        description = step.get("description")
-        if isinstance(description, str) and description.strip():
-            return " ".join(description.split())
-        tool = step.get("tool")
-        if isinstance(tool, str) and tool:
-            from gaia.ui.event_narration import derive_narration
-
-            args = step.get("tool_args")
-            return derive_narration(tool, args if isinstance(args, Mapping) else {})
-        return json.dumps(step, ensure_ascii=False)
-    return " ".join(str(step).split())
-
-
 class TaskListMixin:
     """
     Mixin providing the agent's task list.
@@ -636,7 +533,9 @@ class TaskListMixin:
             done: Optional[List[int]] = None,
             start: Optional[int] = None,
         ) -> Dict[str, Any]:
-            """Keep a short task list for multi-step work; the user sees it pinned while you work.
+            """Keep a task list for work of three or more steps: set it first,
+            advance it as each step finishes. The user sees it pinned; never
+            repeat it in your reply.
 
             Args:
                 items: The whole plan as short imperative steps (max 12). Replaces the list; steps you keep verbatim keep their status. [] clears it.

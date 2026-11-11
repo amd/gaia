@@ -17,27 +17,42 @@ Usage:
 
 import contextlib
 import functools
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 import requests
 import yaml
 
+from gaia.eval.claude_credential import announce, resolve_claude_credential
+from gaia.eval.claude_outage import (
+    CREDENTIAL,
+    HEADLINES,
+    QUOTA,
+    UNREACHABLE,
+    classify_driver_failure,
+    switch_to_backup_account,
+)
+from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.fixture_env import fixture_fingerprint
+from gaia.eval.fixture_env import from_env as fixture_env_from_env
+from gaia.eval.fixture_env import localize
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
-from gaia.eval.scorecard import SKIPPED_STATUSES
+from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
+from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +65,27 @@ MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+
+def eval_checkout_error() -> Optional[str]:
+    """Say why eval can't run when the repo's ``eval/`` assets are absent.
+
+    Scenarios, corpus and MCP config ship only in a source checkout, never in
+    the wheel, so an installed package resolves them into site-packages.
+    """
+    if SCENARIOS_DIR.is_dir():
+        return None
+    return (
+        "gaia eval agent needs a GAIA source checkout, but no scenarios "
+        f"directory exists at {SCENARIOS_DIR}. The scenarios, corpus and MCP "
+        "config live in the repository's eval/ directory and are not part of "
+        "the installed package.\n"
+        "  Clone the repo and install it in editable mode, then run from it:\n"
+        "    git clone https://github.com/amd/gaia && cd gaia\n"
+        '    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python\n'
+        "  See https://amd-gaia.ai/docs/guides/eval#prerequisites"
+    )
+
 
 # ── MCP interpreter resolution ────────────────────────────────────────────
 #
@@ -193,8 +229,182 @@ def _read_session_agent_type(backend_url: str, session_id: str, timeout: float =
 # BLOCKED_BY_ARCHITECTURE remains a comparable outcome here; the separate
 # integrity gate also counts blocked/skipped outcomes as incomplete.
 _NO_MEASUREMENT_STATUSES = frozenset(
-    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED"}
+    {"INFRA_ERROR", "SETUP_ERROR", "TIMEOUT", "BUDGET_EXCEEDED", "ERRORED", NOT_RUN}
 )
+
+#: Exit code of a run stopped because Claude was unavailable: resume it later.
+EXIT_CLAUDE_OUTAGE = 3
+
+#: Zero-token failures with no quota or credential wording, in a row, that
+#: stop a run. One alone may be the scenario's own failure.
+UNREACHABLE_STOP_AFTER = 2
+
+_OUTAGE_ACTIONS = {
+    QUOTA: "Resume once the limit resets",
+    CREDENTIAL: (
+        "Fix the credential (`claude setup-token`, or the CLAUDE_CODE_OAUTH_TOKEN "
+        "secret in CI), then resume"
+    ),
+    UNREACHABLE: (
+        "Read Claude's error above; once `claude -p 'reply with: ok'` answers, resume"
+    ),
+}
+
+
+def _needs_resume(result: dict) -> bool:
+    """True for a scenario with no result yet: never started, or cut off by Claude."""
+    return result.get("status") == NOT_RUN or bool(result.get("claude_outage"))
+
+
+def _current_commit() -> Optional[str]:
+    """The commit under test: ``GITHUB_SHA`` in CI, else this checkout's HEAD.
+
+    ``None`` outside a git checkout (an installed wheel); ``-dirty`` marks
+    uncommitted changes to tracked files, which the commit alone would hide.
+    """
+    if os.environ.get("GITHUB_SHA"):
+        return os.environ["GITHUB_SHA"]
+
+    def _git(*args):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), *args],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
+    head = _git("rev-parse", "HEAD")
+    if not head:
+        return None
+    return (
+        f"{head}-dirty"
+        if _git("status", "--porcelain", "--untracked-files=no")
+        else head
+    )
+
+
+def _stamp_run_info(result: dict, commit: Optional[str]) -> None:
+    """Record when and at which commit this result was produced."""
+    result["ran_at"] = datetime.now(timezone.utc).isoformat()
+    result["commit"] = commit
+
+
+def _write_trace(run_dir, result: dict) -> None:
+    traces_dir = Path(run_dir) / "traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    (traces_dir / f"{result['scenario_id']}.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _stop_reason(stopped: dict, switches: list) -> str:
+    """Why a stopped run stopped, in one clause, naming every reset time."""
+    resets = stopped.get("resets") or "not stated"
+    if stopped["kind"] == QUOTA and switches:
+        last = switches[-1]
+        return (
+            "both Claude accounts are out of quota (the "
+            f"{last['from']} account resets {last.get('from_resets') or 'not stated'}; "
+            f"the {last['to']} account resets {resets})"
+        )
+    if stopped["kind"] == QUOTA:
+        return (
+            f"the Claude account is out of quota (resets {resets}) and there was no "
+            "backup account to switch to"
+        )
+    if stopped["kind"] == CREDENTIAL:
+        return "the Claude credential was rejected"
+    return "Claude never answered"
+
+
+def _partial(stopped: dict, total: int, switches: list) -> dict:
+    """The ``partial`` block: how much of a stopped run produced results, and why."""
+    not_run = len(stopped["not_run"])
+    ran = total - not_run
+    reason = _stop_reason(stopped, switches)
+    return {
+        "ran": ran,
+        "total": total,
+        "not_run": not_run,
+        "reason": reason,
+        "summary": f"partial: {ran} of {total} ran, stopped because {reason}",
+    }
+
+
+def _outage_report(stopped: dict, total: int) -> str:
+    """The multi-line stop message: what failed, for whom, and how to resume."""
+    not_run = stopped["not_run"]
+    done = total - len(not_run)
+    partial = stopped.get("partial") or {}
+    lines = [
+        f"{stopped['headline']} during {stopped['after_scenario']} (scenario "
+        f"{stopped['position']} of {total}). Stopped; nothing after it was started.",
+        *([f"  INCOMPLETE: {partial['summary']}."] if partial else []),
+        f"  Account: {stopped.get('account')}",
+        f"  Resets:  {stopped.get('resets') or 'not stated in the error'}",
+        f"  Claude:  {stopped.get('detail')}",
+        f"  {done} scenario(s) have results and are kept; {len(not_run)} have none "
+        f"(NOT_RUN or cut off, reason {stopped['kind']}).",
+        f"  {_OUTAGE_ACTIONS[stopped['kind']]}; only those {len(not_run)} run:",
+        f"    {stopped['resume']}",
+        f"  In CI, re-dispatch them instead: -f scenarios={','.join(not_run)}",
+    ]
+    return "\n".join(lines)
+
+
+def _announce_switch(switch: dict) -> None:
+    """Say loudly that the rest of the run uses the other Claude account."""
+    message = (
+        f"The {switch['from']} Claude account is out of quota during "
+        f"{switch['during_scenario']} (resets "
+        f"{switch.get('from_resets') or 'not stated'}). Switching to the "
+        f"{switch['to']} account and re-running {switch['during_scenario']}; "
+        "the run stops if that account is out of quota too."
+    )
+    print(f"\n[ACCOUNT SWITCH] {message}", flush=True)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning title=Claude account switched mid-run::{message}", flush=True)
+
+
+def _cli_payload(stdout):
+    """The ``claude -p --output-format json`` object on stdout, or ``None``."""
+    try:
+        raw = json.loads(stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _driver_usage(stdout):
+    """Token and API-time counts from a failed ``claude -p --output-format json``.
+
+    ``None`` when stdout is not that JSON. A run whose driver could not reach
+    Claude at all (quota exhausted) reports zeros here, which is how the
+    integrity gate tells "Claude was unavailable" from an ordinary error.
+    """
+    try:
+        raw = json.loads(stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("usage"), dict):
+        return None
+    usage = raw["usage"]
+    counts = {
+        key: usage.get(key)
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    }
+    counts["duration_api_ms"] = raw.get("duration_api_ms")
+    return counts
 
 
 def _stamp_agent_provenance(
@@ -270,6 +480,99 @@ def _stamp_agent_provenance(
             "agent_type kwarg on create_session; the score measures the wrong "
             "agent and is discarded."
         )
+
+
+def _read_session_model(backend_url: str, session_id: str, timeout: float = 15.0):
+    """Return the model the backend says a turn in *session_id* runs.
+
+    ``effective_model`` is the backend's own resolution (custom override, agent
+    preference, device), so it names the model that answered rather than the
+    one the session was created with. Raises on any transport or parse failure.
+    """
+    url = f"{backend_url.rstrip('/')}/api/sessions/{session_id}"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json().get("effective_model")
+
+
+def _stamp_agent_model(
+    result: dict,
+    scenario_data: dict,
+    expected_model,
+    backend_url: str,
+    read_session_model=_read_session_model,
+) -> None:
+    """Record which local model the agent ran; with a pin, fail any other.
+
+    Same severities as :func:`_stamp_agent_provenance`. With no pin the
+    observation is only recorded, and :func:`run_agent_model` decides what the
+    scorecard may claim from it.
+    """
+    result["agent_model_requested"] = expected_model
+    result.setdefault("agent_model_observed", None)
+    if result.get("status") in _NO_MEASUREMENT_STATUSES:
+        return
+
+    scenario_id = result.get("scenario_id", scenario_data.get("id", "<unknown>"))
+
+    def _unverifiable(reason: str) -> None:
+        if not expected_model:
+            return
+        message = (
+            f"{scenario_id}: the agent model is pinned to '{expected_model}' but "
+            f"{reason}, so the model that answered cannot be verified."
+        )
+        if result.get("status") in ("PASS", "FAIL"):
+            result["status"] = "INFRA_ERROR"
+            result["error"] = message
+        else:
+            result.setdefault("provenance_warning", []).append(message)
+        print(f"[WARN] {message}", file=sys.stderr)
+
+    session_id = result.get("session_id")
+    if not session_id:
+        _unverifiable("the eval driver returned no session_id")
+        return
+    try:
+        observed = read_session_model(backend_url, session_id)
+    except Exception as e:  # transport, HTTP status, or malformed body
+        _unverifiable(
+            f"session {session_id} could not be read back from {backend_url} ({e})"
+        )
+        return
+
+    result["agent_model_observed"] = observed
+    if expected_model and observed != expected_model:
+        result["status"] = "INFRA_ERROR"
+        result["error"] = (
+            f"{scenario_id}: the agent model is pinned to '{expected_model}' but "
+            f"session {session_id} ran '{observed}'. Set default_model to "
+            f"'{expected_model}' in the GAIA home the backend was started with "
+            "(gaia config set default_model ...); the score measures the wrong "
+            "model and is discarded."
+        )
+
+
+def run_agent_model(results: list, pinned_model=None):
+    """The one local model a run may claim it scored, or None if it cannot say.
+
+    A pin is the answer: a scenario that ran anything else was already turned
+    into INFRA_ERROR. Without a pin, every measured scenario must have been
+    observed on the same model; a gap or a second model means the scorecard
+    cannot be attributed to one model, and ``--compare`` refuses it.
+    """
+    if pinned_model:
+        return pinned_model
+    measured = [
+        r
+        for r in results
+        if r.get("status") not in _NO_MEASUREMENT_STATUSES
+        and r.get("status") not in SKIPPED_STATUSES
+    ]
+    observed = {r.get("agent_model_observed") for r in measured}
+    if len(observed) == 1:
+        return next(iter(observed))
+    return None
 
 
 INFRA_ERROR_ABORT_AFTER = 3
@@ -505,13 +808,33 @@ def _downloaded_lemonade_models() -> set:
     return {m["id"] for m in catalog.get("data", []) if m.get("id")}
 
 
+def parse_scenario_ids(values):
+    """Flatten ``--scenario`` values (repeatable, each comma-separated) to ids.
+
+    Returns ``None`` when nothing was asked for, so callers keep "no filter"
+    distinct from "an empty selection". Order is kept and duplicates dropped.
+    """
+    if not values:
+        return None
+    if isinstance(values, str):
+        values = [values]
+    ids = []
+    for value in values:
+        for part in str(value).split(","):
+            sid = part.strip()
+            if sid and sid not in ids:
+                ids.append(sid)
+    return ids or None
+
+
 def find_scenarios(
     scenario_id=None, category=None, extra_dirs=None, tags=None, exclude_tags=None
 ):
     """Find scenario YAML files matching filters.
 
     Args:
-        scenario_id: Only return the scenario with this ID.
+        scenario_id: Only return the scenario with this ID, or with any of
+            these IDs when given a list.
         category: Only return scenarios in this category.
         extra_dirs: List of additional directories to scan for scenario YAML files.
             Scenarios from extra_dirs override built-in scenarios with the same ID.
@@ -557,18 +880,20 @@ def find_scenarios(
             sid = data.get("id")
             if sid in scenarios_by_id:
                 prev_path = scenarios_by_id[sid][0]
-                logger.info(
-                    "Scenario '%s' from %s overrides built-in at %s",
+                logger.warning(
+                    "Scenario '%s' from %s overrides %s",
                     sid,
                     path,
                     prev_path,
                 )
             scenarios_by_id[sid] = (path, data)
 
+    wanted_ids = set(parse_scenario_ids(scenario_id) or ())
+
     # Apply filters
     scenarios = []
     for sid, (path, data) in sorted(scenarios_by_id.items(), key=lambda x: x[0]):
-        if scenario_id and data.get("id") != scenario_id:
+        if wanted_ids and data.get("id") not in wanted_ids:
             continue
         if category and data.get("category") != category:
             continue
@@ -581,6 +906,176 @@ def find_scenarios(
             continue
         scenarios.append((path, data))
     return scenarios
+
+
+def _is_builtin_scenario(path) -> bool:
+    try:
+        Path(path).resolve().relative_to(SCENARIOS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _builtin_scenario_ids() -> set:
+    ids = set()
+    for path in sorted(SCENARIOS_DIR.rglob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as e:
+            raise RuntimeError(f"Failed to parse scenario YAML {path}: {e}") from e
+        if isinstance(data, dict):
+            ids.add(data.get("id"))
+    return ids
+
+
+def _scenario_digest(data) -> str:
+    """SHA-256 of the scenario as parsed — what ran, independent of formatting."""
+    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def scenario_provenance(scenarios) -> dict:
+    """Where each scenario came from, and a digest of what was run.
+
+    Recorded in the scorecard so a run on locally substituted questions — a
+    ``~/.gaia/eval/scenarios`` or ``--scenario-dir`` copy of a built-in id — is
+    distinguishable from a clean one after the fact.
+    """
+    builtin_ids = None
+    entries = []
+    overridden = []
+    for path, data in scenarios:
+        path = Path(path)
+        sid = data.get("id")
+        builtin = _is_builtin_scenario(path)
+        entry = {
+            "id": sid,
+            "source": "builtin" if builtin else "local",
+            "path": (
+                "eval/scenarios/"
+                + path.resolve().relative_to(SCENARIOS_DIR.resolve()).as_posix()
+                if builtin
+                else str(path)
+            ),
+            "sha256": _scenario_digest(data),
+        }
+        if not builtin:
+            if builtin_ids is None:
+                builtin_ids = _builtin_scenario_ids()
+            if sid in builtin_ids:
+                entry["overrides_builtin"] = True
+                overridden.append(sid)
+        entries.append(entry)
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(overridden),
+        "builtin_only": all(e["source"] == "builtin" for e in entries),
+    }
+
+
+def merge_resumed_provenance(recorded: dict, fresh: dict) -> dict:
+    """*recorded* with the scenarios a resume re-ran replaced by *fresh*.
+
+    A resume reloads its scenarios, so a local override added or edited since
+    the first session would otherwise run under the first session's record.
+    """
+    recorded_by_id = {e.get("id"): e for e in recorded.get("scenarios") or []}
+    fresh_by_id = {e["id"]: e for e in fresh["scenarios"]}
+    changed = sorted(
+        sid
+        for sid, entry in fresh_by_id.items()
+        if sid in recorded_by_id
+        and recorded_by_id[sid].get("sha256") != entry["sha256"]
+    )
+    if changed:
+        print(
+            f"[WARN] {len(changed)} scenario(s) changed since this run started "
+            f"(recorded in the scorecard): {', '.join(changed)}",
+            file=sys.stderr,
+        )
+    entries = [fresh_by_id.get(sid, e) for sid, e in recorded_by_id.items()]
+    entries += [e for sid, e in fresh_by_id.items() if sid not in recorded_by_id]
+    return {
+        "scenarios": entries,
+        "overridden_builtins": sorted(
+            e["id"] for e in entries if e.get("overrides_builtin")
+        ),
+        "builtin_only": all(e.get("source") == "builtin" for e in entries),
+    }
+
+
+def scenario_set_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards may not have asked the same questions.
+
+    A scorecard written before provenance was recorded contributes nothing.
+    """
+    warnings = []
+    digests = {}
+    for name, card in (("baseline", baseline), ("current", current)):
+        prov = (card.get("config") or {}).get("scenario_provenance") or {}
+        overridden = prov.get("overridden_builtins") or []
+        if overridden:
+            warnings.append(
+                f"the {name} run replaced {len(overridden)} built-in scenario(s) "
+                f"with local copies: {', '.join(overridden)}"
+            )
+        digests[name] = {
+            e.get("id"): e.get("sha256") for e in prov.get("scenarios") or []
+        }
+    changed = sorted(
+        sid
+        for sid, digest in digests["current"].items()
+        if sid in digests["baseline"] and digests["baseline"][sid] != digest
+    )
+    if changed:
+        warnings.append(
+            f"{len(changed)} scenario file(s) differ between the runs: "
+            + ", ".join(changed)
+        )
+    return warnings
+
+
+def unmatched_scenario_errors(
+    requested, matched, category=None, extra_dirs=None, tags=None, exclude_tags=None
+):
+    """Say why each requested scenario id is missing from ``matched``.
+
+    A run that quietly drops one of the ids it was given looks complete, so the
+    caller turns every line returned here into a hard error. Empty means every
+    requested id was selected.
+    """
+    got = {data.get("id") for _path, data in matched}
+    missing = [sid for sid in requested if sid not in got]
+    if not missing:
+        return []
+    known = {
+        data.get("id"): data for _path, data in find_scenarios(extra_dirs=extra_dirs)
+    }
+    errors = []
+    for sid in missing:
+        data = known.get(sid)
+        if data is None:
+            errors.append(f"'{sid}' is not a scenario id")
+            continue
+        own_category = data.get("category")
+        scenario_tags = set(data.get("tags") or [])
+        if category and own_category != category:
+            errors.append(f"'{sid}' is in category '{own_category}', not '{category}'")
+        elif tags and not scenario_tags.intersection(tags):
+            errors.append(f"'{sid}' carries none of the --tag values {sorted(tags)}")
+        elif exclude_tags and scenario_tags.intersection(exclude_tags):
+            hit = sorted(scenario_tags.intersection(exclude_tags))
+            errors.append(f"'{sid}' carries the excluded tag(s) {hit}")
+        else:
+            errors.append(f"'{sid}' was not selected")
+    pool = sorted(
+        sid
+        for sid, data in known.items()
+        if not category or data.get("category") == category
+    )
+    where = f"in category '{category}'" if category else "in total"
+    errors.append(f"Valid scenario ids {where}: {', '.join(pool)}")
+    return errors
 
 
 def build_scenario_prompt(
@@ -598,6 +1093,18 @@ def build_scenario_prompt(
     backend uses its default agent.
     """
     scenario_yaml = yaml.dump(scenario_data, default_flow_style=False)
+    # One local calendar date per prompt. The deadline is fourteen calendar
+    # days later, and both tokens are filled from that single sample so a
+    # midnight boundary cannot give the simulator and the judge different
+    # dates. Exact str.replace of these two literals only — not format() and
+    # not a template engine — so unrelated braces stay as written. The agent
+    # clock is left alone; only the scenario text carries the reference date.
+    eval_today = date.today()
+    eval_deadline = eval_today + timedelta(days=14)
+    scenario_yaml = scenario_yaml.replace(
+        "{{eval_today_plus_14_days}}", eval_deadline.isoformat()
+    )
+    scenario_yaml = scenario_yaml.replace("{{eval_today}}", eval_today.isoformat())
     manifest_json = json.dumps(manifest_data, indent=2)
 
     corpus_root = str(CORPUS_DIR / "documents").replace("\\", "/")
@@ -697,11 +1204,11 @@ For each turn in the scenario:
      if the turn objective says otherwise.
    - pending_question: answer it in character with answer_question.
    Repeat until the turn is idle. If wait_for_turn times out, call it once more.
-3. Call get_messages(session_id) and judge the LAST assistant message, with its
+3. Call get_messages(session_id, full_replies=True) and judge the LAST assistant message, with its
    tool steps, using the PER-TURN JUDGE INSTRUCTIONS section above
 
 ### Phase 3: Full trace
-After all turns, call get_messages(session_id) for the persisted full trace.
+After all turns, call get_messages(session_id, full_replies=True) for the persisted full trace.
 
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
@@ -942,6 +1449,11 @@ def summarize_attempts(attempts: list) -> dict:
         key=lambda a: (a.get("status") == "PASS", a.get("overall_score") or 0.0),
     )
     result = dict(representative)
+    usage = merge_scenario_usage(a.get("claude_usage") for a in attempts)
+    if usage is None:
+        result.pop("claude_usage", None)
+    else:
+        result["claude_usage"] = usage
 
     scores = [
         a["overall_score"]
@@ -1199,6 +1711,11 @@ def preflight_check(backend_url, scenarios=None):
         errors.extend(command_errors or _check_mcp_server_handshakes())
 
     # Check claude CLI
+    if cloud_blocked():
+        errors.append(
+            "Local only is on, and scenarios are driven and judged by Claude in "
+            "the cloud. Run `gaia config set network_policy cloud_allowed` first."
+        )
     claude_bin = shutil.which("claude")
     if not claude_bin:
         errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
@@ -1216,6 +1733,10 @@ def preflight_check(backend_url, scenarios=None):
                 )
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+        try:
+            announce(resolve_claude_credential(), role="Claude eval driver")
+        except (ValueError, RuntimeError) as e:
+            errors.append(str(e))
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -1587,6 +2108,8 @@ def run_scripted_scenario(
     and answers no questions, then is cleared so it never leaks into the next
     scenario.
     """
+    # A local run stages fixtures under its own folder and port (fixture_env).
+    scenario_data = localize(scenario_data, *fixture_env_from_env())
     kwargs.setdefault("scenario_backend", ScenarioBackend(backend_url, scenario_data))
     declined = _decline_commands(scenario_data)
     if not declined:
@@ -1628,26 +2151,24 @@ def run_scripted_scenario(
 _DRIVER_DRAIN_S = 30
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
+def _driver_auth():
+    """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
 
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
+    Follows :func:`gaia.eval.claude_credential.resolve_claude_credential`. On
+    the subscription the child loses ``ANTHROPIC_API_KEY``, which the CLI would
+    prefer over OAuth. On a key, ``--bare`` gives a clean subprocess (no hooks,
+    no CLAUDE.md auto-load) and restricts auth to that key. ``env`` is ``None``
+    when the child should inherit this process's environment as is.
     """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
+    credential = resolve_claude_credential()
+    announce(credential, role="Claude eval driver")
+    env = credential.cli_env(os.environ)
+    return credential.cli_flags(), (None if env == dict(os.environ) else env)
 
 
-def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+def _run_driver(
+    cmd, *, input, timeout, cwd, env=None
+):  # pylint: disable=redefined-builtin
     """Run the eval driver; on timeout kill its whole process tree, then raise.
 
     Returns a ``CompletedProcess`` with text output, or raises
@@ -1667,6 +2188,7 @@ def _run_driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-built
         encoding="utf-8",
         errors="replace",
         cwd=cwd,
+        env=env,
         **popen_kwargs,
     )
     try:
@@ -1702,6 +2224,7 @@ def run_scenario_subprocess(
     agent_type=None,
     attempt=None,
     scenario_backend=None,
+    agent_model=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict.
 
@@ -1754,18 +2277,8 @@ def run_scenario_subprocess(
 
     claude_bin = shutil.which("claude") or "claude"
 
-    # ``--bare`` gives a clean subprocess (skips hooks, CLAUDE.md auto-load,
-    # plugin sync, etc.) but per the Claude Code CLI docs it ALSO restricts
-    # Anthropic auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` only —
-    # OAuth and keychain are never read. So on a subscription-only setup
-    # (the common case for Claude Code Max users), ``--bare`` makes the
-    # eval fail-fast with ``Not logged in · Please run /login`` because
-    # the SDK can't see the user's existing OAuth session. We opt in to
-    # ``--bare`` only when an explicit API key is available; otherwise we
-    # let the subprocess inherit the parent's OAuth credentials.
-    cmd = [claude_bin, "-p"]
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
+    bare_flags, driver_env = _driver_auth()
+    cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
             "--no-session-persistence",  # don't save eval sessions to disk
@@ -1810,9 +2323,15 @@ def run_scenario_subprocess(
 
     print(f"\n[RUN] {scenario_id} — invoking claude -p ...", flush=True)
     start = time.time()
+    cli_raw = None
+    driver_proc = None
 
+    assert_provider_permitted("the Claude Code CLI")
     try:
-        proc = _run_driver(cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT))
+        proc = _run_driver(
+            cmd, input=prompt, timeout=timeout, cwd=str(REPO_ROOT), env=driver_env
+        )
+        driver_proc = proc
         elapsed = time.time() - start
 
         if proc.returncode != 0:
@@ -1839,6 +2358,10 @@ def run_scenario_subprocess(
                 "elapsed_s": elapsed,
                 "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
             }
+            usage = _driver_usage(proc.stdout)
+            if usage is not None:
+                result["driver_usage"] = usage
+            cli_raw = _cli_payload(proc.stdout)
         else:
             # Parse JSON from stdout
             try:
@@ -1846,6 +2369,7 @@ def run_scenario_subprocess(
                     raise json.JSONDecodeError("Empty stdout", "", 0)
                 # claude --output-format json wraps result; extract the content
                 raw = json.loads(proc.stdout)
+                cli_raw = raw if isinstance(raw, dict) else None
                 # With --json-schema, structured result is in raw["structured_output"]
                 # Without --json-schema, result is in raw["result"] (string or dict)
                 if (
@@ -1945,6 +2469,32 @@ def run_scenario_subprocess(
             scenario_backend.abort()
         raise
 
+    # Runner-owned: never trust a usage block inside the driver's own JSON.
+    result.pop("claude_usage", None)
+    driver_usage = usage_from_cli(cli_raw)
+    if driver_usage is not None:
+        result["claude_usage"] = {"roles": {"driver": driver_usage}}
+
+    result.pop("claude_outage", None)
+    result.pop("not_run_reason", None)
+    if result.get("status") == NOT_RUN:
+        # Only the runner may say a scenario never started.
+        result["status"] = "ERRORED"
+        result["error"] = "eval driver reported NOT_RUN, which only the runner sets"
+    outage = (
+        classify_driver_failure(
+            cli_raw, driver_proc.returncode, driver_proc.stdout, driver_proc.stderr
+        )
+        if driver_proc is not None
+        else None
+    )
+    if outage is not None:
+        result["status"] = "INFRA_ERROR"
+        result["overall_score"] = None
+        result["error"] = f"{outage.headline}: {outage.detail}"
+        result["claude_outage"] = outage.as_dict()
+        print(f"[INFRA_ERROR] {scenario_id} — {outage.headline}", file=sys.stderr)
+
     if scenario_backend is not None:
         scenario_backend.finish(result)
 
@@ -1953,6 +2503,7 @@ def run_scenario_subprocess(
 
     # Provenance: which agent answered, not which one the runner asked for.
     _stamp_agent_provenance(result, scenario_data, agent_type, backend_url)
+    _stamp_agent_model(result, scenario_data, agent_model, backend_url)
 
     # Trust dimension scores, not LLM arithmetic — overwrite per-turn overall_score
     # with the recomputed weighted sum.  Log when the LLM's value differed by > 0.25.
@@ -2133,11 +2684,21 @@ def run_scenario_subprocess(
     return result
 
 
-def aggregate_scorecard(results, run_id, run_dir, config, filename_prefix="scorecard"):
-    """Build scorecard.json + summary.md from all scenario results."""
+def aggregate_scorecard(
+    results, run_id, run_dir, config, filename_prefix="scorecard", stopped=None
+):
+    """Build scorecard.json + summary.md from all scenario results.
+
+    *stopped* describes a run cut short by a Claude outage; it is recorded as
+    the scorecard's ``stopped`` block and leads the summary.
+    """
     from gaia.eval.scorecard import build_scorecard, write_summary_md
 
     scorecard = build_scorecard(run_id, results, config)
+    if stopped is not None:
+        scorecard["stopped"] = stopped
+        if stopped.get("partial"):
+            scorecard["partial"] = stopped["partial"]
     scorecard_path = run_dir / f"{filename_prefix}.json"
     scorecard_path.write_text(
         json.dumps(scorecard, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -2191,6 +2752,65 @@ Fix failures in this order:
 """
 
 
+def require_clean_tree_for_fix() -> None:
+    """Refuse ``--fix`` unless the checkout has no uncommitted tracked changes.
+
+    The fixer edits this checkout with permissions disabled; only a clean
+    starting tree leaves ``git diff`` as an exact record of what it changed.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(
+            f"--fix could not check the git state of {REPO_ROOT}: {e}. "
+            "It edits the checkout, so it needs git on PATH to confirm the tree "
+            "is clean."
+        ) from e
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"--fix needs a git checkout of GAIA, but {REPO_ROOT} is not one "
+            f"(git: {(proc.stderr or proc.stdout).strip()[:300]}). Run it from a "
+            "source checkout (`git clone https://github.com/amd/gaia`)."
+        )
+    dirty = [line for line in proc.stdout.splitlines() if line.strip()]
+    if dirty:
+        shown = "\n  ".join(dirty[:10])
+        more = f"\n  ... and {len(dirty) - 10} more" if len(dirty) > 10 else ""
+        raise RuntimeError(
+            f"--fix refuses to start: {REPO_ROOT} has {len(dirty)} uncommitted "
+            f"change(s), and the fixer edits this tree with permissions "
+            f"disabled:\n  {shown}{more}\n"
+            "Commit them or move them to a branch first, or run --fix from a "
+            "separate worktree (`git worktree add <path>`), so `git diff` shows "
+            "exactly what the fixer changed."
+        )
+
+
+def _fix_iteration_failure(fix_result: dict) -> Optional[str]:
+    """Why a fixer iteration did not complete, or ``None`` when it did."""
+    if fix_result.get("error"):
+        return str(fix_result["error"])
+    code = fix_result.get("fixer_exit_code")
+    if code not in (0, None):
+        return f"the fixer exited {code}"
+    return None
+
+
 def run_fix_iteration(scorecard, run_dir, iteration):
     """Invoke Claude Code to fix failing scenarios. Returns fix log entry."""
     # Load fixer prompt from file if available, fall back to inline FIXER_PROMPT
@@ -2234,6 +2854,7 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     claude_cmd = shutil.which("claude") or "claude"
     cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"]
 
+    assert_provider_permitted("the Claude Code CLI")
     print(f"[FIX] Invoking Claude Code fixer (iteration {iteration})...")
     try:
         proc = subprocess.run(
@@ -2278,38 +2899,180 @@ def run_fix_iteration(scorecard, run_dir, iteration):
         return {"iteration": iteration, "error": str(e), "fixes": []}
 
 
-def _warn_on_judge_mismatch(baseline, current):
-    """Print a loud banner when two scorecards were scored by different judges.
+def _write_fix_history(run_dir, fix_history) -> None:
+    (run_dir / "fix_history.json").write_text(
+        json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
-    Scores are the judge's opinion, so a baseline scored by one model and a run
-    scored by another are not comparable — every per-scenario delta below is
-    partly the judge changing its mind. Without this the diff reads as a clean
-    regression/improvement report and quietly misleads.
+
+#: Committed next to a baseline's scorecards; names what produced them.
+BASELINE_META = "meta.json"
+
+
+def fixture_provenance() -> dict:
+    """Which fixtures a run measured and where it served them from.
+
+    Raises:
+        ValueError: ``GAIA_EVAL_ROOT`` or ``GAIA_EVAL_FIXTURE_PORT`` is malformed.
     """
-    baseline_judge = (baseline.get("config") or {}).get("model")
-    current_judge = (current.get("config") or {}).get("model")
-    if not baseline_judge or not current_judge or baseline_judge == current_judge:
-        return
-
-    print("=" * 78)
-    print("WARNING: judge mismatch — these scorecards are not directly comparable.")
-    print(f"  baseline scored by: {baseline_judge}")
-    print(f"  current  scored by: {current_judge}")
-    print("Deltas below mix real behavior changes with the judge change. Replace the")
-    print("committed baseline from the next nightly on the Strix Halo pool, scored by")
-    print("the current judge, before treating any of them as a regression.")
-    print("=" * 78)
+    root, port = fixture_env_from_env()
+    return {
+        "fingerprint": fixture_fingerprint(REPO_ROOT),
+        "root": str(root) if root is not None else "~/gaia-eval",
+        "port": port if port is not None else 8765,
+    }
 
 
-def compare_scorecards(baseline_path, current_path):
+def lemonade_provenance() -> dict:
+    """The Lemonade build the agent ran on, as its ``/health`` reports it."""
+    from gaia.llm.lemonade_client import LemonadeClient, lemonade_server_version
+
+    client = LemonadeClient(verbose=False, keep_alive=True)
+    return {
+        "base_url": client.base_url,
+        # None when /health does not answer or names no version; compare says so.
+        "version": lemonade_server_version(client),
+    }
+
+
+def measurement_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards with the same scenarios may not have measured alike.
+
+    Different fixtures or a different Lemonade build can move a score with no
+    change to the agent, so ``--compare`` prints these before and after its
+    verdict. A side that predates the field contributes nothing.
+    """
+    warnings = []
+    configs = [(c.get("config") or {}) for c in (baseline, current)]
+    prints = [(c.get("fixtures") or {}).get("fingerprint") or {} for c in configs]
+    if prints[0].get("combined") and prints[1].get("combined"):
+        for part, label in (
+            ("fixtures", "tests/fixtures/gaia"),
+            ("scenarios", "eval/scenarios"),
+        ):
+            if prints[0].get(part) != prints[1].get(part):
+                warnings.append(
+                    f"{label} differs between the runs (fingerprint "
+                    f"{str(prints[0].get(part))[:12]} vs "
+                    f"{str(prints[1].get(part))[:12]}), so a flip may come from "
+                    "the fixtures, not the agent"
+                )
+    builds = [(c.get("lemonade") or {}).get("version") for c in configs]
+    if all(c.get("lemonade") for c in configs) and builds[0] != builds[1]:
+        warnings.append(
+            f"the runs used different Lemonade builds ({builds[0] or 'unknown'} "
+            f"vs {builds[1] or 'unknown'})"
+        )
+    return warnings
+
+
+class ScorecardMismatchError(ValueError):
+    """Two scorecards measured different things, so diffing them means nothing."""
+
+
+def baseline_identity(baseline_path, baseline: dict) -> dict:
+    """What a baseline was measured with: agent model, driver model, and source.
+
+    A committed baseline directory carries ``meta.json`` (``model`` is the local
+    model the agent ran, ``eval_model`` the Claude model that drove and judged),
+    and it outranks the scorecard, which older runs wrote without an agent
+    model. A loose scorecard answers from its own ``config``.
+    """
+    meta_path = Path(baseline_path).parent / BASELINE_META
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise ScorecardMismatchError(
+                f"{meta_path} is not valid JSON ({e}), so the model the baseline "
+                "was captured under is unknown. Fix the file before comparing."
+            ) from e
+        if isinstance(meta, dict) and ("model" in meta or "eval_model" in meta):
+            return {
+                "agent_model": meta.get("model"),
+                "eval_model": meta.get("eval_model"),
+                "source": str(meta_path),
+            }
+    config = baseline.get("config") or {}
+    return {
+        "agent_model": config.get("agent_model"),
+        "eval_model": config.get("model"),
+        "source": str(baseline_path),
+    }
+
+
+def check_comparable(baseline_path, baseline: dict, current: dict) -> None:
+    """Refuse to diff two scorecards measured with different models.
+
+    The scenario ids match whatever produced them, so without this a Gemma run
+    diffed against a Qwen baseline, or a run driven by a different Claude
+    model, reads as a clean list of regressions and improvements. Raises
+    :class:`ScorecardMismatchError`; an axis the baseline does not record is
+    not checked, because there is nothing to hold the run to.
+    """
+    want = baseline_identity(baseline_path, baseline)
+    config = current.get("config") or {}
+    checks = (
+        (
+            "agent model",
+            want["agent_model"],
+            config.get("agent_model"),
+            "Run the eval with --agent-model set to the baseline's model, on a "
+            "GAIA home whose default_model is that model.",
+        ),
+        (
+            "eval model (the Claude driver and judge)",
+            want["eval_model"],
+            config.get("model"),
+            "Re-run with --model set to the baseline's eval model.",
+        ),
+    )
+    problems = []
+    for what, expected, actual, remedy in checks:
+        if not expected or expected == actual:
+            continue
+        if not actual:
+            problems.append(
+                f"the baseline's {what} is '{expected}', and the current scorecard "
+                f"does not record which {what} it ran. {remedy}"
+            )
+        else:
+            problems.append(
+                f"the baseline's {what} is '{expected}' but the current run used "
+                f"'{actual}'. {remedy}"
+            )
+    if problems:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({want['source']}): "
+            + " Also, ".join(problems)
+            + " To measure a different model, capture a baseline for it from a "
+            "real run and compare against that instead."
+        )
+
+
+def _summary_over(results):
+    """The scorecard summary for a subset of results, by the scorecard's own rules."""
+    from gaia.eval.scorecard import build_scorecard
+
+    return build_scorecard("subset", results, {})["summary"]
+
+
+def compare_scorecards(baseline_path, current_path, require_same_setup=False):
     """Compare two scorecard.json files and print a regression/improvement report.
 
     Args:
         baseline_path: Path to the baseline scorecard.json (str or Path)
         current_path:  Path to the current/new scorecard.json (str or Path)
+        require_same_setup: Refuse, instead of warn, when the fixtures or the
+            Lemonade build differ (:func:`measurement_warnings`).
 
     Returns:
         dict with keys: improved, regressed, unchanged, only_in_baseline, only_in_current
+
+    Raises:
+        ScorecardMismatchError: the two were measured with a different agent
+            model or eval model (see :func:`check_comparable`), or with
+            *require_same_setup*, on different fixtures or Lemonade builds.
     """
     baseline_path = Path(baseline_path)
     current_path = Path(current_path)
@@ -2322,7 +3085,18 @@ def compare_scorecards(baseline_path, current_path):
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     current = json.loads(current_path.read_text(encoding="utf-8"))
 
-    _warn_on_judge_mismatch(baseline, current)
+    check_comparable(baseline_path, baseline, current)
+    set_warnings = scenario_set_warnings(baseline, current)
+    setup_warnings = measurement_warnings(baseline, current)
+    if require_same_setup and setup_warnings:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({baseline_path}): "
+            + "; ".join(setup_warnings)
+            + ". Re-run on the baseline's fixtures and Lemonade build, or drop "
+            "--require-same-fixtures to diff anyway with these flagged."
+        )
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.", file=sys.stderr)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -2340,6 +3114,17 @@ def compare_scorecards(baseline_path, current_path):
 
     base_map = scenario_map(baseline)
     curr_map = scenario_map(current)
+
+    # A targeted run (`--scenario`) is judged on the scenarios it was asked to
+    # run. The baseline's others were never selected, so they are "not run",
+    # not "removed", and the summary rows must not mix the two sets.
+    selection = (current.get("config") or {}).get("scenario_filter")
+    not_run = []
+    if selection:
+        selected = set(selection)
+        not_run = sorted(sid for sid in base_map if sid not in selected)
+        base_map = {sid: s for sid, s in base_map.items() if sid in selected}
+        baseline = dict(baseline, summary=_summary_over(list(base_map.values())))
 
     all_ids = sorted(set(base_map) | set(curr_map))
 
@@ -2416,14 +3201,17 @@ def compare_scorecards(baseline_path, current_path):
         # Corpus availability change — not a quality signal
         if b_skipped or c_skipped:
             corpus_changed.append(entry)
+            continue
         # This run produced no measurement — nothing to compare, including the
-        # wall clock, so this is checked ahead of the time-regression branch.
-        elif c_unmeasured:
+        # wall clock.
+        if c_unmeasured:
             unmeasured.append(entry)
-        elif entry.get("time_regressed"):
-            # Time regressions reported separately from score regressions
+            continue
+        # Slowness is a label on top of the status verdict, never a substitute
+        # for it — a PASS→FAIL that also ran long must still count as regressed.
+        if entry.get("time_regressed"):
             time_regressed.append(entry)
-        elif not b_pass and c_pass:
+        if not b_pass and c_pass:
             improved.append(entry)
         elif b_pass and not c_pass:
             regressed.append(entry)
@@ -2444,6 +3232,12 @@ def compare_scorecards(baseline_path, current_path):
     print("SCORECARD COMPARISON")
     print(f"  Baseline : {baseline_path}")
     print(f"  Current  : {current_path}")
+    if selection:
+        print(
+            f"  TARGETED : {len(selection)} selected scenario(s); baseline rows "
+            f"below cover only those. {len(not_run)} baseline scenario(s) were "
+            "not run and are not judged."
+        )
     print(f"{'='*70}")
 
     # Summary row
@@ -2531,6 +3325,14 @@ def compare_scorecards(baseline_path, current_path):
         for sid in only_in_current:
             print(f"    {sid}")
 
+    if not_run:
+        print(
+            f"\n[ ] NOT RUN ({len(not_run)} scenario(s)) — not selected in this "
+            "targeted run; no verdict either way:"
+        )
+        for sid in not_run:
+            print(f"    {sid}")
+
     if corpus_changed:
         print(
             f"\n[~] AVAILABILITY CHANGED ({len(corpus_changed)} scenario(s)) — "
@@ -2552,7 +3354,16 @@ def compare_scorecards(baseline_path, current_path):
                 f"    {e['scenario_id']:<40} {e['baseline_status']} → {e['current_status']}"
             )
 
+    partial = current.get("partial") or {}
     print(f"\n{'='*70}")
+    for warning in set_warnings:
+        print(f"[WARN] Different questions: {warning}.")
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.")
+    if partial:
+        # The run stopped part-way; its NOT_RUN scenarios are excluded above,
+        # so whatever follows describes only the part that ran.
+        print(f"[INCOMPLETE] {partial.get('summary')}.")
     if unmeasured:
         # Loud on purpose: this verdict is silent about these scenarios, and a
         # clean verdict over an incomplete run is the one way this comparison can
@@ -2573,7 +3384,7 @@ def compare_scorecards(baseline_path, current_path):
         )
     # An [OK] over an incomplete run is the misleading line; the WARN above says
     # what is missing, so do not follow it with a clean bill of health.
-    if not regressed and not score_regressed and not unmeasured:
+    if not regressed and not score_regressed and not unmeasured and not partial:
         if improved:
             print(
                 f"[OK]   Net improvement: {len(improved)} scenario(s) fixed, 0 regressions."
@@ -2592,6 +3403,10 @@ def compare_scorecards(baseline_path, current_path):
         "only_in_current": only_in_current,
         "corpus_changed": corpus_changed,
         "unmeasured": unmeasured,
+        "not_run": not_run,
+        "incomplete": partial or None,
+        "scenario_set_warnings": set_warnings,
+        "measurement_warnings": setup_warnings,
     }
 
 
@@ -2612,6 +3427,7 @@ class AgentEvalRunner:
         # agent, so a null default would silently disarm the provenance check.
         agent_type=DEFAULT_AGENT_TYPE,
         iterations=1,
+        agent_model=None,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -2620,6 +3436,8 @@ class AgentEvalRunner:
         self.results_dir = Path(results_dir) if results_dir else RESULTS_DIR
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
+        # Claude account switches made by the current _execute call (labels only).
+        self._account_switches = []
         self.tags = tags or []
         self.exclude_tags = exclude_tags or []
         if iterations is None:
@@ -2629,6 +3447,9 @@ class AgentEvalRunner:
         self.iterations = int(iterations)
         self.output_format = output_format
         self.agent_type = agent_type
+        # The local model the agent must run; None records what it ran instead.
+        self.agent_model = agent_model
+        self._commit = None
 
     def _print_summary(self, scorecard, run_id, run_dir):
         """Print a one-block eval summary to stdout."""
@@ -2642,6 +3463,11 @@ class AgentEvalRunner:
             f"{summary.get('judged_pass_rate', 0)*100:.0f}% judged)"
         )
         print(f"Avg score: {summary.get('avg_score', 0):.1f}/10")
+        if summary.get("not_run"):
+            print(f"Not run: {summary['not_run']} (Claude unavailable; resume the run)")
+        usage = scorecard.get("claude_usage") or {}
+        if usage.get("scenarios_with_usage"):
+            print(f"Claude: {describe(usage['total'])}")
         print(f"Output: {run_dir}")
         print(f"{'='*60}")
 
@@ -2654,8 +3480,17 @@ class AgentEvalRunner:
         max_fix_iterations=3,
         target_pass_rate=0.90,
         keep_sessions=False,
+        resume_dir=None,
+        resume_model=None,
+        resume_agent_type=None,
     ):
         """Run eval scenarios. Returns scorecard dict.
+
+        *resume_dir* finishes an earlier run in place instead: only its
+        scenarios that never produced a result (``NOT_RUN``, or stopped by a
+        Claude outage) run, under the run's own model and agent, and the
+        merged scorecard replaces the old one. *resume_model* and
+        *resume_agent_type*, when given, must match what the run used.
 
         When fix_mode=True, after the initial eval run the runner will:
           B) invoke Claude Code to fix failing scenarios
@@ -2675,7 +3510,22 @@ class AgentEvalRunner:
             print(json.dumps(result, indent=2))
             return result
 
+        checkout_error = eval_checkout_error()
+        if checkout_error:
+            print(f"[ERROR] {checkout_error}", file=sys.stderr)
+            sys.exit(1)
+
+        if fix_mode and resume_dir is None:
+            require_clean_tree_for_fix()
+
         with exclusive_eval("gaia eval agent"):
+            if resume_dir is not None:
+                return self._resume_locked(
+                    Path(resume_dir),
+                    keep_sessions=keep_sessions,
+                    model=resume_model,
+                    agent_type=resume_agent_type,
+                )
             return self._run_locked(
                 scenario_id=scenario_id,
                 category=category,
@@ -2701,50 +3551,32 @@ class AgentEvalRunner:
             "elapsed_s": 0.0,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }
-        # Write a trace so resume mode can reload this result without re-running
-        traces_dir = run_dir / "traces"
-        traces_dir.mkdir(exist_ok=True)
-        (traces_dir / f"{sid}.json").write_text(
-            json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _stamp_run_info(result, self._commit)
+        _write_trace(run_dir, result)
         results.append(result)
 
-    def _run_locked(
-        self,
-        scenario_id=None,
-        category=None,
-        fix_mode=False,
-        max_fix_iterations=3,
-        target_pass_rate=0.90,
-        keep_sessions=False,
-    ):
-        """Internal entry — holds the eval lock; only called by ``run()``."""
+    def _not_run(self, scenario_data, outage, run_dir):
+        """A scenario never started because Claude was unavailable."""
+        result = {
+            "scenario_id": scenario_data["id"],
+            "category": scenario_data.get("category", "unknown"),
+            "agent_type_requested": self.agent_type,
+            "agent_type_observed": None,
+            "status": NOT_RUN,
+            "not_run_reason": outage["kind"],
+            "overall_score": None,
+            "turns": [],
+            "error": (
+                f"Not run: {HEADLINES[outage['kind']]} before this "
+                "scenario started. Resume the run to measure it."
+            ),
+            "elapsed_s": 0.0,
+            "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
+        }
+        _write_trace(run_dir, result)
+        return result
 
-        # Find scenarios
-        scenarios = find_scenarios(
-            scenario_id=scenario_id,
-            category=category,
-            extra_dirs=self.extra_scenario_dirs,
-            tags=self.tags if self.tags else None,
-            exclude_tags=self.exclude_tags if self.exclude_tags else None,
-        )
-        if not scenarios:
-            filter_desc = f"id={scenario_id}, category={category}"
-            if self.tags:
-                filter_desc += f", tags={self.tags}"
-            if self.exclude_tags:
-                filter_desc += f", exclude_tags={self.exclude_tags}"
-            print(
-                f"[ERROR] No scenarios found ({filter_desc})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        print(f"[INFO] Found {len(scenarios)} scenario(s)")
-        if self.agent_type:
-            print(f"[INFO] Targeting agent_type='{self.agent_type}'")
-
-        # Pre-flight
+    def _preflight(self, scenarios):
         errors = preflight_check(self.backend_url, scenarios=scenarios)
         if errors:
             print("[ERROR] Pre-flight check failed:", file=sys.stderr)
@@ -2752,49 +3584,66 @@ class AgentEvalRunner:
                 print(f"  - {e}", file=sys.stderr)
             sys.exit(1)
 
-        downloaded_models = (
-            _downloaded_lemonade_models()
-            if any(_required_models(sd) for _p, sd in scenarios)
-            else set()
-        )
+    def _attempts(self, scenario_path, scenario_data, run_dir, timeout, keep_sessions):
+        """Run one scenario ``self.iterations`` times; stops early on an outage."""
+        sid = scenario_data["id"]
+        # Repeat the scenario N times so a flaky result is distinguishable
+        # from a hard failure — at N=1 they are indistinguishable.
+        attempts = []
+        for attempt_idx in range(1, self.iterations + 1):
+            if self.iterations > 1:
+                print(
+                    f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
+                    flush=True,
+                )
+            attempts.append(
+                run_scripted_scenario(
+                    scenario_path,
+                    scenario_data,
+                    run_dir,
+                    self.backend_url,
+                    self.model,
+                    self.budget,
+                    timeout,
+                    keep_sessions=keep_sessions,
+                    extra_corpus_dirs=(
+                        self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                    ),
+                    # One run scores one agent (#4096) -- a scenario's own
+                    # agent_type is rejected at load time, never honoured.
+                    agent_type=self.agent_type,
+                    attempt=(attempt_idx if self.iterations > 1 else None),
+                    agent_model=self.agent_model,
+                )
+            )
+            if attempts[-1].get("backend_not_idle") or attempts[-1].get(
+                "claude_outage"
+            ):
+                break
+        return attempts
 
-        # Create run dir
-        run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        run_dir = self.results_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+    def _execute(self, scenarios, run_dir, downloaded_models, keep_sessions, kept=None):
+        """Run *scenarios* in order; returns ``(results, aborted, outage)``.
 
-        # Progress tracking
-        progress_path = run_dir / ".progress.json"
-        completed = {}
-        if progress_path.exists():
-            completed = json.loads(progress_path.read_text(encoding="utf-8"))
-
-        # ---- Phase A: Run initial eval ----
+        *kept* maps scenario ids to results an earlier session already has;
+        those are carried over, not re-run. A Claude outage stops the run at
+        once and records every scenario after it as ``NOT_RUN``.
+        """
+        kept = kept or {}
+        self._account_switches = []
         results = []
         infra_streak = []
+        unexplained = 0
         aborted = None
-        for scenario_path, scenario_data in scenarios:
+        outage = None
+        for index, (scenario_path, scenario_data) in enumerate(scenarios):
             sid = scenario_data["id"]
-            if sid in completed:
-                trace_path = run_dir / "traces" / f"{sid}.json"
-                if not trace_path.exists():
-                    # Progress file recorded completion but trace wasn't written —
-                    # previous run crashed between the two writes. Re-run the scenario.
-                    print(
-                        f"[WARN] {sid} in progress file but trace missing — re-running"
-                    )
-                    del completed[sid]
-                else:
-                    try:
-                        results.append(
-                            json.loads(trace_path.read_text(encoding="utf-8"))
-                        )
-                        print(f"[SKIP] {sid} -- already completed (resume mode)")
-                        continue
-                    except (json.JSONDecodeError, OSError):
-                        # Trace file is corrupt (e.g. process killed mid-write) — re-run
-                        print(f"[WARN] {sid} trace file corrupt — re-running")
-                        del completed[sid]
+            if sid in kept:
+                results.append(kept[sid])
+                print(
+                    f"[KEEP] {sid} -- {kept[sid].get('status')} from an earlier session"
+                )
+                continue
 
             # Real-world documents are not committed to git; skip gracefully
             # rather than failing with SETUP_ERROR or INFRA_ERROR.
@@ -2802,10 +3651,6 @@ class AgentEvalRunner:
                 reason = "corpus document(s) not on disk (real-world corpus not committed to git)"
                 self._record_skip(
                     scenario_data, "SKIPPED_NO_DOCUMENT", reason, run_dir, results
-                )
-                completed[sid] = "SKIPPED_NO_DOCUMENT"
-                progress_path.write_text(
-                    json.dumps(completed, indent=2), encoding="utf-8"
                 )
                 continue
 
@@ -2818,55 +3663,79 @@ class AgentEvalRunner:
                     run_dir,
                     results,
                 )
-                completed[sid] = "SKIPPED_NO_MODEL"
-                progress_path.write_text(
-                    json.dumps(completed, indent=2), encoding="utf-8"
-                )
                 continue
 
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
-            # Repeat the scenario N times so a flaky result is distinguishable
-            # from a hard failure — at N=1 they are indistinguishable.
-            attempts = []
-            for attempt_idx in range(1, self.iterations + 1):
-                if self.iterations > 1:
-                    print(
-                        f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
-                        flush=True,
-                    )
-                attempts.append(
-                    run_scripted_scenario(
-                        scenario_path,
-                        scenario_data,
-                        run_dir,
-                        self.backend_url,
-                        self.model,
-                        self.budget,
-                        effective_timeout,
-                        keep_sessions=keep_sessions,
-                        extra_corpus_dirs=(
-                            self.extra_corpus_dirs if self.extra_corpus_dirs else None
-                        ),
-                        # One run scores one agent (#4096) -- a scenario's own
-                        # agent_type is rejected at load time, never honoured.
-                        agent_type=self.agent_type,
-                        attempt=(attempt_idx if self.iterations > 1 else None),
-                    )
+            # Attempts refused on an account the run then switched away from:
+            # they measured nothing, but their usage is still reported.
+            refused = []
+            while True:
+                attempts = self._attempts(
+                    scenario_path,
+                    scenario_data,
+                    run_dir,
+                    effective_timeout,
+                    keep_sessions,
                 )
-                if attempts[-1].get("backend_not_idle"):
+                tripped = next((a for a in attempts if a.get("claude_outage")), None)
+                if tripped is None or tripped["claude_outage"]["kind"] != QUOTA:
                     break
-            result = summarize_attempts(attempts)
-            if self.iterations > 1:
-                # The summarized result is what resume must reload — never one
-                # attempt, which would drop `stability` and could flip status.
-                (run_dir / "traces" / f"{sid}.json").write_text(
-                    json.dumps(result, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
+                switch = switch_to_backup_account(tripped["claude_outage"])
+                if switch is None:
+                    break
+                switch["during_scenario"] = sid
+                self._account_switches.append(switch)
+                refused.extend(attempts)
+                _announce_switch(switch)
+            if tripped is not None:
+                # Earlier attempts measured something, but the scenario as a
+                # whole did not finish; resume re-runs every attempt.
+                result = dict(tripped)
+                usage = merge_scenario_usage(
+                    a.get("claude_usage") for a in refused + attempts
                 )
+                if usage is not None:
+                    result["claude_usage"] = usage
+            else:
+                result = summarize_attempts(attempts)
+                if refused:
+                    usage = merge_scenario_usage(
+                        [u for u in [result.get("claude_usage")] if u]
+                        + [a.get("claude_usage") for a in refused]
+                    )
+                    if usage is not None:
+                        result["claude_usage"] = usage
+            # The trace is what --resume and the artifacts read, so it carries
+            # the summarized, stamped result -- never one attempt.
+            _stamp_run_info(result, self._commit)
+            _write_trace(run_dir, result)
             results.append(result)
 
-            completed[sid] = result.get("status")
-            progress_path.write_text(json.dumps(completed, indent=2), encoding="utf-8")
+            kind = tripped["claude_outage"]["kind"] if tripped is not None else None
+            unexplained = unexplained + 1 if kind == UNREACHABLE else 0
+            if kind is not None and (
+                kind != UNREACHABLE or unexplained >= UNREACHABLE_STOP_AFTER
+            ):
+                outage = {
+                    **result["claude_outage"],
+                    "after_scenario": sid,
+                    "position": index + 1,
+                }
+                for _path, later in scenarios[index + 1 :]:
+                    later_id = later["id"]
+                    results.append(
+                        kept.get(later_id) or self._not_run(later, outage, run_dir)
+                    )
+                break
+            if kind == UNREACHABLE:
+                # A zero-token failure with no quota or credential wording may
+                # be this scenario's own; it stays resumable, and a second one
+                # in a row stops the run.
+                print(
+                    f"[WARN] {sid}: Claude never answered "
+                    f"({result['claude_outage']['detail']}). The run stops if "
+                    "the next scenario fails the same way."
+                )
 
             not_idle = next(
                 (a["backend_not_idle"] for a in attempts if a.get("backend_not_idle")),
@@ -2894,19 +3763,31 @@ class AgentEvalRunner:
                     f"re-run; the scores so far measure infrastructure, not the agent."
                 )
                 break
+        return results, aborted, outage
 
-        # Clean up progress file — all scenarios complete
-        if progress_path.exists():
-            progress_path.unlink()
-
-        # Build baseline scorecard
-        config = {
-            "backend_url": self.backend_url,
-            "model": self.model,
-            "budget_per_scenario_usd": float(self.budget),
-            "agent_type": self.agent_type,
-        }
-        scorecard = aggregate_scorecard(results, run_id, run_dir, config)
+    def _finish(self, results, run_id, run_dir, config, aborted, outage):
+        """Write the scorecard, print the summary, and exit on a stopped run."""
+        stopped = None
+        switches = self._account_switches
+        if outage is not None:
+            not_run = [r["scenario_id"] for r in results if _needs_resume(r)]
+            stopped = {
+                **outage,
+                "headline": HEADLINES[outage["kind"]],
+                "not_run": not_run,
+                "resume": f'gaia eval agent --resume "{run_dir}"',
+            }
+            stopped["partial"] = _partial(stopped, len(results), switches)
+        # The one local model this run may claim; --compare checks it.
+        config = {**config, "agent_model": run_agent_model(results, self.agent_model)}
+        if switches:
+            config["claude_account_switches"] = [
+                *(config.get("claude_account_switches") or []),
+                *switches,
+            ]
+        scorecard = aggregate_scorecard(
+            results, run_id, run_dir, config, stopped=stopped
+        )
 
         # Write JUnit XML if requested
         if self.output_format == "junit":
@@ -2916,12 +3797,244 @@ class AgentEvalRunner:
             junit_path.write_text(write_junit_xml(scorecard), encoding="utf-8")
             print(f"[INFO] JUnit XML written to: {junit_path}")
 
-        # Print summary
         self._print_summary(scorecard, run_id, run_dir)
 
+        if stopped is not None:
+            print(f"\n[ERROR] {_outage_report(stopped, len(results))}", file=sys.stderr)
+            sys.exit(EXIT_CLAUDE_OUTAGE)
         if aborted:
             print(f"\n[ERROR] {aborted}", file=sys.stderr)
             sys.exit(1)
+        return scorecard
+
+    def _resume_locked(self, run_dir, keep_sessions=False, model=None, agent_type=None):
+        """Finish an earlier run in *run_dir*; only its unmeasured scenarios run."""
+        card_path = run_dir / "scorecard.json"
+        if not card_path.is_file():
+            print(
+                f"[ERROR] Cannot resume {run_dir}: it has no scorecard.json. A run "
+                "stopped by a Claude outage always writes one; a run killed "
+                "part-way does not, so start that one again.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        card = json.loads(card_path.read_text(encoding="utf-8"))
+        config = dict(card.get("config") or {})
+        plan = config.get("plan")
+        if not isinstance(plan, dict):
+            print(
+                f"[ERROR] Cannot resume {run_dir}: its scorecard was written by a "
+                "runner without --resume support, so the run's selection and "
+                "settings are unknown. Start it again.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # The run's own model and agent define what it measures; resuming
+        # under different ones would merge two measurements into one scorecard.
+        for flag, given, recorded in (
+            ("--model", model, config.get("model")),
+            ("--agent-type", agent_type, config.get("agent_type")),
+            ("--agent-model", self.agent_model, plan.get("agent_model")),
+        ):
+            if given is not None and given != recorded:
+                print(
+                    f"[ERROR] {run_dir} ran with {flag} {recorded}, but this resume "
+                    f"asked for {given}. A resumed run keeps its own {flag}; drop "
+                    "the flag, or start a new run to measure another one.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        self.model = config.get("model") or self.model
+        self.agent_type = config.get("agent_type")
+        self.agent_model = plan.get("agent_model")
+        self.budget = str(config.get("budget_per_scenario_usd", self.budget))
+        self.timeout = int(plan.get("timeout_per_scenario_s") or self.timeout)
+        self.iterations = int(plan.get("iterations") or 1)
+        self.extra_scenario_dirs = list(plan.get("scenario_dirs") or [])
+        self.extra_corpus_dirs = list(plan.get("corpus_dirs") or [])
+
+        previous = card.get("scenarios") or []
+        kept = {s["scenario_id"]: s for s in previous if not _needs_resume(s)}
+        to_run = [s["scenario_id"] for s in previous if _needs_resume(s)]
+        if not to_run:
+            print(
+                f"[INFO] Nothing to resume: every scenario in {run_dir} already "
+                "has a result."
+            )
+            return card
+
+        found = find_scenarios(scenario_id=to_run, extra_dirs=self.extra_scenario_dirs)
+        problems = unmatched_scenario_errors(
+            to_run, found, extra_dirs=self.extra_scenario_dirs
+        )
+        if problems:
+            print(
+                f"[ERROR] Cannot resume {run_dir}: a scenario it still has to run "
+                "no longer loads.",
+                file=sys.stderr,
+            )
+            for line in problems:
+                print(f"  - {line}", file=sys.stderr)
+            sys.exit(1)
+        if isinstance(config.get("scenario_provenance"), dict):
+            config["scenario_provenance"] = merge_resumed_provenance(
+                config["scenario_provenance"], scenario_provenance(found)
+            )
+        by_id = {data["id"]: (path, data) for path, data in found}
+        # Original order, so the merged scorecard lists scenarios as the run did.
+        planned = [
+            by_id.get(s["scenario_id"]) or (None, {"id": s["scenario_id"]})
+            for s in previous
+        ]
+
+        self._commit = _current_commit()
+        earlier = sorted({s.get("commit") for s in kept.values() if s.get("commit")})
+        if earlier and earlier != [self._commit]:
+            print(
+                f"[WARN] Results kept from {run_dir} ran at commit(s) "
+                f"{', '.join(earlier)}; this session runs at {self._commit}. The "
+                "merged scorecard mixes commits, and each scenario records its own."
+            )
+        print(
+            f"[INFO] Resuming {card.get('run_id')}: {len(to_run)} scenario(s) to "
+            f"run, {len(kept)} kept"
+        )
+        self._preflight(found)
+        downloaded_models = (
+            _downloaded_lemonade_models()
+            if any(_required_models(sd) for _p, sd in found)
+            else set()
+        )
+        config["resumes"] = list(config.get("resumes") or []) + [
+            {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "commit": self._commit,
+                "scenarios": to_run,
+            }
+        ]
+        results, aborted, outage = self._execute(
+            planned, run_dir, downloaded_models, keep_sessions, kept=kept
+        )
+        return self._finish(
+            results,
+            card.get("run_id") or run_dir.name,
+            run_dir,
+            config,
+            aborted,
+            outage,
+        )
+
+    def _run_locked(
+        self,
+        scenario_id=None,
+        category=None,
+        fix_mode=False,
+        max_fix_iterations=3,
+        target_pass_rate=0.90,
+        keep_sessions=False,
+    ):
+        """Internal entry — holds the eval lock; only called by ``run()``."""
+
+        # Find scenarios
+        requested_ids = parse_scenario_ids(scenario_id)
+        scenarios = find_scenarios(
+            scenario_id=requested_ids,
+            category=category,
+            extra_dirs=self.extra_scenario_dirs,
+            tags=self.tags if self.tags else None,
+            exclude_tags=self.exclude_tags if self.exclude_tags else None,
+        )
+        # Every requested id must run: a scorecard that silently lost one looks
+        # complete, and the compare step would never notice it was asked for.
+        problems = unmatched_scenario_errors(
+            requested_ids or [],
+            scenarios,
+            category=category,
+            extra_dirs=self.extra_scenario_dirs,
+            tags=self.tags or None,
+            exclude_tags=self.exclude_tags or None,
+        )
+        if not scenarios or problems:
+            filter_desc = f"id={requested_ids}, category={category}"
+            if self.tags:
+                filter_desc += f", tags={self.tags}"
+            if self.exclude_tags:
+                filter_desc += f", exclude_tags={self.exclude_tags}"
+            headline = (
+                "No scenarios found"
+                if not scenarios
+                else "Not every requested --scenario would run"
+            )
+            print(f"[ERROR] {headline} ({filter_desc})", file=sys.stderr)
+            for line in problems:
+                print(f"  - {line}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"[INFO] Found {len(scenarios)} scenario(s)")
+        if self.agent_type:
+            print(f"[INFO] Targeting agent_type='{self.agent_type}'")
+        if self.agent_model:
+            print(f"[INFO] Agent model pinned to '{self.agent_model}'")
+
+        self._preflight(scenarios)
+        downloaded_models = (
+            _downloaded_lemonade_models()
+            if any(_required_models(sd) for _p, sd in scenarios)
+            else set()
+        )
+
+        # Create run dir
+        run_id = f"eval-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        run_dir = self.results_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        self._commit = _current_commit()
+        config = {
+            "backend_url": self.backend_url,
+            "model": self.model,
+            "budget_per_scenario_usd": float(self.budget),
+            "agent_type": self.agent_type,
+            # The local model under test, as pinned; _finish replaces it with
+            # what the sessions ran when nothing was pinned.
+            "agent_model": self.agent_model,
+            "commit": self._commit,
+            # Everything --resume needs to finish this run as it was started.
+            "plan": {
+                "category": category,
+                "tags": list(self.tags),
+                "exclude_tags": list(self.exclude_tags),
+                "scenario_dirs": [str(d) for d in self.extra_scenario_dirs],
+                "corpus_dirs": [str(d) for d in self.extra_corpus_dirs],
+                "iterations": self.iterations,
+                "timeout_per_scenario_s": self.timeout,
+                "agent_model": self.agent_model,
+            },
+        }
+        if requested_ids:
+            # Marks a targeted run, so compare and the integrity gate judge it
+            # against only these baseline scenarios and name the rest as not run.
+            config["scenario_filter"] = list(requested_ids)
+        provenance = scenario_provenance(scenarios)
+        config["scenario_provenance"] = provenance
+        config["fixtures"] = fixture_provenance()
+        config["lemonade"] = lemonade_provenance()
+        if provenance["overridden_builtins"]:
+            print(
+                f"[WARN] {len(provenance['overridden_builtins'])} built-in "
+                "scenario(s) replaced by local copies (recorded in the "
+                "scorecard; not comparable to a baseline):",
+                file=sys.stderr,
+            )
+            for entry in provenance["scenarios"]:
+                if entry.get("overrides_builtin"):
+                    print(f"  - {entry['id']}: {entry['path']}", file=sys.stderr)
+
+        # ---- Phase A: Run initial eval ----
+        results, aborted, outage = self._execute(
+            scenarios, run_dir, downloaded_models, keep_sessions
+        )
+        scorecard = self._finish(results, run_id, run_dir, config, aborted, outage)
 
         if not fix_mode:
             return scorecard
@@ -2960,6 +4073,17 @@ class AgentEvalRunner:
             # Phase B: Run fixer
             fix_result = run_fix_iteration(current_scorecard, run_dir, iteration)
             fix_history.append(fix_result)
+            failure = _fix_iteration_failure(fix_result)
+            if failure:
+                _write_fix_history(run_dir, fix_history)
+                # Re-scoring a half-edited tree, then fixing it again, compounds
+                # whatever the interrupted fixer left behind.
+                raise RuntimeError(
+                    f"Fix mode stopped: iteration {iteration} did not complete "
+                    f"({failure}). The fixer may have left partial edits in "
+                    f"{REPO_ROOT} — review them with `git diff` before re-running. "
+                    f"Fix history: {run_dir / 'fix_history.json'}"
+                )
 
             # Phase C: Re-run only previously-failed scenarios
             failed_ids = {s.get("scenario_id") for s in failed}
@@ -2988,8 +4112,17 @@ class AgentEvalRunner:
                         self.extra_corpus_dirs if self.extra_corpus_dirs else None
                     ),
                     agent_type=self.agent_type,
+                    agent_model=self.agent_model,
                 )
                 rerun_results.append(result)
+                outage = result.get("claude_outage")
+                if outage:
+                    raise RuntimeError(
+                        f"Fix mode stopped while re-running {sid}: "
+                        f"{HEADLINES[outage['kind']]} ({outage.get('detail')}). "
+                        f"Resets: {outage.get('resets') or 'not stated'}. The "
+                        f"scorecards in {run_dir} cover what ran before it."
+                    )
                 if result.get("backend_not_idle"):
                     raise RuntimeError(
                         f"Fix mode stopped after re-running {sid}: "
@@ -3045,11 +4178,7 @@ class AgentEvalRunner:
             self._print_summary(new_scorecard, fix_run_id, run_dir)
             current_scorecard = new_scorecard
 
-        # Write fix_log.json with full history
-        fix_log_path = run_dir / "fix_history.json"
-        fix_log_path.write_text(
-            json.dumps(fix_history, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _write_fix_history(run_dir, fix_history)
 
         # Final comparison: baseline vs current
         baseline_pass = baseline_scorecard.get("summary", {}).get("judged_pass_rate", 0)
@@ -3059,7 +4188,7 @@ class AgentEvalRunner:
         print(f"  Baseline judged pass rate: {baseline_pass:.0%}")
         print(f"  Final judged pass rate:    {final_pass:.0%}")
         print(f"  Delta:                     {(final_pass - baseline_pass):+.0%}")
-        print(f"  Fix history:        {fix_log_path}")
+        print(f"  Fix history:        {run_dir / 'fix_history.json'}")
         print("  Changes are NOT committed -- review before merging.")
         print(f"{'='*60}")
 
@@ -3067,57 +4196,20 @@ class AgentEvalRunner:
 
 
 # ---------------------------------------------------------------------------
-# --generate-corpus: regenerate corpus documents and validate manifest
+# --generate-corpus: validate the committed corpus against manifest.json
 # ---------------------------------------------------------------------------
 
 
 def generate_corpus():
-    """Regenerate corpus documents and validate manifest.json.
+    """Validate the committed corpus documents against ``manifest.json``.
 
-    Steps:
-    1. Re-run CSV generator (gen_sales_csv_v2.py) with deterministic seed
-    2. Scan corpus/documents/ and corpus/adversarial/ for all files
-    3. Validate manifest.json facts are still reachable
-    4. Print a summary report
+    The corpus is committed ground truth — the manifest's facts were written
+    from these exact files — so nothing here rewrites it. Lists the documents,
+    then raises ``RuntimeError`` when the manifest is absent, names a file
+    that is not on disk, or a corpus file on disk is missing from it.
     """
-    print("[CORPUS] Starting corpus regeneration...")
+    print("[CORPUS] Validating corpus against manifest.json...")
 
-    # Step 1: Regenerate CSV via gen_sales_csv_v2.py
-    gen_scripts = [
-        CORPUS_DIR / "gen_sales_csv_v2.py",
-        CORPUS_DIR / "gen_sales_csv.py",
-    ]
-    ran_generator = False
-    for script in gen_scripts:
-        if script.exists():
-            print(f"[CORPUS] Running CSV generator: {script.name}")
-            result = subprocess.run(
-                [sys.executable, str(script)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(CORPUS_DIR),
-                check=False,
-            )
-            if result.returncode == 0:
-                print("[CORPUS] CSV generator OK")
-                ran_generator = True
-            else:
-                print(
-                    f"[CORPUS] CSV generator failed (exit {result.returncode}):",
-                    file=sys.stderr,
-                )
-                print(result.stderr[:300], file=sys.stderr)
-            break
-
-    if not ran_generator:
-        print(
-            "[CORPUS] No CSV generator found — skipping CSV regeneration",
-            file=sys.stderr,
-        )
-
-    # Step 2: Scan corpus directories
     docs_dir = CORPUS_DIR / "documents"
     adv_dir = CORPUS_DIR / "adversarial"
     all_files = []
@@ -3132,13 +4224,11 @@ def generate_corpus():
     for rel, size in all_files:
         print(f"  {str(rel):<45} {size:>8,} bytes")
 
-    # Step 3: Validate manifest
     if not MANIFEST.exists():
-        print(
-            f"\n[CORPUS] WARNING: manifest.json not found at {MANIFEST}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"Corpus manifest not found at {MANIFEST}. It is committed with the "
+            "repo; restore it with `git checkout -- eval/corpus/manifest.json`."
         )
-        return
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     doc_list = manifest.get("documents", [])
@@ -3151,22 +4241,41 @@ def generate_corpus():
 
     # Check every manifest file exists on disk
     missing = []
-    for doc in doc_list:
-        fn = doc.get("filename", "")
-        if not (docs_dir / fn).exists():
-            missing.append(fn)
-    for doc in adv_list:
-        fn = doc.get("filename", "")
-        if not (adv_dir / fn).exists():
-            missing.append(fn)
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        for doc in entries:
+            fn = doc.get("filename") or ""
+            if not fn or not (base / fn).is_file():
+                missing.append(fn or f"<entry '{doc.get('id', '?')}' has no filename>")
 
     if missing:
-        print(f"[CORPUS] WARNING: {len(missing)} manifest file(s) missing from disk:")
-        for fn in missing:
-            print(f"  MISSING: {fn}")
-    else:
-        print("[CORPUS] All manifest files present on disk [OK]")
+        raise RuntimeError(
+            f"{len(missing)} file(s) named in {MANIFEST} are missing from "
+            f"{CORPUS_DIR}: {', '.join(missing)}. Restore them from git, or fix "
+            "the manifest entry if the document was renamed."
+        )
+    print("[CORPUS] All manifest files present on disk [OK]")
 
+    # And the other way around: a document added to disk without a manifest
+    # entry would score against facts that do not exist for it.
+    undeclared = []
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        declared = {doc.get("filename") for doc in entries}
+        if base.exists():
+            for f in sorted(base.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith(".")
+                    and f.name not in declared
+                ):
+                    undeclared.append(str(f.relative_to(CORPUS_DIR)))
+
+    if undeclared:
+        raise RuntimeError(
+            f"{len(undeclared)} file(s) in {CORPUS_DIR} are not named in "
+            f"{MANIFEST}: {', '.join(undeclared)}. Add a manifest entry for "
+            "them, or remove the files if they were left behind."
+        )
+    print("[CORPUS] All corpus files declared in the manifest [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

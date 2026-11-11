@@ -47,12 +47,13 @@ _EMAIL_PKG_ROOT = (
 
 
 def test_canonical_vocabulary_is_the_frozen_set():
-    # The frozen seven, plus two additive-MINOR types: `needs_input`, the
-    # mid-run question resume seam (#2469, contract 2.6), and `task_list` (§4.5).
+    # The canonical vocabulary plus `needs_input` and the additive-MINOR
+    # `reasoning` and `task_list` events (contracts 2.6, 2.22 and §4.5).
     assert CANONICAL_EVENT_TYPES == frozenset(
         {
             "status",
             "token",
+            "reasoning",
             "tool_call",
             "tool_result",
             "needs_confirmation",

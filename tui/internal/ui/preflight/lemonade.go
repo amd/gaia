@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // How this package answers "the local model server is not running".
@@ -24,19 +26,14 @@ import (
 // So the remedy is RESOLVED against this machine rather than hardcoded. That is
 // deliberately stronger than switching on runtime.GOOS: `gaia.llm
 // .lemonade_launcher.resolve_lemonade` — the Python that owns this decision —
-// only probes the Windows and Linux canonical paths before falling back to the
-// legacy CLI names, so on macOS it reports "nothing installed" even where
-// /usr/local/bin/lemond is the process serving the port. A GOOS table copied
-// from it would inherit that hole. Probing what is on disk cannot.
+// once probed only the Windows and Linux canonical paths, so on macOS it
+// reported "nothing installed" even where /usr/local/bin/lemond is the process
+// serving the port. A GOOS table copied from it would inherit that kind of
+// hole. Probing what is on disk cannot.
 //
-// The two lists it agrees with exactly: the legacy CLI names and their order,
-// and the modern per-platform launchers. `lemonade-server` also remains the
-// correct PACKAGE name (the MSI and .deb are `lemonade-server-*`); it is only
-// the run command that is stale, so it stays in the legacy probe below.
-
-// legacyBinaries are the pre-10.7 CLI names, in probe order. Mirrors
-// lemonade_launcher._LEGACY_BINARIES — `-dev` is the pip/CI variant.
-var legacyBinaries = []string{"lemonade-server", "lemonade-server-dev"}
+// It agrees with the Python on the per-platform launchers. `lemonade-server`
+// remains the PACKAGE name (the MSI and .deb are `lemonade-server-*`), never a
+// command.
 
 // serverPathEnv is the explicit override. Mirrors lemonade_launcher: an
 // override is run VERBATIM, never rerouted to systemctl, because a user who
@@ -76,8 +73,7 @@ type launcher struct {
 	// Argv is Start as something this process can SPAWN: program first, then
 	// arguments, already split and unquoted.
 	//
-	// Start is prose — it is quoted for a shell and may carry an env-assignment
-	// prefix, both of which exist so a human can paste it. Splitting that string
+	// Start is prose — it is quoted for a shell so a human can paste it. Splitting that string
 	// back apart to exec it would be a quoting bug waiting to happen, so the
 	// resolver records both forms at the point where it still knows the real
 	// path. Empty means "do not start this automatically" (nothing installed,
@@ -91,13 +87,9 @@ type launcher struct {
 	// remedy then must not say "and press r" as though the shell came back.
 	Foreground bool
 	// ServiceManaged is true when a unit file, launchd plist, app bundle, or the
-	// command's own flags own the server's environment. The context window then
-	// comes from THAT definition, and prefixing the command with an env
-	// assignment would change nothing while looking like it did.
+	// command's own flags own how the server starts. Its command is shown as-is,
+	// with no PowerShell variant.
 	ServiceManaged bool
-	// CtxSize is the context window the server must come up with, for the
-	// remedy's prose. Always resolved, even when the command cannot carry it.
-	CtxSize int
 	// BadOverride is a LEMONADE_SERVER_PATH that names something absent. It is
 	// its own state: the fix is to correct the variable, not to install anything.
 	BadOverride string
@@ -120,6 +112,9 @@ type hostProbe struct {
 	getenv   func(string) string
 	homeDir  func() (string, error)
 	readFile func(string) ([]byte, error)
+	// readConfig is the locked reader for the shared config.json. Other probes
+	// keep readFile so their host tests can model ordinary file reads.
+	readConfig func(string) ([]byte, error)
 }
 
 // realHostProbe is a var so a test can resolve against a machine it does not
@@ -132,9 +127,10 @@ var realHostProbe = func() hostProbe {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		getenv:   os.Getenv,
-		homeDir:  os.UserHomeDir,
-		readFile: osReadFile,
+		getenv:     os.Getenv,
+		homeDir:    os.UserHomeDir,
+		readFile:   osReadFile,
+		readConfig: filelock.ReadFile,
 	}
 }
 
@@ -153,7 +149,7 @@ var macAppBundles = []string{
 // after it exits, and only launchctl can restart it.
 //
 // The label tracks the pinned Lemonade: upstream renamed it from
-// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.42.1.
+// com.lemonade.server after 11.5.0, so the old one matches nothing on v2026.44.1.
 const (
 	macDaemonLabel = "ai.lemonadeserver.server"
 	macDaemonPlist = "/Library/LaunchDaemons/ai.lemonadeserver.server.plist"
@@ -174,21 +170,16 @@ var macDaemonBinaries = []string{"/usr/local/bin/lemond", "/opt/homebrew/bin/lem
 // handful of stat and PATH lookups, no network.
 func resolveLemonade() launcher { return resolveLemonadeWith(realHostProbe()) }
 
-// resolveLemonadeWith resolves the launcher AND the context window it has to come
-// up with. Those are one answer, not two: a start command without the window
-// produces a server that answers /health and 502s every agent query, which would
-// take this row green and fail on first use.
+// resolveLemonadeWith resolves the launcher and, on Windows, the PowerShell form
+// of its command where that differs from the Command Prompt one.
+//
+// No context window is attached: modern Lemonade reads none at launch (#3320),
+// and GAIA sends it with every `/load`.
 func resolveLemonadeWith(p hostProbe) launcher {
 	l := resolveLauncherWith(p)
-	if l.Found {
-		l.CtxSize = profileCtxSize(p)
-		if !l.ServiceManaged {
-			if p.goos == "windows" && len(l.Argv) > 0 && l.Restart == l.Start {
-				l.StartPS = powerShellCommand(l.CtxSize, l.Argv)
-				l.RestartPS = l.StartPS
-			}
-			prefix := ctxPrefix(p.goos, l.CtxSize)
-			l.Start, l.Restart = prefix+l.Start, prefix+l.Restart
+	if l.Found && !l.ServiceManaged && p.goos == "windows" && len(l.Argv) > 0 && l.Restart == l.Start {
+		if ps := powerShellCommand(l.Argv); ps != l.Start {
+			l.StartPS, l.RestartPS = ps, ps
 		}
 	}
 	return l
@@ -236,18 +227,7 @@ func resolveLauncherWith(p hostProbe) launcher {
 		}
 	}
 
-	// 3. Legacy CLI, if this machine really does still have it.
-	for _, name := range legacyBinaries {
-		if _, err := p.lookPath(name); err == nil {
-			// The legacy CLI takes the window as a FLAG, not an environment
-			// variable (build_start_command's legacy branch), so it appends its
-			// own and opts out of the env prefix.
-			cmd := name + " serve" + legacyCtxFlag(profileCtxSize(p))
-			return launcher{Start: cmd, Restart: cmd, ServiceManaged: true, Found: true}
-		}
-	}
-
-	// 4. Nothing is installed. "Start it" is not a remedy for something that is
+	// 3. Nothing is installed. "Start it" is not a remedy for something that is
 	// not there — the only honest next step is the installer.
 	return launcher{}
 }
@@ -463,8 +443,8 @@ func psQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
-// powerShellCommand renders argv for PowerShell, carrying the context window.
-func powerShellCommand(ctx int, argv []string) string {
+// powerShellCommand renders argv for PowerShell.
+func powerShellCommand(argv []string) string {
 	parts := make([]string, 0, len(argv))
 	for _, a := range argv {
 		parts = append(parts, psQuote(a))
@@ -473,7 +453,7 @@ func powerShellCommand(ctx int, argv []string) string {
 		// A quoted string is an expression in PowerShell; `&` makes it a call.
 		parts[0] = "& " + parts[0]
 	}
-	return fmt.Sprintf("$env:%s=%d; %s", ctxSizeEnv, ctx, strings.Join(parts, " "))
+	return strings.Join(parts, " ")
 }
 
 // --- the two remedies -------------------------------------------------------
@@ -494,7 +474,7 @@ func lemonadeStartRemedy() Remedy {
 		}
 	}
 	return Remedy{
-		Action:     "Start it" + orTheApp(l) + comeBack(l) + ctxNote(l),
+		Action:     "Start it" + orTheApp(l) + comeBack(l),
 		Command:    l.Start,
 		PowerShell: l.StartPS,
 		Where:      lemonadeDocs,
@@ -551,7 +531,7 @@ func lemonadeRestartRemedy() Remedy {
 	}
 	if l.Restart != l.Start {
 		return Remedy{
-			Action:     "Restart it, then press r to re-check." + ctxNote(l),
+			Action:     "Restart it, then press r to re-check.",
 			Command:    l.Restart,
 			PowerShell: l.RestartPS,
 			Where:      lemonadeDocs,
@@ -565,7 +545,7 @@ func lemonadeRestartRemedy() Remedy {
 	// run from the only state the row appears in.
 	return Remedy{
 		Action: "Stop the running server first — it holds the port, and a second one just " +
-			"exits — then start it again" + orTheApp(l) + comeBack(l) + ctxNote(l),
+			"exits — then start it again" + orTheApp(l) + comeBack(l),
 		Command:    l.Restart,
 		PowerShell: l.RestartPS,
 		Where:      lemonadeDocs,
@@ -609,18 +589,4 @@ func comeBack(l launcher) string {
 		return " — it keeps that terminal, so press r back here once it is up."
 	}
 	return ", then press r to re-check."
-}
-
-// ctxNote is added ONLY where the command cannot carry the context window
-// itself — a systemd unit, a launchd plist, an app bundle. Those own their own
-// environment, so the window has to be set there, and a server started without
-// it answers /health while 502-ing every agent query. Saying nothing would leave
-// the user reading that as an agent bug.
-func ctxNote(l launcher) string {
-	if !l.ServiceManaged || l.CtxSize <= 0 || strings.Contains(l.Start, "--ctx-size") {
-		return ""
-	}
-	return fmt.Sprintf(" It has to come up with %s=%d — that is set in the service's own "+
-		"configuration, and without it queries fail even though the server looks healthy.",
-		ctxSizeEnv, l.CtxSize)
 }

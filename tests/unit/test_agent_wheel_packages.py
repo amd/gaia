@@ -52,7 +52,7 @@ def test_production_agent_list_nonempty(packages):
     ids = {p.agent_id for p in packages}
     # Spot-check the surviving hub agents; the helper enforces the full set
     # exists on disk, so this just sanity-checks the mapping direction.
-    assert {"email", "chat", "gaia"} <= ids
+    assert {"email", "gaia"} <= ids
 
 
 def test_dist_name_and_directory_convention(packages):

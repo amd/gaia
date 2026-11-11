@@ -10,7 +10,7 @@ lock, so after every flagship release they broke until someone pinned the
 hashes by hand (#3932, #5341, #3949).
 
 Nothing pushes to main directly, so the release ends by running this: it
-commits the regenerated lock to ``release/flagship-lock-v<version>`` and opens
+commits the regenerated lock to ``flagship-lock/v<version>`` and opens
 a PR against main.
 
 Safe to re-run:
@@ -43,7 +43,8 @@ from typing import Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK = "hub/agents/gaia/npm/binaries.lock.json"
-BRANCH_PREFIX = "release/flagship-lock-v"
+# Not release/*: origin keeps a `release` branch, so git cannot create refs under it.
+BRANCH_PREFIX = "flagship-lock/v"
 BOT_NAME = "github-actions[bot]"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 # A GITHUB_TOKEN PR notifies nobody; the next core release waits on this one.

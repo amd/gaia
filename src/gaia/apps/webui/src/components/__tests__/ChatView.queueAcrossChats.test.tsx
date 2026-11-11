@@ -289,7 +289,7 @@ describe('a queued message whose send fails', () => {
 
         expect(useChatStore.getState().messages.filter((m) => m.role === 'user').map((m) => m.content))
             .toEqual(['first question']);
-        expect(screen.getByText('Not sent. Failed to fetch')).toBeTruthy();
+        expect(screen.getByText('Not sent. Lost the connection to GAIA’s assistant. Once it answers again, try again.')).toBeTruthy();
         expect(screen.getByLabelText('Send again: q1')).toBeTruthy();
     });
 });

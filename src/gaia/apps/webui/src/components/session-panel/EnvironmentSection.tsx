@@ -11,35 +11,34 @@ import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
+import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
-import { useInferencePlace, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
+import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
+import { useChatStore } from '../../stores/chatStore';
+import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
 import { requestMobileAccess, useMobileAccessState } from '../../utils/mobileAccessEvents';
 import { MODES } from '../PermissionModeChip';
 import { PanelSection } from './PanelSection';
-import { FolderPicker } from './FolderPicker';
 import { Switch } from './Switch';
 import type { LocalModelStatus, PermissionMode, TunnelStatus } from '../../types';
 import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
+import type { MessageKey } from '../../i18n/registry';
+import { useT } from '../../i18n/useT';
 
-const SOURCE_LABEL: Record<ScopeSource, string> = {
-    added: 'Added by you',
-    gaia_documents: "GAIA's documents folder",
-    scratch: "GAIA's scratch folder",
-    document: 'Document in this chat',
-    working_folder: 'Folder GAIA started in',
-    approved: 'Approved during this chat',
-    allowed_paths: 'Set by GAIA_ALLOWED_PATHS',
+const SOURCE_LABEL: Record<ScopeSource, MessageKey> = {
+    added: 'env.source.added',
+    gaia_documents: 'env.source.gaia_documents',
+    scratch: 'env.source.scratch',
+    document: 'env.source.document',
+    working_folder: 'env.source.working_folder',
+    approved: 'env.source.approved',
+    allowed_paths: 'env.source.allowed_paths',
 };
 
 const FILES_SHOWN = 3;
-
-function errorText(err: unknown): string {
-    if (err instanceof api.ApiError) return err.detail || err.message;
-    return err instanceof Error ? err.message : String(err);
-}
 
 function baseName(path: string): string {
     const parts = path.split(/[\\/]/).filter(Boolean);
@@ -47,11 +46,12 @@ function baseName(path: string): string {
 }
 
 export function EnvironmentSection({ sessionId, busy }: { sessionId: string; busy: boolean }) {
+    const t = useT();
     const { env } = useSessionEnvironment(sessionId);
-    const summary = env && !env.internet ? 'Offline' : null;
+    const summary = env && !env.internet ? t('env.offline') : null;
     return (
-        <PanelSection id="environment" title="Environment" summary={summary}>
-            <RunsOn busy={busy} />
+        <PanelSection id="environment" title={t('env.title')} summary={summary}>
+            <RunsOn sessionId={sessionId} busy={busy} />
             <Folders sessionId={sessionId} />
             <Internet sessionId={sessionId} />
             <PhoneAccess />
@@ -69,9 +69,18 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     );
 }
 
+/** Lemonade ids compare case-insensitively, with or without the ``user.`` prefix. */
+function sameModel(a: string, b: string): boolean {
+    const norm = (id: string) => id.toLowerCase().replace(/^user\./, '');
+    return norm(a) === norm(b);
+}
+
 /** Where the model answering this chat runs, from the same data as the model status popover. */
-function RunsOn({ busy }: { busy: boolean }) {
+function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
+    const t = useT();
     const place = useInferencePlace();
+    const active = useModelStore((s) => s.active);
+    const chatModel = useChatStore((s) => selectChipModel(active, s.sessions, sessionId));
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
     const [error, setError] = useState<string | null>(null);
     const remote = place?.remote === true;
@@ -86,7 +95,7 @@ function RunsOn({ busy }: { busy: boolean }) {
             })
             .catch((err) => {
                 log.ui.warn('Could not read where the local model runs', err);
-                setError(errorText(err));
+                setError(requestErrorText(err));
             });
     }, [remote]);
     useEffect(load, [load]);
@@ -94,24 +103,28 @@ function RunsOn({ busy }: { busy: boolean }) {
 
     if (remote) {
         return (
-            <Row label="Runs on">
-                <span className="sp-place is-remote"><Cloud size={13} aria-hidden="true" /> {place?.label} (cloud)</span>
+            <Row label={t('env.runsOn')}>
+                <span className="sp-place is-remote"><Cloud size={13} aria-hidden="true" /> {t('env.cloudPlace', { name: place?.label ?? '' })}</span>
                 {place?.description && <span className="sp-meta">{place.description}</span>}
             </Row>
         );
     }
     if (!place) {
-        return <Row label="Runs on"><span className="sp-meta" title={UNKNOWN_PLACE_TITLE}>Not known yet</span></Row>;
+        return <Row label={t('env.runsOn')}><span className="sp-meta" title={UNKNOWN_PLACE_TITLE}>{t('env.notKnownYet')}</span></Row>;
     }
-    const memory = status?.memory;
+    // The server may have another chat's model loaded; only describe it when it is this chat's.
+    const other = !!(status?.model && chatModel && !sameModel(status.model, chatModel));
+    const memory = other ? null : status?.memory;
     return (
-        <Row label="Runs on">
-            <span className="sp-place"><Monitor size={13} aria-hidden="true" /> This PC{status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
-            {status?.display_name && <span className="sp-meta">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
+        <Row label={t('env.runsOn')}>
+            <span className="sp-place"><Monitor size={13} aria-hidden="true" /> {t('env.thisPc')}{!other && status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
+            {other
+                ? <span className="sp-meta">{t('env.notLoaded', { model: displayModelName(chatModel!) })}</span>
+                : status?.display_name && <span className="sp-meta" dir="ltr">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
             {memory && (
                 <span className="sp-meta">
-                    {memory.model_gb != null ? `${memory.model_gb.toFixed(1)} GB in use` : 'Memory in use unknown'}
-                    {memory.free_gb != null ? ` · ${memory.free_gb.toFixed(1)} GB free` : ''}
+                    {memory.model_gb != null ? t('env.inUse', { gb: memory.model_gb.toFixed(1) }) : t('env.inUseUnknown')}
+                    {memory.free_gb != null ? ` · ${t('env.free', { gb: memory.free_gb.toFixed(1) })}` : ''}
                 </span>
             )}
             {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
@@ -120,8 +133,10 @@ function RunsOn({ busy }: { busy: boolean }) {
 }
 
 function Folders({ sessionId }: { sessionId: string }) {
+    const t = useT();
     const { env, error: loadError, change } = useSessionEnvironment(sessionId);
-    const [picking, setPicking] = useState(false);
+    // Only the flagship's own default scope (your user folder) is known here.
+    const flagship = useChatStore((s) => s.sessions.find((x) => x.id === sessionId)?.agent_type === 'gaia');
     const [error, setError] = useState<string | null>(null);
     const [busyPath, setBusyPath] = useState<string | null>(null);
     const [showAllFiles, setShowAllFiles] = useState(false);
@@ -132,7 +147,7 @@ function Folders({ sessionId }: { sessionId: string }) {
         try {
             await op();
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
         } finally {
             setBusyPath(null);
         }
@@ -141,9 +156,9 @@ function Folders({ sessionId }: { sessionId: string }) {
     const remove = (entry: ScopeEntry) =>
         run(entry.path, () => change(() => api.removeEnvironmentFolder(sessionId, entry.path)));
     const add = (path: string) => {
-        setPicking(false);
         void run(path, () => change(() => api.addEnvironmentFolder(sessionId, path)));
     };
+    const { open: pickFolder, picker, error: pickError } = useFolderPicker(add);
 
     const folders = env?.folders.filter((f) => f.kind === 'folder') ?? [];
     const files = env?.folders.filter((f) => f.kind === 'file') ?? [];
@@ -156,8 +171,8 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" title={entry.path}>{baseName(entry.path)}</span>
-                <span className="sp-meta" title={entry.path}>{SOURCE_LABEL[entry.source]} · {entry.path}</span>
+                <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
+                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (
                 <button
@@ -165,8 +180,8 @@ function Folders({ sessionId }: { sessionId: string }) {
                     className="btn-icon-sm sp-item-remove"
                     onClick={() => void remove(entry)}
                     disabled={busyPath !== null}
-                    aria-label={`Remove ${entry.path} from this chat`}
-                    title="Remove from this chat"
+                    aria-label={t('env.remove', { path: entry.path })}
+                    title={t('env.removeShort')}
                 >
                     <X size={12} />
                 </button>
@@ -175,46 +190,52 @@ function Folders({ sessionId }: { sessionId: string }) {
     );
 
     return (
-        <Row label="Can read and write">
-            {!env && !loadError && <span className="sp-meta">Checking…</span>}
-            {loadError && <span className="sp-error">Couldn't read this chat's folders: {loadError}</span>}
+        <Row label={env && !env.enforced ? t('env.reach') : t('env.readWrite')}>
+            {!env && !loadError && <span className="sp-meta">{t('sp.checking')}</span>}
+            {env && !env.enforced && (
+                <span className="sp-meta">
+                    {t(flagship ? 'env.flagshipScope' : 'env.agentScope')}
+                </span>
+            )}
+            {loadError && <span className="sp-error">{t('env.foldersError', { error: loadError })}</span>}
             {env && (
                 <>
-                    {env.folders.length === 0 && <span className="sp-meta">Nothing yet. GAIA can't read or write any folder in this chat.</span>}
+                    {env.folders.length === 0 && <span className="sp-meta">{t('env.nothing')}</span>}
                     <ul className="sp-list">
                         {folders.map(item)}
                         {shownFiles.map(item)}
                     </ul>
                     {files.length > FILES_SHOWN && (
                         <button type="button" className="link-btn sp-more" onClick={() => setShowAllFiles((v) => !v)}>
-                            {showAllFiles ? 'Show fewer files' : `Show all ${files.length} files`}
+                            {showAllFiles ? t('env.fewerFiles') : t('env.allFiles', { n: files.length })}
                         </button>
                     )}
                     {!env.enforced && (
                         <span className="sp-meta">
-                            This chat's agent runs as its own process, so its folders and internet access can't be changed from here.
+                            {t('env.ownProcess')}
                         </span>
                     )}
                     {env.removed.length > 0 && (
                         <span className="sp-meta">
-                            Removed: {env.removed.map(baseName).join(', ')}. GAIA is refused there until you add it back.
+                            {t('env.removed', { names: env.removed.map(baseName).join(', ') })}
                         </span>
                     )}
                     {!locked && (
-                        <button type="button" className="sp-action" onClick={() => setPicking(true)} disabled={busyPath !== null}>
-                            <FolderPlus size={12} aria-hidden="true" /> Add folder
+                        <button type="button" className="sp-action" onClick={() => pickFolder()} disabled={busyPath !== null}>
+                            <FolderPlus size={12} aria-hidden="true" /> {t('env.addFolder')}
                         </button>
                     )}
                 </>
             )}
-            {error && <span className="sp-error" role="alert">{error}</span>}
-            {picking && <FolderPicker onPick={add} onClose={() => setPicking(false)} />}
+            {(error ?? pickError) && <span className="sp-error" role="alert">{error ?? pickError}</span>}
+            {picker}
         </Row>
     );
 }
 
 function Internet({ sessionId }: { sessionId: string }) {
-    const { env, change } = useSessionEnvironment(sessionId);
+    const t = useT();
+    const { env, change, refresh } = useSessionEnvironment(sessionId);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     if (!env) return null;
@@ -224,19 +245,28 @@ function Internet({ sessionId }: { sessionId: string }) {
         try {
             await change(() => api.setInternet(sessionId, on));
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
+            // Saved even when the running turn couldn't be told, so show what was saved.
+            void refresh();
         } finally {
             setSaving(false);
         }
     };
+    if (!env.internet_enforced) {
+        return (
+            <Row label={t('env.internet')}>
+                <span className="sp-state-text">{env.internet ? t('env.on') : t('env.off')}</span>
+            </Row>
+        );
+    }
     return (
-        <Row label="Internet">
+        <Row label={t('env.internet')}>
             <Switch
                 checked={env.internet}
                 onChange={(on) => void toggle(on)}
-                disabled={saving || !env.enforced}
-                label="Internet for this chat"
-                text={env.internet ? 'On' : 'Off: web search and pages are blocked'}
+                disabled={saving}
+                label={t('env.internetFor')}
+                text={env.internet ? t('env.on') : t('env.offBlocked')}
             />
             {error && <span className="sp-error" role="alert">{error}</span>}
         </Row>
@@ -244,6 +274,7 @@ function Internet({ sessionId }: { sessionId: string }) {
 }
 
 function PhoneAccess() {
+    const t = useT();
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -255,30 +286,30 @@ function PhoneAccess() {
                 setStatus(expectShape(s, (r) => typeof r.active === 'boolean', 'phone access status'));
                 setError(null);
             })
-            .catch((err) => setError(errorText(err)));
+            .catch((err) => setError(requestErrorText(err)));
     }, []);
     useEffect(load, [load]);
     useMobileAccessState(() => { setPending(false); load(); });
 
     const active = status?.active === true;
     return (
-        <Row label="Phone access">
+        <Row label={t('env.phone')}>
             <Switch
                 checked={active}
                 onChange={(on) => { setPending(true); requestMobileAccess(on); }}
                 disabled={pending}
-                label="Phone access"
-                text={pending ? (active ? 'Stopping…' : 'Starting…') : active ? 'On' : 'Off'}
+                label={t('env.phone')}
+                text={pending ? (active ? t('env.stopping') : t('env.starting')) : active ? t('env.on') : t('env.off')}
             />
             {active && (
                 <span className="sp-meta">
                     <Smartphone size={12} aria-hidden="true" />{' '}
-                    {status?.device ? `${status.device.name} connected` : 'No phone connected yet'}
+                    {status?.device ? t('env.phoneConnected', { name: status.device.name }) : t('env.noPhone')}
                 </span>
             )}
             {active && (
                 <button type="button" className="sp-action" onClick={() => requestMobileAccess(true)}>
-                    Show QR code
+                    {t('env.qr')}
                 </button>
             )}
             {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
@@ -288,6 +319,7 @@ function PhoneAccess() {
 
 /** The chat's permission mode, mirrored with the composer's chip. */
 function Permission({ sessionId }: { sessionId: string }) {
+    const t = useT();
     const [mode, setMode] = useState<PermissionMode | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -299,16 +331,12 @@ function Permission({ sessionId }: { sessionId: string }) {
             .then((p) => {
                 if (live) setMode(expectShape(p, (r) => typeof r.mode === 'string', 'permission mode').mode);
             })
-            .catch((err) => { if (live) setError(errorText(err)); });
+            .catch((err) => { if (live) setError(requestErrorText(err)); });
         return () => { live = false; };
     }, [sessionId]);
     usePermissionModeEvents(sessionId, setMode);
 
-    const apply = async (next: PermissionMode) => {
-        if (next === 'full_access' && !confirming) {
-            setConfirming(true);
-            return;
-        }
+    const save = async (next: PermissionMode) => {
         setConfirming(false);
         setError(null);
         try {
@@ -316,14 +344,14 @@ function Permission({ sessionId }: { sessionId: string }) {
             setMode(saved);
             announcePermissionMode(sessionId, saved);
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err));
         }
     };
 
     const note = MODES.find((m) => m.mode === mode)?.note;
     return (
-        <Row label="Permission mode">
-            <div className="sp-segmented" role="radiogroup" aria-label="Permission mode">
+        <Row label={t('env.permission')}>
+            <div className="sp-segmented" role="radiogroup" aria-label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -331,21 +359,22 @@ function Permission({ sessionId }: { sessionId: string }) {
                         role="radio"
                         aria-checked={mode === m.mode}
                         className={mode === m.mode ? 'is-selected' : undefined}
-                        onClick={() => void apply(m.mode)}
+                        // Full access only turns on from "Turn it on", so a double-click can't confirm it.
+                        onClick={() => (m.mode === 'full_access' ? setConfirming(true) : void save(m.mode))}
                     >
                         {m.mode === 'full_access'
                             ? <ShieldAlert size={12} aria-hidden="true" />
                             : <ShieldCheck size={12} aria-hidden="true" />}
-                        {m.mode === 'ask' ? 'Ask' : m.label}
+                        {m.mode === 'ask' ? t('env.ask') : t(m.label)}
                     </button>
                 ))}
             </div>
-            {note && <span className="sp-meta">{note}</span>}
+            {note && <span className="sp-meta">{t(note)}</span>}
             {confirming && (
                 <span className="sp-confirm" role="alert">
-                    Full access lets GAIA change files and run commands on this PC without asking.
-                    <button type="button" className="sp-action is-warning" onClick={() => void apply('full_access')}>Turn it on</button>
-                    <button type="button" className="sp-action" onClick={() => setConfirming(false)}>Cancel</button>
+                    {t('env.fullAccessWarn')}
+                    <button type="button" className="sp-action is-warning" onClick={() => void save('full_access')}>{t('env.turnOn')}</button>
+                    <button type="button" className="sp-action" onClick={() => setConfirming(false)}>{t('sp.cancel')}</button>
                 </span>
             )}
             {error && <span className="sp-error" role="alert">{error}</span>}

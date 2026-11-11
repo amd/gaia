@@ -3,15 +3,16 @@
 
 """Shape tests for the Lemonade installer download URLs.
 
-These are hermetic: they assert the URL/filename built for every (platform,
-arch) pair we claim to support, and that unsupported ones fail loudly. A
-mocked HTTP layer only proves we *called* something, so the companion test
+These are hermetic: they assert the URL/filename built for each Windows MSI
+the uninstall downloads, and that other platforms fail loudly. A mocked HTTP
+layer only proves we *called* something, so the companion test
 ``tests/integration/test_lemonade_release_assets.py`` resolves the same URLs
 against the live upstream release — that is the one that catches an asset
-rename (the .deb gained a ``debian13`` infix and the old name now 404s).
+rename.
 """
 
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -51,37 +52,10 @@ class TestDownloadUrlShape:
         installer = _installer(system, machine, minimal)
         assert installer.get_installer_filename() == expected_asset
 
-    def test_linux_deb_carries_distro_infix(self):
-        """Regression guard: the infix-less name 404s upstream."""
-        url = _installer("Linux", "x86_64").get_download_url()
-        assert "-debian13_amd64.deb" in url
-        assert f"lemonade-server_{LEMONADE_VERSION}_amd64.deb" not in url
-
-    def test_macos_yields_pkg(self):
-        url = _installer("Darwin", "arm64").get_download_url()
-        assert url.endswith(".pkg")
-
-    def test_intel_mac_raises_rather_than_installing_arm64_binaries(self):
-        """The .pkg payload is arm64-only and installs happily on Intel."""
-        installer = _installer("Darwin", "x86_64")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "x86_64" in message
-        assert "Apple-Silicon-only" in message
-
-    def test_unsupported_arch_raises_naming_the_arch(self):
-        installer = _installer("Linux", "armv7l")
-        with pytest.raises(RuntimeError) as exc:
-            installer.get_download_url()
-        message = str(exc.value)
-        assert "armv7l" in message
-        assert "amd64" in message and "arm64" in message
-        assert f"releases/tag/v{LEMONADE_VERSION}" in message
-
-    def test_unsupported_platform_raises(self):
-        installer = _installer("FreeBSD", "x86_64")
-        with pytest.raises(RuntimeError, match="not supported"):
+    @pytest.mark.parametrize("system", ["Linux", "Darwin", "FreeBSD"])
+    def test_only_windows_downloads_an_installer(self, system):
+        installer = _installer(system, "x86_64")
+        with pytest.raises(RuntimeError, match="only to uninstall it on Windows"):
             installer.get_download_url()
 
 
@@ -89,7 +63,7 @@ class TestVerifyDownloadUrl:
     """verify_download_url turns an upstream rename into an actionable error."""
 
     def test_404_raises_with_url_version_and_asset_list(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -104,7 +78,7 @@ class TestVerifyDownloadUrl:
         assert f"releases/tag/v{LEMONADE_VERSION}" in message
 
     def test_unreachable_host_blames_the_network_not_a_rename(self):
-        installer = _installer("Darwin", "arm64")
+        installer = _installer("Windows", "AMD64")
         with patch(
             "urllib.request.urlopen",
             side_effect=urllib.error.URLError("nodename nor servname provided"),
@@ -119,7 +93,7 @@ class TestVerifyDownloadUrl:
         assert "renamed" not in message
 
     def test_timeout_is_wrapped_not_leaked(self):
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         with patch("urllib.request.urlopen", side_effect=TimeoutError()):
             with pytest.raises(LemonadeAssetError) as exc:
                 installer.verify_download_url(timeout=1)
@@ -127,7 +101,7 @@ class TestVerifyDownloadUrl:
 
     def test_missing_asset_writes_nothing_to_disk(self, tmp_path):
         """The 404 must stop the download before the file is created."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
         error = urllib.error.HTTPError(url, 404, "Not Found", {}, None)
 
@@ -141,9 +115,9 @@ class TestVerifyDownloadUrl:
         self, tmp_path, monkeypatch
     ):
         """A proxy that 403s HEAD must not block a GET that would succeed."""
-        installer = _installer("Linux", "x86_64")
+        installer = _installer("Windows", "AMD64")
         url = installer.get_download_url()
-        payload = b"deb-bytes"
+        payload = b"msi-bytes"
 
         class _Response:
             headers = {"content-length": str(len(payload))}
@@ -167,12 +141,12 @@ class TestVerifyDownloadUrl:
                 raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
             return _Response()
 
-        _pin(monkeypatch, installer, b"deb-bytes")
+        _pin(monkeypatch, installer, b"msi-bytes")
         with patch("urllib.request.urlopen", side_effect=_urlopen):
             dest = installer.download_installer(dest_dir=str(tmp_path))
 
         assert calls == ["HEAD", "GET"]
-        assert dest.read_bytes() == b"deb-bytes"
+        assert dest.read_bytes() == b"msi-bytes"
 
 
 class _Stream:
@@ -302,15 +276,16 @@ class TestDownloadIntegrity:
         from gaia.installer.lemonade_installer import (
             INSTALLER_SHA256,
             LEGACY_MSI_SHA256,
+            OLDEST_REMOVABLE_LEMONADE,
         )
-        from gaia.version import LEMONADE_MIN_VERSION, parse_version
+        from gaia.version import parse_version
 
         for key, digest in {**INSTALLER_SHA256, **LEGACY_MSI_SHA256}.items():
             assert re.fullmatch(r"[0-9a-f]{64}", digest), f"{key}: {digest!r}"
         for key in LEGACY_MSI_SHA256:
             tag, name = key.split("/", 1)
             version = parse_version(tag.lstrip("v"))
-            assert parse_version(LEMONADE_MIN_VERSION) <= version
+            assert parse_version(OLDEST_REMOVABLE_LEMONADE) <= version
             assert version < parse_version(LEMONADE_VERSION), key
             assert name in ("lemonade.msi", "lemonade-server-minimal.msi"), key
 
@@ -333,6 +308,60 @@ class TestDownloadIntegrity:
         with _serve(payload):
             dest = installer.download_installer(dest_dir=str(tmp_path))
         assert dest.read_bytes() == payload
+
+
+_RELEASE_TAGS = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "lemonade" / "release_tags.txt"
+)
+
+
+def _release_tags() -> list:
+    lines = _RELEASE_TAGS.read_text(encoding="utf-8").splitlines()
+    return [line.strip() for line in lines if line.strip() and line[0] != "#"]
+
+
+class TestEveryReleaseIsPinned:
+    """Every supported release can be verified, judged against a checked-in tag list."""
+
+    def test_tag_list_spans_the_supported_range(self):
+        from gaia.installer.lemonade_installer import OLDEST_REMOVABLE_LEMONADE
+        from gaia.version import parse_version
+
+        tags = _release_tags()
+        versions = [parse_version(tag.removeprefix("v")) for tag in tags]
+        assert versions == sorted(
+            set(versions)
+        ), f"{_RELEASE_TAGS} must list each tag once, oldest first"
+        assert tags[0] == f"v{OLDEST_REMOVABLE_LEMONADE}", tags[0]
+        assert (
+            tags[-1] == f"v{LEMONADE_VERSION}"
+        ), f"{_RELEASE_TAGS} ends at {tags[-1]}; append v{LEMONADE_VERSION}"
+
+    @pytest.mark.parametrize("asset", ["lemonade.msi", "lemonade-server-minimal.msi"])
+    @pytest.mark.parametrize("tag", _release_tags())
+    def test_every_supported_release_pins_both_msis(self, tag, asset):
+        from gaia.installer.lemonade_installer import (
+            INSTALLER_SHA256,
+            LEGACY_MSI_SHA256,
+        )
+
+        current = tag == f"v{LEMONADE_VERSION}"
+        table = INSTALLER_SHA256 if current else LEGACY_MSI_SHA256
+        name = "INSTALLER_SHA256" if current else "LEGACY_MSI_SHA256"
+        assert f"{tag}/{asset}" in table, (
+            f"{name} has no pin for {tag}/{asset}. Add the digest from "
+            f"`gh api repos/lemonade-sdk/lemonade/releases/tags/{tag}`."
+        )
+
+    def test_every_pin_belongs_to_a_listed_release(self):
+        from gaia.installer.lemonade_installer import (
+            INSTALLER_SHA256,
+            LEGACY_MSI_SHA256,
+        )
+
+        tags = set(_release_tags())
+        for key in {**INSTALLER_SHA256, **LEGACY_MSI_SHA256}:
+            assert key.split("/", 1)[0] in tags, f"{key} is not in {_RELEASE_TAGS}"
 
 
 class TestPartialDownloadIsRemoved:
@@ -376,59 +405,7 @@ class TestPartialDownloadIsRemoved:
 
 
 class TestDownloadedInstallerLifecycle:
-    """The CLI and uninstall delete what they downloaded, except to retry."""
-
-    def _run_cli_install(self, tmp_path, monkeypatch, success):
-        from gaia.installer import lemonade_installer as mod
-
-        downloaded = tmp_path / "Lemonade-Darwin-abc.pkg"
-
-        class _Fake:
-            system = "darwin"
-
-            def check_installation(self):
-                return mod.LemonadeInfo(installed=success)
-
-            def needs_install(self, info):
-                return True
-
-            def download_installer(self):
-                downloaded.write_bytes(b"pkg")
-                return downloaded
-
-            def install(self, path, silent=False):
-                if success:
-                    return mod.InstallResult(success=True, version="1")
-                return mod.InstallResult(
-                    success=False, error=f"Retry manually: sudo installer -pkg {path}"
-                )
-
-        monkeypatch.setattr(mod, "LemonadeInstaller", _Fake)
-        monkeypatch.setattr(
-            "sys.argv", ["gaia", "install", "--lemonade", "--yes"], raising=True
-        )
-        from gaia.cli import main
-
-        with pytest.raises(SystemExit) as exit_:
-            main()
-        return downloaded, exit_.value.code
-
-    def test_cli_deletes_the_installer_after_a_successful_install(
-        self, tmp_path, monkeypatch
-    ):
-        downloaded, code = self._run_cli_install(tmp_path, monkeypatch, success=True)
-        assert code == 0
-        assert not downloaded.exists()
-
-    def test_cli_keeps_the_installer_its_retry_hint_names(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        downloaded, code = self._run_cli_install(tmp_path, monkeypatch, success=False)
-        assert code == 1
-        assert downloaded.exists()
-        out = capsys.readouterr().out
-        assert f"sudo installer -pkg {downloaded}" in out
-        assert f"kept at {downloaded}" in out
+    """Uninstall deletes the MSI it downloaded."""
 
     def _uninstaller(self, monkeypatch, version="10.9.0"):
         from gaia.installer import lemonade_installer as mod
@@ -477,7 +454,10 @@ class TestDownloadedInstallerLifecycle:
         assert not result.success
         assert "v9.9.9" in result.error
         assert "No pinned SHA-256" in result.error
+        assert _REFUSED_UNVERIFIED in result.error
         assert "Windows Settings > Apps" in result.error
+        assert "releases/tag/v9.9.9" in result.error
+        assert "gaia init" not in result.error
 
     def test_uninstall_refuses_an_msi_that_fails_its_checksum(
         self, tmp_path, monkeypatch
@@ -487,11 +467,13 @@ class TestDownloadedInstallerLifecycle:
             mod.subprocess, "run", lambda *a, **k: pytest.fail("ran an installer")
         )
         monkeypatch.setattr(mod.tempfile, "gettempdir", lambda: str(tmp_path))
-        with _serve(b"not the real msi"):
+        with _serve(b"not the real msi"), _on_windows():
             result = installer._uninstall_windows(silent=True)
         assert not result.success
-        assert "SHA-256" in result.error
+        assert "failed its SHA-256 check" in result.error
+        assert _REFUSED_UNVERIFIED in result.error
         assert "v10.9.0" in result.error
+        assert "gaia init" not in result.error
         assert list(tmp_path.iterdir()) == []
 
     def test_uninstall_fallback_names_the_unverifiable_installer(self):
@@ -515,6 +497,260 @@ class TestDownloadedInstallerLifecycle:
 
         assert not result.success
         assert "No pinned SHA-256" in result.error
+        assert _REFUSED_UNVERIFIED in result.error
         assert "v1.2.3" in result.error
         urlopen.assert_not_called()
         run.assert_not_called()
+
+
+# Produced only by the uninstall fallback's unverifiable-MSI handler.
+_REFUSED_UNVERIFIED = "GAIA did not run the minimal MSI because it could not verify it"
+
+
+def _on_windows():
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(patch("platform.system", return_value="Windows"))
+    stack.enter_context(patch("platform.machine", return_value="AMD64"))
+    return stack
+
+
+@pytest.fixture
+def release_server(monkeypatch, request):
+    """A local release server that answers every request with ``request.param``."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from gaia.installer import lemonade_installer as mod
+
+    status = request.param
+
+    class _Refuses(BaseHTTPRequestHandler):
+        def _reply(self):
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_HEAD = _reply
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Refuses)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setattr(mod, "GITHUB_RELEASE_BASE", base)
+    try:
+        yield base
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class TestUninstallFallbackErrors:
+    """Each way the MSI fallback fails is reported as what it is."""
+
+    def _uninstaller(self, monkeypatch, tmp_path):
+        from gaia.installer import lemonade_installer as mod
+
+        installer = _installer("Windows", "AMD64")
+        monkeypatch.setattr(installer, "wait_for_msi_mutex", lambda timeout: True)
+        monkeypatch.setattr(installer, "find_product_code", lambda: None)
+        monkeypatch.setattr(
+            installer,
+            "check_installation",
+            lambda: mod.LemonadeInfo(installed=True, version="10.9.0"),
+        )
+        monkeypatch.setattr(mod.tempfile, "gettempdir", lambda: str(tmp_path))
+        return mod, installer
+
+    def _fake_downloads(self, monkeypatch, mod, tmp_path):
+        downloads = []
+
+        def fake_download(self):
+            msi = tmp_path / f"{'minimal' if self.minimal else 'full'}-abc.msi"
+            msi.write_bytes(b"msi")
+            downloads.append(msi)
+            return msi
+
+        monkeypatch.setattr(mod.LemonadeInstaller, "download_installer", fake_download)
+        return downloads
+
+    def _no_installer_runs(self, monkeypatch, mod):
+        monkeypatch.setattr(
+            mod.subprocess, "run", lambda *a, **k: pytest.fail("ran an installer")
+        )
+
+    @pytest.mark.allow_network
+    @pytest.mark.parametrize("release_server", [503], indirect=True)
+    def test_a_failed_download_is_reported_as_a_download_failure(
+        self, tmp_path, monkeypatch, release_server
+    ):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._no_installer_runs(monkeypatch, mod)
+        with _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert "did not accept" not in result.error
+        assert "could not download" in result.error
+        for asset in ("lemonade-server-minimal.msi", "lemonade.msi"):
+            assert f"{release_server}/v10.9.0/{asset}" in result.error
+        assert "HTTP 503" in result.error
+        assert "Check your network" in result.error
+        assert "Windows Settings > Apps" in result.error
+        assert "gaia init" not in result.error
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.allow_network
+    @pytest.mark.parametrize("release_server", [404], indirect=True)
+    def test_an_unpublished_msi_is_not_blamed_on_the_network(
+        self, tmp_path, monkeypatch, release_server
+    ):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._no_installer_runs(monkeypatch, mod)
+        with _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert "The release no longer publishes" in result.error
+        assert f"{release_server}/v10.9.0/lemonade.msi" in result.error
+        assert "Check your network" not in result.error
+        assert "Windows Settings > Apps" in result.error
+        assert list(tmp_path.iterdir()) == []
+
+    def test_an_unwritable_temp_folder_is_named(self, tmp_path, monkeypatch):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._no_installer_runs(monkeypatch, mod)
+
+        def _no_space(*args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(mod.tempfile, "mkstemp", _no_space)
+        with patch("urllib.request.urlopen", return_value=_Stream(b"")), _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert f"could not save the minimal MSI in {tmp_path}" in result.error
+        assert "No space left on device" in result.error
+        assert "msiexec not found" not in result.error
+
+    def test_both_msis_rejected_is_reported_as_a_rejection(self, tmp_path, monkeypatch):
+        import types
+
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        downloads = self._fake_downloads(monkeypatch, mod, tmp_path)
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda cmd, **kw: types.SimpleNamespace(returncode=1605, stderr=""),
+        )
+        with _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert len(downloads) == 2
+        assert "Windows Installer did not accept either MSI" in result.error
+        assert "could not download" not in result.error
+        assert "gaia init" not in result.error
+
+    def test_an_msiexec_timeout_is_reported_once_as_a_timeout(
+        self, tmp_path, monkeypatch
+    ):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._fake_downloads(monkeypatch, mod, tmp_path)
+        ran = []
+
+        def _hangs(cmd, **kw):
+            ran.append(cmd)
+            raise mod.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+        monkeypatch.setattr(mod.subprocess, "run", _hangs)
+        with _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert "timed out" in result.error
+        assert "did not accept" not in result.error
+        assert "wait a minute before retrying" in result.error
+        assert "error 1618" in result.error
+        assert "Windows Settings > Apps" in result.error
+        assert len(ran) == 1
+
+    def test_a_full_disk_during_download_names_the_folder(self, tmp_path, monkeypatch):
+        mod, installer = self._uninstaller(monkeypatch, tmp_path)
+        self._no_installer_runs(monkeypatch, mod)
+        _disk_fills_on_write(monkeypatch, mod)
+        with _serve(b"m" * 20_000), _on_windows():
+            result = installer._uninstall_windows(silent=True)
+
+        assert not result.success
+        assert f"could not save the minimal MSI in {tmp_path}" in result.error
+        assert "No space left on device" in result.error
+        assert "Free disk space" in result.error
+        assert "could not download" not in result.error
+        assert "Check your network" not in result.error
+        assert list(tmp_path.iterdir()) == []
+
+
+def _disk_fills_on_write(monkeypatch, mod, on="write"):
+    """Saving the download fails on open, on a write, or on the final flush.
+
+    ``write`` is a buffered file, so the closing flush fails again;
+    ``write_only`` fails the write alone.
+    """
+    import builtins
+
+    class _FullDisk:
+        def __init__(self, path, mode):
+            if on == "open":
+                raise PermissionError(13, "Permission denied", str(path))
+            self._file = builtins.open(path, mode)
+            self._unflushed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+        def write(self, data):
+            if on in ("write", "write_only"):
+                self._unflushed = on == "write"
+                raise OSError(28, "No space left on device")
+            return self._file.write(data)
+
+        def close(self):
+            # Like a buffered file: unwritten bytes fail again on the closing
+            # flush, and a failed flush still closes it.
+            if self._file.closed:
+                return
+            self._file.close()
+            if on == "close" or self._unflushed:
+                raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(mod, "open", _FullDisk, raising=False)
+
+
+class TestFullDiskIsNotANetworkError:
+    @pytest.mark.parametrize(
+        "on,errno", [("open", 13), ("write", 28), ("write_only", 28), ("close", 28)]
+    )
+    def test_download_installer_raises_the_write_error(
+        self, tmp_path, monkeypatch, on, errno
+    ):
+        from gaia.installer import lemonade_installer as mod
+
+        installer = _installer("Windows", "AMD64")
+        payload = b"m" * 20_000
+        _pin(monkeypatch, installer, payload)
+        _disk_fills_on_write(monkeypatch, mod, on=on)
+        with _serve(payload):
+            with pytest.raises(OSError) as exc:
+                installer.download_installer(dest_dir=str(tmp_path))
+        assert exc.value.errno == errno
+        assert list(tmp_path.iterdir()) == []

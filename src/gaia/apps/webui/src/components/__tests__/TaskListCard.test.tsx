@@ -15,7 +15,6 @@ function list(overrides: Partial<TaskListState> = {}): TaskListState {
             { id: 2, content: 'Fix the bug', status: 'in_progress', started_at: NOW - 60, completed_at: null },
             { id: 3, content: 'Run the tests', status: 'pending', started_at: null, completed_at: null },
         ],
-        source: 'agent',
         current_action: 'Running command: pytest',
         action_started_at: NOW - 818,
         updated_at: NOW,
@@ -103,8 +102,4 @@ describe('TaskListCard', () => {
         expect(screen.getByText('3 of 3 done')).toBeTruthy();
     });
 
-    it('names a list derived from the plan field as a plan', () => {
-        render(<TaskListCard taskList={list({ source: 'plan' })} running />);
-        expect(screen.getByRole('region', { name: 'Plan' })).toBeTruthy();
-    });
 });

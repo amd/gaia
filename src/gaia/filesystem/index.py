@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
 from gaia.filesystem.categorizer import auto_categorize as _auto_categorize
+from gaia.filesystem.name_match import fts_name_terms
+from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +219,7 @@ class FileSystemIndexService(DatabaseMixin):
 
         # A file that is not a database fails here; rebuild rather than raise.
         try:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._db)
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 # Locked, or an AV/backup tool holding the file.
@@ -256,7 +258,7 @@ class FileSystemIndexService(DatabaseMixin):
             logger.debug("close_db during rebuild raised (%s); continuing", exc)
         self.rebuilt_from = _move_aside(db_path)
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
 
     # ------------------------------------------------------------------
     # Schema management
@@ -312,7 +314,7 @@ class FileSystemIndexService(DatabaseMixin):
         self.rebuilt_from = _move_aside(db_path)
 
         self.init_db(db_path)
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
         self.execute(_SCHEMA_SQL)
         self.insert(
             "schema_version",
@@ -421,8 +423,9 @@ class FileSystemIndexService(DatabaseMixin):
         existing_paths: set = set()
         if incremental:
             rows = self.query(
-                "SELECT path FROM files WHERE path LIKE :prefix",
-                {"prefix": root_str + "%"},
+                "SELECT path FROM files "
+                "WHERE path = :root OR substr(path, 1, :prefix_len) = :prefix",
+                _under_root_params(root_str),
             )
             existing_paths = {r["path"] for r in rows}
 
@@ -667,8 +670,8 @@ class FileSystemIndexService(DatabaseMixin):
         """Compute and cache directory statistics for *root_path*."""
         rows = self.query(
             "SELECT size, extension, depth, is_directory FROM files "
-            "WHERE path LIKE :prefix",
-            {"prefix": root_path + "%"},
+            "WHERE path = :root OR substr(path, 1, :prefix_len) = :prefix",
+            _under_root_params(root_path),
         )
 
         total_size = 0
@@ -766,7 +769,9 @@ class FileSystemIndexService(DatabaseMixin):
         everything else.  Filters are combined with ``AND``.
 
         Args:
-            name: Full-text search on file name (FTS5 MATCH).
+            name: Words that must start words of the file name, ignoring
+                case and accents (FTS5 prefix match). A query with no words
+                matches nothing.
             extension: Exact extension match (without leading dot).
             min_size: Minimum file size in bytes.
             max_size: Maximum file size in bytes.
@@ -784,10 +789,15 @@ class FileSystemIndexService(DatabaseMixin):
         joins: List[str] = []
 
         if name:
-            # Use FTS5 for name search
+            # Folded words as prefix terms on the name column only: the raw
+            # query may hold glob or punctuation characters, which are FTS5
+            # syntax. unicode61 already drops accents from indexed names.
+            terms = fts_name_terms(name)
+            if not terms:
+                return []
             joins.append("JOIN files_fts ON files.id = files_fts.rowid")
             conditions.append("files_fts MATCH :name")
-            params["name"] = name
+            params["name"] = "name : (" + " ".join(f'"{t}"*' for t in terms) + ")"
 
         if extension:
             conditions.append("files.extension = :ext")
@@ -1033,6 +1043,16 @@ class FileSystemIndexService(DatabaseMixin):
 # ------------------------------------------------------------------
 # Module-level helpers
 # ------------------------------------------------------------------
+
+
+def _under_root_params(root: str) -> Dict[str, Any]:
+    """Bind values matching *root* and what is beneath it, never ``root2``.
+
+    Paired with a literal ``substr`` prefix compare, not ``LIKE``, where ``_``
+    and ``%`` in a folder name are wildcards.
+    """
+    prefix = os.path.join(root, "")
+    return {"root": root, "prefix": prefix, "prefix_len": len(prefix)}
 
 
 def _now_iso() -> str:

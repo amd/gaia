@@ -34,6 +34,7 @@ from .sse_handler import clean_reply_text
 
 logger = logging.getLogger(__name__)
 
+# MessageBubble.tsx copies the three turn notices; a test keeps them in step.
 INTERRUPTED_TURN_NOTICE = (
     "This answer was interrupted when GAIA closed. Send again to retry."
 )
@@ -108,6 +109,8 @@ class TurnJournal:
             if kind == "tool_start" and isinstance(event.get("tool"), str):
                 self._tools.append(event["tool"])
                 continue
+            if kind in ("thinking", "status") and event.get("retracts_answer"):
+                self._text = ""
             content = event.get("content")
             if not isinstance(content, str):
                 continue

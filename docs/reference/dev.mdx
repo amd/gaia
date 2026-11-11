@@ -33,7 +33,7 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
+| **OS** | Windows 11 Pro 24H2 / Ubuntu 24.04+ | - |
 | **RAM** | 16GB | 64GB |
 | **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
 | **Storage** | 20GB free | - |
@@ -122,7 +122,7 @@ uv pip install -e ".[dev,talk,rag,ui]"
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `rag` | RAG document Q&A (FAISS, pypdf, pypdfium2, Office formats; embeddings come from Lemonade) |
 | `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `image` | Terminal image rendering (`term-image`) |
@@ -257,8 +257,10 @@ python util/lint.py --imports     # custom import-cycle check
 python util/lint.py --workflow-triggers # reject on.pull_request.branches filters
 python util/lint.py --workflow-ancestor-skip # reject job if: conditions an upstream skip silently skips
 python util/lint.py --test-lanes  # reject test files that no CI lane runs
+python util/lint.py --ci-paths    # reject CI lanes whose paths: filter misses a file they depend on
 python util/lint.py --tool-descriptions # hold tool docstrings to the schema budget
 python util/lint.py --doc-versions # verify versions in docs match src/gaia/version.py
+python util/lint.py --release-versions # every version field matches its source
 ```
 
 <Note>
@@ -287,12 +289,58 @@ files go in `test_unit.yml`'s `offline-integration` job), or list it in
 `util/test_lane_allowlist.yml` with the reason CI can't run it.
 
 Being named isn't the same as running. A file with a module-level
-`pytest.importorskip` (for a hub wheel like `gaia_agent_chat`, or an optional
+`pytest.importorskip` (for a hub wheel like `gaia_agent`, or an optional
 extra) skips wholesale in any lane that lacks the package. The unit lane and the
 lanes that install hub wheels run `util/check_module_skips.py` right after their
 install step. It fails on such a skip unless the file is listed
 under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
 installs the package. That lane must name the file and run the check too.
+</Note>
+
+<Note>
+A pull request, and its group in the merge queue, can run part of the unit
+suite, but only when every file it changes is a unit test or modified Python
+code under `src/gaia` or a hub agent package that the nightly coverage map
+records. A queue group runs no unit tests when none of its files is in the
+workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
+any one is, every file in the group counts. `CLAUDE.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `REVIEW.md`, `.claude/` and `scripts/` always run the full
+suite, since the doc-path tests read them. `util/select_tests.py` then picks
+the test files that change can reach, from that map plus imports and
+patch-target strings. Any other change runs the full suite: data files, `util/`
+scripts, test helpers and fixtures, `eval/`, configs, workflows, any
+`conftest.py`, a source file the map has no entry for (such as a new one), a
+deleted or renamed file, or a missing or stale map. Tests
+load those by path, and neither imports nor coverage can follow what such a
+script reads. Of the last 600 merges to main, about one in five (21%) would have
+had a narrowed run; the rest run everything. Linux runs the selection; Windows
+and macOS run the part of it that touches the OS (processes, paths, locks,
+permissions). Every push to main runs the full suite on Linux. The nightly run
+is the full suite on all three operating systems at the head of main, and a red
+one files an issue that the next green one closes. A final release needs a
+dispatched or nightly run on its commit, never a selected one. The check to
+require is **Unit Tests Result**, which passes only when every lane passed or was
+meant to be skipped. The coverage map has one known blind
+spot: code behind a cache or a shared fixture is credited only to the first test
+that ran it, so a test that only reaches it second can be left out until the
+nightly run.
+See what your branch will run with
+`python util/select_tests.py select --base origin/main --explain`, and dispatch
+`test_unit.yml` on the branch to run the full suite.
+</Note>
+
+<Note>
+`--ci-paths` fails when a workflow's `paths:` filter would not fire on a file the
+workflow runs, imports directly, installs, or reads by literal path. A PR changing
+only that file would merge with the lane never running. It also fails when a file
+under `src/`, `hub/`, `tui/`, `installer/`, `util/` or `tests/` triggers no
+path-scoped workflow. Add the path to the lane's filter, or list it in
+`util/ci_path_allowlist.yml` with the reason the lane can't be affected. To see
+which workflows a change would run:
+
+```bash
+git diff --name-only origin/main... | python util/check_ci_path_coverage.py --changed -
+```
 </Note>
 
 ### Running Tests
@@ -356,8 +404,8 @@ legs still only get exercised in CI.
 
 The harness runs on **bogus** credentials against a local Worker, so it proves
 the publish logic and nothing about whether the real key works. Every artifact
-over the Worker's request-body cap — the Agent UI installers, the gaia sidecar's
-Linux build — is PUT straight to R2 instead, and R2 answers both a bad
+over the Worker's request-body cap — today the flagship agent's sidecar
+builds — is PUT straight to R2 instead, and R2 answers both a bad
 credential and a malformed request with the same `Unauthorized`:
 
 ```bash
@@ -375,10 +423,35 @@ It reads `.env` (gitignored) or the environment, writes probes under
 still cannot prove the credential works **from GitHub's runners** — a token with
 Client IP Address Filtering passes locally and fails in CI.
 
+### Version fields
+
+`src/gaia/version.py` is the only version you edit for a core release. One
+command writes every field that follows it, and lint fails when one drifts,
+naming the file, the value it found, and the value it expected:
+
+```bash
+python util/release_versions.py --stamp   # write every field from its source
+python util/release_versions.py --check   # what lint runs; changes nothing
+```
+
+| Source | Fields that follow it |
+|---|---|
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
+| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
+
+`--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's
+`stamp_version.py`, and the hand edits to the Terminal UI manifest and the navbar.
+Those scripts still work, and release workflows still call them.
+`--stamp vX.Y.Z-rcN` writes a release candidate's versions into the same files
+as `util/release_tag.py stamp`, with the same result.
+
+The flagship agent keeps its own version until it joins core's
+([#5172](https://github.com/amd/gaia/issues/5172)).
+
 ### The flagship agent in a core release
 
-`gaia init` and the Windows setup install the flagship
-agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
+`gaia init`, the one-line installers (`install.sh` / `install.ps1`) and the
+Windows setup install the flagship agent's `gaia-agent` binary from the download server (`hub.amd-gaia.ai`) and from the pin in
 `hub/agents/gaia/npm/binaries.lock.json`. Only `release_agent_gaia.yml` (tag
 `agent-pkg-gaia-vX.Y.Z`) fills either, so a core release does not rebuild it.
 A final core release therefore fails unless that flagship release was cut from
@@ -410,6 +483,10 @@ approval, and keeps the result off every stable channel:
   and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
+  `GAIA_RC_FLAGSHIP_URL` points a candidate core at another copy of those
+  assets (a `file://` directory works); the release pipeline uses it so the
+  frozen core's real-engine check installs the flagship from the same run,
+  before the pre-release exists.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
@@ -419,6 +496,18 @@ approval, and keeps the result off every stable channel:
 - **Not published** — Download-server components (the catalog has no pre-release
   channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
   numeric-only version.
+
+Tests never hold a candidate: it publishes as soon as its own builds and the
+smoke tests of those artifacts pass. CI on its commit (lint, the unit tests on
+every OS, the integration lanes, the release dry run) is read once and shown on
+the run as passed, failed, still running, or not run, with a warning for each
+that isn't green. A final requires all of it except the Linux NPU agent-chat
+check, waits for it, and needs a passing dry run on its commit, so clear an RC's
+warnings before tagging the final. The Linux NPU check still runs and shows as a
+warning on the final, but doesn't hold it until its runners can lock enough
+memory for the NPU model ([#6764](https://github.com/amd/gaia/issues/6764)).
+`RC_REPORTED`, `FINAL_REQUIRED` and `FINAL_ADVISORY` in
+`util/check_release_ci.py` are the lists.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`

@@ -105,9 +105,9 @@ class TestConsumesMcpServers:
         assert isinstance(Agent.CONSUMES_MCP_SERVERS, bool)
 
     def test_builtin_chat_consumes_mcp_servers(self):
-        # chat ships as the standalone gaia-agent-chat wheel (#1102), discovered
+        # chat ships in the flagship gaia-agent-gaia wheel (#6099), discovered
         # via the gaia.agent entry point — use discover(), not the builtin pass.
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         registry = AgentRegistry()
         registry.discover()
         chat = registry.get("chat")
@@ -118,8 +118,8 @@ class TestConsumesMcpServers:
         # The lazy factory cannot import the chat module at discovery time, so
         # the registration hardcodes the flag. Guard it against the class-level
         # source of truth drifting apart.
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgent
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgent
 
         registry = AgentRegistry()
         registry.discover()

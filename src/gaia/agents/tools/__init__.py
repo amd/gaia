@@ -6,6 +6,7 @@ Shared tools for GAIA agents.
 This package contains tool mixins that can be used across multiple agents.
 """
 
+from .audio_generation_tools import AudioGenerationToolsMixin
 from .audio_tools import AudioToolsMixin
 from .browser_tools import BrowserToolsMixin
 from .browser_use_tools import BrowserUseToolsMixin
@@ -24,6 +25,7 @@ from .task_list_tools import TaskListMixin
 from .wait_tools import WaitToolsMixin
 
 __all__ = [
+    "AudioGenerationToolsMixin",
     "AudioToolsMixin",
     "BrowserToolsMixin",
     "BrowserUseToolsMixin",

@@ -44,9 +44,8 @@
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
-# lab-runner convention shared by test_email_agent_eval.yml and
-# email_scorecard_refresh.yml. Do NOT reintroduce
-# bash here: this workflow's first-ever execution died instantly on
+# lab-runner convention shared by email_scorecard_refresh.yml. Do NOT
+# reintroduce bash here: this workflow's first-ever execution died instantly on
 # `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
 # every other bash step in the job hit the same parser. Windows also breaks the
 # text-processing assumptions bash invites — the eval prints an `Output:` line
@@ -69,9 +68,7 @@
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
 # `::warning::` and returns 0 rather than pretending the regression did not
-# happen, and test_email_agent_eval.yml ships its gates in report mode until the
-# bars are trustworthy. Same idea, inverted default: report unless asked to
-# enforce.
+# happen. Same idea, inverted default: report unless asked to enforce.
 #
 # REPORT MODE COVERS "WORSE" AND "DIDN'T MEASURE" ALIKE — VISIBLY. `--compare`
 # scores only scenarios present on BOTH sides: scenarios that vanish from the
@@ -119,13 +116,12 @@
 # PREREQUISITES ON THE RUNNER. Lemonade is NOT assumed to be already running:
 # install-lemonade pins the runner to the expected LEMONADE_VERSION and
 # ensure-lemonade-running.ps1 starts it as a persistent Scheduled Task and warms
-# the model — exactly what test_email_agent_eval.yml and
-# email_scorecard_refresh.yml do. (An earlier revision of this file claimed those
-# two workflows assume a persistent server and start nothing; they do not, and
-# that claim is what left this job with no way to bring Lemonade up.) The GAIA UI
-# backend is separate and NOT persistent, so this workflow starts it itself — in
-# the SAME shell session as the evals, because a backgrounded child does not
-# survive a GitHub Actions step boundary.
+# the model — exactly what email_scorecard_refresh.yml does. (An earlier
+# revision of this file claimed the lab workflows assume a persistent server and
+# start nothing; they do not, and that claim is what left this job with no way
+# to bring Lemonade up.) The GAIA UI backend is separate and NOT persistent, so
+# this workflow starts it itself — in the SAME shell session as the evals,
+# because a backgrounded child does not survive a GitHub Actions step boundary.
 #
 # Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
 # only the chat model, but rag_quality and context_retention answer out of RAG
@@ -143,32 +139,57 @@
 # refuses to start without it on PATH. Installed below via npm, as
 # docs/guides/eval-ci.mdx prescribes.
 #
-# WHAT TRIGGERS IT. Release and RC tags, and manual dispatch — see `on:` below.
-# To measure a branch before it is tagged, `gh workflow run eval_flagship.yml
-# --ref <branch>`.
+# WHAT TRIGGERS IT, AND HOW MUCH RUNS. Tiers, from eval/ci_tiers.json via
+# util/eval_tiers.py (#5493 section 6.6):
 #
-# FORKS AND DRAFTS. The job-level `if` guards below still skip fork and draft
-# PRs, in case a `pull_request` trigger is ever added back: a fork PR could not
-# pass (ANTHROPIC_API_KEY is not exposed to it) and must not put unreviewed code
-# on the lab pool. If the key is ever missing, the preflight fails with
-# instructions instead of running a judge-less eval.
+#   RC tag (v*-rc*)            smoke: 30 stable scenarios, 13 protected, 3 machines
+#   RC tag with [full eval]    full: every lane minus the weekly backlog's
+#     in its annotation          leaves_full scenarios. Nominate the RC you
+#                                will promote; [skip eval] still skips
+#   final tag (vX.Y.Z)         verify: nothing re-runs (the release train
+#                                promotes the measured RC, #5492); verify-final
+#                                checks a full sweep measured this commit or an RC
+#   weekly (Sun 06:17 UTC)     backlog: always-fail and high-flip scenarios on 3
+#                                machines, with a rolling trend artifact. Skipped
+#                                while any other run of this workflow holds the pool
+#   dispatch                   `tier` (default smoke), or a targeted selection
+#                                through `categories` / `scenarios`
+#
+# THE MODEL UNDER TEST on this pool is Qwen3.6-35B-A3B, what `gaia init`
+# installs on a 64 GB+ Strix Halo, pinned in every category's GAIA home and
+# checked per scenario (--agent-model). It compares only against the Qwen
+# baseline (tests/fixtures/eval_baselines/gaia-flagship-qwen); until one is
+# committed every category reports "no baseline yet". Gemma-4-E4B is scored on
+# the Strix Point pool. A dispatch can still pick `model: Gemma-4-E4B-it-GGUF`
+# here, which compares against the Gemma-on-Halo baseline in gaia-flagship/ -
+# the way a targeted re-run joins an earlier Gemma tag run.
+#
+# No `pull_request` trigger, so no fork or draft code reaches the lab pool. Do
+# not add one without a fork/draft guard: a fork PR would put unreviewed code on
+# a self-hosted runner. If ANTHROPIC_API_KEY is ever missing, the preflight
+# fails with instructions instead of running a judge-less eval.
 
 name: Agent Eval — flagship
 
 on:
-  # Release and release-candidate tags only (v0.24.1, v0.25.0-rc14), plus manual
-  # dispatch. Not per-PR and not nightly: the Strix Halo pool is too scarce for
-  # either - per-PR runs queued for hours and had to be cancelled. An
-  # LLM-affecting PR names the categories to watch; the next RC's run covers it.
-  # A tag run checks out the tagged commit, compares it with the committed
-  # baseline in report mode, and files an issue when it does not pass
-  # (release-escalation below). `v*.*.*` already matches the -rc tags; the
+  # Release and release-candidate tags (v0.24.1, v0.25.0-rc14), one weekly
+  # backlog run, and manual dispatch. Not per-PR and not nightly: the Strix Halo
+  # pool is too scarce for either - per-PR runs queued for hours and had to be
+  # cancelled. An LLM-affecting PR names the categories to watch; the next RC's
+  # run covers it. A tag run checks out the tagged commit, compares it with the
+  # committed baseline in report mode, and files an issue when a scenario
+  # regressed against it (release-escalation below). `v*.*.*` already matches the -rc tags; the
   # second pattern says so out loud. Agent-package tags (agent-pkg-*) match
   # neither.
   push:
     tags:
       - 'v*.*.*'
       - 'v*.*.*-rc*'
+  # The weekly backlog lane (maintainer-approved). Sunday 06:17 UTC is the
+  # quietest hour on the pool; the minute is off the hour so it does not land
+  # with every other cron. Owner and README: eval/ci_tiers.json, docs/reference/eval.mdx.
+  schedule:
+    - cron: '17 6 * * 0'
   workflow_dispatch:
     inputs:
       enforce:
@@ -189,13 +210,36 @@ on:
         description: 'Space-separated suites from eval/tasks/tasks.json (a tag run uses everyday therock; adversarial is the traps; full is everything)'
         required: false
         default: 'core'
+      tier:
+        description: 'smoke (30 scenarios, 3 machines), full (the promotion sweep, ~13 machines), or backlog (the weekly lane). Ignored when categories or scenarios is set.'
+        required: false
+        type: choice
+        options: [smoke, full, backlog]
+        default: smoke
+      # Qwen is what a 64 GB+ Strix Halo runs. Gemma compares against the
+      # Gemma-on-Halo baseline: use it to re-run part of a Gemma tag run.
+      model:
+        description: 'Local model under test. Each compares only against its own baseline (eval/ci_tiers.json).'
+        required: false
+        type: choice
+        options: [Qwen3.6-35B-A3B-GGUF, Gemma-4-E4B-it-GGUF]
+        default: Qwen3.6-35B-A3B-GGUF
+      # Targeted runs. Blank both to run the `tier`. Validated by
+      # util/eval_lane_matrix.py before any lane takes a lab machine.
+      categories:
+        description: 'Comma-separated categories to run (blank = the tier). Add "outcomes" to also run the outcomes job, which a targeted run otherwise skips.'
+        required: false
+        default: ''
+      scenarios:
+        description: 'Comma-separated scenario ids to run (blank = every scenario in the selected categories). Only lanes holding them get a machine.'
+        required: false
+        default: ''
 
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
 # split would buy nothing — the same shape as the phantom-job bug this repo has
-# already paid for once (a caller holding the group its callee needed; see
-# test_email_agent_eval.yml). Each lane declares its own group at job level,
-# where `matrix.lane` is in scope.
+# already paid for once (a caller holding the group its callee needed). Each
+# lane declares its own group at job level, where `matrix.lane` is in scope.
 #
 # `lemonade-eval` is gone from this file on purpose and must not come back. It
 # serialises by NAME across machines, which is right for the persistent pool the
@@ -205,12 +249,12 @@ permissions:
   contents: read
 
 env:
-  # One scorecard per ci_lanes.json category, copied unedited from a real run
-  # on this pool (meta.json names the run and its eval_model, which every job
-  # here runs under unless a dispatch overrides it); a
-  # run under any other driver is not comparable to it. Replace the files from a
-  # newer tag or dispatch run; never edit a number in them.
-  BASELINE_DIR: tests/fixtures/eval_baselines/gaia-flagship
+  # No BASELINE_DIR here: it depends on the model under test, so the lanes job
+  # resolves it from eval/ci_tiers.json (`baselines`) and each job sets it.
+  # A baseline holds one scorecard per category, copied unedited from a real run
+  # on this pool; its meta.json names the model, the run and the eval_model every
+  # job runs under unless a dispatch overrides it. Never edit a number in one.
+  #
   # THE LANE MAP IS THE SOURCE OF TRUTH: eval/ci_lanes.json. The `lanes` job below
   # reads it, checks it, and hands each lane its own category list as
   # EVAL_CATEGORIES at job level — which is what the four steps downstream already
@@ -265,22 +309,22 @@ env:
   # (httpx/requests in the eval, the agents and the backend); PowerShell's
   # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.
   NO_PROXY: 'localhost,127.0.0.1'
-  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself. Mirrors
-  # test_email_agent_eval.yml so the preflight probe and the agents agree.
+  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself, so the
+  # preflight probe and the agents agree.
   LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
   # The eval prints box-drawing characters and em dashes; the runner's default
   # console codepage is cp1252 and Python dies on the first one without this.
   PYTHONIOENCODING: 'utf-8'
   # Connector resolution blocks on the OS keyring in a headless runner, which
-  # hangs agent construction. Same guard as test_email_agent_eval.yml.
+  # hangs agent construction.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
   # The default for every lane; the memory and gaia_* lanes override all three at
   # job level (util/eval_lane_matrix.py).
   # Long-term memory surviving between categories makes a later category's score
-  # depend on an earlier one's run order (convention: test_chat_agent.yml,
-  # test_email_agent_eval.yml). The memory lane is the one place that state IS
-  # the subject, and it can opt back in safely because every category runs on
-  # its own fresh GAIA home (see the run step). Do not rely on the machine being
+  # depend on an earlier one's run order (convention: test_chat_agent.yml).
+  # The memory lane is the one place that state IS the subject, and it can opt
+  # back in safely because every category runs on its own fresh GAIA home (see
+  # the run step). Do not rely on the machine being
   # wiped: the runner's ~/.gaia survived between runs and leaked memory (rc16).
   #
   # Do NOT flip these here. Workflow scope would re-enable memory for every lane
@@ -302,18 +346,35 @@ env:
 jobs:
   # An RC tag annotated with `[skip eval]` skips every lane below; a final
   # release, a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
-  # Hosted and seconds long, so the decision costs no lab-pool time.
+  # Then the tier (util/eval_tiers.py): RC smoke, [full eval] full sweep, final
+  # verify, weekly backlog, or a dispatch's choice. Hosted and seconds long, so
+  # the decision costs no lab-pool time.
   eval-gate:
     name: Eval gate (release tag)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The weekly run lists this workflow's queued and running runs, to stay
+      # off the pool while a release eval is on it.
+      actions: read
     outputs:
       run: ${{ steps.gate.outputs.run }}
+      tier: ${{ steps.tier.outputs.tier }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Read the tag annotation
         id: gate
         run: python util/eval_tag_gate.py
+      - name: Pick the tier
+        id: tier
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVAL_DISPATCH_TIER: ${{ github.event_name == 'workflow_dispatch' && inputs.tier || '' }}
+          EVAL_SELECT_CATEGORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.categories || '' }}
+          EVAL_SELECT_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || '' }}
+        run: python util/eval_tiers.py decide >> "$GITHUB_OUTPUT"
 
   # Build the lane matrix, and refuse to build a bad one. Runs on a hosted runner
   # in seconds, BEFORE anything reaches the scarce AMD pool, so a broken lane map
@@ -334,16 +395,54 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
+      has_lanes: ${{ steps.build.outputs.has_lanes }}
+      targeted: ${{ steps.build.outputs.targeted }}
+      outcomes: ${{ steps.build.outputs.outcomes }}
+      selection: ${{ steps.build.outputs.selection }}
+      tier: ${{ steps.build.outputs.tier }}
+      agent_model: ${{ steps.build.outputs.agent_model }}
+      baseline_dir: ${{ steps.build.outputs.baseline_dir }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Validate the lane map and emit the matrix
+      - name: Validate the lane map and tiers, and emit the matrix
         id: build
         # The rules (which lane gets memory, which gets the gaia_* fixtures,
-        # what may never be in a lane) live in util/eval_lane_matrix.py, where
-        # tests/unit/eval/test_eval_lane_matrix.py covers them.
-        run: python util/eval_lane_matrix.py >> "$GITHUB_OUTPUT"
+        # what may never be in a lane, what a dispatch may select) live in
+        # util/eval_lane_matrix.py; which scenarios each tier runs, on which
+        # machine, against which model's baseline, in util/eval_tiers.py and
+        # eval/ci_tiers.json. It re-runs the tier coverage check first, so a bad
+        # tier file fails here in seconds. Tests: tests/unit/eval/test_eval_lane_matrix.py,
+        # tests/unit/eval/test_eval_tiers.py. Inputs arrive through env, never
+        # inline in the script.
+        env:
+          EVAL_TIER: ${{ needs.eval-gate.outputs.tier }}
+          EVAL_AGENT_MODEL: ${{ github.event_name == 'workflow_dispatch' && inputs.model || '' }}
+          EVAL_SELECT_CATEGORIES: ${{ github.event_name == 'workflow_dispatch' && inputs.categories || '' }}
+          EVAL_SELECT_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || '' }}
+        run: python util/eval_tiers.py matrix >> "$GITHUB_OUTPUT"
+
+      - name: Label a partial run in the summary
+        if: steps.build.outputs.targeted == 'true'
+        env:
+          SELECTION: ${{ steps.build.outputs.selection }}
+          TIER: ${{ steps.build.outputs.tier }}
+          CATEGORIES: ${{ inputs.categories }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          {
+            echo "## ${SELECTION}"
+            echo ""
+            echo "This is NOT a full sweep. Only the selection below ran; every other scenario has no result in this run."
+            echo ""
+            if [ "${TIER}" = "targeted" ]; then
+              echo "- categories input: \`${CATEGORIES:-<blank>}\`"
+              echo "- scenarios input: \`${SCENARIOS:-<blank>}\`"
+            else
+              echo "- tier \`${TIER}\`: the scenarios and the reason each is in it are in \`eval/ci_tiers.json\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The flagship GaiaAgent on outcome-scored tasks (`gaia eval tasks`, docs:
   # docs/reference/eval.mdx), served by GAIA's own embedded Lemonade. Three steps
@@ -363,24 +462,27 @@ jobs:
   # traps, ~7 tasks). Each suite is judged and gated on its own against
   # eval/tasks/expectations/<model>.<suite>.json once they are committed (from
   # `gaia eval tasks propose` over repeated TASK_MODEL runs on this pool); until
-  # then the gate reports only. A failing tag run files an issue naming the
-  # suite (release-escalation below).
+  # then the gate reports only. A failing gate is named in the tag run's
+  # summary (release-escalation below); it cannot yet tell a missed expectation
+  # from an unreachable backend, so it files no issue on its own.
   #
   # A lane in everything but the matrix. It stays its own job because its
   # steps are a different shape - embedded Lemonade, `gaia eval tasks` - not
   # because it is ordered against the others; it runs alongside them.
+  #
+  # Only the full sweep runs it, so the RC smoke tier stays on three machines.
+  # A targeted dispatch skips it unless its `categories` input names
+  # `outcomes`; the weekly backlog and a final tag never run it. The lanes job
+  # decides (`outcomes` output) for every event.
   flagship-tasks:
     name: Scenario eval - outcomes
-    needs: eval-gate
+    needs: [eval-gate, lanes]
     outputs:
       failed_suites: ${{ steps.gate.outputs.failed }}
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
-      needs.eval-gate.outputs.run == 'true' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+      needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.outcomes == 'true'
     concurrency:
       group: ${{ github.workflow }}-outcomes-${{ github.ref }}
       cancel-in-progress: false
@@ -392,7 +494,7 @@ jobs:
         shell: powershell
     # At least the sum of the step limits below plus setup, or a job-level
     # timeout cancels and skips the judge, gate and upload steps.
-    timeout-minutes: ${{ github.event_name != 'pull_request' && 420 || 200 }}
+    timeout-minutes: 420
     env:
       # The venv's interpreter and CLI by full path. A bare `python` resolves
       # through PATH, which a runner's own setup can put ahead of the venv.
@@ -405,8 +507,6 @@ jobs:
       TASK_JUDGE_MODEL: claude-opus-5-5
       TASKS_OUT: eval-out\tasks
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -416,7 +516,7 @@ jobs:
         with:
           python-version: '3.12'
           # The flagship ships as its own hub package and builds on ChatAgent.
-          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/gaia/python'
 
       - name: Check the venv interpreter
         env:
@@ -432,9 +532,9 @@ jobs:
               exit 1
             }
           }
-          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          & $env:VENV_PY -c "import gaia, gaia_agent"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent - the editable installs in the Setup Python Environment step are broken."
             exit 1
           }
           $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
@@ -477,7 +577,7 @@ jobs:
 
       # No credentials in this step's environment: the agent runs shell commands.
       - name: Run the flagship on the task suites
-        timeout-minutes: ${{ github.event_name != 'pull_request' && 240 || 60 }}
+        timeout-minutes: 240
         run: |
           $ErrorActionPreference = "Continue"
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -490,13 +590,28 @@ jobs:
           }
           if ($crashed.Count -gt 0) { throw "gaia eval tasks run crashed for: $($crashed -join ', '). A harness failure, not a verdict." }
 
-      - name: Judge quality
+      # The account this job starts on: the primary, or the secondary if the
+      # primary is out of quota. Both out fails here, naming both reset times.
+      - name: Pick the Claude account
+        id: claude_account
         if: ${{ !cancelled() }}
-        timeout-minutes: ${{ github.event_name != 'pull_request' && 60 || 30 }}
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          model: ${{ env.TASK_JUDGE_MODEL }}
+          what: "The flagship task judge"
+          python: ${{ env.VENV_PY }}
+
+      # Not after a failed pick: it would judge on an account that cannot answer.
+      - name: Judge quality
+        if: ${{ !cancelled() && steps.claude_account.outcome == 'success' }}
+        timeout-minutes: 60
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          # Blank when the OAuth token is set: the judge adds --bare only with a key.
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $failed = @()
@@ -528,6 +643,19 @@ jobs:
             exit 1
           }
 
+      # Last, so the GPU is idle. On against off on this machine, so the gate
+      # needs no stored seconds; it fails if the first turn stops being cheaper,
+      # the prompt cache breaks mid-session, or the short tool list costs steps.
+      - name: Measure dynamic tool loading
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = "Continue"
+          . "$HOME\.gaia\lemonade\env.ps1"
+          New-Item -ItemType Directory -Force -Path $env:TASKS_OUT | Out-Null
+          & $env:VENV_PY util/measure_first_turn.py --model $env:TASK_MODEL --out "$env:TASKS_OUT\first_turn.json"
+          if ($LASTEXITCODE -ne 0) { throw "The dynamic tool loading gate failed; each reason is printed above." }
+
       - name: Stop the embedded Lemonade
         if: always()
         run: '& $env:VENV_GAIA lemonade embedded stop'
@@ -544,13 +672,14 @@ jobs:
       - name: Refuse to upload a credential
         if: always()
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           $ErrorActionPreference = "Stop"
           $files = @(Get-ChildItem $env:TASKS_OUT -File -Recurse -ErrorAction SilentlyContinue)
           $secrets = @()
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY", "ANTHROPIC_API_KEY")) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if ($value) { $secrets += $value }
           }
@@ -608,28 +737,16 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ matrix.lane }}-${{ github.ref }}
       cancel-in-progress: false
-    # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
-    # untrusted code onto a self-hosted runner and could not pass anyway
-    # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
-    # fails); a draft would spend a multi-hour single-slot run on work still in
-    # progress. A job-level `if` resolves before a runner is assigned, so a
-    # skipped job never reaches the pool at all. `ready_for_ci` is the repo-wide
-    # escape hatch for a draft that does want CI. Mirrors the guard in
-    # test_email_agent_eval.yml.
-    #
     # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
     # more-indented lines, and an `if:` expression must fold to a single line.
     if: >-
       !cancelled() && needs.eval-gate.result == 'success' &&
       needs.eval-gate.outputs.run == 'true' && needs.lanes.result == 'success' &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.pull_request.draft == false ||
-      contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))))
+      needs.lanes.outputs.has_lanes == 'true'
     # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
     # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
-    # found'. Same guard as test_email_agent_eval.yml.
+    # found'.
     #
     # `strix-halo` pins the SoC, and that is a correctness requirement, not a
     # preference: the pool spans Strix Point boxes as well (sjlab-stx-1,
@@ -726,6 +843,22 @@ jobs:
       # disagree about what this lane was supposed to measure.
       EVAL_CATEGORIES: ${{ matrix.categories }}
       EVAL_LANE: ${{ matrix.lane }}
+      # Targeted dispatch only: "category=id,id category=id". Blank runs every
+      # scenario in each category, which is what a tag run always does.
+      EVAL_SCENARIOS: ${{ matrix.scenarios }}
+      EVAL_SELECTION: ${{ needs.lanes.outputs.selection }}
+      EVAL_TARGETED: ${{ needs.lanes.outputs.targeted }}
+      EVAL_TIER: ${{ needs.lanes.outputs.tier }}
+      # The local model under test, pinned in every category's GAIA home and
+      # checked per scenario, and the baseline captured on that model. Both
+      # from eval/ci_tiers.json via the lanes job, so they cannot disagree.
+      AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+      BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
+      # Every run, tag runs included, fails on scenarios that errored before
+      # Claude spent a token (an exhausted quota, as on v0.25.1-rc2). That is a
+      # run that measured nothing, not a regression, so report mode does not
+      # soften it.
+      FAIL_ON_ZERO_TOKENS: 'true'
       # Memory ON for the memory lane, OFF everywhere else. Job scope beats the
       # workflow defaults, and everything that reads these is started from here:
       # the backend inherits the job environment through Start-Process, and the
@@ -736,20 +869,22 @@ jobs:
       GAIA_MEMORY_ADMIN: ${{ matrix.memory_admin }}
       GAIA_MEMORY_MCP_ALWAYS: ${{ matrix.memory_mcp }}
       GAIA_FIXTURES: ${{ matrix.gaia_fixtures }}
+      # A tier machine can hold `memory` beside other non-gaia categories. The
+      # job runs with memory off, and the run step turns the store on for the
+      # categories named here only, each on its own backend and GAIA home.
+      EVAL_MEMORY_CATEGORIES: ${{ matrix.memory_categories }}
     steps:
-      - name: Show which Claude account this job uses
-        run: echo "::notice title=Claude account::${{ vars.CLAUDE_ACCOUNT != 'secondary' && 'This job uses the primary Claude account.' || secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY != '' && 'This job uses the secondary Claude account.' || 'CLAUDE_ACCOUNT is secondary but CLAUDE_CODE_OAUTH_TOKEN_SECONDARY is not set, so this job uses the primary Claude account.' }}"
       - name: Checkout
         uses: actions/checkout@v7
 
       # The Claude model drives every scenario as well as judging it, so it must
-      # be the one the committed flagship baseline was captured under: its
-      # meta.json is the single source. A dispatch input overrides it.
+      # be the one the model's baseline was captured under: its meta.json is the
+      # single source. A dispatch input overrides it.
       - name: Resolve the eval driver model
         run: |
           $model = $env:EVAL_MODEL_OVERRIDE
           if (-not $model) {
-            $meta = 'tests/fixtures/eval_baselines/gaia-flagship/meta.json'
+            $meta = "$env:BASELINE_DIR/meta.json"
             $model = (Get-Content -Raw $meta | ConvertFrom-Json).eval_model
             if (-not $model) {
               Write-Host "::error title=No eval model::$meta has no eval_model, so this run cannot know which Claude model the baseline was captured under. | WHAT TO DO: restore eval_model in $meta, or dispatch with the eval_model input."
@@ -771,20 +906,27 @@ jobs:
           $cats = @($env:EVAL_CATEGORIES -split '\s+' | Where-Object { $_ })
           $needsMemory = $cats -contains 'memory'
           $gaiaLane = @($cats | Where-Object { $_ -like 'gaia_*' }).Count -gt 0
+          # A tier machine with memory beside other non-gaia categories runs
+          # with memory off and turns it on for `memory` alone (run step).
+          $mixedMemory = $needsMemory -and $cats.Count -gt 1 -and -not $gaiaLane
           if ($gaiaLane) {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '1'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "gaia_* categories must run the way test_gaia_agent_eval.yml runs them and their baselines were captured: memory live with admin seeding, fixtures staged."
+          } elseif ($mixedMemory) {
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = 'memory' }
+            $why = "This machine runs memory beside other categories: the job runs with the store off and the run step turns it on for the memory category alone, so EVAL_MEMORY_CATEGORIES must name exactly memory."
           } elseif ($needsMemory) {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '0'; GAIA_MEMORY_ADMIN = '1'; GAIA_MEMORY_MCP_ALWAYS = '1'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "The memory scenarios call remember/recall and verify through memory_recall, so this lane must run with the store live and its admin and MCP read tools registered."
           } else {
-            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0' }
+            $want = [ordered]@{ GAIA_MEMORY_DISABLED = '1'; GAIA_MEMORY_ADMIN = '0'; GAIA_MEMORY_MCP_ALWAYS = '0'; GAIA_FIXTURES = '0'; EVAL_MEMORY_CATEGORIES = '' }
             $why = "No category in this lane touches long-term memory, and leaving the store live lets state from one scenario change the next one's score."
           }
           $wrong = @()
           foreach ($name in $want.Keys) {
             $have = [Environment]::GetEnvironmentVariable($name)
-            if ($null -eq $have) { $have = '<unset>' }
+            # Windows drops an env var set to '', so unset IS the empty value.
+            if ($null -eq $have) { $have = if ($want[$name] -eq '') { '' } else { '<unset>' } }
             if ($have -ne $want[$name]) { $wrong += "$name is '$have' but should be '$($want[$name])'" }
           }
           if ($wrong.Count -gt 0) {
@@ -801,11 +943,11 @@ jobs:
           # [dev] + [eval] for the eval harness and the Anthropic judge deps;
           # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
           # ([dev] alone fails at import), [api] for the connectors layer.
-          # Both hub packages are REQUIRED, and neither is pulled by those extras.
+          # The flagship package is REQUIRED, and none of those extras pulls it.
           # Every scenario runs the flagship `gaia` agent (DEFAULT_AGENT_TYPE in
           # src/gaia/eval/config.py), which is not a builtin — it registers only
-          # through the `gaia.agent` entry point in gaia-agent-gaia, and GaiaAgent
-          # subclasses ChatAgent from gaia-agent-chat (#1102). Miss either and
+          # through the `gaia.agent` entry point in gaia-agent-gaia, which also
+          # carries ChatAgent (#6099). Miss it and
           # POST /api/sessions 422s for every scenario in this lane. The "default
           # agent is registered" preflight below asserts this at runtime so the
           # gap costs seconds, not a whole lane. Core gaia stays editable so eval
@@ -814,7 +956,7 @@ jobs:
           # the Agent UI MCP server, and without the extra that server exits with
           # ModuleNotFoundError before writing a protocol frame — which the client
           # reports only as CONNECTION_CLOSED.
-          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/chat/python -e hub/agents/gaia/python'
+          install-package: '-e .[dev,eval,ui,api,mcp] -e hub/agents/gaia/python'
 
       - name: Check the venv interpreter
         env:
@@ -830,9 +972,9 @@ jobs:
               exit 1
             }
           }
-          & $env:VENV_PY -c "import gaia, gaia_agent, gaia_agent_chat"
+          & $env:VENV_PY -c "import gaia, gaia_agent"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent / gaia_agent_chat - the editable installs in the Setup Python Environment step are broken."
+            Write-Host "::error::$env:VENV_PY cannot import gaia / gaia_agent - the editable installs in the Setup Python Environment step are broken."
             exit 1
           }
           $bare = (Get-Command python -ErrorAction SilentlyContinue).Source
@@ -858,28 +1000,57 @@ jobs:
           claude --version
           if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
 
+      # The account this job starts on: the primary, or the secondary if the
+      # primary is out of quota. Both out fails here, naming both reset times.
+      - name: Pick the Claude account
+        id: claude_account
+        uses: ./.github/actions/claude-credential
+        with:
+          primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          secondary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
+          model: ${{ env.EVAL_MODEL }}
+          what: "Flagship eval lane ${{ matrix.lane }}"
+          python: ${{ env.VENV_PY }}
+
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
       - name: Start Lemonade Server (version-matched, warmed)
-        timeout-minutes: 15
+        # 15 min for the server and Gemma, plus up to 30 min to pull a 23 GB
+        # Qwen3.6 onto a fresh machine.
+        timeout-minutes: 50
         env:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           # Launches the version-matched server as a persistent Scheduled Task
-          # (survives across CI jobs), reuses it if healthy, and warms the model.
-          # Default -WarmModel is already Gemma-4-E4B-it-GGUF, the model under test.
+          # (survives across CI jobs), reuses it if healthy, and warms
+          # Gemma-4-E4B, its default. Gemma is pulled whatever the model under
+          # test: vision loads it by name, and every PC `gaia init` sets up has
+          # it, Qwen machines included.
           powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
           if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+          # Then the model under test, pulled here rather than through a second
+          # script call: the script returns early on a healthy server without
+          # warming anything, and swallows a failed pull.
+          if ($env:AGENT_MODEL -ne 'Gemma-4-E4B-it-GGUF') {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $base = $env:LEMONADE_BASE_URL.TrimEnd('/') -replace '/api/v1$', ''
+            $body = @{ model_name = $env:AGENT_MODEL } | ConvertTo-Json
+            try {
+              Invoke-RestMethod "$base/api/v1/pull" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 1800 | Out-Null
+            } catch {
+              throw "Could not pull $env:AGENT_MODEL into Lemonade at $base : $($_.Exception.Message). Check the runner's network and disk, then re-run."
+            }
+            Write-Host "Pulled $env:AGENT_MODEL in $([math]::Round($sw.Elapsed.TotalMinutes, 1)) min."
+          }
 
       - name: Preflight — judge key, baselines, Lemonade
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          # Blank when the OAuth token is present, deliberately: runner.py adds
-          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
-          # auth to the key alone, so leaving both set would ignore the token.
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
@@ -1025,17 +1196,32 @@ jobs:
             Write-Host "::warning::NO BASELINE COMMITTED. Regression detection is OFF for this run: the eval still measures every category and uploads its scorecards, but nothing compares them to a known-good run. Restore the flagship baseline in $env:BASELINE_DIR."
             "REGRESSION DETECTION OFF: no baseline at ``$env:BASELINE_DIR``. Scorecards are produced and uploaded; nothing is compared." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           } else {
+            # The baseline must have been captured on the model under test.
+            # eval/ci_tiers.json maps each model to its directory and a unit test
+            # checks the meta, so this only fires if the two drift at runtime.
+            $metaModel = (Get-Content -Raw (Join-Path $env:BASELINE_DIR 'meta.json') | ConvertFrom-Json).model
+            if ($metaModel -ne $env:AGENT_MODEL) {
+              Write-Host "::error::$env:BASELINE_DIR was captured on '$metaModel', but this run scores '$env:AGENT_MODEL'. Comparing them would report the model swap as regressions. Fix the baselines map in eval/ci_tiers.json."
+              exit 1
+            }
+            $noScorecards = @(Get-ChildItem $env:BASELINE_DIR -Filter 'scorecard_*.json').Count -eq 0
+            if ($noScorecards) {
+              Write-Host "::warning::NO $env:AGENT_MODEL BASELINE YET: $env:BASELINE_DIR holds no scorecards, so nothing in this run is compared. Every category still runs and uploads its scorecard. Capture the baseline from a full sweep ($env:BASELINE_DIR/README.md)."
+              "**No $env:AGENT_MODEL baseline yet** (``$env:BASELINE_DIR``): this run measured quality and compared it to nothing." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            }
             foreach ($category in $categories) {
               $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
               if (-not (Test-Path $baseline)) {
                 # A category added since the baseline was captured has none until
                 # its first tag run; that is reported, and never enforced against.
                 if ($env:ENFORCE -eq 'true') {
-                  Write-Host "::error::enforce=true but there is no baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a run on this hardware first, or re-dispatch with enforce: false."
+                  Write-Host "::error::enforce=true but there is no $env:AGENT_MODEL baseline at $baseline, so '$category' would pass by default. Commit its scorecard from a run on this hardware first, or re-dispatch with enforce: false."
                   exit 1
                 }
-                Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
-                "``$category``: not compared, no baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                if (-not $noScorecards) {
+                  Write-Host "::warning::${category}: NOT COMPARED - no $env:AGENT_MODEL baseline at $baseline yet. The category still runs and its scorecard is uploaded; commit that scorecard as the baseline."
+                  "``$category``: not compared, no $env:AGENT_MODEL baseline yet. Its scorecard from this run is the baseline candidate." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+                }
                 continue
               }
               Write-Host "baseline ok: $baseline"
@@ -1056,7 +1242,9 @@ jobs:
             exit 1
           }
           $lemonadeUrl = $probe[-5]
-          $modelUnderTest = $probe[-4]
+          # Not DEFAULT_MODEL_NAME ($probe[-4]): the model under test is pinned
+          # per run (AGENT_MODEL), and on this pool it is not the code default.
+          $modelUnderTest = $env:AGENT_MODEL
           $embeddingModel = $probe[-3]
           $embeddingCheckpoint = $probe[-2]
           $embeddingRecipe = $probe[-1]
@@ -1090,7 +1278,7 @@ jobs:
           # about the model this job exists to measure. `/models` (no show_all)
           # lists DOWNLOADED models only, so this is the assertion that the model
           # is actually on disk. Without it a run can score every scenario against
-          # whatever was resident and compare it to the Gemma baseline.
+          # whatever was resident and compare it to the wrong baseline.
           try {
             $downloaded = @((Invoke-RestMethod -Uri "$lemonadeUrl/models" -TimeoutSec 60).data | ForEach-Object { $_.id })
           } catch {
@@ -1098,7 +1286,7 @@ jobs:
             exit 1
           }
           if ($downloaded -notcontains $modelUnderTest) {
-            Write-Host "::error::$modelUnderTest is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm-pull step failed silently. Pull it on the runner (POST $lemonadeUrl/pull with model_name=$modelUnderTest) and re-run; do NOT let this eval score a different model against the Gemma baseline."
+            Write-Host "::error::$modelUnderTest is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm-pull step failed silently. Pull it on the runner (POST $lemonadeUrl/pull with model_name=$modelUnderTest) and re-run; do NOT let this eval score a different model against the $modelUnderTest baseline."
             exit 1
           }
           Write-Host "Model under test present: $modelUnderTest"
@@ -1344,11 +1532,14 @@ jobs:
         # budget table prices.
         timeout-minutes: 360
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
-          # Blank when the OAuth token is present, deliberately: runner.py adds
-          # `--bare` only when ANTHROPIC_API_KEY is set, and `--bare` restricts
-          # auth to the key alone, so leaving both set would ignore the token.
-          ANTHROPIC_API_KEY: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Only without a subscription token. The token would win anyway, and the
+          # key then never reaches the job.
+          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          # The other account. The eval moves to it once if the first runs out of
+          # quota mid-run, and stops with a partial scorecard if both are out.
+          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
+          GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
         run: |
           # Deliberately NOT "Stop": the eval's stderr is piped through `2>&1`
           # below, and under Stop the first stderr line from a native command
@@ -1400,7 +1591,7 @@ jobs:
           # which is not guaranteed to track the PowerShell location, so callers
           # pass an absolute working directory and absolute redirect targets.
           $judgeCredentials = @{}
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "ANTHROPIC_API_KEY")) {
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
           }
           function Start-Isolated($argList, $cwd, $out, $err) {
@@ -1514,9 +1705,22 @@ jobs:
                 [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
               }
             }
+            $stoppedAt = $null
             $swTotal = [Diagnostics.Stopwatch]::StartNew()
-            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME"
+            Add-Summary "## Eval wall clock - lane ``$env:EVAL_LANE`` on $env:COMPUTERNAME, model ``$env:AGENT_MODEL``"
             Add-Summary ""
+            # category -> "id,id", from a targeted dispatch. Empty on a tag run.
+            $selected = @{}
+            foreach ($pair in (($env:EVAL_SCENARIOS -split '\s+') | Where-Object { $_ })) {
+              $kv = $pair -split '=', 2
+              $selected[$kv[0]] = $kv[1]
+            }
+            if ($env:EVAL_TARGETED -eq 'true') {
+              Add-Summary "**$env:EVAL_SELECTION**"
+              Add-Summary ""
+              foreach ($c in $selected.Keys) { Add-Summary "- ``$c``: $($selected[$c] -replace ',', ', ')" }
+              Add-Summary ""
+            }
             Add-Summary "| category | minutes |"
             Add-Summary "| --- | ---: |"
 
@@ -1588,6 +1792,24 @@ jobs:
               if ($LASTEXITCODE -ne 0) {
                 Write-Host "::error::$category would not start on an isolated, empty GAIA home (NOT ISOLATED lines above). Refusing to score it with state from another run."
                 exit 1
+              }
+              # The model under test is this home's default_model, read back
+              # through GAIA's own config. Without it a fresh home resolves to
+              # the code default, whatever this pool is meant to measure.
+              & $env:VENV_PY util/eval_gaia_home.py pin-model --home $catHome --model $env:AGENT_MODEL
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "::error::Could not pin $env:AGENT_MODEL in $catHome for $category (NOT PINNED lines above). Refusing to score whatever model the home would fall back to."
+                exit 1
+              }
+              # A tier machine holding memory beside other categories: the store
+              # is live for `memory` alone. Set before this category's backend
+              # starts, which is what reads it.
+              if ($env:EVAL_MEMORY_CATEGORIES) {
+                $memOn = @($env:EVAL_MEMORY_CATEGORIES -split '\s+') -contains $category
+                $env:GAIA_MEMORY_DISABLED = if ($memOn) { '0' } else { '1' }
+                $env:GAIA_MEMORY_ADMIN = if ($memOn) { '1' } else { '0' }
+                $env:GAIA_MEMORY_MCP_ALWAYS = if ($memOn) { '1' } else { '0' }
+                Write-Host "  memory for ${category}: $(if ($memOn) { 'live' } else { 'off' })"
               }
 
               # The acme MCP stub exists only for gaia_mcp; staged for any other
@@ -1707,10 +1929,17 @@ jobs:
               # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
               # at its previous value, so an unset/stale 0 would read as success.
               $global:LASTEXITCODE = 0
+              # A targeted run names its scenarios; the CLI refuses any that
+              # would not run, so a typo cannot shrink the run silently.
+              $pick = @()
+              if ($selected.ContainsKey($category)) { $pick = @('--scenario', $selected[$category]) }
               # Not Tee-Object: on Windows PowerShell 5.1 it has no -Encoding and
               # writes UTF-16, which the `Output:` parse in the next step then has
               # to guess at. Echo + Out-File keeps the log UTF-8 and greppable.
-              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" @extraArgs 2>&1 |
+              # --agent-model turns any scenario whose session ran another model
+              # into INFRA_ERROR and records the model in the scorecard, which is
+              # what --compare checks against the baseline's meta.json.
+              & $env:VENV_GAIA eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --agent-model "$env:AGENT_MODEL" @extraArgs @pick 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
               # Capture BEFORE anything else can clobber it. .NET calls and
@@ -1741,6 +1970,14 @@ jobs:
               Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 360-min step budget)"
               Add-Summary "| ``$category`` | $mins |"
 
+              if ($code -eq 3) {
+                # Claude stopped answering on every account. The runner already
+                # wrote this category's partial scorecard; keep it, start no more,
+                # and let the collect, compare and upload steps report what ran.
+                Write-Host "::error title=Eval stopped - Claude unavailable::$category stopped part-way because Claude was unavailable on every configured account (the log above names the cause and reset times). Its partial scorecard is kept; later categories were not started."
+                $stoppedAt = $category
+                break
+              }
               if ($code -ne 0) {
                 # Never `exit $LASTEXITCODE` - on a launch failure it can be $null,
                 # which PowerShell turns into exit 0 and the step passes GREEN
@@ -1750,6 +1987,17 @@ jobs:
               }
             }
 
+            if ($stoppedAt) {
+              $after = $false
+              $notStarted = @()
+              foreach ($c in $categories) {
+                if ($after) { $notStarted += $c }
+                if ($c -eq $stoppedAt) { $after = $true }
+              }
+              $shownRest = if ($notStarted.Count -gt 0) { $notStarted -join ', ' } else { 'none' }
+              Add-Summary ""
+              Add-Summary "**INCOMPLETE:** ``$stoppedAt`` stopped part-way because Claude was unavailable on every account; not started: $shownRest. The partial scorecard is uploaded and only what ran is compared."
+            }
             $swTotal.Stop()
             $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
             Write-Host "[TIMING] lane $env:EVAL_LANE, all $($categories.Count) categories: $totalMins min"
@@ -1772,6 +2020,10 @@ jobs:
               Write-Host "Stopping fixture server pid $($fixture.Id)..."
               Stop-Process -Id $fixture.Id -Force -ErrorAction SilentlyContinue
             }
+          }
+          if ($stoppedAt) {
+            Write-Host "::error::This lane is INCOMPLETE: $stoppedAt stopped part-way and the categories after it never started. Failing so it is never read as a full run."
+            exit 1
           }
 
       # Deletes every category's GAIA home, in its own always() step so a step
@@ -1850,6 +2102,12 @@ jobs:
             }
             New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
             Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            $partial = (Get-Content -Raw -Encoding UTF8 "eval-out\$category\scorecard.json" | ConvertFrom-Json).partial
+            if ($partial) {
+              Write-Host "::error title=Partial scorecard - ${category}::$($partial.summary). The scenarios that ran are kept and uploaded; the rest are NOT_RUN and excluded from the comparison."
+              $line = "`r`n**INCOMPLETE - ${category}:** $($partial.summary). Only the scenarios that ran are compared; this job fails so it is never read as a full run.`r`n"
+              [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $line, (New-Object System.Text.UTF8Encoding($false)))
+            }
             # Take the whole run directory, not just the score. This machine is
             # destroyed when the job ends, so a trace left behind is gone for good
             # - and the traces are the transcripts, judge rationales and failure
@@ -1928,6 +2186,7 @@ jobs:
             foreach ($c in $all) { $gateArgs += @("--category", $c) }
           }
           if ($env:ENFORCE -eq 'true') { $gateArgs += "--enforce" }
+          if ($env:FAIL_ON_ZERO_TOKENS -eq 'true') { $gateArgs += "--fail-on-zero-token-errors" }
 
           # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE at its
           # previous value, so a stale 0 would read as a complete run.
@@ -1944,6 +2203,7 @@ jobs:
         run: |
           $regressed = @()
           $failedCompare = $false
+          $incomplete = @()
 
           # Say it, do not skip quietly. With nothing to compare against, this
           # step has no verdict to give, and a green check that looks like
@@ -1956,6 +2216,17 @@ jobs:
             "### Regression check, lane ``$env:EVAL_LANE``: NOT PERFORMED" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             "No flagship baseline is committed at ``$env:BASELINE_DIR``, so this run measured quality but compared it to nothing. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            exit 0
+          }
+          # The model's baseline directory exists but holds no scorecards yet
+          # (the Qwen one, until a full sweep is captured). Never fall back to
+          # another model's baseline.
+          if (@(Get-ChildItem $env:BASELINE_DIR -Filter 'scorecard_*.json').Count -eq 0) {
+            Write-Host "::warning::NO $env:AGENT_MODEL BASELINE YET: nothing in lane '$env:EVAL_LANE' was compared. The scorecards are uploaded as the 'eval-$env:EVAL_LANE' artifact. Capture the baseline from a full sweep ($env:BASELINE_DIR/README.md)."
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "### Regression check, lane ``$env:EVAL_LANE``: NO $env:AGENT_MODEL BASELINE YET" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "``$env:BASELINE_DIR`` holds no scorecards, so this run compared nothing. It is not compared with another model's baseline. A green check here does NOT mean no regression." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
             exit 0
           }
 
@@ -1984,6 +2255,8 @@ jobs:
               Write-Host "::warning::${category}: NOT COMPARED - no baseline at $baseline yet (reported at preflight)."
               continue
             }
+            $partial = (Get-Content -Raw -Encoding UTF8 $current | ConvertFrom-Json).partial
+            if ($partial) { $incomplete += $category }
             # `--compare` exits 2 on status/score/time regressions, 0 otherwise
             # (src/gaia/cli.py). It only DIFFS - the eval above already ran.
             # Reset first: a launch failure would otherwise inherit the PREVIOUS
@@ -1996,6 +2269,12 @@ jobs:
                 Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
                 $regressed += $category
               }
+              # Exit 3: the baseline was measured on another agent model or
+              # eval model. A config error, never a verdict, so always fatal.
+              3 {
+                Write-Host "::error::${category}: refused to compare - $baseline was captured on a different agent model or eval model than this run ($env:AGENT_MODEL, $env:EVAL_MODEL). The reason is printed above."
+                $failedCompare = $true
+              }
               default {
                 Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (not a regression verdict - a harness/IO error)."
                 $failedCompare = $true
@@ -2007,17 +2286,26 @@ jobs:
           Write-Host "=================================================================="
           Write-Host "  SUMMARY - enforce=$env:ENFORCE"
           Write-Host "=================================================================="
+          if ($env:EVAL_TARGETED -eq 'true') {
+            Write-Host "$env:EVAL_SELECTION"
+            Write-Host "Each comparison above judged only the selected scenarios; its NOT RUN list names the rest."
+          }
           if ($regressed.Count -gt 0) {
             Write-Host "Regressed categories: $($regressed -join ' ')"
           } else {
             Write-Host "Regressed categories: none"
           }
-          Write-Host "Baselines: $env:BASELINE_DIR"
+          if ($incomplete.Count -gt 0) {
+            Write-Host "INCOMPLETE (partial run, only what ran was compared, not a pass): $($incomplete -join ' ')"
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+            "**INCOMPLETE - partial run, only what ran was compared, not a pass:** $($incomplete -join ', ')" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          }
+          Write-Host "Model under test: $env:AGENT_MODEL"
+          Write-Host "Baselines: $env:BASELINE_DIR (captured on the same model)"
           Write-Host "Scorecards, traces and logs uploaded as the 'eval-$env:EVAL_LANE' artifact."
           Write-Host ""
-          Write-Host "Code-generation and data-analysis scenarios are EXPECTED to regress on"
-          Write-Host "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
-          Write-Host "Read the per-scenario diff above before treating a regression as a bug."
+          Write-Host "Read the per-scenario diff above before treating a regression as a bug:"
+          Write-Host "about 18% of scenarios flip between two runs of the same code (#5493)."
           Write-Host ""
           Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
           Write-Host "verdict, and are the weakest signal here. Each lane runs on a freshly"
@@ -2057,14 +2345,15 @@ jobs:
       - name: Refuse to upload a credential
         if: always()
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ (vars.CLAUDE_ACCOUNT == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
           $files = @(Get-ChildItem eval-out -Recurse -File -ErrorAction SilentlyContinue)
           $secrets = @()
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if ($value) { $secrets += $value }
           }
@@ -2107,7 +2396,16 @@ jobs:
             # Whether the agent under test could remember anything, recorded next
             # to the scores so a memory result is never read without it.
             memory_enabled = ($env:GAIA_MEMORY_DISABLED -ne '1')
-          } | ConvertTo-Json -Compress
+            memory_categories = $env:EVAL_MEMORY_CATEGORIES
+            tier = $env:EVAL_TIER
+            agent_model = $env:AGENT_MODEL
+          }
+          if ($env:EVAL_TARGETED -eq 'true') {
+            $status.targeted = $true
+            $status.selection = $env:EVAL_SELECTION
+            $status.scenarios = $env:EVAL_SCENARIOS
+          }
+          $status = $status | ConvertTo-Json -Compress
           [System.IO.File]::WriteAllText("$PWD\eval-out\lane-status.json", $status, (New-Object System.Text.UTF8Encoding($false)))
 
       # Scores AND evidence, because this pool is ephemeral: the machine that
@@ -2155,19 +2453,35 @@ jobs:
         env:
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
+          TARGETED: ${{ needs.lanes.outputs.targeted }}
+          MATRIX: ${{ needs.lanes.outputs.matrix }}
+          SELECTION: ${{ needs.lanes.outputs.selection }}
+          TIER: ${{ needs.lanes.outputs.tier }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
         run: |
           set -euo pipefail
+          # The report covers the lanes this run's matrix held: tier machines
+          # are not ci_lanes.json lanes, and the full sweep drops the backlog's
+          # scenarios. A partial run (smoke, backlog, targeted) gets a banner.
+          scope=(--matrix-json "${MATRIX}")
+          if [ "${TARGETED}" = "true" ]; then
+            scope+=(--selection "${SELECTION}")
+          fi
           # Run as a file, not `-m gaia.eval.lane_summary`: this is a hosted runner
           # with no gaia install, and the module is stdlib-only by design.
           python src/gaia/eval/lane_summary.py \
             --lanes-file eval/ci_lanes.json \
             --artifacts-dir lane-artifacts \
-            --baseline-dir tests/fixtures/eval_baselines/gaia-flagship \
+            --baseline-dir "${BASELINE_DIR}" \
+            "${scope[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
           {
             echo ""
             echo "| job | result |"
             echo "| --- | --- |"
+            echo "| tier | \`${TIER}\` |"
+            echo "| model under test | \`${AGENT_MODEL}\` (baseline \`${BASELINE_DIR}\`) |"
             echo "| scenario lanes (matrix) | \`${LANES_RESULT}\` |"
             echo "| outcomes (\`gaia eval tasks\`) | \`${OUTCOMES_RESULT}\` |"
             echo ""
@@ -2176,75 +2490,242 @@ jobs:
             echo "are the only copy - download them before they expire (14 days)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # A release or RC tag run that does not pass files an issue, one per tag.
-  # The nightly that used to catch environment drift (a Lemonade bump, a
-  # re-quantised model, a runner-image change) is gone, so the tag run is now the
-  # only recurring measurement - and its annotations would otherwise go unread.
-  # It does not block publish.yml: the release proceeds, the issue records why
-  # the eval did not pass. A dispatch does not file one; the dispatcher is
-  # watching. A skipped RC (`[skip eval]`) files nothing.
+      # What this run was, kept 90 days. A final tag's verify-final job looks
+      # for the `flagship-tier-full` one on its commit or its RCs' commits.
+      - name: Record the tier
+        env:
+          TIER: ${{ needs.lanes.outputs.tier }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          LANES_RESULT: ${{ needs.agent-eval.result }}
+          OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
+        run: |
+          mkdir -p tier
+          jq -n --arg tier "$TIER" --arg model "$AGENT_MODEL" --arg sha "$GITHUB_SHA" \
+            --arg ref "$GITHUB_REF" --arg lanes "$LANES_RESULT" --arg outcomes "$OUTCOMES_RESULT" \
+            '{tier: $tier, agent_model: $model, sha: $sha, ref: $ref, lanes: $lanes, outcomes: $outcomes}' \
+            > tier/tier.json
+          cat tier/tier.json
+      - name: Upload the tier marker
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-tier-${{ needs.lanes.outputs.tier }}
+          path: tier/tier.json
+          retention-days: 90
+
+  # The weekly backlog's whole point is its trend: one run of a scenario that
+  # always fails says nothing new. Picks up the previous week's trend artifact,
+  # appends this run, and re-uploads it, so the history rolls forward. A gap
+  # longer than the 90-day retention starts a new trend, and says so.
+  backlog-trend:
+    name: Weekly backlog trend
+    needs: [lanes, agent-eval]
+    if: >-
+      always() && needs.lanes.result == 'success' &&
+      needs.lanes.outputs.tier == 'backlog' && needs.agent-eval.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the backlog lanes' artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: eval-backlog-*
+          path: lane-artifacts
+        continue-on-error: true
+
+      - name: Fetch the previous trend
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Newest first across the repo, this run's own not uploaded yet.
+          found="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=flagship-backlog-trend&per_page=1" \
+            --jq '.artifacts[0] | select(. != null) | "\(.workflow_run.id) \(.expired)"')"
+          if [ -z "${found}" ]; then
+            echo "::notice title=Backlog trend::No earlier trend artifact exists. This run starts the trend."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          read -r run expired <<< "${found}"
+          if [ "${expired}" = "true" ]; then
+            echo "::warning title=Backlog trend::The last trend artifact (run ${run}) has expired, so the history before it is gone. This run starts a new trend."
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh run download "${run}" --repo "${GITHUB_REPOSITORY}" -n flagship-backlog-trend -D previous
+          echo "path=previous/trend.json" >> "$GITHUB_OUTPUT"
+
+      - name: Append this week and summarise
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.path }}
+          AGENT_MODEL: ${{ needs.lanes.outputs.agent_model }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          previous=()
+          if [ -n "${PREVIOUS}" ]; then previous=(--previous "${PREVIOUS}"); fi
+          python util/eval_backlog_trend.py --artifacts-dir lane-artifacts \
+            "${previous[@]}" --out trend/trend.json --run-url "${RUN_URL}" \
+            --sha "${GITHUB_SHA}" --date "$(date -u +%F)" --model "${AGENT_MODEL}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the trend
+        if: always() && hashFiles('trend/trend.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: flagship-backlog-trend
+          path: trend/trend.json
+          retention-days: 90
+
+  # A final tag does not re-run the eval: the release train promotes the RC
+  # that was measured (#5492). This checks that measurement exists - a
+  # full-sweep run (its `flagship-tier-full` marker) of this commit or of one of
+  # its RCs' commits - and fails loudly when it does not. It does not judge the
+  # results; that gate is #5497.
+  verify-final:
+    name: Final tag - a full sweep measured this release
+    needs: [eval-gate]
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true' && needs.eval-gate.outputs.tier == 'verify'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Find the full sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python util/eval_tiers.py verify-final
+
+  # A release or RC tag run files an `eval-failure` issue only when it MEASURED
+  # a quality drop: a scenario in the stable smoke set (eval/ci_tiers.json, each
+  # passed 90%+ of 10+ runs) that passed in the committed baseline now fails.
+  # A PASS -> FAIL anywhere else is a "watch" line in the summary: the baseline
+  # is one run and ~18% of scenarios flip between runs (#5493). The issue names
+  # each regression with the judge's root cause. A run that measured
+  # nothing - lanes skipped or cancelled, Claude out of quota, no baseline for
+  # the model under test, a final tag (which only checks a full sweep exists) -
+  # files nothing and says in its job summary what was not measured and why.
+  # A run that compared every category it ran and found nothing closes the
+  # open issue. util/eval_failure_notice.py decides, using the same
+  # compare_scorecards diff `gaia eval agent --compare` prints.
+  #
+  # One issue for the flagship, edited in place by the next regressed tag, so
+  # failures never pile up as one issue per tag. It does not block publish.yml.
+  # A dispatch does not file one; the dispatcher is watching.
   #
   # This job claims NO lane's concurrency group. A caller that holds the group
   # its callee needs deadlocks the callee before a job record exists, so
-  # `needs.*.result` reads `failure` for a job that never ran and the issue filed
-  # describes nothing. The now-deleted weekly caller did exactly that, every run
-  # for ten days, filing issues about a job that never started.
+  # `needs.*.result` reads `failure` for a job that never ran. Its own group
+  # only keeps two tag runs from editing the one issue at the same time.
   release-escalation:
-    name: File an issue when the release eval does not pass
-    needs: [eval-gate, agent-eval, flagship-tasks, aggregate]
+    name: File (or close) the release eval issue
+    needs: [eval-gate, lanes, agent-eval, flagship-tasks, aggregate, verify-final]
     if: >-
       always() && github.event_name == 'push' && github.ref_type == 'tag' &&
-      needs.eval-gate.outputs.run == 'true' &&
-      (needs.agent-eval.result != 'success' || needs.flagship-tasks.result != 'success')
+      needs.eval-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
+    concurrency:
+      group: eval-failure-issue-flagship
+      cancel-in-progress: false
     steps:
-      - name: File (or update) the issue for this tag
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: setup.py
+
+      # compare_scorecards lives in gaia.eval.runner.
+      - name: Install gaia
+        run: pip install -e .
+
+      - name: Download every lane's artifact
+        uses: actions/download-artifact@v8
+        with:
+          pattern: eval-*
+          path: lane-artifacts
+        # A lane that uploaded nothing is reported by the next step, by name.
+        continue-on-error: true
+
+      # Scenario text and judge output are untrusted: they reach the issue only
+      # through notice/body.md, never through an expression in a script.
+      - name: Decide what this run proved
+        id: notice
         env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TAG: ${{ github.ref_name }}
+          TIER: ${{ needs.eval-gate.outputs.tier }}
+          MATRIX: ${{ needs.lanes.outputs.matrix }}
+          BASELINE_DIR: ${{ needs.lanes.outputs.baseline_dir }}
+          LANES_JOB: ${{ needs.lanes.result }}
           LANES_RESULT: ${{ needs.agent-eval.result }}
           OUTCOMES_RESULT: ${{ needs.flagship-tasks.result }}
           OUTCOMES_FAILED: ${{ needs.flagship-tasks.outputs.failed_suites }}
+          VERIFY_RESULT: ${{ needs.verify-final.result }}
+          REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # This job has no checkout, so every gh call names the repo; without it gh
-          # dies with "not a git repository" and the alert is never filed.
-          # DEDUP KEY - do not reword. The lookup below searches this exact title,
-          # so a re-run of the same tag comments on its issue instead of filing another.
-          TITLE="Flagship eval did not pass on ${TAG}"
+          [ -n "$MATRIX" ] || MATRIX='{"include": []}'
+          args=(--target flagship --tier "$TIER" --ref "$REF" --run-url "$RUN_URL"
+            --matrix-json "$MATRIX" --artifacts-dir lane-artifacts
+            --job "lanes=$LANES_JOB" --job "scenarios=$LANES_RESULT"
+            --job "outcomes=$OUTCOMES_RESULT" --job "verify=$VERIFY_RESULT"
+            --outcomes-failed "$OUTCOMES_FAILED"
+            --out-dir notice --github-output "$GITHUB_OUTPUT"
+            --step-summary "$GITHUB_STEP_SUMMARY")
+          [ -n "$BASELINE_DIR" ] && args+=(--baseline-dir "$BASELINE_DIR")
+          python util/eval_failure_notice.py "${args[@]}"
+
+      - name: Ensure the eval-failure label exists
+        if: steps.notice.outputs.verdict == 'regressed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           gh label create eval-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "Automated eval failure" --force
-          BODY="$(cat <<EOF
-          The flagship eval on release tag \`${TAG}\` did not pass. Publishing is not blocked by it.
 
-          - Run: ${RUN_URL}
-          - Scenario lanes: \`${LANES_RESULT}\`
-          - Outcomes (\`gaia eval tasks\`): \`${OUTCOMES_RESULT}\`${OUTCOMES_FAILED:+ - gate failed for: ${OUTCOMES_FAILED}}
+      - name: File (or update) the flagship regression issue
+        if: steps.notice.outputs.verdict == 'regressed'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: eval-regression/flagship
+          title: ${{ steps.notice.outputs.title }}
+          body-file: ${{ github.workspace }}/notice/body.md
+          update: edit
+          labels: eval-failure
 
-          Start with the run's summary page: it names which lanes measured, which measured nothing, and
-          how long each took. Then download the failing lane's \`eval-<lane>\` artifact - it carries the
-          transcripts, judge rationales, backend log and Lemonade logs. Those machines are ephemeral and
-          already destroyed, so the artifact is the only copy, and it expires in 14 days.
+      - name: Close the flagship regression issue
+        if: steps.notice.outputs.verdict == 'passed'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: eval-regression/flagship
+          note: "The flagship eval passed on `${{ github.ref_name }}` with no regression against the baseline (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."
 
-          Compare with the previous tag's run first. A failure no change since then explains usually means
-          the environment moved, not the code: a Lemonade version bump, a re-quantised model, a driver or
-          runner-image change.
-
-          \`cancelled\` rather than \`failure\` means no measurement happened at all - a manual cancel, or a
-          lane that waited out GitHub's 24h queue limit. Re-dispatch the workflow on the tag.
-          EOF
-          )"
-          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label eval-failure \
-            --search "${TITLE} in:title" --json number,title \
-            | jq -r --arg t "${TITLE}" 'map(select(.title == $t)) | .[0].number // empty')"
-          if [ -n "${EXISTING}" ]; then
-            gh issue comment "${EXISTING}" --repo "$GITHUB_REPOSITORY" --body "${BODY}"
-            echo "commented on existing issue #${EXISTING}"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "${TITLE}" --body "${BODY}" \
-              --label eval-failure
-          fi
+      # The per-tag issues filed before this job named regressions, up to this
+      # tag on its major.minor line.
+      - name: Close earlier tags' per-tag eval issues
+        if: steps.notice.outputs.verdict == 'passed'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key-prefix: eval-flagship/
+          legacy-title-prefix: "Flagship eval did not pass on "
+          up-to-version: ${{ github.ref_name }}
+          note: "The flagship eval passed on `${{ github.ref_name }}` with no regression against the baseline (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Closing automatically; reopen if this still needs a look."

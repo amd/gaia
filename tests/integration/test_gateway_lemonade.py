@@ -21,7 +21,7 @@ from gaia.llm.gateway import (
     GatewayError,
     GatewayManager,
 )
-from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
+from gaia.version import LEMONADE_MIN_VERSION
 
 # A syntactically valid endpoint that will never resolve — enough to exercise
 # registration and the error path without depending on the AMD network.
@@ -53,14 +53,12 @@ def gateway_manager(require_lemonade):
     if "cloud" not in payload:
         pytest.skip(
             f"This Lemonade has no cloud-provider support "
-            f"(needs >= {LEMONADE_GATEWAY_MIN_VERSION})"
+            f"(needs >= {LEMONADE_MIN_VERSION})"
         )
 
     version = payload.get("version") or payload.get("server_version")
-    if version and _version_tuple(version) < _version_tuple(
-        LEMONADE_GATEWAY_MIN_VERSION
-    ):
-        pytest.skip(f"Lemonade {version} is older than {LEMONADE_GATEWAY_MIN_VERSION}")
+    if version and _version_tuple(version) < _version_tuple(LEMONADE_MIN_VERSION):
+        pytest.skip(f"Lemonade {version} is older than {LEMONADE_MIN_VERSION}")
 
     yield manager
 

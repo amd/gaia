@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gaia.agents.base import history
 from gaia.agents.base.history import (
     CutReporter,
     TurnMessages,
@@ -113,22 +114,124 @@ def test_no_budget_left_reports_every_hidden_turn():
     assert [(c.turns, c.tokens) for c in cuts] == [(3, 30)]
 
 
-def test_oversized_turn_is_not_split_or_silently_truncated():
-    turns = [_turn(0), [{"role": "user", "content": "x" * 10000}], _turn(2)]
-    with patch("gaia.agents.base.history.logger") as logger:
-        assert select_history(turns, 100) == _turn(2)
-    logger.warning.assert_called_once()
+def _bulky_tool_turn(answer):
+    turn = _tool_turn(9)
+    turn[0]["content"] = "summarize the report"
+    turn[2]["content"] = "revenue table " * 2000
+    turn[3]["content"] = answer
+    return turn
 
 
-def test_newest_oversized_turn_keeps_the_earlier_turns(caplog):
-    turns = [_turn(i) for i in range(5)] + [[{"role": "user", "content": "x" * 10000}]]
+def test_newest_oversized_turn_keeps_its_question_and_answer(caplog):
+    turns = [_turn(0), _turn(1), _bulky_tool_turn("revenue grew 12%")]
 
-    def costs(text):
-        return 1000 if "xxxx" in text else 10
+    replayed = select_history(turns, 1000)
 
-    with patch("gaia.agents.base.history.count_tokens", side_effect=costs):
-        assert select_history(turns, 100) == sum(turns[:5], [])
-    assert "1 turn(s) larger than the whole history budget" in caplog.text
+    assert replayed[-4]["content"] == "summarize the report"
+    assert replayed[-1] == {"role": "assistant", "content": "revenue grew 12%"}
+    call, result = replayed[-3], replayed[-2]
+    assert result["tool_call_id"] == call["tool_calls"][0]["id"] == "call-9"
+    assert result["content"].startswith("[Left out of the conversation history")
+    assert "read_fact" in result["content"]
+    assert len(result["content"]) < 400
+    # The small turns before it still fit beside the shortened one.
+    assert replayed[:4] == _turn(0) + _turn(1)
+    assert "shortened 1 turn(s)" in caplog.text
+
+
+def test_oversized_turn_in_the_middle_keeps_the_turns_before_it():
+    turns = [_turn(0), _turn(1), _bulky_tool_turn("revenue grew 12%"), _turn(3)]
+
+    replayed = select_history(turns, 1000)
+
+    assert replayed[:4] == _turn(0) + _turn(1)
+    assert replayed[-2:] == _turn(3)
+    assert {"role": "assistant", "content": "revenue grew 12%"} in replayed
+
+
+def test_oversized_text_turn_is_cut_with_a_marker_not_dropped():
+    # Pushed /query context carries no tool messages, only text.
+    question = "here is the log: " + "line " * 5000
+    turns = [_turn(0), [{"role": "user", "content": question}, *_turn(1)[1:]]]
+
+    replayed = select_history(turns, 1000)
+
+    assert history.turn_cost(replayed[2:]) <= 500
+    assert replayed[2]["content"].startswith("here is the log: ")
+    assert "characters to fit the model's context window" in replayed[2]["content"]
+    assert replayed[-1] == {"role": "assistant", "content": "answer-1"}
+    assert replayed[:2] == _turn(0)
+    # The stored turn is untouched; only the replayed copy is cut.
+    assert turns[1][0]["content"] == question
+
+
+def test_text_tool_results_are_stubbed_too():
+    turn = history.text_tool_history([_bulky_tool_turn("revenue grew 12%")])[0]
+
+    replayed = select_history([turn], 1000)
+
+    result = replayed[2]["content"]
+    assert result.startswith("[Recorded tool result: read_fact] [Left out of")
+    assert replayed[-1]["content"] == "revenue grew 12%"
+
+
+def test_a_refusal_in_an_oversized_turn_is_not_stubbed():
+    turn = _bulky_tool_turn("I did not run it.")
+    refusal = json.dumps(
+        {"status": "denied", "message": "User refused: " + "reason " * 100}
+    )
+    turn[2]["content"] = refusal
+    turn[0]["content"] = "run it " * 3000
+
+    replayed = select_history([turn], 1000)
+
+    assert replayed[2]["content"] == refusal
+    assert replayed[-1]["content"] == "I did not run it."
+
+
+@pytest.mark.parametrize("as_text", [False, True])
+def test_a_refusal_longer_than_the_question_is_cut_last(as_text):
+    turn = _bulky_tool_turn("I did not run it.")
+    refusal = json.dumps(
+        {"status": "denied", "message": "User refused: " + "reason " * 600}
+    )
+    turn[2]["content"] = refusal
+    turn[0]["content"] = "run it " * 400
+    if as_text:
+        turn = history.text_tool_history([turn])[0]
+    whole = turn[2]["content"]
+    budget = history.turn_cost(turn) - 100
+
+    clipped, clips = history.clip_turn(turn, budget)
+
+    assert clipped[2]["content"] == whole
+    assert [index for index, _, _ in clips] == [0]
+    assert history.turn_cost(clipped) <= budget
+
+
+def test_a_refusal_is_still_cut_when_nothing_else_is_left():
+    refusal = json.dumps({"status": "denied", "message": "no " * 3000})
+    turn = [
+        {"role": "user", "content": "run it"},
+        {"role": "tool", "tool_call_id": "c", "name": "x", "content": refusal},
+    ]
+
+    clipped, clips = history.clip_turn(turn, 200)
+
+    assert [index for index, _, _ in clips] == [1]
+    assert history.turn_cost(clipped) <= 200
+
+
+def test_a_turn_that_cannot_be_shortened_enough_is_dropped_alone(caplog):
+    # Call arguments are replayed as sent, so only a tool result can shrink.
+    huge = _tool_turn(1)
+    huge[1]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+        {"text": "x" * 20000}
+    )
+    turns = [_turn(0), huge, _turn(2)]
+
+    assert select_history(turns, 1000) == _turn(0) + _turn(2)
+    assert "dropped 1 that still did not fit" in caplog.text
 
 
 def test_eviction_never_separates_a_tool_call_from_its_result():
@@ -294,3 +397,85 @@ def test_restoration_uses_actual_agent_native_tool_property(agent):
     _restore_model_history(agent, db, session, "follow up")
     assert agent.conversation_history[-1]["content"] == "prior answer"
     db.close()
+
+
+def _budget_agent():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        model_id="M-GGUF",
+        system_prompt="You are GAIA.",
+        _openai_tools=[],
+        chat=SimpleNamespace(config=SimpleNamespace(max_tokens=3000)),
+    )
+
+
+def _with_memory_context(tokens, question="next question"):
+    return history.frame_user_message(" ".join(["note"] * tokens), question)
+
+
+def _sized_turn(index, words=250):
+    return [
+        {"role": "user", "content": f"question-{index}"},
+        {"role": "assistant", "content": " ".join(["word"] * words)},
+    ]
+
+
+def test_memory_context_lowers_the_history_budget_by_its_size(monkeypatch):
+    from gaia.agents.base.turn_metrics import count_tokens
+
+    monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
+    agent = _budget_agent()
+    framed = _with_memory_context(2000)
+    memory_tokens = count_tokens(framed) - count_tokens("next question")
+
+    plain = history.history_budget(agent, "next question")
+    with_memory = history.history_budget(agent, framed)
+
+    assert memory_tokens >= 2000
+    assert abs((plain - with_memory) - memory_tokens) <= 10
+
+
+def _fixed_token_counter(monkeypatch):
+    # CI may lack tiktoken data and fall back to a larger estimate; pin the size.
+    monkeypatch.setattr(history, "count_tokens", lambda text: len(text) // 4)
+
+
+def test_history_admitted_before_the_memory_context_is_refit(monkeypatch):
+    _fixed_token_counter(monkeypatch)
+    monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
+    agent = _budget_agent()
+    turns = [_sized_turn(i) for i in range(8)]
+    messages = [message for turn in turns for message in turn]
+    assert history.select_history(turns, history.history_budget(agent, "q")) == (
+        messages
+    )
+
+    plain = history.fit_history_to_turn(agent, messages, "next question")
+    refit = history.fit_history_to_turn(agent, messages, _with_memory_context(2000))
+
+    assert plain is messages
+    assert refit[-2:] == turns[-1]
+    assert "question-0" not in json.dumps(refit)
+    assert len(refit) < len(messages)
+
+
+def test_process_query_budgets_history_against_the_query_it_sends(agent, monkeypatch):
+    _fixed_token_counter(monkeypatch)
+    seen = []
+
+    def budget(_agent, query):
+        seen.append(query)
+        return 600 - history.count_tokens(query)
+
+    monkeypatch.setattr(history, "history_budget", budget)
+    agent.conversation_history = [m for i in range(4) for m in _sized_turn(i, 40)]
+    chat = _stub_chat(agent, "Done.")
+    framed = _with_memory_context(400, "what next")
+
+    agent.process_query(framed, max_steps=2)
+
+    assert seen == [framed]
+    sent = json.dumps(chat.send_messages.call_args_list[0].kwargs["messages"])
+    assert "question-3" in sent
+    assert "question-0" not in sent

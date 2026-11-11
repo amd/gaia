@@ -12,8 +12,12 @@ and two copies of every model. The choice lives in ``~/.gaia/config.json``:
 * ``lemonade_base_url``: the user's server, used only in ``external`` mode.
 * ``lemonade_api_key_stored``: the server's API key is in the OS credential
   store (never in the config file).
+* ``lemonade_env_url_ignored``: a ``LEMONADE_BASE_URL`` value the person chose
+  GAIA's own over in the app (see :func:`ignore_env_url`).
 
-``LEMONADE_BASE_URL`` / ``LEMONADE_API_KEY`` still win over all of this.
+``LEMONADE_BASE_URL`` / ``LEMONADE_API_KEY`` still win over all of this, except
+while ``LEMONADE_BASE_URL`` equals ``lemonade_env_url_ignored``. A different
+value applies again.
 
 In ``external`` mode GAIA never starts a Lemonade of any kind. A server that is
 down, too old, needs a key it does not have, or is not Lemonade at all is an
@@ -27,7 +31,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.logger import get_logger
@@ -41,9 +45,9 @@ MODES = (MODE_GAIA, MODE_EXTERNAL)
 #: Credential-store slot for the user's Lemonade API key.
 API_KEY_SECRET_NAME = "lemonade_api_key"
 
-#: Ports a locally installed Lemonade listens on: the current default, then
-#: the pre-10.1 one. Same list the TUI's preflight probes.
-DETECT_PORTS = (13305, 8000)
+#: Ports a locally installed Lemonade listens on. Same list the TUI's
+#: preflight probes.
+DETECT_PORTS = (13305,)
 
 # A busy server accepts the connection at once but can take seconds to answer.
 _DETECT_TIMEOUT = (0.5, 10.0)
@@ -152,11 +156,81 @@ def external_mode_active() -> bool:
     return _config().lemonade_mode == MODE_EXTERNAL
 
 
-def _env_url() -> Optional[str]:
-    """``LEMONADE_BASE_URL`` when it is the user's choice (not GAIA's export)."""
+def _raw_env_url() -> Optional[str]:
+    """``LEMONADE_BASE_URL`` unless it is GAIA's own export."""
     if os.getenv("GAIA_LEMONADE_EMBEDDED", "").strip() == "1":
         return None
     return os.getenv("LEMONADE_BASE_URL", "").strip() or None
+
+
+def _same_env_value(a: Optional[str], b: Optional[str]) -> bool:
+    """Same server: the TUI hands its child a bare origin with ``/api/v1`` added."""
+    if not (isinstance(a, str) and isinstance(b, str) and a.strip() and b.strip()):
+        return False
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
+    return resolve_lemonade_base_url(a) == resolve_lemonade_base_url(b)
+
+
+def is_ignored_env_value(url: Optional[str], marker: Optional[str] = None) -> bool:
+    """True when *url*, a ``LEMONADE_BASE_URL`` value, is one the app chose
+    GAIA's own over. *marker* is that environment's ``GAIA_LEMONADE_EMBEDDED``.
+    """
+    if (marker or "").strip() == "1" or not (url or "").strip():
+        return False
+    return _same_env_value(url, _config().lemonade_env_url_ignored)
+
+
+def env_url_ignored() -> Optional[str]:
+    """This process's ``LEMONADE_BASE_URL`` when the app chose GAIA's own over it."""
+    env = _raw_env_url()
+    return env if is_ignored_env_value(env) else None
+
+
+def child_lemonade_env(env: Mapping[str, str]) -> Dict[str, str]:
+    """*env* for a process GAIA spawns, without a ``LEMONADE_BASE_URL`` it ignores.
+
+    The child may be an agent built apart from this GAIA that never reads
+    ``lemonade_env_url_ignored``, so it must not inherit that value or its
+    key. It gets GAIA's own running server, marked as GAIA's so it follows a
+    restart, or no address at all when the saved setting picks the server.
+    """
+    out = dict(env)
+    if not is_ignored_env_value(
+        out.get("LEMONADE_BASE_URL"), out.get("GAIA_LEMONADE_EMBEDDED")
+    ):
+        return out
+    out.pop("LEMONADE_BASE_URL", None)
+    out.pop("LEMONADE_API_KEY", None)
+    if external_lemonade_url() is None:
+        from gaia.llm.lemonade_client import running_embedded_lemonade_url
+
+        url = running_embedded_lemonade_url()
+        if url:
+            out["LEMONADE_BASE_URL"] = url
+            out["GAIA_LEMONADE_EMBEDDED"] = "1"
+    return out
+
+
+def _env_url() -> Optional[str]:
+    """``LEMONADE_BASE_URL`` when it is the user's choice (not GAIA's export)."""
+    return None if env_url_ignored() else _raw_env_url()
+
+
+def ignore_env_url() -> Optional[str]:
+    """Let GAIA's own, chosen in the app, win over this ``LEMONADE_BASE_URL``.
+
+    Saves the value it overrides, so a later, different value applies again.
+    Returns that value, or None when no ``LEMONADE_BASE_URL`` picks a server.
+    """
+    from gaia.config import GaiaConfig
+
+    env = _raw_env_url()
+    if env is None:
+        return None
+    GaiaConfig.save_key("lemonade_env_url_ignored", env)
+    log.info("GAIA's own Lemonade chosen over LEMONADE_BASE_URL=%s", env)
+    return env
 
 
 def configured_source() -> Optional[str]:
@@ -256,8 +330,12 @@ class ProbeResult:
             "message": self.message(),
         }
 
-    def message(self) -> str:
-        """One plain sentence and the next step."""
+    def message(self, *, in_use: bool = False) -> str:
+        """One plain sentence and the next step.
+
+        ``in_use``: GAIA is already set to this server, so the way back to its
+        own is a next step. Before a switch GAIA still runs its own, so it isn't.
+        """
         if self.status == OK:
             return f"Lemonade Server v{self.version} is running at {self.url}."
         if self.status == NEEDS_KEY:
@@ -274,24 +352,27 @@ class ProbeResult:
             return (
                 f"The Lemonade Server at {self.url} is v{self.version}; GAIA needs "
                 f"v{self.minimum} or newer. Upgrade it from "
-                "https://lemonade-server.ai, or " + SWITCH_BACK_HINT + "."
+                "https://lemonade-server.ai"
+                + (", or " + SWITCH_BACK_HINT if in_use else "")
+                + "."
             )
         if self.status == NOT_LEMONADE:
             return (
                 f"Something answers at {self.url}, but it is not a Lemonade "
                 f"Server ({self.detail}). Check the address and port."
             )
+        next_step = SWITCH_BACK_HINT if in_use else "check the address and port"
         return (
-            f"No Lemonade Server is answering at {self.url} ({self.detail}). "
-            "Start it, or " + SWITCH_BACK_HINT + "."
+            f"No Lemonade Server is answering at {self.url}: {self.detail}. "
+            f"Start it, or {next_step}."
         )
 
 
 def minimum_version() -> str:
-    """The oldest Lemonade the flagship profile runs against."""
-    from gaia.installer.init_command import DEFAULT_INIT_PROFILE, INIT_PROFILES
+    """The oldest Lemonade GAIA runs against."""
+    from gaia.version import LEMONADE_MIN_VERSION
 
-    return INIT_PROFILES[DEFAULT_INIT_PROFILE]["min_lemonade_version"]
+    return LEMONADE_MIN_VERSION
 
 
 def probe(
@@ -317,11 +398,12 @@ def probe(
             f"{base}/health", headers=headers, timeout=timeout, allow_redirects=False
         )
     except requests.exceptions.RequestException as e:
+        log.debug("Lemonade probe of %s/health failed: %r", base, e)
         return ProbeResult(
             base,
             UNREACHABLE,
             minimum=minimum,
-            detail=_short(e),
+            detail=_unreachable_reason(e),
             timed_out=isinstance(e, requests.exceptions.ReadTimeout),
         )
     if response.status_code in (401, 403):
@@ -350,9 +432,41 @@ def probe(
     return ProbeResult(base, OK, version=version, minimum=minimum)
 
 
-def _short(error: Exception) -> str:
-    text = str(error).splitlines()[0] if str(error) else type(error).__name__
-    return text[:160]
+def _unreachable_reason(error: Exception) -> str:
+    """Why nothing answered, in plain words a person can act on."""
+    import socket
+
+    import requests
+
+    # SSLError and ConnectTimeout are ConnectionErrors too: check them first.
+    if isinstance(error, requests.exceptions.SSLError):
+        return "the secure (HTTPS) connection could not be set up"
+    if isinstance(error, requests.exceptions.ConnectTimeout):
+        return "nothing accepted the connection in time"
+    if isinstance(error, requests.exceptions.ReadTimeout):
+        return "it accepted the connection but did not answer in time"
+    if isinstance(error, requests.exceptions.ConnectionError):
+        for cause in _causes(error):
+            if isinstance(cause, ConnectionRefusedError):
+                return "nothing is listening on that port"
+            if isinstance(cause, socket.gaierror):
+                return "the host name could not be found"
+    return "the connection failed"
+
+
+def _causes(error: BaseException):
+    """*error* and what it wraps: urllib3 nests the socket error a few deep."""
+    seen = set()
+    stack = [error]
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        stack.extend((current.__cause__, current.__context__))
+        stack.append(getattr(current, "reason", None))
+        stack.extend(a for a in current.args if isinstance(a, BaseException))
 
 
 @dataclass(frozen=True)
@@ -670,6 +784,40 @@ def apply_gaia_switch(previous_mode: Optional[str]) -> Optional[dict]:
     return applied
 
 
+def switch_to_gaia_over_env() -> Optional[dict]:
+    """Use GAIA's own instead of the server ``LEMONADE_BASE_URL`` names.
+
+    Saved together with the value it overrides. When GAIA's own is installed
+    the daemon must have it answering, else both are put back; when it isn't,
+    nothing starts and setup installs it next.
+
+    Raises:
+        DaemonError: The daemon did not switch, or GAIA's server did not start.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.daemon.client import ensure_lemonade
+    from gaia.daemon.errors import DaemonError
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    cfg = GaiaConfig.load()
+    previous = {
+        "lemonade_mode": cfg.lemonade_mode,
+        "lemonade_env_url_ignored": cfg.lemonade_env_url_ignored,
+    }
+    ignore_env_url()
+    use_gaia()
+    if not EmbeddedLemonade().is_installed():
+        return None
+    try:
+        applied = apply_to_daemon()
+        if applied is not None:
+            applied = {**applied, "lemonade": ensure_lemonade()}
+    except DaemonError:
+        GaiaConfig.save_keys(previous)
+        raise
+    return applied
+
+
 def saved_target() -> dict:
     """The server the saved setting picks, ignoring ``LEMONADE_BASE_URL``.
 
@@ -708,6 +856,7 @@ def describe() -> dict:
         "base_url": resolve_lemonade_base_url(configured) if configured else None,
         "saved_base_url": cfg.lemonade_base_url,
         "api_key_stored": bool(cfg.lemonade_api_key_stored),
+        "env_url_ignored": env_url_ignored(),
     }
 
 
@@ -754,7 +903,8 @@ def set_mode(mode: str) -> Optional[ProbeResult]:
         )
     result = probe(cfg.lemonade_base_url, _stored_key(cfg))
     if not result.usable:
-        raise LemonadeChoiceError(result.message(), result.status)
+        in_use = cfg.lemonade_mode == MODE_EXTERNAL
+        raise LemonadeChoiceError(result.message(in_use=in_use), result.status)
     cfg.lemonade_mode = MODE_EXTERNAL
     cfg.save()
     return result
@@ -790,7 +940,7 @@ def set_url(url: Optional[str]) -> Optional[ProbeResult]:
                 NEEDS_KEY,
             )
         if not result.usable:
-            raise LemonadeChoiceError(result.message(), result.status)
+            raise LemonadeChoiceError(result.message(in_use=True), result.status)
     if base != cfg.lemonade_base_url and cfg.lemonade_api_key_stored:
         _forget_key()
         cfg.lemonade_api_key_stored = False

@@ -22,7 +22,6 @@ const LIST: TaskListState = {
         { id: 1, content: 'Read the config', status: 'completed', started_at: NOW - 30, completed_at: NOW - 20 },
         { id: 2, content: 'Fix the bug', status: 'in_progress', started_at: NOW - 20, completed_at: null },
     ],
-    source: 'agent',
     current_action: 'Running command: pytest',
     action_started_at: NOW - 5,
     updated_at: NOW,

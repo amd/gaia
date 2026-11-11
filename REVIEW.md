@@ -38,6 +38,42 @@ correctness; never let nit volume bury a blocking finding.
 When unsure whether something is 🟡 or 🟢, ask "would this break or mislead a user?" If no,
 it is a nit.
 
+**A defect a user can see is never a 🟢**, even when the PR didn't cause it: wrong text, the
+wrong language or locale, a needless wait. If this PR shouldn't fix it, keep it 🟡, start it
+with `Follow-up:` and a one-line issue title, and don't let it alone decide Request changes.
+The author fixes it or files that issue before merge. Three of these, posted as 🟢 on #6598,
+#6599 and #6602, were fixed only because someone reread the reviews after merge (#6609, #6610).
+
+## Licences
+
+GAIA ships no AGPL, GPL or LGPL code (or SSPL, EUPL or non-commercial / share-alike
+licences). Any PR that adds or bundles one is a 🔴, whether it arrives as:
+
+- a new Python, npm or Go dependency, or a bumped version that changed licence
+- a library a wheel compiles in, or a system library a frozen binary or installer collects
+- a new model, font or data file
+- code copied into the tree
+
+When a PR touches `setup.py`, any `pyproject.toml`, `package.json` / `package-lock.json`,
+`go.mod`, `packaging/freeze.py`, `electron-builder.yml` or an installer, name the licence of
+each new or changed dependency. Flag it if the licence is copyleft or unclear. Free-text
+metadata is how copyleft slips past scanners: PyMuPDF declares "GNU AFFERO GPL 3.0". MPL-2.0
+is allowed unmodified. For an `OR` licence, the permissive option is the one GAIA uses.
+
+**Known exceptions, awaiting a removal decision.** These LGPL libraries still ship. Each is
+dynamically linked and replaceable, which LGPL permits. Each is reported on every freeze by
+`check_bundle_licenses.py` (`REVIEWED_LGPL`). Flag any LGPL library not on this list:
+
+- **FFmpeg** (LGPL-2.1-or-later) inside Electron, in every desktop installer.
+- **libquadmath** (LGPL-2.1-or-later), vendored by the numpy and faiss-cpu Linux wheels.
+- **libasound / ALSA** (LGPL-2.1-or-later), vendored by the sherpa-onnx Linux wheel.
+- **libkeyutils** (LGPL-2.1-or-later), from the Linux build container's system
+  OpenSSL/Kerberos.
+
+`.github/workflows/license-check.yml` enforces this on everything GAIA ships. A PR that adds
+an entry to `REVIEWED` in `util/check_licenses.py` must show the evidence that the licence
+is permissive.
+
 ## Nit cap
 
 Post **at most 5 nits** total across the whole review. If you find more, post the five
@@ -51,8 +87,9 @@ CI already enforces these, or the project has decided against them — flagging 
 
 - Anything `python util/lint.py --all` fixes: **black** formatting, **isort** import order,
   trailing whitespace, missing EOF newlines, line length.
-- Copyright headers, SPDX identifiers, and license boilerplate — this is an open-source
-  project and contributors retain their own copyright.
+- Copyright headers, SPDX identifiers, and license boilerplate in file headers — this is an
+  open-source project and contributors retain their own copyright. (Dependency licences are
+  not boilerplate; see Licences.)
 - Generated, vendored, or build-output files.
 - Pure type-hint-completeness nags (type checking is advisory here, not a merge gate).
 
@@ -100,6 +137,64 @@ eventual screenshot, don't block on it. The gap worth flagging is a UI-backed ch
 **Spot regression** subsection (a few *adjacent* operations exercised alongside the changed
 one) is expected content, not scope creep.
 
+**A failed evidence harness is not "N/A".** The bundle has three states: real evidence, `N/A`
+(nothing runnable changed), and `⚠️ EVIDENCE HARNESS FAILED` with a `Cause:` line (auth, quota,
+install, or a run that wrote no bundle). Only the third turns the review job red, through its
+last step "Evidence harness failed — this PR's surface was not exercised", and it names the
+cause in the job summary. Before merging past that red check, re-run the job once the cause is
+fixed, or put manual evidence on the PR. Making the check block merges is a branch-protection
+setting, not something this file can enforce.
+
+## Sibling paths
+
+The most common bug that gets past review is a change that lands on one path while a sibling
+stays broken. On a PR of 200+ changed lines (`grep -c '^[+-]' pr-diff.txt`), before you write
+the verdict, take each behaviour the diff changes and search the code outside the diff for:
+
+- other callers of what changed, and other implementations of the same rule
+- hard-coded lists that must gain or lose an entry (tools, models, event types, routes)
+- the same flow reached another way: the Agent UI, the TUI, the CLI, a relayed or background
+  run, and the streaming and non-streaming branches
+
+A sibling still on the old behaviour is a 🟡, or a 🔴 when users reach it in normal use. Name
+the sibling and how you found it. If the PR has no behaviour change, skip this.
+
+## Known bug classes
+
+`/tmp/missed-bug-classes.md` lists the bugs that keep shipping. Apply every **Code:** line to
+the changed code, whatever the PR's size, and trace startup, restart and lock changes from an
+empty `~/.gaia` and from a server that just restarted. Skip the **Docs**, **Walkthrough** and
+"Don't report" parts: those are for the audits.
+
+## Documentation drift
+
+Run this on every PR. Most doc bugs are made here: a PR corrects the docs it remembers and
+misses the others that repeat the claim.
+
+When the diff changes behaviour a reader relies on (a default, limit, flag, command, status
+code, error message, field, name or UI label), take the **old** value or wording from the
+removed lines and grep for it across `docs/`, `hub/agents/**/*.md`, `hub/skills/**/SKILL.md`,
+any shipped contract (`spec_html.py`, `specification.html`, `openapi.*.json`), the root
+`README.md`, and `cpp/`. Search the old claim, not the file the PR already touched, and check
+hand-maintained tables for a row the change added or removed.
+
+- A doc that still states the old behaviour is a 🟡, or a 🔴 when a command it gives now fails.
+- Report each stale claim **once**, listing every place, and name a doc the PR should have
+  changed. These do not count toward the nit cap.
+- A PR that edits docs: check its new claims against the code, too.
+- Skip this for changes nothing documents: internal refactors, tests, CI. Skip a claim that
+  only appears in a past CHANGELOG entry or release note, which record what was true then.
+
+On a re-review, check only behaviour the new commits changed.
+
+## The verdict is enforced
+
+Part 1 opens with exactly one of `**Verdict: Approve**`, `**Verdict: Approve with suggestions**`
+or `**Verdict: Request changes**`, on its own line. The `PR review verdict` status reads that
+line, and a Request changes stays failing until a push passes re-review or a maintainer adds
+the `review-override` label. A reply does not clear it. So use Request changes only for a 🔴 or
+🟡 that must be fixed before merge.
+
 ## Length caps
 
 Keep reviews skimmable:
@@ -111,6 +206,6 @@ Keep reviews skimmable:
 ## Lightweight re-review (per push)
 
 The re-review that runs on each push is **stricter than this rubric, by design**: it reports
-only NEW 🔴/🟡 regressions introduced since the first review and stays **completely silent on
-nits**. The nit cap above is the ceiling for the first full review, not a license for the
+only NEW 🔴/🟡 regressions introduced since the first review, plus any blocking finding from
+an earlier Request changes that is still not fixed, and stays **completely silent on nits**. The nit cap above is the ceiling for the first full review, not a license for the
 re-review to post nits. Default to silence on a re-review.

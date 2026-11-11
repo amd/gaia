@@ -23,8 +23,6 @@ from gaia.agents.tools.task_list_tools import (
     IN_PROGRESS,
     MAX_ITEMS,
     PENDING,
-    SOURCE_AGENT,
-    SOURCE_PLAN,
     TaskList,
     TaskListMixin,
 )
@@ -157,7 +155,6 @@ class TestTaskList:
         tl.update(advance=True)
         assert len(events) == 2
         assert events[-1]["items"][1]["status"] == IN_PROGRESS
-        assert events[-1]["source"] == SOURCE_AGENT
 
     def test_the_action_line_follows_tool_calls_but_not_its_own_tool(self):
         events = []
@@ -190,32 +187,6 @@ class TestTaskList:
     def test_a_malformed_saved_list_fails_loudly(self):
         with pytest.raises(ValueError, match="malformed"):
             TaskList().restore({"items": [{"content": "a", "status": "running"}]})
-
-
-# -- the plan-field fallback --------------------------------------------------
-
-
-class TestPlanFallback:
-    def test_the_plan_is_mirrored_when_the_model_kept_no_list(self):
-        events = []
-        tl = TaskList(on_change=events.append)
-        tl.begin_turn()
-        tl.mirror_plan(["Search the web", "Summarize"], 0)
-        assert _statuses(tl) == [IN_PROGRESS, PENDING]
-        assert tl.state()["source"] == SOURCE_PLAN
-        tl.mirror_plan(["Search the web", "Summarize"], 1)
-        assert _statuses(tl) == [COMPLETED, IN_PROGRESS]
-        tl.mirror_plan(["Search the web", "Summarize"], 2)
-        assert _statuses(tl) == [COMPLETED, COMPLETED]
-        assert len(events) == 3
-
-    def test_a_list_the_model_keeps_always_wins(self):
-        tl = TaskList()
-        tl.begin_turn()
-        tl.update(items=["My own step"])
-        tl.mirror_plan(["Plan step"], 0)
-        assert [item["content"] for item in tl.items] == ["My own step"]
-        assert tl.state()["source"] == SOURCE_AGENT
 
 
 # -- the tool -----------------------------------------------------------------
@@ -300,11 +271,17 @@ class TestUpdateTasksTool:
         assert writes[-1]["items"][0]["status"] == COMPLETED
 
 
-def test_the_prompt_rule_is_short():
-    """Local models pay for every prompt token (#5020/#5288)."""
-    from gaia.agents.tools.task_list_tools import PROMPT_RULES
+def test_the_feature_adds_nothing_to_the_system_prompt(clean_registry):
+    """Local models pay for every prompt token (#5020/#5288): the guidance
+    lives in the tool description, which ships only with the tool."""
+    # pylint: disable=unused-argument
+    _Host().register_task_list_tools()
+    description = " ".join(_TOOL_REGISTRY["update_tasks"]["description"].split())
+    assert "three or more steps" in description
+    assert "never repeat it" in description
+    import gaia.agents.tools.task_list_tools as module
 
-    assert len(PROMPT_RULES.split()) < 70
+    assert not hasattr(module, "PROMPT_RULES")
 
 
 # -- persistence with the TUI's session transcript ----------------------------
@@ -330,7 +307,7 @@ class TestSessionHistory:
 
         def save():
             try:
-                history.save_task_list({"items": [], "source": "agent"})
+                history.save_task_list({"items": [], "updated_at": 1.0})
             except Exception as exc:  # pylint: disable=broad-except
                 errors.append(exc)
 
@@ -338,7 +315,7 @@ class TestSessionHistory:
         worker.start()
         worker.join()
         assert errors == []
-        assert history.load_task_list() == {"items": [], "source": "agent"}
+        assert history.load_task_list() == {"items": [], "updated_at": 1.0}
 
 
 # -- the event on both wires --------------------------------------------------
@@ -362,7 +339,6 @@ class TestEventContract:
         assert event["type"] == "task_list"
         assert set(event) >= {
             "items",
-            "source",
             "current_action",
             "action_started_at",
             "updated_at",
@@ -398,7 +374,9 @@ class TestEventContract:
         from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
 
         emitted = []
-        handler = SimpleNamespace(_emit=emitted.append)
+        handler = SimpleNamespace(
+            _emit=emitted.append, set_relay_question=lambda *_, **__: None
+        )
         event = {"type": "task_list", **self._state()}
         assert relay_module._dispatch_one(handler, event, GAIA_PROFILE) is False
         assert emitted == [event]
@@ -417,7 +395,6 @@ class TestChatDatabase:
         before = db.get_session(session["id"])["updated_at"]
         state = {
             "items": [{"content": "a", "status": "in_progress"}],
-            "source": "agent",
         }
         db.set_session_task_list(session["id"], state)
         row = db.get_session(session["id"])

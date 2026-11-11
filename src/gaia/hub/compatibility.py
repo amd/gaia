@@ -37,12 +37,18 @@ logger = get_logger(__name__)
 
 _BYTES_PER_GB = 1024**3
 
-# Headroom multiplier applied to an artifact's download size to estimate the
-# on-disk install footprint (extraction + pip-resolved dependencies). A wheel
-# typically expands to several times its compressed size once dependencies are
-# installed; 3x is a deliberately conservative floor so we block *before* a
-# half-finished install fills the disk rather than after.
-_INSTALL_SIZE_HEADROOM = 3.0
+# Multiplier on an artifact's download size that estimates its on-disk install
+# footprint, by artifact kind (the installer's ``ARTIFACT_KIND_*`` values). Set
+# high enough to block *before* a half-finished install fills the disk.
+_INSTALL_SIZE_HEADROOM = {
+    # Written to a temp dir, then pip installs it and its dependencies.
+    "wheel": 3.0,
+    # Written to a temp dir, then extracted next to it.
+    "cpp": 3.0,
+    # Written once, from memory, straight over the old executable; the 10%
+    # covers the agent manifest, the sentinel and filesystem block rounding.
+    "binary": 1.1,
+}
 
 
 @dataclass
@@ -188,6 +194,7 @@ def check_compatibility(
     detected_gpu_vram_gb: Optional[float] = None,
     npu_probe_error: Optional[str] = None,
     subject: str = "This agent",
+    artifact_kind: str = "wheel",
 ) -> CompatibilityReport:
     """Check whether the current machine satisfies *requirements*.
 
@@ -214,11 +221,19 @@ def check_compatibility(
             ``"This agent"`` for the hub-install path; the onboarding preflight
             passes its own phrase (e.g. ``"The recommended model"``) so first-run
             setup never claims an agent is involved when none has been chosen.
+        artifact_kind: How the artifact installs (``"wheel"``, ``"cpp"`` or
+            ``"binary"``); picks the headroom multiplier for
+            *download_size_bytes*.
 
     Returns:
         A :class:`CompatibilityReport`. ``compatible`` is ``True`` only when no
         blockers were found.
     """
+    if artifact_kind not in _INSTALL_SIZE_HEADROOM:
+        raise ValueError(
+            f"Unknown artifact kind '{artifact_kind}'; expected one of "
+            f"{', '.join(sorted(_INSTALL_SIZE_HEADROOM))}."
+        )
     reqs = _coerce_requirements(requirements)
     install_dir = install_dir or gaia_agents_dir()
 
@@ -269,7 +284,7 @@ def check_compatibility(
         required_disk_gb = float(reqs.min_disk_gb)
     else:
         required_disk_gb = (
-            download_size_bytes * _INSTALL_SIZE_HEADROOM
+            download_size_bytes * _INSTALL_SIZE_HEADROOM[artifact_kind]
         ) / _BYTES_PER_GB
     disk_ok = True
     if required_disk_gb > 0:
@@ -290,7 +305,8 @@ def check_compatibility(
     # detected_gpu_vram_gb), turn the requirement into a concrete pass or
     # warning instead of the blanket "cannot verify". Absent a scan we fall
     # back to the conservative message — never silently passing (#1727).
-    if reqs.npu:
+    # No Mac has a Ryzen AI NPU, so the requirement doesn't apply there.
+    if reqs.npu and not (detected or "").startswith("darwin"):
         if detected_npu is True:
             pass  # requirement met — no warning
         elif detected_npu is False:

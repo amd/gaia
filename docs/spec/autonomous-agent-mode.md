@@ -201,10 +201,18 @@ AgentLoop
 └── _run_step(trigger)       — find session, acquire locks, run agent tick
 ```
 
-**Active session selection:**
-- Select most recently updated non-private session
-- Skip sessions where `session.private = true` — **always, unconditionally**
-- Skip sessions with no approved pending goals (avoids pointless LLM calls)
+**Session selection:**
+- Ticks run in their own "Background goals" chat (`kind = "scheduled"`, listed with
+  the other background runs), created on first use — never in a chat the user is in,
+  because a tick holds its chat's lock and a long one would refuse the user's messages (#5711)
+- A tick therefore sees none of a chat's attached documents or working folder; goals carry no
+  chat of origin, and before #5711 a tick ran in whichever chat was most recent, not the goal's
+- A turn in a private chat never triggers a tick — **always, unconditionally**
+- No tick runs without approved pending goals (avoids pointless LLM calls)
+- A tick that fails marks the goals it was given `failed`, with the error in their progress
+  notes, and the loop goes idle — it never reruns the failure at once (#5840)
+- Ticks run the flagship in-process only. Where it is installed as a daemon sidecar (the
+  desktop app) they fail with that reason until ticks are relayed (#5840)
 
 **Startup gate:** The loop does not process triggers until after the
 initialized marker exists (`~/.gaia/chat/initialized`). On first launch,
@@ -231,9 +239,8 @@ This mirrors the OpenClaw heartbeat economics: routing routine classification
 to local small models makes always-on operation sustainable. The 35B model
 only loads when there is real work to execute.
 
-Model selection is configured via `GAIA_AUTO_OBSERVE_MODEL` (default:
-`Qwen3-4B-GGUF`) and falls back to the agent's primary model if the
-lightweight model is unavailable.
+This split is not built yet: every tick runs on the session's own model, and
+nothing reads `GAIA_AUTO_OBSERVE_MODEL` (planned, default `Qwen3-4B-GGUF`).
 
 ### 5.2 `set_loop_state` Tool (replaces "respond with IDLE")
 
@@ -595,15 +602,15 @@ in history, preventing context window saturation from repeated ticks.
 
 | Limit | Default | Config key |
 |-------|---------|------------|
-| Max steps per autonomous tick | 20 | `GAIA_AUTO_MAX_STEPS` |
-| Max autonomous ticks per hour | 30 | `GAIA_AUTO_MAX_TICKS_PER_HOUR` |
-| Max agent-created goals per day | 10 | `GAIA_AUTO_MAX_GOALS_PER_DAY` |
+| Seconds between idle ticks | 60 | `GAIA_AGENT_TICK_INTERVAL` |
+| Max autonomous ticks per hour | 30 | `GAIA_AGENT_HOURLY_LIMIT` |
+| Max seconds a single tick may run | 300 | `GAIA_AGENT_TICK_TIMEOUT` |
 | Min schedule interval | 30s | hardcoded |
 | Max schedule lookahead | 86400s | hardcoded |
 
-When `max_steps` is reached mid-tick, the agent is forced to `IDLE` and a
-warning is added to the activity log: "Tick exceeded step budget — partially
-completed work may need review."
+A tick that runs past `GAIA_AGENT_TICK_TIMEOUT` is cancelled and the loop goes
+idle. A per-tick step budget and a daily cap on agent-created goals are not
+implemented.
 
 When the hourly rate limit is hit, all further ticks are suppressed and a
 notification is shown in the UI: "Autonomous loop rate-limited — check
@@ -725,7 +732,7 @@ shows a three-way toggle: **Manual | Goal-driven | Autonomous**.
 
 Sessions with `private=True` are **never touched by the autonomous loop**,
 unconditionally. This applies to:
-- Active session selection in `_get_active_session()` — skipped entirely
+- Session selection — ticks never run in a user's chat, private or not
 - The `notify_user_message()` trigger — if the session is private, no
   autonomous continuation fires after the agent responds
 - The activity log — no entries for private sessions
@@ -947,7 +954,7 @@ async def _run_step(self, trigger: AgentTrigger, session: dict):
 - [ ] `SSEOutputHandler.background_mode` flag + immediate deny for destructive tools
 - [ ] `SSEOutputHandler` user input request queue (replace single slot with `deque`)
 - [ ] `PathValidator`: enforce `prompt_user=False` in background mode (no `input()` calls)
-- [ ] `AgentLoop._get_active_session()` skips private sessions unconditionally
+- [ ] `AgentLoop` runs ticks in its own background chat, and a private chat's turn triggers none
 - [ ] `set_loop_state` enforces `wake_in_seconds` floor (30s) and ceiling (86400s)
 - [ ] Per-tick step budget (default 20), hourly rate limit (default 30)
 - [ ] Daily agent-created goal limit (default 10)

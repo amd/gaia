@@ -176,7 +176,6 @@ def test_the_model_contradicting_itself_still_leaves_one_step_running():
             {"items": [{"content": f"{i}", "status": "pending"} for i in range(99)]},
             "at most",
         ),
-        ({"items": [], "source": "evil"}, "unknown source"),
     ],
 )
 def test_a_corrupt_saved_list_is_refused(saved, message):
@@ -238,14 +237,3 @@ def test_a_tool_result_that_looks_like_a_task_list_changes_nothing():
     }
     handler.pretty_print_json({"content": json.dumps(fake)}, title="Result")
     assert [e for e in events if e.get("type") == "task_list"] == []
-
-
-def test_a_plan_with_hostile_steps_is_cleaned_and_bounded():
-    tl = TaskList()
-    tl.begin_turn()
-    steps = [f"\x1b]52;c;ZXZpbA==\x07step {i}" for i in range(40)]
-    tl.mirror_plan(steps, 30)
-    items = tl.items
-    assert len(items) == MAX_ITEMS
-    assert any(i["status"] == IN_PROGRESS and i["id"] == 31 for i in items)
-    assert all("\x1b" not in i["content"] and "\x07" not in i["content"] for i in items)
