@@ -1032,7 +1032,9 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     try {
       const launcher = installAppImageLauncher();
-      if (launcher.status === "written") console.log(`[main] Wrote the AppImage launcher ${launcher.entry}`);
+      if (launcher.status !== "not-appimage") {
+        console.log(`[main] AppImage launcher ${launcher.status}: ${launcher.entry}`);
+      }
     } catch (err) {
       console.error(`[main] ${err.message}`);
     }
