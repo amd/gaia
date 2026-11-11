@@ -8031,12 +8031,30 @@ def handle_gateway_command(args):
         sys.exit(1)
 
 
+def _is_link(path) -> bool:
+    """True for a symlink or a Windows junction, which ``is_symlink`` misses."""
+    path = str(path)
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+    if isjunction is not None:
+        return isjunction(path)
+    import stat as stat_mod
+
+    try:
+        attrs = getattr(os.lstat(path), "st_file_attributes", 0)
+    except OSError:  # gone; the size walk reports it as unreadable
+        return False
+    return bool(attrs & getattr(stat_mod, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
 def _cache_folder_usage(folder: Path) -> tuple:
     """Bytes, file count and unreadable entries under *folder*, without following links."""
     size = files = 0
     # Files and folders that couldn't be read, so the size never quietly comes up short.
     unreadable: list = []
-    for dirpath, _dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+    for dirpath, dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(dirpath, d))]
         for name in filenames:
             try:
                 stat = os.lstat(os.path.join(dirpath, name))
@@ -8060,9 +8078,11 @@ def _print_cache_folders() -> None:
         return
     rows = []
     for entry in root.iterdir():
-        if entry.is_dir() and not entry.is_symlink():
+        if _is_link(entry):
+            continue
+        if entry.is_dir():
             rows.append((entry.name, *_cache_folder_usage(entry)))
-        elif entry.is_file() and not entry.is_symlink():
+        elif entry.is_file():
             try:
                 rows.append((entry.name, entry.lstat().st_size, 1, 0))
             except OSError:  # removed or locked while listing

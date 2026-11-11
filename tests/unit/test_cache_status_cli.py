@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,27 @@ def test_status_does_not_follow_a_link_out_of_the_cache(
         (cache / "models-link").symlink_to(elsewhere, target_is_directory=True)
     except OSError:
         pytest.skip("this platform cannot create a symlink without privileges")
+
+    _status(monkeypatch, True, caplog)
+
+    assert _cache_lines(capsys.readouterr().out) == [
+        ["rag", "100", "B", "1", "file"],
+        ["Total", "100", "B", "1", "file"],
+    ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+@pytest.mark.parametrize("link", ["linkout", "rag/linkout"])
+def test_status_does_not_follow_a_junction_out_of_the_cache(
+    isolated_cache, tmp_path, monkeypatch, capsys, caplog, link
+):
+    import _winapi
+
+    elsewhere = tmp_path / "bin"
+    _write(elsewhere / "huge.bin", 4096)
+    cache = tmp_path / ".gaia" / "cache"
+    _write(cache / "rag" / "doc.bin", 100)
+    _winapi.CreateJunction(str(elsewhere), str(cache / link))
 
     _status(monkeypatch, True, caplog)
 
