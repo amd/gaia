@@ -1195,7 +1195,8 @@ class AgentSDK:
                 'RAG dependencies not installed. Install with: uv pip install -e ".[rag]"'
             )
 
-        # Create RAG config matching chat config
+        # Index on the same Lemonade the chat uses, not the default server.
+        rag_kwargs.setdefault("base_url", self.config.base_url)
         rag_config = RAGConfig(
             model=self.config.model,
             show_stats=self.config.show_stats,
