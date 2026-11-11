@@ -625,7 +625,8 @@ def _is_material(part: str, start: int) -> bool:
     return (
         part[start] == ":"
         or before.count('"') % 2 == 1
-        or before.count("“") > before.count("”")
+        or before.count("\N{LEFT DOUBLE QUOTATION MARK}")
+        > before.count("\N{RIGHT DOUBLE QUOTATION MARK}")
     )
 
 
