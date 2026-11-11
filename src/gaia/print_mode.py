@@ -391,7 +391,11 @@ def _relay_turn(
             or "the GAIA agent's reply ended without an answer"
         )
     record = summarize(result, model, time.time() - started, verbose=verbose)
-    # The agent counted these itself; its model messages carry no token stats.
-    record["num_tool_calls"] = int(usage.get("tools_used") or 0)
-    record["cached_tokens"] = int(usage.get("cached_tokens") or 0)
+    # Prefer the agent's own counts; a final without them keeps the conversation's.
+    for src, dst in (
+        ("tools_used", "num_tool_calls"),
+        ("cached_tokens", "cached_tokens"),
+    ):
+        if src in usage:
+            record[dst] = int(usage[src] or 0)
     return record

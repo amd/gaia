@@ -767,6 +767,30 @@ def test_a_relayed_verbose_record_carries_the_conversation(relay, capsys):
     assert kwargs["turns"] == []
 
 
+def test_a_relayed_final_without_a_tool_count_keeps_the_conversations(relay, capsys):
+    """An error-exit final carries steps and tokens but no ``tools_used``."""
+    usage = {"steps": 2, "tokens": 12, "input_tokens": 4000}
+    relay.outcome = _Outcome(
+        "final", final_answer="amber", usage=usage, model_messages=_RELAY_MESSAGES
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 1
+    assert record["num_steps"] == 2
+
+
+def test_a_relayed_final_with_no_usage_reports_zeros_not_a_crash(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber")
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 0
+    assert record["cached_tokens"] == 0
+
+
 def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
     """The daemon brings up the model server for its agent, as it does for the
     Agent UI; starting one here would race it."""
