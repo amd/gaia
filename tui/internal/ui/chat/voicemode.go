@@ -24,8 +24,6 @@ import (
 // reply_style "voice", and its <spoken> summary is handed back to the daemon
 // to say. See docs/plans/voice.mdx › Voice mode › TUI screen.
 
-const talkCommand = "/talk"
-
 // voiceTickEvery paces the shimmer and the meter's decay.
 const voiceTickEvery = 90 * time.Millisecond
 
