@@ -161,6 +161,11 @@ from gaia.agents.base.turn_scope import (
     REOPENED_MARKER,
     TurnScopeGuard,
 )
+from gaia.agents.base.unasked_edits import (
+    limits_edit,
+    removal_note,
+    unasked_removals,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     VERIFY_AFTER_CHANGE_TAG,
@@ -2880,6 +2885,7 @@ Do NOT wrap conversational replies in JSON.
         # the entries from _turn_error_start on.
         self.error_history = []
         self._turn_error_start = 0
+        self._turn_unasked_removals = []
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -7528,6 +7534,7 @@ Do NOT wrap conversational replies in JSON.
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
             if outermost:
+                self._note_edit_removals(tool_args, result)
                 result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
@@ -7545,6 +7552,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            self._note_edit_removals(tool_args, result)
             return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
@@ -7568,6 +7576,40 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _note_edit_removals(self, tool_args: Any, result: Any) -> None:
+        """Keep the lines a "change nothing else" edit removed unasked."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        old, new = args.get("old_content"), args.get("new_content")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return
+        if self._is_error_result(result):
+            return
+        request = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        if not limits_edit(str(request or "")):
+            return
+        removals = getattr(self, "_turn_unasked_removals", None)
+        if removals is None:
+            return
+        raw_path = str(args.get("file_path") or "")
+        path = os.path.abspath(raw_path) if raw_path else ""
+        key = os.path.normcase(path)
+        path = next((p for p, _ in removals if os.path.normcase(p) == key), path)
+
+        def _fold(line: str) -> str:
+            return " ".join(line.split()).lower()
+
+        restored = {_fold(line) for line in new.splitlines()}
+        removals[:] = [
+            (p, line)
+            for p, line in removals
+            if os.path.normcase(p) != key or _fold(line) not in restored
+        ]
+        for line in unasked_removals(old, new, str(request)):
+            if (path, line) not in removals:
+                removals.append((path, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
@@ -10418,6 +10460,10 @@ Do NOT wrap conversational replies in JSON.
         note = self._planted_instructions_note(body)
         if note:
             body = f"{body.rstrip()}\n\n{note}"
+        removals = getattr(self, "_turn_unasked_removals", None) or []
+        removed = removal_note(removals, body)
+        if removed:
+            body = f"{body.rstrip()}\n\n{removed}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10853,6 +10899,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
+        self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
         self._last_tool_schemas = None
