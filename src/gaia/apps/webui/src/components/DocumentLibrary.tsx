@@ -10,6 +10,7 @@ import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
@@ -137,6 +138,10 @@ export function DocumentLibrary() {
     const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
     // Outcome of indexing a folder typed into the path box
     const [folderNotice, setFolderNotice] = useState<string | null>(null);
+    // Why the last remove, cancel or open-folder failed
+    const [actionError, setActionError] = useState<string | null>(null);
+    // The library couldn't be listed: an empty list would look like the documents are gone
+    const [loadError, setLoadError] = useState<{ err: unknown } | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
     // Pages read / chunks embedded, per document being indexed right now
@@ -146,10 +151,10 @@ export function DocumentLibrary() {
     // Force re-render for elapsed time updates
     const [, setTick] = useState(0);
 
-    // Load documents on mount
-    useEffect(() => {
+    const loadDocuments = useCallback(() => {
         log.doc.info('Loading document library...');
         const timer = log.doc.time();
+        setLoadError(null);
         api.listDocuments()
             .then((data) => {
                 const docs = data.documents || [];
@@ -158,9 +163,12 @@ export function DocumentLibrary() {
             })
             .catch((err) => {
                 log.doc.error('Failed to load documents', err);
-                setDocuments([]);
+                setLoadError({ err });
             });
     }, [setDocuments]);
+
+    // Load documents on mount
+    useEffect(loadDocuments, [loadDocuments]);
 
     // Poll for indexing status on documents that are still 'indexing'
     const hasIndexingDocs = documents.some(
@@ -252,8 +260,10 @@ export function DocumentLibrary() {
                     setDocuments(freshDocs);
                     log.doc.debug('Document list refreshed (server-side changes detected)');
                 }
-            } catch {
-                // Ignore refresh errors
+                setLoadError(null);
+            } catch (err) {
+                // The next refresh asks again; the list keeps what it last showed.
+                log.doc.warn('Document list refresh failed', err);
             }
         }, 15000); // Refresh every 15 seconds
 
@@ -427,42 +437,55 @@ export function DocumentLibrary() {
     }, [uploadFileBlob]);
 
     const handleDeleteDoc = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Deleting document: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Deleting document: ${name}`);
+        setActionError(null);
         try {
             await api.deleteDocument(id);
-            indexingStartTimes.current.delete(id);
-            removeDraftDocument(id);
-            setDocuments(documents.filter((d) => d.id !== id));
-            log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
+            log.doc.error(`Failed to delete document: ${name}`, err);
+            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            return;
         }
-    }, [documents, setDocuments, removeDraftDocument]);
+        indexingStartTimes.current.delete(id);
+        removeDraftDocument(id);
+        // The list now, not when the click happened: a poll may have refreshed it meanwhile.
+        setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
+        log.doc.info(`Deleted document: ${name}`);
+    }, [documents, setDocuments, removeDraftDocument, t]);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
+        setActionError(null);
         try {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
+            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
         }
-    }, []);
+    }, [t]);
 
     const handleCancelIndexing = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Cancelling indexing for: ${name}`);
+        setActionError(null);
         try {
             await api.cancelIndexing(id);
-            indexingStartTimes.current.delete(id);
-            // Refresh
+        } catch (err) {
+            log.doc.error(`Failed to cancel indexing: ${name}`, err);
+            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            return;
+        }
+        indexingStartTimes.current.delete(id);
+        log.doc.info(`Cancelled indexing for: ${name}`);
+        try {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
-            log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
+            // The periodic refresh shows the cancelled row on its next pass.
+            log.doc.warn('Could not refresh the documents after cancelling', err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, setDocuments, t]);
 
     const handleReindex = useCallback(async (id: string) => {
         if (reindexingIds.has(id)) return; // guard against double-click
@@ -706,6 +729,16 @@ export function DocumentLibrary() {
                         />
                     )}
 
+                    {actionError && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{actionError}</span>
+                            <button className="btn-icon-sm" onClick={() => setActionError(null)} aria-label={t('docs.dismissError')}>
+                                <X size={12} />
+                            </button>
+                        </div>
+                    )}
+
                     {folderNotice && (
                         <div className="doc-folder-notice" role="status">
                             <CheckCircle size={14} />
@@ -729,7 +762,16 @@ export function DocumentLibrary() {
 
                     {/* Document list */}
                     <div className="doc-list">
-                        {documents.length === 0 && !isUploading && (
+                        {loadError && (
+                            <div className="empty-docs doc-load-error" role="alert">
+                                <AlertCircle size={32} strokeWidth={1} />
+                                <p>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</p>
+                                <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                    {t('docs.loadRetry')}
+                                </button>
+                            </div>
+                        )}
+                        {documents.length === 0 && !isUploading && !loadError && (
                             <div className="empty-docs">
                                 <FileText size={32} strokeWidth={1} />
                                 <p>{t('docs.empty')}</p>
