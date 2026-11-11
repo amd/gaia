@@ -23,8 +23,8 @@ import pytest
 
 from tests.fixtures.lemonade_bump import (
     CURRENT,
-    SKIPPED,
     REPO_ROOT,
+    SKIPPED,
     TARGET,
     git,
     honest_bump,
