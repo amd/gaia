@@ -109,7 +109,7 @@ def test_eval_dates_fill_the_scenario_and_never_the_prefix(monkeypatch, today):
 def _launch(tmp_path, monkeypatch, scenario):
     seen = {}
 
-    def driver(cmd, *, input, timeout, cwd):  # pylint: disable=redefined-builtin
+    def driver(cmd, *, input, timeout, cwd, env=None):  # pylint: disable=redefined-builtin
         seen["cmd"], seen["input"] = cmd, input
         payload = {
             "structured_output": {
