@@ -124,7 +124,7 @@ def test_the_chat_shim_is_not_a_frozen_input():
 
 
 def test_the_frozen_inputs_include_bundled_prompts_and_apps():
-    # freeze.py bundles skill prompts and gaia.agents imports gaia.apps.llm.
+    # freeze.py bundles skill prompts; only the web frontend is left out of src/gaia.
     tracked = gate._git("ls-files", "--", *gate.FROZEN_INPUTS).split()
     assert any(
         p.startswith("hub/agents/gaia/python/gaia_agent/skills/")

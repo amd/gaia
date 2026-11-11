@@ -535,10 +535,15 @@ class AgentSidecarManager:
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
+        from gaia.env import unfreeze_loader_paths
         from gaia.llm.lemonade_choice import child_lemonade_env
 
+        # A frozen sidecar is another bundle: it must not record ours as the
+        # user's library path and hand it to the commands it runs.
         spawn_env = child_lemonade_env(
-            {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+            unfreeze_loader_paths(
+                {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+            )
         )
         self._spawned_lemonade = (
             spawn_env.get("LEMONADE_BASE_URL"),

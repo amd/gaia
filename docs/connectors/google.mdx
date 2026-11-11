@@ -110,8 +110,8 @@ This is separate from authorizing the connection or granting scopes
 inside GAIA.
 
 You only need to declare the scopes the agents you actually use will
-request — the flagship [`gaia` agent](/guides/email) needs only
-`gmail.readonly`; `openid` and `userinfo.email` are requested on every
+request — the flagship [`gaia` agent](/guides/email) uses `gmail.readonly` and
+`gmail.compose` for mail and `calendar.events` for its calendar tools; `openid` and `userinfo.email` are requested on every
 connection regardless of agent. GAIA no longer requests the short `email`
 and `profile` names (`email` is the same permission as `userinfo.email`). It
 still accepts them so connections made by older GAIA versions keep working,
@@ -126,6 +126,7 @@ and declaring them does no harm.
 | `https://www.googleapis.com/auth/userinfo.email` | Non-sensitive | See your email address — Google's URL spelling of `email` |
 | `https://www.googleapis.com/auth/gmail.readonly` | Restricted | Read your email |
 | `https://www.googleapis.com/auth/gmail.send` | Sensitive | Send email on your behalf |
+| `https://www.googleapis.com/auth/gmail.compose` | Restricted | Draft and send email on your behalf |
 | `https://www.googleapis.com/auth/gmail.modify` | Restricted | Read, modify, and send email on your behalf |
 | `https://www.googleapis.com/auth/calendar.readonly` | Sensitive | Read your calendar events |
 | `https://www.googleapis.com/auth/calendar.events` | Sensitive | Manage your calendar events |
@@ -246,8 +247,12 @@ On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent
 already declares in its own code, so there's no list to type out or keep
 in sync:
 
-**Flagship `gaia` agent — the read-only Gmail scope** it needs to read and
-search your mailbox:
+**Flagship `gaia` agent — two Gmail scopes and one calendar scope:**
+`gmail.readonly` to read and search, `gmail.compose` to draft and send
+through its bundled `send-email` skill, with a confirmation before anything is
+sent, and `calendar.events` so it can read
+your calendar and, once you approve each change, create, change or cancel
+events. It never asks for `gmail.modify`:
 
 ```bash
 gaia connectors connect google --grant-agent installed:gaia
@@ -259,19 +264,24 @@ Naming the agent is enough; GAIA rejects `--grant-agent` outright for an
 agent that declares no Google scopes, rather than silently granting
 nothing.
 
-**Flagship — the same read-only scope, as a grant:** mail tools read
-the `installed:gaia` grant. Use this when Google is already connected
-and you only need the ledger entry:
+**Flagship — the same two scopes, as a grant:** mail tools read the
+`installed:gaia` grant. Use this when Google is already connected with
+both scopes and you only need the ledger entry:
 
 ```bash
 gaia connectors grants grant google installed:gaia \
-  --scopes https://www.googleapis.com/auth/gmail.readonly
+  --scopes https://www.googleapis.com/auth/gmail.readonly \
+  https://www.googleapis.com/auth/gmail.compose
 ```
 
+A connection made when the flagship only read mail holds `gmail.readonly`
+alone. It keeps reading, but drafting or sending asks you to reconnect
+Google and approve `gmail.compose`.
+
 <Note>
-  `gmail.readonly` is a **Restricted** scope — the same tier as
-  `gmail.modify` (see [Scopes to declare in your
-  Console](#declare-scopes-under-data-access)). Read-only narrows what the
+  `gmail.readonly` and `gmail.compose` are **Restricted** scopes — the same
+  tier as `gmail.modify` (see [Scopes to declare in your
+  Console](#declare-scopes-under-data-access)). Narrower scopes limit what the
   agent can *do*, not which verification tier Google applies.
 </Note>
 
@@ -390,7 +400,7 @@ Two places — both work:
 ## See also
 
 - [Connectors overview](/connectors)
-- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly`
+- [Email](/guides/email) — the flagship agent, which uses `gmail.readonly` and `gmail.compose` for mail and `calendar.events` for its calendar
 - [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) — the AMD-internal client + rotation procedure (maintainers)
 - [Manage OAuth Clients — Google Cloud Console Help](https://support.google.com/cloud/answer/15549257)
 - [Get started with the Google Auth Platform — Google Cloud Console Help](https://support.google.com/cloud/answer/15544987)

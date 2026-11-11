@@ -47,6 +47,11 @@ on:
         required: false
         type: string
         default: ''
+      flagship:
+        description: 'artifact: a release candidate''s real-engine check installs the gaia-agent-<platform> builds this run froze (build_flagship_sidecar.yml), because its pre-release does not exist yet. Empty: it reads the published pre-release.'
+        required: false
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       platforms:
@@ -226,3 +231,150 @@ jobs:
           name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
           path: gaia-core-${{ matrix.key }}.tar.gz
           if-no-files-found: error
+
+  # A release candidate's core installs the flagship from its own pre-release
+  # (gaia.hub.prerelease), which the run under test is what publishes. Pack this
+  # run's flagship builds exactly as publish.yml attaches them, so real-engine
+  # installs those through the same release file. The caller must have built
+  # them (rc-flagship / build_flagship_sidecar.yml) before calling this.
+  rc-flagship:
+    name: Pack this run's flagship (release candidate)
+    if: inputs.flagship == 'artifact' && (contains(inputs.tag, '-rc') || contains(inputs.version, '-rc'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          sparse-checkout: |
+            util/flagship_rc_assets.py
+            hub/agents/gaia/python/gaia_agent/__init__.py
+            hub/agents/gaia/python/gaia-agent.yaml
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: gaia-agent-*
+          path: flagship
+
+      - name: Pack the pre-release's flagship assets
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ inputs.ref || github.sha }}
+        run: |
+          set -euo pipefail
+          # 0.25.4-rc.3 is tagged v0.25.4-rc3.
+          [ -n "${TAG}" ] || TAG="v${VERSION/-rc./-rc}"
+          python3 util/flagship_rc_assets.py release \
+            --artifacts flagship --tag "${TAG}" --commit "${COMMIT}" --out release-assets
+          ls -l release-assets
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_prefix }}rc-flagship-release
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  # Ubuntu 24.04 is the Linux floor: Lemonade's engine needs glibc 2.38.
+  # The freshly frozen gaia, on the hosts users have, sets up a REAL Lemonade
+  # and answers one chat turn: no fake server, no source install. The freeze
+  # job's smoke test runs with Lemonade unreachable, inside a glibc-floor
+  # container, so it cannot see a library the bundle leaks into lemond.
+  real-engine:
+    name: Real engine (${{ matrix.label }})
+    needs: [freeze, rc-flagship]
+    if: >-
+      !cancelled() &&
+      needs.freeze.result == 'success' &&
+      (needs.rc-flagship.result == 'success' || needs.rc-flagship.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {label: Windows, os: windows-latest, key: win32-x64, exe: gaia.exe}
+          - {label: macOS arm64, os: macos-latest, key: darwin-arm64, exe: gaia}
+          - {label: Ubuntu 24.04, os: ubuntu-24.04, key: linux-x64, exe: gaia}
+          - {label: Fedora 44, os: ubuntu-latest, key: linux-x64, exe: gaia, container: 'fedora:44'}  # Fedora 45's OpenSSL 4 has no libssl.so.3 (#7010)
+    steps:
+      - name: Is this platform wanted
+        id: want
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          KEY: ${{ matrix.key }}
+        run: |
+          case " ${PLATFORMS} " in
+            *" ${KEY} "*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT"; echo "${KEY} was not built" ;;
+          esac
+
+      - name: Let the Fedora container unpack the checkout
+        if: steps.want.outputs.run == 'true' && matrix.container
+        run: dnf install -y --setopt=install_weak_deps=False tar gzip
+
+      - uses: actions/checkout@v7
+        if: steps.want.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          sparse-checkout: |
+            installer/core/real_engine_check.sh
+            installer/core/fedora-engine-packages.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Prepare the Fedora container
+        if: steps.want.outputs.run == 'true' && matrix.container
+        shell: bash
+        run: |
+          # shellcheck disable=SC2046  # one package per word
+          dnf install -y --setopt=install_weak_deps=False \
+            $(grep -v '^#' installer/core/fedora-engine-packages.txt)
+
+      - uses: actions/download-artifact@v8
+        if: steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.key }}
+          path: ${{ runner.temp }}/core-tgz
+
+      - name: Unpack the frozen gaia
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/core"
+          # Relative paths: GNU tar on Windows reads "C:" as a remote host.
+          cd "${RUNNER_TEMP}"
+          tar -C core -xzf "core-tgz/gaia-core-${{ matrix.key }}.tar.gz"
+
+      - uses: actions/download-artifact@v8
+        if: steps.want.outputs.run == 'true' && needs.rc-flagship.result == 'success'
+        with:
+          name: ${{ inputs.artifact_prefix }}rc-flagship-release
+          path: ${{ runner.temp }}/rc-flagship
+
+      - name: Set up and chat through a real Lemonade
+        if: steps.want.outputs.run == 'true'
+        shell: bash
+        env:
+          RUN_FLAGSHIP: ${{ needs.rc-flagship.result == 'success' }}
+        run: |
+          set -euo pipefail
+          if [ "${RUN_FLAGSHIP}" = "true" ]; then
+            dir="${RUNNER_TEMP}/rc-flagship"
+            [ "${RUNNER_OS}" != "Windows" ] || dir="$(cygpath -m "${dir}")"
+            export GAIA_RC_FLAGSHIP_URL="file:///${dir#/}"
+            echo "The release candidate installs this run's flagship from ${GAIA_RC_FLAGSHIP_URL}"
+          fi
+          bash installer/core/real_engine_check.sh "${RUNNER_TEMP}/core/${{ matrix.exe }}" "${RUNNER_TEMP}/real-engine"
+
+      - uses: actions/upload-artifact@v7
+        if: failure() && steps.want.outputs.run == 'true'
+        with:
+          name: ${{ inputs.artifact_prefix }}real-engine-logs-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/real-engine/gaia-home/**/*.log
+          if-no-files-found: ignore
+          retention-days: 14

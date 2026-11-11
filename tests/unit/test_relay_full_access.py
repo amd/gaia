@@ -20,12 +20,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
 from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,

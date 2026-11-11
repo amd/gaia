@@ -355,12 +355,23 @@ def _agent_turn_problem(model_id: str) -> Optional[str]:
 
 def _agent_turn_failure(model_id: str) -> str:
     """The Test step's sentence for a failed chat on *model_id*."""
-    from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        is_cloud_model_with_catalog,
+    )
     from gaia.ui.routers.providers import display_name
     from gaia.ui.warmup import _device_for
 
     name = display_name(model_id)
-    if model_id.startswith("claude-") or cloud_model_provider(model_id):
+    try:
+        cloud = model_id.startswith("claude-") or is_cloud_model_with_catalog(model_id)
+    except LemonadeClientError as e:
+        return (
+            f"GAIA's test chat on {name} got no answer, and the model catalog "
+            f"could not be checked ({e}). Check Lemonade and retry setup."
+        )
+    if cloud:
         what = f"GAIA's test chat on {name}, which runs in the cloud, got no answer."
     else:
         device = _device_for(LemonadeClient(verbose=False), model_id)
@@ -1614,9 +1625,10 @@ class SetupRunner:
             recording = threading.Thread(
                 target=self._record_failure, args=(run, cause), daemon=True
             )
+            # Started under the lock, so report() never joins an unstarted thread.
             with self._lock:
                 self._recording = recording
-            recording.start()
+                recording.start()
 
     def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
         record_id = _record_setup_failure(run, cause)
@@ -1832,7 +1844,10 @@ class SetupRunner:
     def _test_agent(self, run: SetupRun) -> Optional[str]:
         """One real turn through the agent, on the model chat will open on:
         every model loading doesn't prove GAIA answers on that one."""
-        from gaia.llm.lemonade_client import cloud_model_provider
+        from gaia.llm.lemonade_client import (
+            LemonadeClientError,
+            is_cloud_model_with_catalog,
+        )
 
         started = time.monotonic()
         from gaia.config import GaiaConfigError
@@ -1846,7 +1861,15 @@ class SetupRunner:
             model, unknown = "", str(e)
         else:
             unknown = None
-        cloud = model.startswith("claude-") or bool(cloud_model_provider(model))
+        try:
+            cloud = model.startswith("claude-") or is_cloud_model_with_catalog(model)
+        except LemonadeClientError as e:
+            cloud = False
+            if unknown is None:
+                unknown = (
+                    f"GAIA could not classify the chat model {model!r} because "
+                    f"the Lemonade catalog was unavailable: {e}"
+                )
         problem = unknown
         if problem is None and run.skip_chat_model and not cloud:
             # A cloud setup chats on the cloud model connecting saved.

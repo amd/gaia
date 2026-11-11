@@ -193,6 +193,35 @@ When an answer names a document from your library, the name is a link that
 opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
 6–7") opens that page. In the desktop app they open in your web browser.
 
+### Recipes, Workouts, Plans and Calculators as Cards
+
+Ask for a recipe, a workout, how to fix something, a packing list, a trip plan,
+a tip split or a loan payment, and the answer arrives as a card you can use
+rather than a wall of text. The **Try** row on a new chat fills in an example
+of each, and the first card you get carries a short tip on what it can do.
+
+| Card | What you can do with it |
+|------|------------------------|
+| **Recipe** | Change the servings and every amount rescales; switch between US and metric units; tap a time in a step to start a timer |
+| **Workout** | Tick off equipment; count sets and run hold and rest timers |
+| **How-to** | Tick off materials and tools; timers on any step with a time in it |
+| **Checklist** | Tick items off; your ticks stay when you come back to the chat |
+| **Trip plan** | A day-by-day timeline with a packing list to tick off |
+| **Tip or loan calculator** | Change any number and the tip, per-person share or monthly payment updates at once |
+
+**Start cooking**, **Start workout** and **Start** open the steps full screen,
+one at a time, with a large timer for the step. Use the arrows or the ← and →
+keys to move, and **Esc** or the **X** to leave. A running timer keeps going
+when you leave. Every card can be copied as plain text, and recipes and guides
+can be printed.
+
+> *"Give me a recipe for banana bread"*
+>
+> *"Split a $142 dinner four ways with a 20% tip"*
+
+The model fills in the card and the app does the math, so amounts and payments
+are exact even on a small local model.
+
 ### See Generated Images and Audio
 
 An image the agent generates shows in the answer; click it to see it full size.
@@ -474,7 +503,9 @@ system settings, the dots hold still.
   "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
   including the tokens the whole turn read and wrote across every model call.
   Files the answer names by full path,
-  such as a saved deliverable, open in your file explorer when clicked.
+  such as a saved deliverable, open in your file explorer when clicked. So does
+  a file the answer names only by file name, in code formatting, when it is one
+  of the files that turn wrote; two written files with the same name stay plain.
 - **A new chat** greets you and shows the folder GAIA works in.
   Click the folder under the message box to give the chat another folder it
   may read and write from its first message, the same as **Add folder** in the
@@ -551,9 +582,11 @@ as you flip it:
 
 On a Linux desktop that shows no tray icons, such as stock GNOME, closing the
 window minimizes GAIA instead, with your model still loaded. Click GAIA in the
-dock to bring it back. To quit, right-click it there and choose Quit. **Start in
+dock to bring it back, or in the Activities overview where no dock is on screen
+(Fedora). To quit, right-click it there and choose Quit. **Start in
 the tray** stays off there, because there's no tray to open the window from.
-No extension is needed.
+No extension is needed. GAIA doesn't appear under GNOME's **Background Apps**:
+that list shows Flatpak apps only.
 
 ## Models and where they run
 
@@ -1130,7 +1163,7 @@ policy version, and receipt ID remain attached to the assistant message.
 The agent supports the **Model Context Protocol** in both directions — connect external tools to expand what the agent can do, or expose the Agent UI itself so other AI tools can drive it.
 
 <CardGroup cols={2}>
-  <Card title="Add Tools to the Agent" icon="plug" href="/guides/mcp/client">
+  <Card title="Add Tools to the Agent" icon="plug" href="/sdk/sdks/mcp">
     Connect GitHub, Slack, databases, and more via MCP servers
   </Card>
 
