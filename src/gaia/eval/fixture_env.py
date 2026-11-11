@@ -41,7 +41,9 @@ _PORT_PATTERNS = (
 )
 
 #: Generated under the fixture tree at run time; not part of what was measured.
-_UNHASHED_PARTS = frozenset({"__pycache__", "_prepared", ".pytest_cache"})
+_UNHASHED_PARTS = frozenset({"__pycache__", ".pytest_cache"})
+#: The prepared hub plus its .lock, .lock.d and .build-*/.old-* swap folders.
+_UNHASHED_PREFIXES = ("_prepared",)
 
 
 def from_env(environ=None) -> tuple[Optional[Path], Optional[int]]:
@@ -115,6 +117,8 @@ def _tree_digest(root: Path) -> str:
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)
         if not path.is_file() or _UNHASHED_PARTS.intersection(rel.parts):
+            continue
+        if any(part.startswith(_UNHASHED_PREFIXES) for part in rel.parts):
             continue
         if path.suffix == ".pyc":
             continue

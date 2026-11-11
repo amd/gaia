@@ -121,6 +121,12 @@ def test_the_fingerprint_follows_content_not_line_endings_or_build_output(tmp_pa
     hub = repo / "tests" / "fixtures" / "gaia" / "fixture_hub" / "_prepared"
     hub.mkdir(parents=True)
     (hub / "index.json").write_text("{}")
+    # The hub's lock and swap folders that prepare_fixture_hub leaves behind.
+    (hub.parent / "_prepared.lock").write_text("")
+    (hub.parent / "_prepared.lock.d").mkdir()
+    (hub.parent / "_prepared.lock.d" / "owner").write_text("1234")
+    (hub.parent / "_prepared.old-x").mkdir()
+    (hub.parent / "_prepared.old-x" / "index.json").write_text("{}")
     assert fixture_env.fixture_fingerprint(repo) == first
 
     csv.write_bytes(b"a,b\n1,3\n")
