@@ -451,7 +451,7 @@ class AutoIndexAgent(Agent):
 
 ### Extraction from ChatAgent (Completed)
 
-`FileChangeHandler` was originally embedded in `hub/agents/chat/python/gaia_agent_chat/agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
+`FileChangeHandler` was originally embedded in `hub/agents/gaia/python/gaia_agent/chat_agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
 
 ```python
 from gaia.utils.file_watcher import FileChangeHandler
@@ -524,7 +524,7 @@ def _should_process(self, event: FileSystemEvent) -> bool:
 # pyproject.toml
 [project]
 dependencies = [
-    "watchdog>=3.0.0",  # File system monitoring
+    "watchdog>=3.0.0,<7",  # File system monitoring
 ]
 ```
 

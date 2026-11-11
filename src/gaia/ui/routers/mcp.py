@@ -9,7 +9,7 @@ read-only runtime-status endpoints used by the UI's MCP status panel.
 
 Mutating operations now route through:
   * Catalog tiles  → POST /api/connectors/{id}/configure
-  * Custom servers → gaia connectors mcp add (CLI; UI work in #977)
+  * Custom servers → an entry in ~/.gaia/mcp_servers.json (CLI and UI in #977)
   * Catalog        → GET  /api/connectors/catalog (filter by type='mcp_server')
 """
 

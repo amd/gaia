@@ -35,24 +35,25 @@ import functools
 import os
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.base.console import SilentConsole
-from gaia.agents.base.mcp_agent import MCPAgent
-from gaia_agent_email.contract import (
-    BatchTriageRequest,
-    DraftReply,
-    EmailAddress,
-    EmailTriageRequest,
-)
 from gaia_agent_email.api_routes import (  # read-only reuse of the REST surface
     ConfirmationStore,
     EmailTriageService,
     _format_address,
     _payload_fingerprint,
 )
-from gaia.connectors.api import connected_mailbox_providers
-from gaia.logger import get_logger
+from gaia_agent_email.contract import (
+    BatchTriageRequest,
+    DraftReply,
+    EmailAddress,
+    EmailTriageRequest,
+)
 from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.version import AGENT_VERSION
+
+from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.mcp_agent import MCPAgent
+from gaia.connectors.api import connected_mailbox_providers
+from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -418,7 +419,10 @@ class EmailTriageMCPAgent(MCPAgent):
                 f"Expected one of: {', '.join(PROVIDERS)}."
             ) from None
         if family == "gmail":
-            from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
+            from gaia_agent_email.gmail_backend import (
+                LiveGmailBackend,
+                _get_gmail_token,
+            )
 
             return LiveGmailBackend(_get_gmail_token)
         from gaia_agent_email.outlook_backend import (
@@ -463,6 +467,13 @@ def start_email_mcp(
 
 def main() -> None:
     import argparse
+
+    try:
+        from gaia.logger import configure
+    except ImportError:  # older amd-gaia sets up logging on import; the pin allows it
+        pass
+    else:
+        configure()
 
     parser = argparse.ArgumentParser(description="GAIA Email Triage MCP Server")
     parser.add_argument(

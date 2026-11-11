@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { memoryD1 } from "./d1";
 
 const env = {
   DB: {} as D1Database,
@@ -42,13 +43,13 @@ describe("routing", () => {
 
 describe("maintainer accounts", () => {
   it("are read from MAINTAINER_LOGINS and offered as a Hide maintainers button", async () => {
-    const res = await worker.fetch(new Request("http://localhost:8787/admin/developers"), { ...env, MAINTAINER_LOGINS: "ann, bob-2" });
-    expect(await res.text()).toContain('var MINE=["ann","bob-2"];');
+    const res = await worker.fetch(new Request("http://localhost:8787/admin/developers"), { ...env, DB: memoryD1(), MAINTAINER_LOGINS: "ann, bob-2" });
+    expect(await res.text()).toContain('var MINE=["ann","bob-2"],');
   });
 
   it("default to none, so no personal account is baked into the page", async () => {
-    const html = await (await worker.fetch(new Request("http://localhost:8787/admin/developers"), env)).text();
-    expect(html).toContain("var MINE=[];");
+    const html = await (await worker.fetch(new Request("http://localhost:8787/admin/developers"), { ...env, DB: memoryD1() })).text();
+    expect(html).toContain("var MINE=[],");
   });
 
   it("refuse anything that is not a GitHub login (nothing can be injected into the page)", async () => {
@@ -89,5 +90,78 @@ describe("parseMaintainerGroups", () => {
     expect(parseMaintainerGroups("alice+alice-work, bob")).toEqual([["alice", "alice-work"], ["bob"]]);
     expect(parseMaintainers("alice+alice-work,bob")).toEqual(["alice", "alice-work", "bob"]);
     expect(() => parseMaintainerGroups("alice+<script>")).toThrow(/not GitHub logins/);
+  });
+});
+
+describe("core team set from the dashboard", () => {
+  const save = (db: D1Database, body: unknown, headers: Record<string, string> = { "x-admin-action": "core-team" }) =>
+    worker.fetch(
+      new Request("http://localhost:8787/admin/api/core-team", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }),
+      { ...env, DB: db, MAINTAINER_LOGINS: "deploy-person" },
+    );
+  const page = async (db: D1Database) =>
+    (await worker.fetch(new Request("http://localhost:8787/admin/developers"), { ...env, DB: db, MAINTAINER_LOGINS: "deploy-person" })).text();
+
+  it("uses the deploy value until a team is saved, then the saved one, recording who saved it", async () => {
+    const db = memoryD1();
+    expect(await page(db)).toContain('var MINE=["deploy-person"],');
+    const res = await save(db, { maintainers: " ann + ann-work , bob " });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ maintainers: "ann+ann-work,bob" });
+    const html = await page(db);
+    expect(html).toContain('var MINE=["ann","ann-work","bob"],');
+    expect(html).toContain('"source":"dashboard"');
+    expect(html).toContain('"by":"dev@localhost"');
+  });
+
+  it("refuses a save without the action header or from another site", async () => {
+    const db = memoryD1();
+    expect((await save(db, { maintainers: "ann" }, {})).status).toBe(403);
+    expect((await save(db, { maintainers: "ann" }, { "x-admin-action": "core-team", origin: "https://evil.example" })).status).toBe(403);
+    expect((await save(db, { maintainers: "ann" }, { "x-admin-action": "collect" })).status).toBe(403);
+    expect(await page(db)).toContain('var MINE=["deploy-person"],');
+  });
+
+  it("accepts a save from the page itself, which sends its own Origin", async () => {
+    const db = memoryD1();
+    expect((await save(db, { maintainers: "ann" }, { "x-admin-action": "core-team", origin: "http://localhost:8787" })).status).toBe(200);
+    expect((await save(db, { maintainers: "ann" }, { "x-admin-action": "core-team", origin: "http://localhost" })).status).toBe(200);
+  });
+
+  it("rejects anything that is not a GitHub login and keeps the previous team", async () => {
+    const db = memoryD1();
+    await save(db, { maintainers: "ann" });
+    const res = await save(db, { maintainers: 'ann,"];alert(1)//' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/not GitHub logins/);
+    expect((await save(db, { nope: 1 })).status).toBe(400);
+    expect(await page(db)).toContain('var MINE=["ann"],');
+  });
+
+  it("is what the Growth page uses too", async () => {
+    const db = memoryD1();
+    await save(db, { maintainers: "ann+ann-work,bob" });
+    const html = await (await worker.fetch(new Request("http://localhost:8787/admin/growth"), { ...env, DB: db, MAINTAINER_LOGINS: "deploy-person" })).text();
+    expect(html).toContain('CORE="ann+ann-work,bob"');
+  });
+
+  it("refuses Origin: null and names the core team, not the secret, in a validation error", async () => {
+    const db = memoryD1();
+    expect((await save(db, { maintainers: "ann" }, { "x-admin-action": "core-team", origin: "null" })).status).toBe(403);
+    expect(await (await save(db, { maintainers: "ann,<x>" })).text()).toMatch(/^The core team has entries that are not GitHub logins: <x>/);
+  });
+
+  it("lets an empty list clear the team, so nobody is counted as core", async () => {
+    const db = memoryD1();
+    expect((await save(db, { maintainers: "" })).status).toBe(200);
+    expect(await page(db)).toContain("var MINE=[],");
+  });
+});
+
+describe("collect with an empty source list", () => {
+  it("answers 400 instead of collecting nothing and reporting ok", async () => {
+    const res = await worker.fetch(new Request("http://localhost:8787/admin/api/collect?days=1&only=,", { method: "POST", headers: { "x-admin-action": "collect" } }), env);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/names no source/);
   });
 });

@@ -1,15 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Build the terminal hub and its installers for a final release, then:
+# Build the terminal hub for a final release and publish its six raw binaries
+# to the Agent Hub (R2). The flagship agent's binaries.lock.json pins them, so
+# its npm package and `gaia hub install gaia` fetch them from there.
 #
-#   GitHub release  — the terminal installers (.pkg/.deb/.rpm and the one
-#                     Windows setup) plus gaia-installers-SHA256SUMS.txt. The
-#                     website's download buttons link these; publish.yml
-#                     attaches everything else (desktop app, raw binaries).
-#   Agent Hub (R2)  — terminal-hub's six raw binaries, and nothing else. The
-#                     flagship agent's binaries.lock.json pins them, so its npm
-#                     package and `gaia hub install gaia` fetch them from there.
+# The installers (.pkg/.deb/.rpm and the one Windows setup) are not built here
+# on a tag: publish.yml builds and attaches them to the GitHub release for every
+# tag, with no approval, so they never wait on this workflow's. A by-hand
+# dispatch still builds and attaches them, as a fallback for a release whose
+# publish.yml run cannot be re-run.
 #
 # Installers are not uploaded to R2: install.sh / install.ps1 and the website
 # take everything from the GitHub release, so an R2 copy would have no reader.
@@ -63,8 +63,8 @@ jobs:
         with:
           fetch-depth: 0   # the flagship gate below compares against its agent tag
 
-      # The Windows setup attached below bundles the flagship the lock pins.
-      # Same gate as publish.yml's validate: never ship one older than the release.
+      # Same gate as publish.yml's validate: never publish a final's terminal
+      # against a flagship older than the release.
       - name: Verify the flagship agent is built from this release
         if: github.event_name != 'workflow_dispatch'
         run: python3 util/check_flagship_release.py --ref "${GITHUB_SHA}"
@@ -290,6 +290,9 @@ jobs:
   # not stop the six raw binaries from publishing, because the flagship agent's
   # lock pins them. The two outputs are what let the jobs below tell those cases
   # apart.
+  #
+  # The macOS and Linux installers are built only on a dispatch: on a tag,
+  # publish.yml builds and attaches them.
   tui:
     name: TUI
     needs: version
@@ -298,17 +301,19 @@ jobs:
     with:
       version: ${{ needs.version.outputs.tui_version }}
       sidecar: pinned
+      installers: ${{ github.event_name == 'workflow_dispatch' }}
 
-  # ── The one Windows setup: desktop app, terminal, or both ───────────────────
-  # Its own workflow so a slow or failed desktop app build costs only this
-  # setup, never the macOS and Linux packages or the raw binaries. It embeds the
-  # desktop app setup build-installers.yml made: on a tag, from publish.yml's run
-  # for the same commit (built before that run's approval gate, so no human
-  # wait); on a dispatch, from the published v<version> release.
+  # ── Fallback: the one Windows setup, by hand ────────────────────────────────
+  # Dispatch only; on a tag publish.yml builds it. It embeds the desktop app
+  # setup from the published v<version> release, so a dispatch before that
+  # release exists fails here, loudly -- there is no desktop app setup to embed.
   windows-setup:
     name: Windows setup
     needs: [version, tui]
-    if: '!cancelled() && needs.tui.outputs.binaries_ok == ''true'''
+    if: >-
+      !cancelled() &&
+      github.event_name == 'workflow_dispatch' &&
+      needs.tui.outputs.binaries_ok == 'true'
     permissions:
       contents: read
       actions: read
@@ -316,10 +321,7 @@ jobs:
     with:
       version: ${{ needs.version.outputs.tui_version }}
       sidecar: pinned
-      agent_ui_publish_run_sha: ${{ github.event_name == 'push' && github.sha || '' }}
-      # A dispatch before that release exists fails here, loudly -- there is no
-      # desktop app setup to embed yet.
-      agent_ui_release: ${{ github.event_name != 'push' && format('v{0}', needs.version.outputs.tui_version) || '' }}
+      agent_ui_release: v${{ needs.version.outputs.tui_version }}
 
 
   # ── terminal-hub: publish the six raw binaries to the Agent Hub ─────────────
@@ -430,22 +432,24 @@ jobs:
   windows-setup-missing:
     name: Windows setup not attached
     needs: [version, windows-setup]
-    if: '!cancelled() && needs.version.result == ''success'' && needs.windows-setup.outputs.ok != ''true'''
+    if: >-
+      !cancelled() &&
+      github.event_name == 'workflow_dispatch' &&
+      needs.version.result == 'success' &&
+      needs.windows-setup.outputs.ok != 'true'
     runs-on: ubuntu-latest
     steps:
       - run: |
           echo "::warning::the Windows setup did not build and smoke-test cleanly, so gaia-${{ needs.version.outputs.tui_version }}-win-x64-setup.exe is not attached to the release. Everything else is. Fix the Windows setup run and re-run this workflow to attach it."
 
-  # ── Attach the terminal installers to the GitHub release ─────────────────────
-  # The website's download buttons and the release page are where users get
-  # these, and each click lands in GitHub's per-asset download_count.
-  # publish.yml attaches the raw binaries and the desktop app; these installers
-  # are built only here, so this job attaches them.
+  # ── Fallback: attach the installers to the GitHub release, by hand ──────────
+  # Dispatch only. On a tag, publish.yml's github-release-installers attaches
+  # them, so a tag never has two attach paths racing. This is for a release
+  # whose publish.yml run cannot simply be re-run.
   #
-  # No environment and no R2 credentials: it only touches the GitHub release,
-  # which publish.yml creates after its own approval gate. --clobber makes a
-  # re-run replace rather than fail. It requests its own website redeploy, so
-  # the installers show up however late the release appears or the job re-runs.
+  # No environment and no R2 credentials: it only touches the GitHub release.
+  # --clobber makes a re-run replace rather than fail. It requests its own
+  # website redeploy, so the installers show up once attached.
   #
   # A dry run stops after writing the checksum file and looking the release up,
   # so the file list and the checksums are proven without touching any release.
@@ -454,10 +458,11 @@ jobs:
     needs: [version, tui, windows-setup]
     if: |
       !cancelled()
+      && github.event_name == 'workflow_dispatch'
       && needs.version.result == 'success'
       && (needs.tui.outputs.installers_ok == 'true' || needs.windows-setup.outputs.ok == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 20
     permissions:
       contents: write
       actions: write
@@ -514,40 +519,22 @@ jobs:
           cat dist/gaia-installers-SHA256SUMS.txt
           ls -l "${files[@]}"
 
-      # On a tag push publish.yml creates the release behind its own approval,
-      # so wait for it, bounded: a release that never appears is a failed
-      # publish run, not something to wait out. A dispatch looks once: run
-      # before the release exists (publishing terminal-hub ahead of a flagship
-      # release, or a dry run), there is nothing to attach to yet.
+      # Looks once, never waits: run before the release exists (a dry run, or
+      # ahead of the tag), there is nothing to attach to yet.
       - name: Find the GitHub release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ needs.version.outputs.tui_version }}
-          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          exists() { gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; }
-          if [ "${EVENT}" = "workflow_dispatch" ]; then
-            if exists; then
-              echo "exists=true" >> "$GITHUB_OUTPUT"
-              echo "✓ release ${TAG} exists"
-            else
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-              echo "::warning::there is no GitHub release ${TAG} yet, so no installer is attached. publish.yml creates it on the tag; once it exists, re-run this job (it redeploys the website itself)."
-            fi
-            exit 0
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "✓ release ${TAG} exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::there is no GitHub release ${TAG} yet, so no installer is attached. publish.yml creates it on the tag and attaches the installers itself."
           fi
-          deadline=$(( SECONDS + 3 * 3600 ))
-          until exists; do
-            if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "::error::timed out after 3h waiting for the GitHub release ${TAG}. publish.yml creates it; check that run, then re-run this job (it redeploys the website itself). Nothing was attached, so the website offers no terminal installer for ${TAG}."
-              exit 1
-            fi
-            echo "waiting for release ${TAG}"
-            sleep 60
-          done
-          echo "exists=true" >> "$GITHUB_OUTPUT"
 
       - name: Attach the installers and their checksums
         if: needs.version.outputs.dry_run == 'false' && steps.release.outputs.exists == 'true'

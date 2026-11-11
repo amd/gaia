@@ -14,10 +14,9 @@ import pytest
 pytest.importorskip("gaia_agent_email")
 pytest.importorskip("gaia.ui.sse_translation")
 
+from gaia_agent_email.sse_translation import _QUEUE_FIELDS as _SIDECAR  # noqa: E402
+
 from gaia.ui.sse_translation import _QUEUE_FIELDS as _CORE  # noqa: E402
-from gaia_agent_email.sse_translation import (  # noqa: E402
-    _QUEUE_FIELDS as _SIDECAR,
-)
 
 
 def test_queue_fields_match_the_core_translator():

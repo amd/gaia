@@ -66,6 +66,13 @@ TIER_REVIEW_THRESHOLD: dict[str, Optional[Severity]] = {
 #: would pass it at ``experimental``, which is the fail-open this closes.
 UNAUDITABLE_RULE_IDS = frozenset({"code.unparseable", "code.unreadable"})
 
+#: Some instruction findings must hold even the lowest capture tier. A capture
+#: audit is the last gate before untrusted text becomes model-facing content;
+#: outbound transmission to an arbitrary URL needs an explicit maintainer look.
+#: It stays non-critical so a legitimate webhook skill is reviewable below
+#: ``verified``; at ``verified`` its ``high`` severity blocks, by design.
+FORCE_REVIEW_RULE_IDS = frozenset({"body.injection.outbound_url"})
+
 #: Tiers the hub refuses to publish without an audit report (mirrors
 #: ``TIERS_REQUIRING_AUDIT`` in ``workers/agent-hub/src/audit.ts``).
 TIERS_REQUIRING_AUDIT = frozenset({"community", "verified"})
@@ -111,7 +118,9 @@ def severity_verdict(findings: Sequence[Finding], tier: str) -> DecisionType:
     if review_threshold is not None and _rank(worst) >= _rank(review_threshold):
         return "REVIEW"
 
-    if has_unauditable_finding(findings):
+    if has_unauditable_finding(findings) or any(
+        f.rule_id in FORCE_REVIEW_RULE_IDS for f in findings
+    ):
         return "REVIEW"
 
     return "ALLOW"

@@ -16,6 +16,9 @@ pre-first-health-success only, so it cannot contain mailbox data).
 caller's own belief about which checkout it is asking for dev mode from —
 it is COMPARED against the daemon's own configured source, never executed. A
 mismatch is a 409 naming both checkouts; a non-absolute value is a 400.
+Its user-mode mirror, ``binary_lock_sha256`` (with ``binary_lock_path`` for the
+message, issue #2596), compares the caller's ``binaries.lock.json`` digest
+against the daemon's own; a mismatch is a 409 naming both lock files.
 
 The daemon serves no OpenAPI schema, so this table IS the contract:
 
@@ -96,6 +99,25 @@ def build_agents_router(token: str, registry):
             return None
         return body.get("dev_src_dir")
 
+    async def _body_binary_lock(
+        request: Request,
+    ) -> "tuple[Optional[str], Optional[str]]":
+        """``(binary_lock_sha256, binary_lock_path)`` from an optional JSON
+        body (issue #2596): the digest of the caller's own lock file, compared
+        against the daemon's lock. The path is only quoted in a refusal."""
+        try:
+            body = await request.json()
+        except ValueError:
+            return None, None
+        if not isinstance(body, dict):
+            return None, None
+        sha256 = body.get("binary_lock_sha256")
+        path = body.get("binary_lock_path")
+        for name, value in (("binary_lock_sha256", sha256), ("binary_lock_path", path)):
+            if value is not None and not isinstance(value, str):
+                raise HTTPException(status_code=400, detail=f"{name} must be a string")
+        return sha256, path
+
     async def _install_body(request: Request) -> "tuple[Optional[str], bool]":
         """``(version, trusted)`` from an optional JSON install body.
 
@@ -123,11 +145,22 @@ def build_agents_router(token: str, registry):
     async def ensure(agent_id: str, request: Request) -> dict:
         mode = await _body_mode(request)
         dev_src_dir = await _body_dev_src_dir(request)
+        lock_sha256, lock_path = await _body_binary_lock(request)
+        lock_kwargs = {}
+        if lock_sha256 is not None:
+            lock_kwargs = {
+                "binary_lock_sha256": lock_sha256,
+                "binary_lock_path": lock_path,
+            }
         try:
             # manager.start() is sync-blocking (health poll, lazy fetch) —
             # keep it off the event loop.
             return await run_in_threadpool(
-                registry.ensure, agent_id, mode=mode, dev_src_dir=dev_src_dir
+                registry.ensure,
+                agent_id,
+                mode=mode,
+                dev_src_dir=dev_src_dir,
+                **lock_kwargs,
             )
         except UnknownAgentError as e:
             raise _ensure_failed(404, e) from e

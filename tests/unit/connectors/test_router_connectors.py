@@ -17,6 +17,7 @@ Coverage:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -134,6 +135,29 @@ class TestListConnectors:
         assert entry["type"] == "oauth_pkce"
         assert "configured" in entry
         assert "description" in entry
+
+    def test_a_failing_summary_is_listed_by_name_as_unavailable(
+        self, ui_api_client, monkeypatch
+    ):
+        from gaia.ui.routers import connectors as router
+
+        real = router._connector_summary
+
+        def summary(connector_id):
+            if connector_id == "google":
+                raise RuntimeError("keyring locked")
+            return real(connector_id)
+
+        monkeypatch.setattr(router, "_connector_summary", summary)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = {e["id"]: e for e in resp.json()["connectors"]}
+        assert rows["google"] == {
+            "id": "google",
+            "display_name": "Google",
+            "error": "unavailable",
+        }
+        assert rows["mcp-test"]["display_name"] == "MCP Test"
 
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
@@ -320,6 +344,50 @@ class TestConfigureEndpoint:
 # ---------------------------------------------------------------------------
 # POST /api/connectors/{connector_id}/authorize — grant-on-connect (#2117)
 # ---------------------------------------------------------------------------
+
+
+class TestAuthorizeColdPath:
+    """#3326: a never-connected account, through the real route and flow.
+
+    The other authorize tests stub ``start_authorization`` so they can check
+    what the route passes it. This one runs the real PKCE flow behind the
+    route, from an empty keyring, and checks the URL the user is sent to.
+    """
+
+    _SCOPES = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+
+    def test_authorize_from_an_empty_keyring_returns_a_pkce_url(
+        self, ui_api_client, google_provider, no_browser
+    ):
+        from gaia.connectors.store import list_connections
+
+        assert list_connections() == [], "the test must start never-connected"
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": self._SCOPES},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        info = resp.json()
+        try:
+            url = urlparse(info["authorization_url"])
+            assert info["authorization_url"].startswith(google_provider.auth_url)
+            params = parse_qs(url.query)
+            assert params["code_challenge_method"] == ["S256"]
+            assert params["code_challenge"][0], "no PKCE challenge in the URL"
+            assert params["client_id"] == ["test.apps.example"]
+            assert params["state"][0]
+            assert set(self._SCOPES) <= set(params["scope"][0].split())
+            assert urlparse(params["redirect_uri"][0]).hostname == "127.0.0.1"
+        finally:
+            # Close the flow's loopback listener; nothing completes it here.
+            cancel = ui_api_client.delete(
+                f"/api/connectors/_flows/{info['flow_id']}", headers=UI_HEADER
+            )
+            assert cancel.status_code == 204, cancel.text
+
+        assert list_connections() == [], "starting a flow must not store anything"
 
 
 class TestAuthorizeGrantAgents:

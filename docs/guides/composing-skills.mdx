@@ -75,9 +75,9 @@ widened return types, and changed defaults all qualify.
 ```
 
 `tools_required` names registry tools the skill's recipe *consumes* — it does not
-grant anything, but on an agent with dynamic tool selection a loaded skill's
-`tools_required` are admitted into the prompt on each turn its instructions are
-active (and unloading it stops that). A name your agent has not registered is
+grant anything, but on an agent with dynamic tool loading a skill's `tools_required`
+join the tool list when it loads or its instructions first become active, and stay
+until it unloads. A name your agent has not registered is
 logged at load time, so a skill that cannot execute its own recipe is diagnosable
 rather than silently useless.
 
@@ -130,11 +130,14 @@ from pathlib import Path
 from typing import ClassVar, List, Optional
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
 
 _HERE = Path(__file__).resolve().parent
 
 
-class MyReviewAgent(Agent):
+class MyReviewAgent(Agent, FileIOToolsMixin):
     # Highest-precedence discovery root: the skills you bundle always win over a
     # same-named user or Claude Code copy. Both lines below are optional — a
     # skills/ folder and a gaia-agent.yaml beside this module are found without
@@ -142,10 +145,24 @@ class MyReviewAgent(Agent):
     SKILL_DIRS: ClassVar[List[str]] = [str(_HERE / "skills")]
     # Opt in to the declarative blocks.
     SKILL_MANIFEST: ClassVar[Optional[str]] = str(_HERE / "gaia-agent.yaml")
+
+    def __init__(self, **kwargs):
+        # FileIOToolsMixin reads this off the agent, so set it before
+        # super().__init__() runs _register_tools().
+        self.path_validator = PathValidator()
+        super().__init__(**kwargs)
+
+    # Abstract on the base Agent, so the class cannot be created without it.
+    def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+        self.register_file_io_tools()
+        self._snapshot_tools()
 ```
 
-That is enough. `Agent.__init__` resolves a set and loads it — the always-on
-skills plus that set's, in declaration order.
+`Agent.__init__` resolves a set and loads it — the always-on skills plus that
+set's, in declaration order. A skill only names the tools its recipe uses, so
+the agent has to register them itself. `api-compatibility` needs `read_file`
+and `search_code`, and `FileIOToolsMixin` provides both.
 
 ## 4. Choose the set at runtime
 
@@ -202,12 +219,16 @@ Skill set 'library' active (chosen by: explicit) — loaded 3 of 3 declared
 skill(s): review-basics, api-compatibility, changelog-discipline
 ```
 
-And from the CLI:
+And from the CLI. `gaia skill` does not know which agent you mean, so point
+`--agent-dir` at the package directory that holds `agent.py` and `skills/`:
 
 ```bash
-gaia skill list          # every discovered skill, with its root and precedence
-gaia skill info api-compatibility
+gaia skill list --agent-dir my_agent          # every discovered skill, with its root
+gaia skill info api-compatibility --agent-dir my_agent
 ```
+
+The bundled skills show with root `agent-bundled`. Without `--agent-dir`, the
+CLI searches only `~/.gaia/skills` and the `.claude/skills` folders.
 
 Switching sets mid-session is one call — the previous set's skills are unloaded
 first, so a stale set never lingers in the prompt:
@@ -271,4 +292,4 @@ personal.
 - [Agent Skills](/spec/agent-skills#skill-sets) — architecture, discovery, selection
 - [Skill Format](/plans/skill-format#manifest-side-grammar-skills-skill_sets-default_skill_set) — the full field grammar
 - [Custom Agents](/guides/custom-agent) — building the agent the skills attach to
-- [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`
+- [CLI Reference → Skills](/reference/cli#skills) — all 16 `gaia skill` verbs, from `create` and `audit` to `install` and `publish`

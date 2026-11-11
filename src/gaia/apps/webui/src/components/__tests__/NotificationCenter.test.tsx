@@ -12,10 +12,12 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationCenter } from '../NotificationCenter';
-import { useNotificationStore } from '../../stores/notificationStore';
+import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 const notif = (id: string, message: string): GaiaNotification => ({
     id,
@@ -59,5 +61,78 @@ describe('NotificationCenter', () => {
         render(<NotificationCenter onClose={vi.fn()} />);
         expect(screen.getByText('Still here')).toBeTruthy();
         expect(screen.queryByText('Gone')).toBeNull();
+    });
+});
+
+describe('NotificationCenter dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows a week-old notification date in Arabic in an Arabic UI', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Old news'), timestamp: Date.now() - 30 * 86_400_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        const time = stripIsolates(container.querySelector('.notification-time')!.textContent ?? '');
+        expect(time).toMatch(ARABIC_MONTH);
+        expect(time).not.toMatch(ENGLISH_MONTH);
+    });
+
+    it('says how long ago in Arabic for a recent one', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-1', 'Fresh'), timestamp: Date.now() - 5 * 60_000 }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(stripIsolates(container.querySelector('.notification-time')!.textContent ?? '')).toContain('قبل 5 د');
+    });
+});
+
+describe('NotificationCenter permission prompts follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    const prompt = (extra: Partial<GaiaNotification>): GaiaNotification => ({
+        ...notif('perm-1', 'GAIA needs your OK before running python.'),
+        type: 'permission_request',
+        title: 'Allow running python?',
+        priority: 'high',
+        ...extra,
+    });
+
+    it('words a tool prompt in Arabic, the tool kept left to right', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        const title = container.querySelector('.notification-title')!;
+        expect(title.textContent).toContain('هل تسمح بـ');
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
+        expect(container.querySelector('.notification-message')).toHaveTextContent('يحتاج GAIA إلى موافقتك قبل');
+    });
+
+    it('words a path prompt in Arabic, the path kept left to right', () => {
+        setUiLocale('ar');
+        useNotificationStore.setState({
+            notifications: [prompt({
+                tool: PATH_ACCESS_TOOL, title: 'Let GAIA use this folder?',
+                message: 'GAIA wants to use the folder C:\\data. Allow it for this chat?',
+                toolArgs: { path: 'C:\\data', kind: 'folder' },
+            })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')).toHaveTextContent('هل تسمح لـ GAIA باستخدام هذا المجلد؟');
+        const message = container.querySelector('.notification-message')!;
+        expect(message).toHaveTextContent('يريد GAIA استخدام المجلد');
+        expect(message.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^C:\\data$/);
+    });
+
+    it('reads the same as before in English', () => {
+        useNotificationStore.setState({
+            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow running python?');
+        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before running python.');
     });
 });

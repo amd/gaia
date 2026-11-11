@@ -5,8 +5,6 @@ package update
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 )
@@ -17,12 +15,16 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 	t.Cleanup(func() { Current = prev })
 	// v0.26.0 carries only the desktop app's setup; v0.25.0 shipped no
 	// Terminal UI Windows setup at all.
-	rs := []Release{
-		{Tag: "v0.26.0", Assets: []Asset{{Name: "gaia-agent-ui-0.26.0-x64-setup.exe"}, {Name: installerSums}}},
-		{Tag: "v0.25.1", Assets: []Asset{{Name: "gaia-0.25.1-win-x64-setup.exe"}, {Name: installerSums}}},
-		{Tag: "v0.25.0", Assets: []Asset{{Name: installerSums}, {Name: "gaia-windows-amd64.exe"}, {Name: tuiSums}}},
-	}
-	serveReleases(t, func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(rs) })
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.26.0", "v0.25.1", "v0.25.0"),
+		latest: "v0.26.0",
+		sums: map[string]string{
+			"v0.26.0/" + installerSums: sumsOf("gaia-agent-ui-0.26.0-x64-setup.exe"),
+			"v0.25.1/" + installerSums: sumsOf("gaia-0.25.1-win-x64-setup.exe"),
+			"v0.25.0/" + installerSums: sumsOf("gaia_0.25.0_amd64.deb"),
+			"v0.25.0/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
+		},
+	})
 
 	withHome(t)
 	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
@@ -119,5 +121,24 @@ func TestInstallerNamesRejectPathSeparators(t *testing.T) {
 		if re, _ := assetPattern(kind); !re.MatchString(n) {
 			t.Errorf("%s pattern rejected the real asset %q", kind, n)
 		}
+	}
+}
+
+func TestGoingBackBeforeTheInstallersExistedSaysWhy(t *testing.T) {
+	// v0.25.3 shipped the Terminal UI binaries only: no setup, .pkg, .deb or .rpm.
+	withGitHub(t, &fakeGitHub{
+		feed:   atom("v0.25.4", "v0.25.3"),
+		latest: "v0.25.4",
+		sums: map[string]string{
+			"v0.25.4/" + installerSums: sumsOf("gaia-0.25.4-win-x64-setup.exe"),
+			"v0.25.3/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
+		},
+	})
+	withHome(t)
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+
+	_, err := PlanTag(context.Background(), "v0.25.3")
+	if err == nil || !strings.Contains(err.Error(), "came out before GAIA had a Windows setup installer") {
+		t.Fatalf("going back to v0.25.3 from a Windows setup install said %v; want why it can't", err)
 	}
 }

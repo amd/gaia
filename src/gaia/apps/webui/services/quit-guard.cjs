@@ -70,15 +70,18 @@ const RESTART_FOR_UPDATE = Object.freeze({
 /**
  * The warning for this work, or null when nothing would be lost.
  *
- * @param {{answers: Array<{title: string|null}>, indexing: Array<{filename: string|null}>}} work
+ * @param {{answers: Array<{title: string|null}>, indexing: Array<{filename: string|null}>, setup?: boolean}} work
  * @param {string} [verb] "Quitting" or "Restarting".
  */
 function describeWork(work, verb = QUIT.verb) {
   const answers = work.answers.map((a) => a.title || "a chat");
   const files = work.indexing.map((d) => d.filename || "a document");
-  if (answers.length === 0 && files.length === 0) return null;
+  if (answers.length === 0 && files.length === 0 && !work.setup) return null;
 
   const lines = [];
+  if (work.setup) {
+    lines.push(`${verb} pauses setup. What has downloaded is kept, and setup offers to resume next time.`);
+  }
   if (answers.length === 1) {
     lines.push(`${verb} stops the answer in ${quoteList(answers)}, and that answer will be lost.`);
   } else if (answers.length > 1) {
@@ -88,7 +91,11 @@ function describeWork(work, verb = QUIT.verb) {
     lines.push(`Indexing ${quoteList(files)} stops too; add ${files.length === 1 ? "it" : "them"} again later.`);
   }
   let message;
-  if (files.length === 0) {
+  if (work.setup && answers.length === 0 && files.length === 0) {
+    message = "GAIA is still setting up.";
+  } else if (work.setup) {
+    message = "GAIA is still working.";
+  } else if (files.length === 0) {
     message = answers.length === 1 ? "GAIA is still writing an answer." : `GAIA is still writing ${answers.length} answers.`;
   } else if (answers.length === 0) {
     message = "GAIA is still indexing documents.";
@@ -190,9 +197,11 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
 }
 
 /**
- * What closing the window does: hide it to the tray (telling the user once),
- * or, when closing quits, run the quit guard first and keep the window open
- * until it agrees. An OS sign-out (Windows' session-end) never waits on it.
+ * What closing the window does: hide it to the tray, or minimize it where
+ * there is no tray (telling the user once either way), or, when closing quits,
+ * run the quit guard first and keep the window open until it agrees. A close
+ * while GAIA sits minimized is a dock Quit, so it quits. An OS sign-out
+ * (Windows' session-end) never waits on the guard.
  *
  * @param {Electron.BrowserWindow} win
  * @param {{app: Electron.App, guard: ReturnType<typeof installQuitGuard>,
@@ -200,13 +209,30 @@ function installQuitGuard({ app, updater, shouldAsk, confirm, onQuitting, onErro
  *   reportNoticeError: (err: Error) => void}} deps
  */
 function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, reportNoticeError }) {
+  let minimizedByClose = false;
+  // On Wayland a restore from the dock may arrive only as focus, so that counts too.
+  for (const back of ["restore", "focus", "show"]) {
+    win.on(back, () => {
+      minimizedByClose = false;
+    });
+  }
   win.on("close", (event) => {
     if (isQuitting()) return;
     const tray = getTray();
-    if (tray && tray.minimizeToTray) {
+    const action = tray ? tray.closeAction : "quit";
+    // Focus wins over isMinimized(), which Wayland can leave stale after a dock restore.
+    const dockQuit =
+      action === "minimize" && !win.isFocused() && (minimizedByClose || win.isMinimized());
+    if (action === "hide" || (action === "minimize" && !dockQuit)) {
       event.preventDefault();
-      win.hide();
-      console.log("[main] Window hidden to tray");
+      if (action === "hide") {
+        win.hide();
+        console.log("[main] Window hidden to tray");
+      } else {
+        win.minimize();
+        minimizedByClose = true;
+        console.log("[main] Window minimized; no tray to hide it in");
+      }
       if (tray.closeNoticeDue) {
         Promise.resolve()
           .then(() => tray.showCloseNotice())
@@ -228,9 +254,35 @@ function attachWindowGuards(win, { app, guard, getTray, isQuitting, platform, re
   win.on("session-end", () => guard.allow());
 }
 
+/**
+ * SIGTERM (logout, shutdown, `kill`) quits without the question: nobody is
+ * there to answer it, so the dialog would hold the app until it is SIGKILLed.
+ * Electron's own SIGTERM handling quits through the guard, which asks.
+ *
+ * @param {{proc: NodeJS.Process, app: Electron.App,
+ *   guard: ReturnType<typeof installQuitGuard>, logger?: {log: Function}}} deps
+ * @returns {Promise<void>} Settles once the handler is back on top of Electron's.
+ */
+function quitOnTermSignal({ proc, app, guard, logger = console }) {
+  proc.on("SIGTERM", () => {
+    logger.log("[main] SIGTERM: quitting without asking about running work");
+    guard.allow();
+    app.quit();
+  });
+  // Electron installs its own SIGTERM handler after the main script runs, and
+  // it replaces Node's, so the listener above never fires. Re-adding every
+  // listener once ready makes Node install its handler again, over Electron's.
+  return app.whenReady().then(() => {
+    const listeners = proc.listeners("SIGTERM");
+    proc.removeAllListeners("SIGTERM");
+    for (const listener of listeners) proc.on("SIGTERM", listener);
+  });
+}
+
 module.exports = {
   QUIT_ANYWAY_MS,
   attachWindowGuards,
+  quitOnTermSignal,
   backendJson,
   fetchWorkInProgress,
   describeWork,

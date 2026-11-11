@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""The session panel's Environment (#5276) and Outputs (#5277) endpoints."""
+"""The session panel's Environment (#5276), Outputs (#5277) and Agent info (#440)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from gaia.agents.base import file_snapshots
 from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError
 
+from .. import session_capabilities
 from .. import session_environment as env
 from .. import session_outputs
 from ..database import ChatDatabase
@@ -105,3 +106,16 @@ async def get_outputs(session_id: str, db: ChatDatabase = Depends(get_db)):
         return await asyncio.to_thread(session_outputs.list_outputs, db, session_id)
     except file_snapshots.SnapshotError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/api/sessions/{session_id}/capabilities")
+async def get_capabilities(session_id: str, db: ChatDatabase = Depends(get_db)):
+    """The tools this chat's agent has: name, description and category each.
+
+    409 when the agent isn't running yet; never an empty list in its place.
+    """
+    session = _session(db, session_id)
+    try:
+        return await asyncio.to_thread(session_capabilities.describe, session)
+    except session_capabilities.CapabilitiesError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e

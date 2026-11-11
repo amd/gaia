@@ -118,7 +118,7 @@ class AudioRecorder:
         return (
             f"Microphone unavailable: could not {verb} {device} ({error}). "
             "Pick another with `gaia talk --audio-device-index <N>`; list them "
-            "with `gaia test asr-list-audio-devices`."
+            "with `gaia test --test-type asr-list-audio-devices`."
         )
 
     def _record_audio(self):

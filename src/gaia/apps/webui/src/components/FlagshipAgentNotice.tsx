@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useT } from '../i18n/useT';
 import { installFlagshipAgent } from '../services/flagshipInstall';
 
 type InstallState =
@@ -11,9 +12,14 @@ type InstallState =
 
 /**
  * Shown when the backend has no GAIA agent (a fresh GAIA_HOME): every new chat
- * would be refused, so say why and offer the install instead.
+ * would be refused, so say why and offer the install instead. With *noBuild*
+ * there is nothing to install on this PC, so it says that and offers nothing.
  */
-export function FlagshipAgentNotice({ onInstalled }: { onInstalled: () => void | Promise<void> }) {
+export function FlagshipAgentNotice({ onInstalled, noBuild = false }: {
+    onInstalled: () => void | Promise<void>;
+    noBuild?: boolean;
+}) {
+    const t = useT();
     const [state, setState] = useState<InstallState>({ kind: 'idle' });
     const cancelled = useRef(false);
     useEffect(() => () => { cancelled.current = true; }, []);
@@ -33,18 +39,26 @@ export function FlagshipAgentNotice({ onInstalled }: { onInstalled: () => void |
         }
     }, [onInstalled]);
 
+    if (noBuild) {
+        return (
+            <div className="app-notice is-warning" role="status">
+                <span>{t('agentNotice.noBuild')}</span>
+            </div>
+        );
+    }
+
     return (
         <div className="app-notice is-warning" role="status">
             {state.kind === 'installing' ? (
-                <span>Installing the GAIA agent… {Math.round(state.percent)}%</span>
+                <span>{t('agentNotice.installing', { percent: Math.round(state.percent) })}</span>
             ) : state.kind === 'failed' ? (
-                <span>The GAIA agent could not be installed: {state.error}</span>
+                <span>{t('agentNotice.failed', { error: state.error })}</span>
             ) : (
-                <span>The GAIA agent isn't installed, so new chats can't start yet.</span>
+                <span>{t('agentNotice.missing')}</span>
             )}
             {state.kind !== 'installing' && (
                 <button type="button" className="link-btn" onClick={() => void install()}>
-                    {state.kind === 'failed' ? 'Try again' : 'Install GAIA agent'}
+                    {state.kind === 'failed' ? t('agentNotice.retry') : t('agentNotice.install')}
                 </button>
             )}
         </div>
