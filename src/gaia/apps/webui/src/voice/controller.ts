@@ -157,7 +157,8 @@ export function yesOrNo(text: string): boolean | null {
 }
 
 const QUIET = /\b(don'?t|do not|stop|quit|no need to) (respond|answer|reply|talk|speak|listen)(ing)?\b|\bnot talking to you\b|\b(be|stay|keep) quiet\b|\bignore (us|me|this|that)\b|\bgo to sleep\b|\bstand ?by\b|\bavoid speaking\b/i;
-const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:gaia|gaya|gaea|gaiya|kaia|guya)\b[\s,.!?:-]*/i;
+// Recognizers spell her name many ways, and sometimes fuse it with "hey" ("Hegaya").
+const NAME = /\b(?:(?:hey|hi|hello|ok|okay|yo)[\s,]+)?(?:he|hey)?(?:gaia|gaya|gaea|gaiya|gaija|kaia|kaya|guya|gyah?)\b[\s,.!?:-]*/i;
 
 /** How long after GAIA speaks a reply needs no "Hey GAIA". */
 export const FOLLOW_UP_MS = 10_000;
