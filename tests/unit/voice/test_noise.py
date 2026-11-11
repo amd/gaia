@@ -6,6 +6,7 @@ import asyncio
 
 import numpy as np
 import pytest
+from test_voice_core import _session, _until
 
 from gaia.voice import audio as pcm
 from gaia.voice.noise import (
@@ -16,8 +17,6 @@ from gaia.voice.noise import (
     is_noise_text,
 )
 from gaia.voice.turns import TurnTaker
-
-from test_voice_core import _session, _until, fake_lemonade  # noqa: F401
 
 RATE = pcm.ASR_RATE
 
@@ -150,7 +149,7 @@ def frames(samples: np.ndarray):
         yield pcm.float_to_pcm16(samples[i : i + 1600])
 
 
-async def heard(fake_lemonade, transcript, samples):  # noqa: F811
+async def heard(fake_lemonade, transcript, samples):
     _, target = await fake_lemonade(transcript=transcript, stop_after=10)
     s, events, sink = await _session(target)
     await s.start()
@@ -162,31 +161,31 @@ async def heard(fake_lemonade, transcript, samples):  # noqa: F811
     return events, sink
 
 
-async def test_typing_transcribed_as_words_is_ignored(fake_lemonade):  # noqa: F811
+async def test_typing_transcribed_as_words_is_ignored(fake_lemonade):
     events, sink = await heard(fake_lemonade, "you know", typing(1000))
     assert {"type": "ignored", "reason": "not_voiced"} in events
     assert not any(e["type"] == "final" for e in events)
     assert pcm.earcon() not in sink.frames
 
 
-async def test_a_sound_label_is_ignored_even_when_loud(fake_lemonade):  # noqa: F811
+async def test_a_sound_label_is_ignored_even_when_loud(fake_lemonade):
     events, _ = await heard(fake_lemonade, "*music*", vowel(1000))
     assert {"type": "ignored", "reason": "not_words"} in events
 
 
-async def test_a_short_okay_from_a_noise_is_ignored(fake_lemonade):  # noqa: F811
+async def test_a_short_okay_from_a_noise_is_ignored(fake_lemonade):
     samples = np.concatenate([vowel(300), silence(700)])
     events, _ = await heard(fake_lemonade, "Okay.", samples)
     assert {"type": "ignored", "reason": "filler"} in events
 
 
-async def test_real_speech_is_a_turn(fake_lemonade):  # noqa: F811
+async def test_real_speech_is_a_turn(fake_lemonade):
     events, sink = await heard(fake_lemonade, "Check my email.", vowel(1000))
     assert {"type": "final", "text": "Check my email."} in events
     assert pcm.earcon() in sink.frames
 
 
-async def test_a_bare_yes_counts_when_a_question_is_open(fake_lemonade):  # noqa: F811
+async def test_a_bare_yes_counts_when_a_question_is_open(fake_lemonade):
     _, target = await fake_lemonade(transcript="Okay.", stop_after=10)
     s, events, _ = await _session(target)
     await s.start()
@@ -218,7 +217,7 @@ def test_a_doubled_sentence_is_said_once():
 
 async def test_a_looped_sentence_is_ignored_even_when_voiced(
     fake_lemonade,
-):  # noqa: F811
+):
     events, _ = await heard(
         fake_lemonade, "Get some more.\nGet some more.\nGet some more.", vowel(1000)
     )

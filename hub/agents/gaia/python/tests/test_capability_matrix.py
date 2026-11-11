@@ -68,7 +68,7 @@ _spec.loader.exec_module(capability_matrix)
 # 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
 # 102 with `forget_everything`, 103 once search_tools became a default tool.
 # 105 with analyze_transcript and export_transcript.
-_EXPECTED_TOOLS_TOTAL = 105
+_EXPECTED_TOOLS_TOTAL = 106
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
@@ -285,6 +285,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_skills_tasks",
         "gaia_tool_selection",
         "gaia_voice",
+        "gaia_voice_mode",
         "gaia_web",
     ]
     assert capability_matrix.EVAL_FOLLOWUP_PLAN.strip()
