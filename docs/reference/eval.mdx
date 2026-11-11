@@ -272,7 +272,21 @@ reads the baseline's from the `meta.json` in its directory when there is one.
 |---|---|
 | 0 | No regression |
 | 2 | A regression (or, with `--require-complete`, a missing or unmeasured scenario) |
-| 3 | Not comparable: the baseline was measured with a different agent model or eval model |
+| 3 | Not comparable: the baseline was measured with a different agent model or eval model (or, with `--require-same-fixtures`, on different fixtures or a different Lemonade build) |
+
+### Same fixtures, same Lemonade
+
+A scorecard also records a fingerprint of `tests/fixtures/gaia` and `eval/scenarios`,
+where its fixtures were staged and served (`config.fixtures`), and the Lemonade build
+the agent ran on (`config.lemonade`). When two scorecards differ in either, `--compare`
+prints a `[WARN] Different setup:` line before and after its verdict, because a flip may
+come from the fixtures rather than the agent. Add `--require-same-fixtures` to refuse
+the comparison instead. A scorecard written before these fields existed is not checked.
+
+`util/run_eval_lane.py` stages a local run's fixtures under its `--out/eval-root` and
+serves them on a free port, and the runner rewrites each scenario's `~/gaia-eval` and
+`127.0.0.1:8765` to match, so two runs with different `--out` and `--port` never touch
+each other or `~`. Their evals still take turns on the machine-wide eval lock.
 
 To score one model on a machine whose hardware would pick another, pin it and check it:
 

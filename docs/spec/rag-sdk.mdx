@@ -40,7 +40,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3.5-35B-A3B-GGUF"
+    model: str = DEFAULT_MODEL_NAME  # "Gemma-4-E4B-it-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500  # max useful; chunks are capped at EMBED_MAX_CHARS (2000)
     chunk_overlap: int = 100

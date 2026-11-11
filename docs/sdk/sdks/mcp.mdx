@@ -112,9 +112,9 @@ flowchart TB
     }
     ```
     <Note>
-    `gaia mcp add` / `gaia mcp remove` were removed in #977 — MCP servers are
-    now configured through the connectors framework (`gaia connectors --help`)
-    or by editing `mcp_servers.json` directly.
+    `gaia mcp add` / `gaia mcp remove` were removed. Add a server outside the
+    catalog by editing `mcp_servers.json` as shown; catalog servers use
+    `gaia connectors configure <id> --set KEY=VALUE`.
     </Note>
   </Step>
 
@@ -374,9 +374,10 @@ gaia mcp test-client <name>      # Test connection
 ```
 
 <Note>
-`gaia mcp add` and `gaia mcp remove` were removed in #977. MCP servers are now
-managed through the connectors framework (`gaia connectors --help`) or by editing
-`~/.gaia/mcp_servers.json` directly.
+`gaia mcp add` and `gaia mcp remove` were removed. Set up a catalog server in
+Settings → Connectors or with `gaia connectors configure <id> --set KEY=VALUE`.
+For a server outside the catalog, add an entry to `~/.gaia/mcp_servers.json`; a
+command for that is planned ([#977](https://github.com/amd/gaia/issues/977)).
 </Note>
 
 ---
