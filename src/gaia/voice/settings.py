@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """The voice settings GAIA may change herself when asked out loud.
 
-Only how she sounds and listens: her voice, speed and volume, captions, and
-whether she waits for her name. Everything else stays the user's to change in
+Only how she sounds and listens: her voice, speed and volume, captions, the
+chime, and whether she waits for her name. Everything else stays the user's to change in
 Settings; :func:`change_voice_setting` says so instead of guessing.
 """
 
@@ -26,9 +26,11 @@ AGENT_VOICE_SETTINGS = {
     "volume": "voice_volume",
     "wake_word": "voice_wake_word",
     "captions": "voice_captions",
+    "chime": "voice_chime",
 }
 _ELSEWHERE = (
-    "GAIA can change only her voice, speed, volume, captions and wake word. "
+    "GAIA can change only her voice, speed, volume, captions, chime and wake "
+    "word. "
     "The user changes every other setting themselves in Settings."
 )
 _ON = {"on", "true", "yes", "enable", "enabled", "1"}
@@ -91,6 +93,7 @@ def current_voice_settings() -> Dict[str, Any]:
         "volume": config.voice_volume,
         "wake_word": config.voice_wake_word,
         "captions": config.voice_captions,
+        "chime": config.voice_chime,
     }
 
 

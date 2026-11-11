@@ -20,7 +20,7 @@ vi.mock('../socket', () => ({
     VoiceSocket: vi.fn(function (this: Record<string, unknown>, purpose: string, language: string, handlers: unknown) {
         const s = {
             purpose, language, handlers,
-            speak: vi.fn(), speakEnd: vi.fn(), commit: vi.fn(), close: vi.fn(), sendAudio: vi.fn(), expect: vi.fn(),
+            speak: vi.fn(), speakEnd: vi.fn(), commit: vi.fn(), close: vi.fn(), sendAudio: vi.fn(), expect: vi.fn(), playback: vi.fn(),
             interrupt: vi.fn(() => fx.calls.push('interrupt')),
         };
         fx.sockets.push(s);
@@ -439,6 +439,33 @@ describe('voice mode turn loop', () => {
         expect(player().setVolume).toHaveBeenLastCalledWith(0.4);
         expect(state().captions).toBe(false);
         saved.value = { ...saved.value, volume: 100, captions: true };
+    });
+
+    it('tells the server while her speech is still playing here, and when it ends', async () => {
+        await open();
+        serve({ type: 'ready', speech: true });
+        (socket().handlers as { onAudio: (b: ArrayBuffer) => void }).onAudio(new ArrayBuffer(4));
+        expect(socket().playback).toHaveBeenLastCalledWith(true);
+        player().onIdle();
+        expect(socket().playback).toHaveBeenLastCalledWith(false);
+    });
+
+    it('a new request stops the end of the last answer before it starts', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        player().playing = true;
+        serve({ type: 'final', text: 'no, the other one' });
+        expect(fx.calls).toEqual(['flush', 'interrupt']);
+        expect(h.sendTurn).toHaveBeenCalledOnce();
+    });
+
+    it('speech without her name on standby says why nothing happened', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'Be quiet for a minute.' });
+        serve({ type: 'final', text: 'what time is it' });
+        expect(h.sendTurn).not.toHaveBeenCalled();
+        expect(state().caption?.text).toContain('Hey GAIA');
     });
 
     it('a bare "stop" only stops', async () => {

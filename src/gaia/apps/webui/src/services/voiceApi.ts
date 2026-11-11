@@ -32,6 +32,8 @@ export interface VoiceStatus {
     wake_word?: boolean;
     /** How loud GAIA speaks, 0-100. */
     volume?: number;
+    /** The short tone that says GAIA heard you. */
+    chime?: boolean;
 }
 
 export interface VoiceSettings {
@@ -44,6 +46,7 @@ export interface VoiceSettings {
     captions: boolean;
     wake_word: boolean;
     volume: number;
+    chime: boolean;
 }
 
 /** `language: ''` goes back to following the app's language. */

@@ -10,7 +10,7 @@ import { VOICE_ERROR_CODES } from '../../../voice/protocol';
 const controller = vi.hoisted(() => ({
     closeVoice: vi.fn(), primaryAction: vi.fn(), holdStart: vi.fn(), holdEnd: vi.fn(), setCaptions: vi.fn(),
     dismissPhoneNotice: vi.fn(), retryVoice: vi.fn(), downloadModel: vi.fn(async () => undefined),
-    toggleMute: vi.fn(), setVolume: vi.fn(), setWakeWord: vi.fn(), voiceVolume: vi.fn(() => 0.6),
+    toggleMute: vi.fn(), setVolume: vi.fn(), setWakeWord: vi.fn(), setChime: vi.fn(), voiceVolume: vi.fn(() => 0.6),
 }));
 const speech = vi.hoisted(() => ({
     settings: {
@@ -153,6 +153,8 @@ describe('VoiceScreen states', () => {
         expect(controller.setVolume).toHaveBeenCalledWith(0.35);
         fireEvent.click(screen.getByRole('checkbox', { name: /Hey GAIA/ }));
         expect(controller.setWakeWord).toHaveBeenCalledWith(false);
+        fireEvent.click(screen.getByRole('checkbox', { name: /tone/ }));
+        expect(controller.setChime).toHaveBeenCalledWith(false);
     });
 
     it('a picture a tool made is shown under its row', () => {

@@ -183,7 +183,7 @@ async def test_a_voice_changed_mid_conversation_is_used_for_the_next_reply():
         synthesizer=synth,
         catalog=lambda: CATALOG,
         listener_factory=lambda *_a, **_k: FakeListener("stalls"),
-        voice_settings=lambda: (chosen["voice"], chosen["speed"]),
+        voice_settings=lambda: (chosen["voice"], chosen["speed"], True),
     )
     await session.start()
     chosen.update(voice="bm_george", speed=1.25)
@@ -191,4 +191,31 @@ async def test_a_voice_changed_mid_conversation_is_used_for_the_next_reply():
     await session.speak_end()
     await _until(lambda: "speaking_done" in kinds(events))
     assert session.options.voice == "bm_george" and session.options.speed == 1.25
+    await session.close()
+
+
+async def test_speech_the_host_is_still_playing_can_be_interrupted():
+    """Audio is sent faster than it plays: the server is done, the room still hears her."""
+    session, events, made = await start(["stalls"])
+    await session.speak("A long answer that is still playing.")
+    await session.speak_end()
+    session.playback(True)
+    await _until(lambda: "speaking_done" in kinds(events))
+    assert not session.speaking and session.audible
+    made[0].queue.put_nowait({"type": "speech_started"})
+    made[0].queue.put_nowait({"type": "partial", "text": "no wait"})
+    await _until(lambda: "barge_in" in kinds(events))
+    session.playback(False)
+    assert not session.audible
+    await session.close()
+
+
+async def test_the_chime_can_be_turned_off():
+    from gaia.voice import audio as pcm
+
+    session, events, made = await start(["works"])
+    session.options.chime = False
+    await talk(session)
+    await _until(lambda: "final" in kinds(events))
+    assert pcm.earcon() not in session._sink.frames
     await session.close()

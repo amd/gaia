@@ -285,6 +285,7 @@ class GaiaConfig:
         voice_status_updates: Speak a short line before each step in voice mode.
         voice_captions: Show live captions in voice mode.
         voice_volume: How loud GAIA speaks in voice mode, 0-100.
+        voice_chime: Play a short tone when GAIA has heard you.
         voice_wake_word: In hands-free voice mode, answer only when addressed
             ("Hey GAIA") or just after GAIA spoke.
     """
@@ -319,6 +320,7 @@ class GaiaConfig:
     voice_captions: bool = True
     voice_wake_word: bool = True
     voice_volume: int = 100
+    voice_chime: bool = True
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None

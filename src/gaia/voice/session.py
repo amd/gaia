@@ -79,6 +79,7 @@ class VoiceOptions:
     hands_free: bool = True
     speak: bool = True  # False for non-English voice languages
     english: bool = True  # the recognizer is expected to return English
+    chime: bool = True  # the short tone that says "heard you"
 
     def __post_init__(self):
         if self.purpose not in PURPOSES:
@@ -114,7 +115,7 @@ class VoiceSession:
         synthesizer: Synthesizer,
         catalog: Callable[[], List[dict]],
         listener_factory=None,
-        voice_settings: Optional[Callable[[], Tuple[str, float]]] = None,
+        voice_settings: Optional[Callable[[], Tuple[str, float, bool]]] = None,
     ):
         self.target = target
         self.options = options
@@ -137,6 +138,8 @@ class VoiceSession:
         self._closed = False
         self._limit_sent = False
         self.speaking = False
+        #: The host is still playing speech it was sent.
+        self.playing = False
         self._turns = TurnTaker()
         self._meter = SpeechMeter()
         # Voiced milliseconds of utterances whose transcript is still to come.
@@ -230,7 +233,7 @@ class VoiceSession:
         samples = pcm.pcm16_to_float(frame)
         await self._watch(self._meter.feed(samples))
         if (
-            self.speaking
+            self.audible
             and not self._sustained
             and self._meter.voiced_ms >= BARGE_VOICED_MS
         ):
@@ -267,9 +270,11 @@ class VoiceSession:
             and not self.speaking
             and self._queue.empty()
         ):
-            self.options.voice, self.options.speed = await asyncio.to_thread(
-                self._voice_settings
-            )
+            (
+                self.options.voice,
+                self.options.speed,
+                self.options.chime,
+            ) = await asyncio.to_thread(self._voice_settings)
         if kind == "status":
             line = first_sentence(text)
             if line:
@@ -300,8 +305,24 @@ class VoiceSession:
             self.speaking = False
             await self._emit({"type": "speech_stopped_by_user"})
 
+    @property
+    def audible(self) -> bool:
+        """Whether GAIA can be heard: speech is being sent, or the host is
+        still playing what was sent (it arrives faster than it plays)."""
+        return self.speaking or self.playing
+
+    def playback(self, on: bool) -> None:
+        """The host started or finished playing GAIA's speech."""
+        self.playing = bool(on)
+        if not self.audible:
+            self._turns.speaking_done()
+
     async def play_earcon(self) -> None:
-        if self._sink is not None and self.options.purpose == "voice":
+        if (
+            self._sink is not None
+            and self.options.purpose == "voice"
+            and self.options.chime
+        ):
             await self._sink.write(pcm.earcon())
 
     # ---- internals -------------------------------------------------------
@@ -406,10 +427,10 @@ class VoiceSession:
             self._meter.begin()
             self._sustained = False
             await self._emit(event)
-            await self._apply(self._turns.speech_started(self.speaking))
+            await self._apply(self._turns.speech_started(self.audible))
         elif kind == "partial":
             await self._emit(event)
-            await self._apply(self._turns.partial(event.get("text", ""), self.speaking))
+            await self._apply(self._turns.partial(event.get("text", ""), self.audible))
         elif kind == "speech_stopped":
             self._voiced.append(self._meter.end())
             self._marks = {"stopped": time.monotonic()}
@@ -433,11 +454,11 @@ class VoiceSession:
             if self.expecting_answer:
                 # An answer to a question is never a backchannel or a half-thought.
                 await self._apply(self._turns.noise())
-                if self.speaking:
+                if self.audible:
                     await self.interrupt()
                 await self._emit({"type": "final", "text": text.strip()})
                 return
-            await self._apply(self._turns.final(text, self.speaking))
+            await self._apply(self._turns.final(text, self.audible))
         else:
             await self._emit(event)
 

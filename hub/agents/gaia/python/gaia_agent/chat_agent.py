@@ -3270,19 +3270,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             """Change how GAIA herself sounds or listens in voice mode.
 
             Use when the user asks you to change your voice, speak faster or
-            slower, be louder or quieter, show or hide captions, or stop or
-            start waiting for "Hey GAIA". Heard from your next spoken reply.
-            You can change only these five; for any other setting, tell the
-            user where it is in Settings.
+            slower, be louder or quieter, show or hide captions, turn the
+            chime on or off, or stop or start waiting for "Hey GAIA". Heard
+            from your next reply. You can change only these six; for any
+            other setting, tell the user where it is in Settings.
 
             Args:
-                setting: voice, speed, volume, captions or wake_word.
+                setting: voice, speed, volume, captions, chime or wake_word.
                 value: voice: a Kokoro id or name (af_bella, George). speed:
-                    percent 50-200. volume: percent 0-100. captions and
-                    wake_word: on or off.
+                    percent 50-200. volume: percent 0-100. Others: on or off.
 
             Returns:
-                status and the five settings as they are now, or an error
+                status and the six settings as they are now, or an error
                 to tell the user.
             """
             from gaia.voice.settings import change_voice_setting
