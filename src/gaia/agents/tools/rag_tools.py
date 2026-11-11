@@ -2209,6 +2209,17 @@ class RAGToolsMixin:
                         }
                     if result.get("error_type") in _CACHE_LOCK_HINTS:
                         return _index_cache_error(result, file_path)
+                    if result.get("error_type") == "vision_model_failed":
+                        return {
+                            "status": "error",
+                            "error": result.get("error"),
+                            "error_type": "vision_model_failed",
+                            "file_name": result.get("file_name", Path(file_path).name),
+                            "hint": (
+                                "The vision model failed, not the file. Tell the user "
+                                "the error: it names the model and how to fix it."
+                            ),
+                        }
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."
