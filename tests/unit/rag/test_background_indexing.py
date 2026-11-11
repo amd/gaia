@@ -209,6 +209,30 @@ def test_an_index_finishing_right_after_the_guard_is_not_run_again(tmp_path, slo
     assert str(doc) in host.indexed_files
 
 
+def test_a_reused_index_clears_its_unattended_attach_failure(tmp_path, slow_rag):
+    rag, release = slow_rag
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    asked = time.perf_counter()
+
+    def attach_fails(_result):
+        raise OSError("session store is read-only")
+
+    first, job = rag_tools._index_within_budget(
+        rag, str(doc), budget=0, on_indexed=attach_fails
+    )
+    assert first is None
+    release.set()
+    assert job.done.wait(CALL_DEADLINE_S)
+    assert rag_tools.documents_failed_indexing(rag)
+
+    reused, _ = rag_tools._index_within_budget(rag, str(doc), since=asked)
+
+    assert reused["success"]
+    assert rag.index_document.call_count == 1
+    assert rag_tools.documents_failed_indexing(rag) == []
+
+
 def test_an_index_that_ended_before_the_ask_does_not_count(tmp_path, slow_rag):
     rag, release = slow_rag
     doc = tmp_path / "big.pdf"
