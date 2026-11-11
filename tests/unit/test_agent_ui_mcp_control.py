@@ -816,6 +816,25 @@ def test_refused_turn_reports_its_reason_not_unknown_error():
     assert view["error"] == reason
 
 
+def test_refused_turn_uses_the_latest_error_reason():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "agent_error", "content": "Retrying"})
+    t.apply({"type": "agent_error", "content": "Model failed to load."})
+    t.apply({"type": "done", "content": "", "failed": True})
+    with t.cond:
+        view = t.view()
+    assert view["error"] == "Model failed to load."
+
+
+def test_failed_done_with_no_reason_anywhere_still_says_unknown_error():
+    t = TurnTracker("s", "mcp")
+    t.apply({"type": "done", "content": "", "failed": True})
+    with t.cond:
+        view = t.view()
+    assert view["outcome"] == "error"
+    assert view["error"] == "Unknown error"
+
+
 def test_nonfatal_agent_error_does_not_fail_the_turn():
     t = TurnTracker("s", "mcp")
     t.apply({"type": "agent_error", "content": "Retrying"})

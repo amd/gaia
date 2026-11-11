@@ -372,3 +372,20 @@ class TestStreamChatFailedTurn:
             [{"type": "done", "content": "Cancelled.", "cancelled": True}]
         )
         assert "status" not in result
+
+    def test_failed_done_explanation_is_the_detail(self):
+        why = "The model stopped before it could finish."
+        result = self._run([{"type": "done", "content": why, "failed": True}])
+        assert result["status"] == "error"
+        assert result["detail"] == why
+        assert result["content"] == why
+
+    def test_stale_retry_error_does_not_mask_the_failure_explanation(self):
+        why = "The model stopped before it could finish."
+        result = self._run(
+            [
+                {"type": "agent_error", "content": "Retrying"},
+                {"type": "done", "content": why, "failed": True},
+            ]
+        )
+        assert result["detail"] == why
