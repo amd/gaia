@@ -57,6 +57,8 @@ on:
       # Repository files that individual unit tests read.
       - 'scripts/dev/**'
       - 'scripts/audit/**'
+      - 'scripts/testing/**'
+      - 'scripts/video-demo/R2-SETUP.md'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'
@@ -130,6 +132,8 @@ on:
       # Repository files that individual unit tests read.
       - 'scripts/dev/**'
       - 'scripts/audit/**'
+      - 'scripts/testing/**'
+      - 'scripts/video-demo/R2-SETUP.md'
       - 'examples/skill_references_example.py'
       - 'examples/mcp_windows_system_health_agent.py'
       - 'eval/ci_lanes.json'

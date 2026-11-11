@@ -5,6 +5,7 @@
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -361,6 +362,14 @@ def test_a_quoted_pem_header_alone_is_not_wiped_to_the_end():
     text = f"error: expected {_PEM_BEGIN}\nthen the rest of the log\n"
     assert fr.redact(text) == text
     assert fr.matched_pattern_names(text) == []
+
+
+def test_header_like_lines_after_a_pem_header_do_not_backtrack():
+    text = f"{_PEM_BEGIN}\n" + "-:\r\n" * 5000 + "!"
+    start = time.perf_counter()
+    assert fr.matched_pattern_names(text) == []
+    fr.redact(text)
+    assert time.perf_counter() - start < 5
 
 
 def test_matched_pattern_names_name_patterns_never_values():

@@ -84,7 +84,7 @@ _NAMED_SECRET_PATTERNS = (
         "PEM private key",
         re.compile(
             r"-----BEGIN [A-Z ]*PRIVATE KEY-----[ \t]*\r?\n"
-            r"(?:[\w-]+:[^\n]*\r?\n|[ \t]*\r?\n)*"
+            r"(?:[\w-]+:[^\r\n]*\r?\n|[ \t]*\r?\n)*"
             r"[A-Za-z0-9+/]{16,}={0,2}[ \t]*(?:\r?\n|\Z)[\s\S]*?"
             r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
         ),
