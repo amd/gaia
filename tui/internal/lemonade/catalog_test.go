@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Lemonade /system-info bodies, trimmed to the fields the fit check reads.
@@ -33,7 +34,6 @@ func capacityOf(t *testing.T, body string) Capacity {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ServerVersion = "2026.39.1"
 	return c
 }
 
@@ -302,31 +302,6 @@ func TestUnknownFitIsLabelledAsSuch(t *testing.T) {
 	}
 }
 
-func TestQwenFlashNeedsANewEnoughLemonade(t *testing.T) {
-	halo := capacityOf(t, strixHalo128)
-	for version, want := range map[string]bool{"2026.39.1": true, "2026.40.0~3.abc": true, "11.9.0": false, "": false} {
-		halo.ServerVersion = version
-		for _, e := range BuildEntries("local", nil, halo, nil) {
-			if e.Recommended == nil || e.Recommended.RegisterAs == "" || e.Recommended.MinLemonade == "" {
-				continue
-			}
-			if e.Selectable() != want || e.NeedsUpgrade == want {
-				t.Errorf("Lemonade %q: selectable=%v needsUpgrade=%v reason=%q", version, e.Selectable(), e.NeedsUpgrade, e.Reason)
-			}
-		}
-	}
-}
-
-func TestTooSmallBeatsTooOldInTheReason(t *testing.T) {
-	mac := capacityOf(t, macM4)
-	mac.ServerVersion = "11.9.0"
-	for _, e := range BuildEntries("local", nil, mac, nil) {
-		if e.Recommended != nil && e.Recommended.RegisterAs != "" && (e.NeedsUpgrade || !strings.Contains(e.Reason, "memory")) {
-			t.Fatalf("a PC too small was told to upgrade Lemonade: %+v", e)
-		}
-	}
-}
-
 // The gateway picker opens on its first row, so the default is whatever leads.
 func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
 	models := []Model{
@@ -343,5 +318,132 @@ func TestGatewayPickerLeadsWithDeepSeekV41Flash(t *testing.T) {
 		if e.Recommended != nil {
 			t.Errorf("%s must not be recommended", e.Model.ID)
 		}
+	}
+}
+
+func npuEntry(entries []Entry, id string) *Entry {
+	for i := range entries {
+		if entries[i].Model.ID == id {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 8, DiskFreeGB: 500, NPUMemoryGB: 32}, nil)
+	e := npuEntry(entries, "gemma4-it-e4b-FLM")
+	if e == nil || !e.Selectable() || e.Listed || e.Featured() {
+		t.Fatalf("cold NPU row: %+v", e)
+	}
+}
+
+func TestAPCWithoutAnNPUIsNotOfferedFLMModels(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil)
+	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e != nil {
+		t.Fatalf("offered on a PC with no NPU: %+v", e)
+	}
+}
+
+func TestAnFLMModelIsJudgedOnSystemRAM(t *testing.T) {
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 2, DiskFreeGB: 500, NPUMemoryGB: 32}, nil)
+	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e == nil || !e.Fits {
+		t.Fatalf("a small GPU pool must not refuse an NPU model: %+v", e)
+	}
+}
+
+func TestChatLabelWinsOverAudioAndSingleTurnLoses(t *testing.T) {
+	if !isChatModel(Model{ID: "gemma4-it-e4b-FLM", Labels: []string{"audio", "chat"}}) {
+		t.Fatal("an omni FLM model is a chat model")
+	}
+	if isChatModel(Model{ID: "gemma4e-flash-e4b-FLM", Labels: []string{"chat", "single-turn"}}) {
+		t.Fatal("a single-turn build cannot hold a conversation")
+	}
+}
+
+func TestAColdPullInstallsTheBackendFirstThenGoesByName(t *testing.T) {
+	var order []string
+	var install, pull map[string]any
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/install"):
+			order = append(order, "install")
+			_ = json.NewDecoder(r.Body).Decode(&install)
+			fmt.Fprint(w, `{"status":"success"}`)
+		case strings.HasSuffix(r.URL.Path, "/pull"):
+			order = append(order, "pull")
+			_ = json.NewDecoder(r.Body).Decode(&pull)
+			fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+		}
+	}))
+	defer s.Close()
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "install,pull" {
+		t.Fatalf("order: %v", order)
+	}
+	if install["recipe"] != "flm" || install["backend"] != "npu" {
+		t.Fatalf("install body: %v", install)
+	}
+	if _, ok := pull["recipe"]; ok || pull["model_name"] != rec.ID {
+		t.Fatalf("built-in pull must go by name only (#1655): %v", pull)
+	}
+}
+
+func TestAListedFLMModelSkipsTheInstall(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/install") {
+			t.Error("the backend is in: Lemonade already lists the model")
+		}
+		fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+	}))
+	defer s.Close()
+	e := Entry{Model: Model{ID: "gemma4-it-e4b-FLM", Recipe: "flm"}, Listed: true, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAFailedBackendInstallStopsThePull(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/pull") {
+			t.Error("pull after a failed install")
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer s.Close()
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := New(s.URL).Pull(context.Background(), e, nil); err == nil || !strings.Contains(err.Error(), "NPU backend") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAnAddedFLMRowSurvivesAPCWithoutAnNPU(t *testing.T) {
+	rec := Recommended{ID: "qwen3.5-4b-FLM", Provider: "local", Device: "npu", Custom: true, SizeGB: 5}
+	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, rec)
+	e := npuEntry(entries, rec.ID)
+	if e == nil || e.Fits {
+		t.Fatalf("an added row must stay, so it can be removed, and must not fit: %+v", e)
+	}
+}
+
+func TestTheBackendInstallIsNotBoundByTheShortClientTimeout(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/install") {
+			time.Sleep(150 * time.Millisecond)
+		}
+		fmt.Fprint(w, "event: complete\ndata: {\"percent\":100}\n\n")
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	c.HTTP.Timeout = 50 * time.Millisecond
+	rec := Recommended{ID: "gemma4-it-e4b-FLM", Provider: "local", Device: "npu"}
+	e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec, Fits: true}
+	if err := c.Pull(context.Background(), e, nil); err != nil {
+		t.Fatal(err)
 	}
 }

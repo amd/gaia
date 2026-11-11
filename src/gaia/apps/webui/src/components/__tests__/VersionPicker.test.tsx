@@ -6,6 +6,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VersionPicker } from '../VersionPicker';
 import type { ReleaseInfo } from '../../hooks/useUpdateStatus';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -113,7 +115,7 @@ describe('VersionPicker', () => {
         // Confirm step should mention version and restart
         expect(screen.getAllByText(/0\.20\.0/i).length).toBeGreaterThan(0);
         expect(screen.getAllByText(/restart/i).length).toBeGreaterThan(0);
-        expect(screen.getAllByText(/downgrade/i).length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/updates are paused/i).length).toBeGreaterThan(0);
     });
 
     it('does not steal focus from the focused control when the view changes', async () => {
@@ -200,6 +202,21 @@ describe('VersionPicker', () => {
         if (currentRow) {
             expect(currentRow.getAttribute('aria-disabled') === 'true' ||
                    !currentRow.matches('button')).toBe(true);
+        }
+    });
+});
+
+describe('VersionPicker dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows release dates in Arabic in an Arabic UI', async () => {
+        setUiLocale('ar');
+        const { container } = render(<VersionPicker onClose={vi.fn()} />);
+        await waitFor(() => expect(container.querySelectorAll('.vp-date')).toHaveLength(releases.length));
+        for (const el of container.querySelectorAll('.vp-date')) {
+            const date = stripIsolates(el.textContent ?? '');
+            expect(date).toMatch(ARABIC_MONTH);
+            expect(date).not.toMatch(ENGLISH_MONTH);
         }
     });
 });

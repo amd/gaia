@@ -44,8 +44,10 @@ Then double-click the app — it will open without the Gatekeeper dialog.
 
 ## Antivirus flags a GAIA file as an infostealer {#av-false-positive}
 
-**Symptom**: Your antivirus quarantines a file under `.gaia/venv/…/gaia/skills/audit/`
-with a generic Python-malware name. The reported case is Bitdefender flagging
+**Symptom**: On an older install that still runs GAIA from `.gaia/venv`, your antivirus
+quarantines a file under `.gaia/venv/…/gaia/skills/audit/` with a generic Python-malware
+name. Current installs run a frozen `gaia` and have no `.gaia/venv`; re-running the one-line
+installer moves an older install onto it. The reported case is Bitdefender flagging
 
 ```
 C:\Users\<user>\.gaia\venv\Lib\site-packages\gaia\skills\audit\__pycache__\code.cpython-312.pyc.2586770202400
@@ -86,111 +88,18 @@ wheel's manifest and prints anything that has been altered:
 2. Nothing needs restoring — the quarantined file was a bytecode cache, and Python rebuilds it
    on the next import. To stop the alert recurring, add an antivirus exclusion for `~/.gaia/`
    (Windows: `%USERPROFILE%\.gaia\`).
-3. If the integrity check above lists any modified file, do **not** add an exclusion — reinstall
-   with `~/.gaia/venv/bin/pip install --force-reinstall amd-gaia` and
+3. If the integrity check above lists any modified file, do **not** add an exclusion — re-run
+   the one-line installer, which installs a fresh, checksum-verified `gaia`, and
    [open an issue](https://github.com/amd/gaia/issues/new).
-
-## First-launch backend install fails
-
-The Electron app launches but the backend install fails with an error dialog. Common causes:
-
-### Insufficient disk space
-
-**Symptom**: Error dialog says "Not enough free disk space (X GB available, 5 GB required)".
-
-**Fix**: Free at least 5 GB of disk space and click **Retry**. The Python environment + minimal model needs ~5 GB.
-
-### No internet connection
-
-**Symptom**: Install fails during the download step with a `uv`/`pip` network
-error (connection refused, name resolution failure, timeouts). The first-launch
-network check is advisory and no longer blocks on its own — a genuine outage
-surfaces here, at the actual download, with a precise error.
-
-**Fix**: Connect to the internet and click **Retry**. The first launch needs to download:
-- `uv` (~30 MB)
-- Python 3.12 (~100 MB)
-- amd-gaia + dependencies (~1.5 GB)
-- Lemonade Server (~50 MB)
-- The default model, Gemma-4-E4B-it-GGUF (~6 GB; ~23 GB Qwen3.6-35B-A3B-GGUF on PCs whose GPU can hold it)
-
-Subsequent launches work fully offline.
-
-### Corporate proxy / firewall
-
-**Symptom**: Install fails with network errors during `uv` or `pip install`.
-
-**Fix**: Set the `HTTPS_PROXY` environment variable before launching GAIA:
-
-**Windows (PowerShell)**:
-```powershell
-$env:HTTPS_PROXY = "http://proxy.example.com:8080"
-& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
-```
-
-**macOS/Linux**:
-```bash
-HTTPS_PROXY=http://proxy.example.com:8080 open -a "GAIA"
-# or just (Linux .deb / AppImage):
-HTTPS_PROXY=http://proxy.example.com:8080 gaia-desktop
-```
-
-### Corporate proxy with TLS inspection — "unable to get issuer certificate"
-
-**Symptom**: Install fails (or the network pre-check warns) with `unable to get
-issuer certificate; if the root CA is installed locally, try running Node.js
-with --use-system-ca`. You are **not** offline — your proxy re-signs HTTPS
-traffic with a corporate root CA that GAIA's bundled trust store doesn't know.
-
-GAIA now trusts the OS certificate store automatically, so on most machines this
-resolves itself. If the install still can't reach a host, point GAIA at your
-corporate root CA explicitly:
-
-**Windows (PowerShell)** — export the root CA from `certmgr.msc` as Base-64 `.cer`/`.pem`, then:
-```powershell
-$env:NODE_EXTRA_CA_CERTS = "C:\path\to\corp-root-ca.pem"
-& "$env:LOCALAPPDATA\Programs\GAIA\gaia-desktop.exe"
-```
-
-**macOS/Linux**:
-```bash
-NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem gaia-desktop
-```
-
-`NODE_EXTRA_CA_CERTS` covers GAIA's own network checks. The download step runs
-`uv` and `pip`, which use their own trust stores — point them at the same root
-CA with `SSL_CERT_FILE` (honored by both) and set `HTTPS_PROXY`. The most
-reliable combination behind a TLS-inspecting proxy:
-
-```bash
-export HTTPS_PROXY=http://proxy.example.com:8080
-export NODE_EXTRA_CA_CERTS=/path/to/corp-root-ca.pem
-export SSL_CERT_FILE=/path/to/corp-root-ca.pem
-gaia-desktop
-```
-
-### Antivirus interference
-
-**Symptom**: Install gets stuck or fails midway.
-
-**Fix**: Some antivirus products quarantine the `uv` binary or Python downloads. Add an exclusion for `~/.gaia/` and re-run the install.
-
-If instead your antivirus names a specific GAIA file as malware, see [Antivirus flags a GAIA file as an infostealer](#av-false-positive).
-
-### Missing C++ build tools (Windows, rare)
-
-**Symptom**: `pip install` fails with "Microsoft Visual C++ 14.0 or greater is required".
-
-**Cause**: Some Python packages have native extensions that need a C++ compiler. We use uv which prefers prebuilt wheels, but in rare cases this falls through.
-
-**Fix**: Install Microsoft Visual Studio Build Tools from [https://visualstudio.microsoft.com/visual-cpp-build-tools/](https://visualstudio.microsoft.com/visual-cpp-build-tools/). Restart and click **Retry**.
 
 ## App installs but won't start
 
 ### Backend not found
-**Symptom**: App opens to a blank window or shows "Backend not found".
+**Symptom**: The app shows "This GAIA install is missing its backend."
 
-**Fix**: Check `~/.gaia/electron-install.log` for the actual error. The most common cause is a partial install — delete `~/.gaia/venv/` and relaunch GAIA to trigger a fresh install.
+**Cause**: The app ships its backend as a `gaia` executable in its `resources/core` folder, and that file is gone. Antivirus quarantining it is the usual reason.
+
+**Fix**: Reinstall GAIA. If your antivirus removed the file, restore it from quarantine or add an exclusion for the GAIA install folder first.
 
 ### Tray icon missing
 **Symptom**: App launches but no tray icon appears.
@@ -213,12 +122,9 @@ If instead your antivirus names a specific GAIA file as malware, see [Antivirus 
 
 **Cause**: This is intentional — the default uninstall keeps your data so reinstalling preserves your chats and documents.
 
-**Fix**: To fully remove all GAIA data, run:
-```bash
-~/.gaia/venv/bin/gaia uninstall --purge
-```
+**Fix**: Run `gaia uninstall --purge` with the `gaia` inside the app, before you uninstall it. The [installation guide](/guides/install#uninstalling) has the command for each platform.
 
-Add `--purge-lemonade` to also uninstall Lemonade Server, or `--purge-models` to also remove downloaded models.
+Add `--purge-lemonade` to also uninstall a system-wide Lemonade Server, or `--purge-models` to also remove downloaded models.
 
 ## How to attach the install log to a bug report
 

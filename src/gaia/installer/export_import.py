@@ -29,6 +29,7 @@ from typing import List
 from gaia.config import gaia_agents_dir
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
+from gaia.utils.paths import WINDOWS_DEVICE_NAMES
 from gaia.version import __version__
 
 log = get_logger(__name__)
@@ -46,19 +47,14 @@ MAX_ENTRIES = 1000
 MAX_UNCOMPRESSED_TOTAL = 500 * 1024 * 1024  # 500 MB
 MAX_UNCOMPRESSED_PER_FILE = 50 * 1024 * 1024  # 50 MB
 
+# Build artefacts that pin the exporter's Python version or OS; never bundled.
+_EXPORT_EXCLUDED_DIRS = frozenset({"__pycache__"})
+_EXPORT_EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo"})
+_EXPORT_EXCLUDED_NAMES = frozenset({".DS_Store"})
+
 # Lowercase letters/digits/hyphens, 1-52 chars, must start and end with
 # alphanumeric.
 _AGENT_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
-
-# Reserved Windows device names (case-insensitive).
-_RESERVED_WINDOWS_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +129,7 @@ def _validate_agent_id(agent_id: str) -> None:
         raise ValueError("Agent ID cannot be empty")
     if "/" in agent_id or "\\" in agent_id or ".." in agent_id:
         raise ValueError(f"Agent ID '{agent_id}' contains path separators")
-    if agent_id.upper() in _RESERVED_WINDOWS_NAMES:
+    if agent_id.lower() in WINDOWS_DEVICE_NAMES:
         raise ValueError(f"Agent ID '{agent_id}' is a reserved Windows device name")
     if not _AGENT_ID_RE.match(agent_id):
         raise ValueError(
@@ -150,6 +146,14 @@ def _iso_now() -> str:
 # ---------------------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------------------
+
+
+def _is_export_excluded(rel_path: Path) -> bool:
+    return (
+        any(part in _EXPORT_EXCLUDED_DIRS for part in rel_path.parts[:-1])
+        or rel_path.suffix.lower() in _EXPORT_EXCLUDED_SUFFIXES
+        or rel_path.name in _EXPORT_EXCLUDED_NAMES
+    )
 
 
 def export_custom_agents(output_path: Path) -> ExportResult:
@@ -193,7 +197,9 @@ def export_custom_agents(output_path: Path) -> ExportResult:
             zf.writestr(BUNDLE_JSON_NAME, json.dumps(manifest, indent=2))
             for agent_dir in agent_dirs:
                 for file_path in sorted(agent_dir.rglob("*")):
-                    if not file_path.is_file():
+                    if not file_path.is_file() or _is_export_excluded(
+                        file_path.relative_to(agent_dir)
+                    ):
                         continue
                     arcname = f"{agent_dir.name}/{file_path.relative_to(agent_dir).as_posix()}"
                     zf.write(file_path, arcname=arcname)

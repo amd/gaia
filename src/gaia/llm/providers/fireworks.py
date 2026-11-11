@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import requests
+
+from gaia.llm.retry import http_body_text
 
 #: Fireworks' OpenAI-compatible endpoint — the same base Lemonade routes to.
 FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1"
@@ -45,6 +48,7 @@ LEMONADE_PREFIX = "fireworks."
 
 _MODELS_PATH = "/models"
 _DEFAULT_TIMEOUT = 30
+_LIST_CHECK_TIMEOUT = 10
 
 
 class FireworksError(RuntimeError):
@@ -150,7 +154,7 @@ def fetch_models(
     if response.status_code != 200:
         raise FireworksError(
             f"Fireworks returned HTTP {response.status_code} for {url}: "
-            f"{response.text[:300]}"
+            f"{http_body_text(response)[:300]}"
         )
 
     try:
@@ -178,6 +182,45 @@ def fetch_models(
             )
         )
     return sorted(models, key=lambda m: m.id)
+
+
+class ModelListState(Enum):
+    """What Fireworks said when asked for its model list."""
+
+    OK = "ok"
+    REJECTED = "rejected"
+    FAILING = "failing"
+
+
+@dataclass(frozen=True)
+class ModelListCheck:
+    state: ModelListState
+    detail: str = ""
+
+
+def check_model_list(
+    api_key: str, *, timeout: int = _LIST_CHECK_TIMEOUT
+) -> ModelListCheck:
+    """Tell a rejected key apart from Fireworks failing to list its models."""
+    url = FIREWORKS_BASE_URL + _MODELS_PATH
+    try:
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout
+        )
+    except requests.RequestException as e:
+        return ModelListCheck(
+            ModelListState.FAILING,
+            f"could not reach Fireworks ({type(e).__name__})",
+        )
+    if response.status_code in (401, 403):
+        return ModelListCheck(ModelListState.REJECTED)
+    if response.status_code == 200:
+        return ModelListCheck(ModelListState.OK)
+    # Redact before cutting, or a key echoed across the cut leaks its prefix.
+    body = http_body_text(response).replace(api_key, "[key]")[:200].strip()
+    return ModelListCheck(
+        ModelListState.FAILING, f"HTTP {response.status_code}: {body}"
+    )
 
 
 def search(models: List[FireworksModel], term: str) -> List[FireworksModel]:
@@ -261,7 +304,7 @@ def fetch_library(
         if response.status_code != 200:
             raise FireworksError(
                 f"Fireworks returned HTTP {response.status_code} for {url}: "
-                f"{response.text[:300]}"
+                f"{http_body_text(response)[:300]}"
             )
         try:
             payload = response.json()

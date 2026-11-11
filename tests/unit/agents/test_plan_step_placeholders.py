@@ -123,7 +123,7 @@ def test_placeholder_plan_step_is_refused_and_the_model_supplies_the_value(agent
 
 
 def test_direct_call_args_replace_the_plan_copy_of_the_same_step(agent):
-    # kw-04: the plan held a stand-in, the direct call held the real script.
+    # The plan held a stand-in, the direct call held the real script.
     _script(
         agent,
         _plan_reply("SCRIPT_PLACEHOLDER", top_content=_SCRIPT),

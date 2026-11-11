@@ -24,7 +24,14 @@ import gaia.ui.email_sidecar.daemon_client as daemon_client_module  # noqa: E402
 from gaia.daemon import paths
 from gaia.daemon.errors import DaemonStartError, DaemonVersionError
 from gaia.daemon.instance import DaemonInstance
-from gaia.daemon.sidecars.errors import SidecarError
+from gaia.daemon.sidecars.errors import (
+    ERROR_KIND_HEADER,
+    KIND_CAPACITY,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+    SidecarError,
+)
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy  # noqa: E402
 
 ENSURE_PAYLOAD = {
@@ -49,9 +56,10 @@ def _daemon_instance(**overrides) -> DaemonInstance:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
+    def __init__(self, status_code: int, payload: dict, headers=None):
         self.status_code = status_code
         self._payload = payload
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -118,7 +126,7 @@ def test_acquire_daemon_start_error_wraps_as_sidecar_error(monkeypatch):
         daemon_client_module.acquire_handle()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "boom-xyz" in message
 
@@ -133,7 +141,7 @@ def test_acquire_generic_daemon_error_wraps_as_sidecar_error(monkeypatch):
         daemon_client_module.acquire_handle()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "version-skew-xyz" in message
 
@@ -293,6 +301,70 @@ def test_acquire_non_200_response_raises_sidecar_error_with_detail(monkeypatch):
         daemon_client_module.acquire_handle()
 
 
+def test_acquire_non_200_response_carries_the_daemons_error_kind(monkeypatch):
+    inst = _daemon_instance()
+    monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
+    response = _FakeResponse(
+        409, {"detail": "capacity"}, headers={ERROR_KIND_HEADER: KIND_CAPACITY}
+    )
+    monkeypatch.setattr(daemon_client_module.requests, "post", _RecordingPost(response))
+
+    with pytest.raises(SidecarError) as excinfo:
+        daemon_client_module.acquire_handle()
+    assert excinfo.value.kind == KIND_CAPACITY
+
+
+def test_acquire_non_200_from_a_daemon_without_kinds_has_no_kind(monkeypatch):
+    inst = _daemon_instance()
+    monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
+    response = _FakeResponse(502, {"detail": "x"})
+    monkeypatch.setattr(daemon_client_module.requests, "post", _RecordingPost(response))
+
+    with pytest.raises(SidecarError) as excinfo:
+        daemon_client_module.acquire_handle()
+    assert excinfo.value.kind == ""
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (DaemonStartError("x"), KIND_SERVICE_UNREACHABLE),
+        (DaemonVersionError("x"), KIND_SERVICE_OUTDATED),
+    ],
+)
+def test_acquire_daemon_errors_carry_a_kind(monkeypatch, error, kind):
+    def _raise(*a, **k):
+        raise error
+
+    monkeypatch.setattr(daemon_client_module, "start_or_attach", _raise)
+    with pytest.raises(SidecarError) as excinfo:
+        daemon_client_module.acquire_handle()
+    assert excinfo.value.kind == kind
+
+
+def test_acquire_stale_daemon_floor_is_a_service_outdated_kind(monkeypatch):
+    inst = _daemon_instance(api_version="1.0")
+    monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
+    monkeypatch.setattr(daemon_client_module.requests, "post", _ForbiddenPost())
+
+    with pytest.raises(SidecarError) as excinfo:
+        daemon_client_module.acquire_handle()
+    assert excinfo.value.kind == KIND_SERVICE_OUTDATED
+
+
+def test_acquire_unreachable_daemon_is_a_service_unreachable_kind(monkeypatch):
+    inst = _daemon_instance()
+    monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
+
+    def _refuse(*a, **k):
+        raise daemon_client_module.requests.exceptions.ConnectionError("refused")
+
+    monkeypatch.setattr(daemon_client_module.requests, "post", _refuse)
+    with pytest.raises(SidecarError) as excinfo:
+        daemon_client_module.acquire_handle()
+    assert excinfo.value.kind == KIND_SERVICE_UNREACHABLE
+
+
 # ── stop_sidecar: attach-only, genuine no-op when no daemon is live ────────
 
 
@@ -353,7 +425,7 @@ def test_stop_sidecar_daemon_error_from_attach_wraps_as_sidecar_error(monkeypatc
         daemon_client_module.stop_sidecar()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "attach-boom-xyz" in message
 

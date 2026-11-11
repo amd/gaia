@@ -214,7 +214,7 @@ class TestTheTurnSurvives:
         monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{OLD_PORT}")
         client = _client()
         server.on_request = server.stop
-        with pytest.raises(requests.exceptions.ConnectionError):
+        with pytest.raises(lc.LemonadeServerDownError):
             _ask(client)
         assert server.daemon_calls == 0
 
@@ -283,7 +283,9 @@ class TestAnotherGaiaHome:
 
 
 class TestOneServerWhenTwoRestart:
-    def test_two_processes_restarting_at_once_start_one_server(self):
+    def test_two_processes_restarting_at_once_start_one_server(
+        self, gaia_owned_lemonade
+    ):
         """The daemon serialises ensure(): the second finds the first's server."""
         from gaia.daemon.lemonade import EmbeddedLemonadeOwner
 

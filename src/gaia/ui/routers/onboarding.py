@@ -129,6 +129,11 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     return result
 
 
+def _decimal_gb(gib: Optional[float]) -> Optional[float]:
+    """GiB from the compatibility probe as the decimal GB setup shows next to model sizes."""
+    return round(gib * 1024**3 / 1e9, 1) if gib is not None else None
+
+
 def _classify_tier(ram_gb: Optional[float], npu: Optional[bool]) -> str:
     """Coarse hardware tier used only to phrase the recommendation."""
     if ram_gb is None:
@@ -206,8 +211,8 @@ async def onboarding_preflight() -> PreflightReport:
     return PreflightReport(
         os=report.detected_platform,
         detected_platform=report.detected_platform,
-        ram_gb=round(ram_gb, 1) if ram_gb is not None else None,
-        disk_free_gb=report.free_disk_gb,
+        ram_gb=_decimal_gb(ram_gb),
+        disk_free_gb=_decimal_gb(report.free_disk_gb),
         npu_detected=npu_detected,
         gpu_name=devices["gpu_name"],
         gpu_vram_gb=gpu_vram,
@@ -228,15 +233,24 @@ async def onboarding_preflight() -> PreflightReport:
 def new_chat_start(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """A new chat's task cards and working folder, from what is set up here.
 
-    When the agent can't list its skills there are no cards, and
-    ``skills_error`` carries why, so the screen can say so.
+    When the agent can't list its skills, or be asked whether it takes
+    folders, it can't run a task either, so there are no cards, the folder
+    can't be changed, and ``skills_error`` carries why.
     """
     from gaia.ui.routers.skills import list_skills
-    from gaia.ui.start_screen import start_screen
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+    from gaia.ui.session_environment import EnvironmentChangeError, takes_folders
+    from gaia.ui.start_screen import start_screen, working_folder
 
     try:
         skills = list_skills()["skills"]
-    except HTTPException as e:
-        logger.warning("New-chat cards unavailable: %s", e.detail)
-        return {**start_screen(db, []), "skills_error": str(e.detail)}
-    return {**start_screen(db, skills), "skills_error": None}
+        choosable = takes_folders(FLAGSHIP_AGENT_ID)
+    except (HTTPException, EnvironmentChangeError) as e:
+        detail = str(e.detail if isinstance(e, HTTPException) else e)
+        logger.warning("New-chat cards unavailable: %s", detail)
+        return {
+            "cards": [],
+            "working_folder": working_folder(choosable=False),
+            "skills_error": detail,
+        }
+    return {**start_screen(db, skills, choosable), "skills_error": None}

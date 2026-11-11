@@ -744,21 +744,25 @@ def test_agent_evicts_before_the_call_and_keeps_everything_readable():
 
 
 @pytest.mark.usefixtures("clean_registry")
-def test_eviction_still_fires_in_a_second_turn_on_replayed_history():
+def test_eviction_puts_away_replayed_history_results_in_a_later_turn(monkeypatch):
     """History replays every result whole (the log keeps the pre-eviction copy);
-    those results were read last turn, so they can go at once."""
+    those results were read last turn, so they go before this turn's own."""
+    # A window whose history budget still holds last turn's results.
+    monkeypatch.setenv("GAIA_CTX_SIZE", "65536")
     agent = _make_agent()
     _stub_chat(agent, _script(10))
     result1 = agent.process_query("read the first batch of files")
-    assert any("evicted_results" in s for s in _stats_entries(result1))
 
     agent.conversation_history = result1["model_messages"]
     sent2 = _stub_chat(agent, _script(3, start=11))
     result2 = agent.process_query("read a second batch of files")
 
     assert any("evicted_results" in s for s in _stats_entries(result2))
-    first_call = _tool_texts(sent2[0])
-    assert first_call and all(_is_stub(t) for t in first_call[:5])
+    assert _tool_texts(sent2[0])[0] == _full(1)
+    fired = next(_tool_texts(s) for s in sent2 if any(map(_is_stub, _tool_texts(s))))
+    stubbed = [t for t in fired if _is_stub(t)]
+    assert stubbed and fired[: len(stubbed)] == stubbed
+    assert "path=file1.py" in stubbed[0]
 
 
 def test_console_message_says_what_happened():

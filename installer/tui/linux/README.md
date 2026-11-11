@@ -13,6 +13,10 @@ Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 All files are owned `root:root`. The desktop entry sets `Terminal=true` — this is
 a TUI, so the launcher has to open a terminal for it.
 
+The `gaia` command that setup runs is not in either package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet.
+
 ## Build it
 
 ```bash
@@ -29,13 +33,35 @@ dist/gaia_1.4.0_amd64.deb
 dist/gaia-1.4.0.x86_64.rpm
 ```
 
-- `--payload` is a directory that already contains exactly two executables named
-  `gaia-tui` and `gaia-agent`, no extension. The script copies them; it does not
-  build them.
+- `--payload` is a directory that already contains two executables named
+  `gaia-tui` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
+  its `_internal` folder. The script copies them; it does not build them. The
+  core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
+  script stops a daemon running it before the package is removed or upgraded.
+  `--without-core` leaves the core out, as packages before it shipped one did;
+  CI uses it only to rebuild such a release's package.
 - `--out` is created if absent.
-- `--version` must be `MAJOR.MINOR.PATCH`, digits only. RPM forbids `-` in a
-  version, so a semver prerelease suffix is rejected up front with that reason
-  rather than failing later inside `rpmbuild`.
+- `--version` is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rc.N` for a release
+  candidate. Any other suffix is rejected up front rather than failing later
+  inside `rpmbuild`.
+
+### Release candidate versions
+
+A candidate's file names keep the release's own spelling, so they match the
+Windows setup and `installer/tui/artifacts.py`. The version *inside* both
+packages uses a tilde instead, because RPM forbids `-` and because dpkg and rpm
+both sort a tilde before the bare version. A final then installs over its
+candidates as an ordinary upgrade:
+
+| Release | Files | Package version (deb and rpm) |
+| --- | --- | --- |
+| `v0.25.1-rc4` | `gaia_0.25.1-rc.4_amd64.deb`, `gaia-0.25.1-rc.4.x86_64.rpm` | `0.25.1~rc.4` |
+| `v0.25.1` | `gaia_0.25.1_amd64.deb`, `gaia-0.25.1.x86_64.rpm` | `0.25.1` |
+
+`0.25.1~rc.4` sorts after `0.25.0` and before `0.25.1`, and `rc.10` after
+`rc.9`. `--print-package-version` prints the package version for a `--version`
+without building anything. The macOS `.pkg` keeps `0.25.1-rc.4`: macOS
+Installer does not version-gate plain files, so it needs no respelling.
 
 There is no flag to build only one of the two. If `rpmbuild` is missing or the
 rpm step fails, the whole run exits non-zero — a release with a `.deb` and no
@@ -84,8 +110,8 @@ Then install in a container that did **not** build the packages:
 docker run --rm -v "$PWD/dist:/out:ro" debian:bookworm \
   bash -c 'dpkg -i /out/gaia_1.4.0_amd64.deb && gaia-tui version && dpkg -P gaia'
 
-docker run --rm -v "$PWD/dist:/out:ro" fedora:41 \
-  bash -c 'rpm -i /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
+docker run --rm -v "$PWD/dist:/out:ro" fedora:latest \
+  bash -c 'dnf install -y /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
 ```
 
 Use `debian:bookworm`, not `-slim`. The slim image ships

@@ -47,9 +47,18 @@ _NGROK_INSTALL_COMMANDS = {
 }
 
 
+#: ``reason`` a status carries when ngrok is missing: setup, not a failure.
+NGROK_NOT_INSTALLED = "ngrok_not_installed"
+
+
+def _ngrok_install_commands(system: Optional[str] = None) -> list:
+    """This OS's ngrok install commands; empty where none is known."""
+    return list(_NGROK_INSTALL_COMMANDS.get(system or platform.system(), []))
+
+
 def _ngrok_install_hint(system: Optional[str] = None) -> str:
     """How to install ngrok, naming only this OS's package-manager commands."""
-    commands = _NGROK_INSTALL_COMMANDS.get(system or platform.system(), [])
+    commands = _ngrok_install_commands(system)
     hint = "ngrok is not installed. Install it from https://ngrok.com/download"
     if not commands:
         return hint + "."
@@ -452,6 +461,8 @@ class TunnelManager:
         self._token: Optional[str] = None
         self._started_at: Optional[str] = None
         self._error: Optional[str] = None
+        # Set with _error when the failure is a missing prerequisite.
+        self._reason: Optional[str] = None
         self._public_ip: Optional[str] = None
         self._device: Optional[dict] = None
         self._start_lock = asyncio.Lock()
@@ -484,6 +495,10 @@ class TunnelManager:
             "token": self._token if self.active else None,
             "startedAt": self._started_at,
             "error": self._error,
+            "reason": self._reason,
+            "installCommands": (
+                _ngrok_install_commands() if self._reason == NGROK_NOT_INSTALLED else []
+            ),
             "publicIp": self._public_ip,
             "device": self._device if self.active else None,
         }
@@ -539,12 +554,14 @@ class TunnelManager:
 
         # Reset state
         self._error = None
+        self._reason = None
         self._url = None
 
         # Check ngrok installation
         ngrok_path = self._find_ngrok()
         if not ngrok_path:
             self._error = _ngrok_install_hint()
+            self._reason = NGROK_NOT_INSTALLED
             logger.warning("ngrok not found on PATH")
             return self.get_status()
 
@@ -652,6 +669,7 @@ class TunnelManager:
         self._url = None
         self._started_at = None
         self._error = None
+        self._reason = None
         self._device = None
         logger.info("Tunnel stopped")
 

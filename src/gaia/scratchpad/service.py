@@ -10,7 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from gaia.config import gaia_home
 from gaia.database.mixin import DatabaseMixin
+from gaia.database.sql_safety import validate_identifier
 from gaia.logger import get_logger
+from gaia.utils.sqlite_wal import enable_wal
 
 log = get_logger(__name__)
 
@@ -42,6 +44,24 @@ _VALID_SQL_TYPES = {
 }
 _COLUMN_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+_TABLE_NAME_RULE = (
+    "Table names may use only letters, digits and underscores, and must not "
+    "start with a digit (pattern [A-Za-z_][A-Za-z0-9_]*)."
+)
+
+
+def _suggest_name(name: Any) -> str:
+    """Return a valid table name close to *name*, for an error message."""
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", str(name))
+    if clean[0].isdigit():
+        clean = f"t_{clean}"
+    return clean[:64]
+
+
+def _norm_type(col_type: str) -> str:
+    """Declared types that differ only by case or spacing count as the same."""
+    return "".join(col_type.split()).upper()
+
 
 class ScratchpadService(DatabaseMixin):
     """SQLite-backed working memory for multi-document data analysis.
@@ -67,6 +87,7 @@ class ScratchpadService(DatabaseMixin):
     MAX_TABLES = 100
     MAX_ROWS_PER_TABLE = 1_000_000
     MAX_TOTAL_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
+    MAX_NAME_LENGTH = 64
 
     def __init__(self, db_path: Optional[str] = None):
         """Initialize scratchpad service.
@@ -98,7 +119,7 @@ class ScratchpadService(DatabaseMixin):
         """
         try:
             # Both statements fail loudly on a corrupt file — catch together.
-            self._db.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._db)
             row = self._db.execute("PRAGMA integrity_check").fetchone()
             if row and row[0] == "ok":
                 return True
@@ -123,14 +144,15 @@ class ScratchpadService(DatabaseMixin):
             log.error("Failed to delete corrupt scratchpad DB: %s", exc)
         self.init_db(db_path)
         # Fresh DB — these now succeed.
-        self._db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(self._db)
         return False
 
     def create_table(self, name: str, columns: str) -> str:
         """Create a prefixed scratchpad table.
 
         Args:
-            name: Table name (will be prefixed with 'scratch_').
+            name: Table name matching [A-Za-z_][A-Za-z0-9_]*, stored with a
+                'scratch_' prefix. Invalid names are rejected, not rewritten.
             columns: Column definitions in SQLite syntax,
                      e.g., "date TEXT, amount REAL, description TEXT"
 
@@ -140,7 +162,7 @@ class ScratchpadService(DatabaseMixin):
         Raises:
             ValueError: If table limit exceeded or name is invalid.
         """
-        safe_name = self._sanitize_name(name)
+        safe_name = self._validate_name(name)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         # Check table limit
@@ -157,8 +179,23 @@ class ScratchpadService(DatabaseMixin):
         # unchecked `columns` string is a direct SQL-injection vector.
         safe_columns = self._validate_columns(columns)
 
+        # An existing table keeps its columns; refuse a different request
+        # instead of reporting a schema that was never applied.
+        if self.table_exists(full_name):
+            if self._table_info(full_name) != self._declared_info(safe_columns):
+                actual = ", ".join(
+                    f"{c['name']} {c['type']}".strip()
+                    for c in self.query(f"PRAGMA table_info({full_name})")
+                )
+                raise ValueError(
+                    f"Table '{safe_name}' already exists with different columns "
+                    f"({actual}). Use the existing columns, or drop_table "
+                    "first to change the schema."
+                )
+            return f"Table '{safe_name}' already exists with columns: {columns}"
+
         # Create table using execute() (outside any transaction)
-        self.execute(f"CREATE TABLE IF NOT EXISTS {full_name} ({safe_columns})")
+        self.execute(f"CREATE TABLE {full_name} ({safe_columns})")
 
         log.info(f"Scratchpad table created: {safe_name}")
         return f"Table '{safe_name}' created with columns: {columns}"
@@ -176,7 +213,7 @@ class ScratchpadService(DatabaseMixin):
         Raises:
             ValueError: If table does not exist or row limit would be exceeded.
         """
-        safe_name = self._sanitize_name(table)
+        safe_name = self._validate_name(table)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         if not self.table_exists(full_name):
@@ -215,10 +252,7 @@ class ScratchpadService(DatabaseMixin):
 
         # Enforce the global scratchpad size cap. Without this, an agent
         # could fill 100 tables * 1 M rows * ~200 bytes = 20 GB by staying
-        # under each individual cap. get_size_bytes() is an estimate (200
-        # bytes/row average) — acceptable given the ~30% slack in the cap
-        # and that a real enforcement via PRAGMA page_count is too
-        # SQLite-version-specific to rely on here.
+        # under each individual cap. get_size_bytes() measures the real file.
         current_size = self.get_size_bytes()
         if current_size >= self.MAX_TOTAL_SIZE_BYTES:
             raise ValueError(
@@ -334,7 +368,7 @@ class ScratchpadService(DatabaseMixin):
         Returns:
             Confirmation message.
         """
-        safe_name = self._sanitize_name(name)
+        safe_name = self._validate_name(name)
         full_name = f"{self.TABLE_PREFIX}{safe_name}"
 
         if not self.table_exists(full_name):
@@ -362,55 +396,79 @@ class ScratchpadService(DatabaseMixin):
             count += 1
 
         # Reclaim disk space — without VACUUM, SQLite keeps the freed
-        # pages on disk and get_size_bytes (row-count estimate) may
-        # report 0 while the file is still large.
+        # pages in the file.
         if count > 0:
             try:
                 self._db.execute("VACUUM")
-            except Exception as exc:
-                log.debug("VACUUM after clear_all failed (%s); non-critical", exc)
+            except sqlite3.Error as exc:
+                # The size cap ignores freed pages, so only disk use is affected.
+                log.warning("VACUUM after clear_all failed: %s", exc)
 
         log.info(f"Cleared {count} scratchpad tables")
         return f"Dropped {count} scratchpad table(s)."
 
     def get_size_bytes(self) -> int:
-        """Get total size of all scratchpad data in bytes (approximate).
+        """Get the size of the scratchpad database in bytes.
 
-        Uses a rough estimate of 200 bytes per row across all
-        scratchpad tables.
+        The scratchpad has its own database file, so this counts only
+        scratchpad data. Pages freed by drop_table are not counted.
 
         Returns:
-            Estimated size in bytes.
+            (page_count - freelist_count) * page_size.
         """
         # Not guarded: returning 0 on error would silently disable the size cap.
-        total_rows = sum(t["rows"] for t in self.list_tables())
-        return total_rows * 200
+        pages = self._pragma("page_count") - self._pragma("freelist_count")
+        return pages * self._pragma("page_size")
 
-    def _sanitize_name(self, name: str) -> str:
-        """Sanitize table/column names to prevent SQL injection.
+    def _pragma(self, name: str) -> int:
+        """Read a single-integer PRAGMA from the scratchpad database."""
+        return self.query(f"PRAGMA {name}", one=True)[name]
 
-        Only allows alphanumeric and underscore characters.
-        Prepends 't_' if name starts with a digit.
+    def _table_info(self, full_name: str) -> List[tuple]:
+        """Return (name, type, notnull, default, pk) for each column."""
+        return [
+            (c["name"], _norm_type(c["type"]), c["notnull"], c["dflt_value"], c["pk"])
+            for c in self.query(f"PRAGMA table_info({full_name})")
+        ]
 
-        Args:
-            name: Raw table name.
+    @staticmethod
+    def _declared_info(safe_columns: str) -> List[tuple]:
+        """Return what _table_info would show if these columns were applied."""
+        scratch = sqlite3.connect(":memory:")
+        try:
+            scratch.execute(f"CREATE TABLE t ({safe_columns})")
+            return [
+                (name, _norm_type(col_type), notnull, default, pk)
+                for _, name, col_type, notnull, default, pk in scratch.execute(
+                    "PRAGMA table_info(t)"
+                )
+            ]
+        finally:
+            scratch.close()
 
-        Returns:
-            Sanitized name safe for use in SQL identifiers.
+    def _validate_name(self, name: str) -> str:
+        """Return *name* unchanged if it is a valid table name, else raise.
+
+        Names are never rewritten: two names that differ only in punctuation
+        would otherwise land in the same table.
 
         Raises:
-            ValueError: If name is empty or None.
+            ValueError: Naming the rule and a valid name to use instead.
         """
         if not name:
-            raise ValueError("Table name cannot be empty.")
-
-        clean = re.sub(r"[^a-zA-Z0-9_]", "_", name)
-        if not clean or clean[0].isdigit():
-            clean = f"t_{clean}"
-        # Truncate to reasonable length
-        if len(clean) > 64:
-            clean = clean[:64]
-        return clean
+            raise ValueError(f"Table name cannot be empty. {_TABLE_NAME_RULE}")
+        if isinstance(name, str) and len(name) > self.MAX_NAME_LENGTH:
+            raise ValueError(
+                f"Table name {name[:20]!r}... is {len(name)} characters; the "
+                f"limit is {self.MAX_NAME_LENGTH}. Choose a shorter name."
+            )
+        try:
+            return validate_identifier(name, "table name", "scratchpad")
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid table name {name!r}. {_TABLE_NAME_RULE} "
+                f"For example: '{_suggest_name(name)}'."
+            ) from e
 
     def _count_tables(self) -> int:
         """Count existing scratchpad tables."""

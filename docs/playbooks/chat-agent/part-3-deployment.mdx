@@ -5,7 +5,7 @@ icon: "graduation-cap"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -246,11 +246,11 @@ def _generate_search_keys(self, query: str) -> List[str]:
     AGENT_MODELS = {
         # 👇 Your new agent
         "doc-qa": {
-            "class_name": "gaia_agent_chat.agent.ChatAgent",
+            "class_name": "gaia_agent.chat_agent.ChatAgent",
             "init_params": {
                 "silent_mode": True,
                 # Only kwargs recognised by ChatAgentConfig will be applied;
-                # see ChatAgentConfig in hub/agents/chat/python/gaia_agent_chat/agent.py.
+                # see ChatAgentConfig in hub/agents/gaia/python/gaia_agent/chat_agent.py.
                 "rag_documents": ["./company_docs"],
             },
             "description": "Document Q&A agent backed by RAG",
@@ -317,7 +317,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```python title="cli.py"
     #!/usr/bin/env python3
     import sys
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     def main():
         if len(sys.argv) < 2:
@@ -355,11 +355,12 @@ def _generate_search_keys(self, query: str) -> List[str]:
     [project]
     name = "doc-qa-agent"
     version = "1.0.0"
-    # ChatAgent is installed from source while PyPI publishing is paused.
-    # Pin it to the tag of the amd-gaia release you depend on.
+    # ChatAgent ships in the flagship package, installed from source while
+    # PyPI publishing is paused. Pin it to the tag of the amd-gaia release
+    # you depend on (replace <version>).
     dependencies = [
-        "amd-gaia[rag]==0.24.1",
-        "gaia-agent-chat @ git+https://github.com/amd/gaia.git@v0.24.1#subdirectory=hub/agents/chat/python",
+        "amd-gaia[rag]==<version>",
+        "gaia-agent-gaia @ git+https://github.com/amd/gaia.git@v<version>#subdirectory=hub/agents/gaia/python",
     ]
 
     [project.scripts]
@@ -443,7 +444,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     **Solution:**
     ```bash
     # Install watchdog dependency
-    uv pip install "watchdog>=2.1.0"
+    uv pip install "watchdog>=2.1.0,<7"
     ```
 
     **Verify:**
@@ -680,7 +681,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
 ## Source Code Reference
 
 <CardGroup cols={2}>
-  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py">
+  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py">
     Main agent implementation with session management and file monitoring
   </Card>
 

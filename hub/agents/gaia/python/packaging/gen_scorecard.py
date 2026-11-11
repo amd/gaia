@@ -235,11 +235,11 @@ def _compute_performance(scorecard: dict):
 def _build_reproduction_command(model: str, ctx_size: int) -> str:
     """Exact, portable shell recipe that reproduces this scorecard."""
     return (
-        "# Prerequisites: install the eval extras + this repo's chat/gaia hub\n"
-        "# packages, start a Lemonade Server with the model on AMD Ryzen AI\n"
+        "# Prerequisites: install the eval extras + this repo's gaia hub\n"
+        "# package, start a Lemonade Server with the model on AMD Ryzen AI\n"
         "# hardware, and have the Claude Code CLI on PATH (the eval driver).\n"
         'uv pip install -e ".[dev,eval,ui,api]" '
-        "-e hub/agents/chat/python -e hub/agents/gaia/python\n"
+        "-e hub/agents/gaia/python\n"
         "gaia init   # installs and starts Lemonade Server; it must stay running\n\n"
         "# Step 0: stage fixtures + start the fixture server (see\n"
         "# tests/fixtures/gaia/README.md for the staging contract)\n"

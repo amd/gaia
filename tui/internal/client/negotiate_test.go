@@ -413,3 +413,50 @@ func TestMissingVersionRouteGetsNoSessionID(t *testing.T) {
 		t.Errorf("session_id was sent with no version negotiated: %s", raw)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// surface negotiation (#5295, contract 2.20): the flagship words provider
+// errors for a headless caller unless told the TUI is asking.
+// ---------------------------------------------------------------------------
+
+func sendOnce(t *testing.T, f *fakeRelay, agentID string) {
+	t.Helper()
+	f.strictBody = true
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"hi"}`)
+		flush()
+	}
+	ch, err := f.clientFor(t, agentID).Send(context.Background(), "say hi")
+	if err != nil {
+		t.Fatalf("Send to %s at %q failed: %v", agentID, f.contractVersion, err)
+	}
+	if !hasFinal(collect(t, ch)) {
+		t.Fatal("the turn did not complete")
+	}
+}
+
+func TestTheFlagshipAt220IsToldTheTUIIsAsking(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.20"
+	sendOnce(t, f, "gaia")
+	if got := f.queries[0].Surface; got != "tui" {
+		t.Errorf("surface = %q, want \"tui\": %s", got, f.lastRawBody())
+	}
+}
+
+func TestOlderPeersAndOtherAgentsGetNoSurface(t *testing.T) {
+	for _, tc := range []struct{ agent, version string }{
+		{"gaia", "2.19"},
+		{"gaia", ""},
+		{"email", "2.20"},
+	} {
+		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = tc.version
+			sendOnce(t, f, tc.agent)
+			if raw := f.lastRawBody(); strings.Contains(raw, "surface") {
+				t.Errorf("surface was sent to a peer that rejects it: %s", raw)
+			}
+		})
+	}
+}

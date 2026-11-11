@@ -28,7 +28,7 @@ from gaia_agent_email.mailbox_state import (
 
 from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectionBusyError, ConnectorsError
 from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
 from gaia.llm.lemonade_client import configured_lemonade_url
 from gaia.logger import get_logger
@@ -744,20 +744,30 @@ class EmailAgentConfig:
                 )
 
             # A provider is calendar-scoped iff its stored connection includes one
-            # of its calendar scopes. NOTE: get_connection() returns None while a
-            # provider's re-auth tripwire is active, so a genuinely scoped provider
-            # can be transiently treated as unscoped here — re-auth is required
-            # anyway, and the actionable error below still names the scope to grant.
+            # of its calendar scopes. NOTE: get_connection() returns None once a
+            # provider's re-auth tripwire has cleared it, so a scoped provider can
+            # be transiently treated as unscoped; the error below still names the
+            # scope to grant. A busy row (another GAIA operation mid-save) has no
+            # scopes yet, so it says busy instead of asking for a grant.
+            rows = {p: get_connection(p) or {} for p in connected}
             scoped = [
                 p
                 for p in connected
                 if p in _PROVIDER_CALENDAR_SCOPES
-                and _PROVIDER_CALENDAR_SCOPES[p].intersection(
-                    (get_connection(p) or {}).get("scopes", [])
-                )
+                and _PROVIDER_CALENDAR_SCOPES[p].intersection(rows[p].get("scopes", []))
             ]
 
+            busy = sorted(
+                (
+                    p
+                    for p in connected
+                    if p in _PROVIDER_CALENDAR_SCOPES and rows[p].get("error") == "busy"
+                ),
+                key=PROVIDERS.index,
+            )
             if not scoped:
+                if busy:
+                    raise ConnectionBusyError(busy[0])
                 raise ConfigurationError(
                     "Connected providers have no calendar scope. "
                     "Grant calendar.events or calendar.readonly for Google, "
@@ -765,9 +775,13 @@ class EmailAgentConfig:
                     "in Settings → Connectors, then retry."
                 )
 
-            # First in registry order wins when more than one is scoped.
+            # First in registry order wins when more than one is scoped. A busy
+            # provider ranked ahead may be the one that wins once its save ends,
+            # so picking the next one now would use the wrong calendar.
             scoped.sort(key=PROVIDERS.index)
             provider = scoped[0]
+            if busy and PROVIDERS.index(busy[0]) < PROVIDERS.index(provider):
+                raise ConnectionBusyError(busy[0])
 
         try:
             family = backend_family(provider)

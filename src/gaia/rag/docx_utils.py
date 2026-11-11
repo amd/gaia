@@ -33,8 +33,7 @@ def extract_docx_text(docx_path: str) -> str:
     content controls) and block-level content controls are recursed into.
 
     Known omissions: header/footer text (separate XML parts, usually
-    repeated boilerplate) and embedded images (TODO #1072: VLM extraction
-    for images embedded in .docx files).
+    repeated boilerplate) and embedded images.
 
     Raises:
         ImportError: python-docx is not installed.
@@ -81,7 +80,10 @@ def extract_docx_text(docx_path: str) -> str:
         )
 
     try:
-        doc = Document(docx_path)
+        # A stream, not the path: given a path, python-docx's is_zipfile check
+        # swallows a lock and reports the file as not a package.
+        with open(docx_path, "rb") as stream:
+            doc = Document(stream)
     except Exception as e:
         raise ValueError(
             f"Could not read Word file: {file_name}\nReason: {e}\n{_CORRUPT_HINT}"

@@ -227,3 +227,33 @@ def test_list_tasks_rejects_bad_status(host):
     fn = _tool(host, "list_tasks")
     out = json.loads(fn(status="bogus"))
     assert out["ok"] is False
+
+
+def test_get_briefing_logs_its_own_tool_name(host, monkeypatch, tmp_path, caplog):
+    """A cold briefing must not be attributed only to pre_scan_inbox."""
+    import logging
+
+    import gaia_agent_email.briefing as briefing
+
+    monkeypatch.setattr(briefing, "briefing_path", lambda: tmp_path / "brief.json")
+    fn = _tool(host, "get_briefing")
+    with caplog.at_level(logging.INFO, logger="gaia_agent_email"):
+        out = json.loads(fn(max_messages=10))
+
+    assert out["ok"] is True
+    calls = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "gaia_agent_email"
+        and record.__dict__.get("stage") == "tool_call"
+    ]
+    results = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "gaia_agent_email"
+        and record.__dict__.get("stage") == "tool_result"
+    ]
+    assert any(message == "tool_call name=get_briefing" for message in calls)
+    assert any(
+        message.startswith("tool_result name=get_briefing ") for message in results
+    )

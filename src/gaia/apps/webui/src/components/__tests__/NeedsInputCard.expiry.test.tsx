@@ -210,6 +210,65 @@ describe('ChatView question lifecycle', () => {
         await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
     });
 
+    it('an open permission prompt keeps the header on "Waiting for you" after a status event', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'delete it' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'run_shell_command', confirm_id: 'c-1',
+                summary: 'del note.txt', args: { command: 'del note.txt' },
+            } as unknown as StreamEvent);
+        });
+        act(() => {
+            callbacks!.onAgentEvent({ type: 'status', status: 'info', message: 'Running command' } as unknown as StreamEvent);
+        });
+        await waitFor(() => expect(document.querySelector('.thinking-indicator-text')?.textContent).toBe('Waiting for you'));
+    });
+
+    it('answering a prompt mid-tool shows the running tool, not "Waiting for you"', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'list every code' } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        act(() => {
+            callbacks!.onAgentEvent({ type: 'tool_start', tool: 'extract_document_items' } as unknown as StreamEvent);
+            callbacks!.onAgentEvent({
+                type: 'permission_request', tool: 'read_file', confirm_id: 'c-1',
+                summary: 'Read plant_manual.md', args: { file_path: 'plant_manual.md' },
+            } as unknown as StreamEvent);
+        });
+        await waitFor(() => expect(screen.getByText('Waiting for you')).toBeInTheDocument());
+        // The tool keeps running silently after the answer: no event arrives to end the wait.
+        await act(async () => {
+            await useNotificationStore.getState().respondToPermission('c-1', 'allow');
+        });
+        expect(useChatStore.getState().awaitingUser).toBe(false);
+        await waitFor(() => expect(screen.queryByText('Waiting for you')).not.toBeInTheDocument());
+        // Its own model calls then say where they are, and that the server is restarting.
+        act(() => {
+            callbacks!.onAgentEvent({ type: 'status', status: 'working', phase: 'reading', message: 'Reading page 4 of 12…' } as unknown as StreamEvent);
+        });
+        await waitFor(() => expect(screen.getByText('Reading page 4 of 12…')).toBeInTheDocument());
+        act(() => {
+            callbacks!.onAgentEvent({
+                type: 'status', status: 'working', phase: 'model_restart',
+                message: 'The model server stopped. GAIA is restarting it…',
+            } as unknown as StreamEvent);
+        });
+        await waitFor(() => expect(screen.getByText('The model server stopped. GAIA is restarting it…')).toBeInTheDocument());
+    });
+
+    it('answering the question ends the wait before the next event', async () => {
+        await send();
+        expect(useChatStore.getState().awaitingUser).toBe(true);
+        act(() => useChatStore.getState().closeQuestion('req-1'));
+        expect(useChatStore.getState().awaitingUser).toBe(false);
+    });
+
     it('the turn ending closes its questions', async () => {
         await send();
         expect(useChatStore.getState().liveQuestions['req-1']).toBeDefined();

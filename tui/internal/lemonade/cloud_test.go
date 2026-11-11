@@ -55,6 +55,25 @@ func TestConfigureKeepsKeyOutOfInstallAndDiscoversModels(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+
+// A cloud model Lemonade has "loaded" lists context_length 4096; a local
+// model's context_length is the window it is configured at.
+func TestWindowIsTheProvidersForCloudAndConfiguredForLocal(t *testing.T) {
+	cases := []struct {
+		model Model
+		want  int
+	}{
+		{Model{ID: "fireworks.deepseek-v4p1-flash", Recipe: "cloud", ContextLength: 4096, MaxContextWindow: 1048576}, 1048576},
+		{Model{ID: "fireworks.unlisted", Recipe: "cloud", ContextLength: 4096}, 0},
+		{Model{ID: "Gemma-4-E4B-it-GGUF", Recipe: "llamacpp", ContextLength: 65536, MaxContextWindow: 131072}, 65536},
+	}
+	for _, c := range cases {
+		if got := c.model.Window(); got != c.want {
+			t.Errorf("%s: Window() = %d, want %d", c.model.ID, got, c.want)
+		}
+	}
+}
+
 func TestRecommendedModelsAreRankedAndLookedUpByID(t *testing.T) {
 	if len(RecommendedModels) < 2 || TopRecommendation() != RecommendedModels[0] {
 		t.Fatal("top recommendation must be the first ranked entry")
@@ -114,6 +133,22 @@ func TestErrorsNeverReflectProviderBodyOrFollowRedirects(t *testing.T) {
 		})
 	}
 }
+
+// A Lemonade without the cloud API is older than the floor; name it and the
+// same remedy the Python side gives, never a version GAIA no longer accepts.
+func TestNoCloudAPINamesTheFloor(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer s.Close()
+	err := New(s.URL).Clear(context.Background(), "fireworks")
+	if err == nil || !strings.Contains(err.Error(), MinExternalVersion) ||
+		!strings.Contains(err.Error(), "gaia daemon restart") ||
+		!strings.Contains(err.Error(), "lemonade-server.ai") {
+		t.Fatalf("404 error does not name the floor and the remedy: %v", err)
+	}
+}
+
 func TestProviderURLValidation(t *testing.T) {
 	for _, u := range []string{"http://gateway.example/v1", "http://localhost/v1", "https://user:secret@example.com/v1", "https://example.com/v1?key=secret", "file:///tmp/key"} {
 		if validateURL(u, false) == nil {

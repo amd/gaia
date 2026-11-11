@@ -438,7 +438,7 @@ class TestFTS5Search:
 
 
 class TestDeduplication:
-    """>80% word overlap in same category+context → updates existing."""
+    """A restatement in the same category+context updates the existing entry."""
 
     def test_dedup_high_overlap_same_category_context(self, store):
         """High overlap in same category+context deduplicates."""
@@ -454,22 +454,21 @@ class TestDeduplication:
         assert id2 == id1
 
     def test_dedup_replaces_with_newer_content(self, store):
-        """Dedup replaces content with the newer version (not longer)."""
+        """A refinement replaces content with the newer, fuller version."""
         id1 = store.store(
             category="fact",
             content="Project uses React 18 with webpack bundler",
         )
         id2 = store.store(
             category="fact",
-            content="Project uses React 19 with webpack bundler",
+            content="Project uses React 18 with webpack bundler and Babel",
         )
         assert id2 == id1
 
-        # Newer content should be stored
         results = store.search("React webpack bundler")
         match = next((r for r in results if r["id"] == id1), None)
         assert match is not None
-        assert "React 19" in match["content"]
+        assert match["content"].endswith("and Babel")
 
     def test_dedup_takes_max_confidence(self, store):
         """Dedup takes the maximum confidence of old and new."""
@@ -507,7 +506,7 @@ class TestDeduplication:
 
         id2 = store.store(
             category="fact",
-            content="GAIA supports NPU acceleration on AMD chips",
+            content="GAIA supports NPU acceleration on AMD hardware today",
         )
         assert id2 == id1
 
@@ -553,6 +552,27 @@ class TestDeduplication:
             context="personal",
         )
         assert id1 != id2
+
+    @pytest.mark.parametrize(
+        "left, right",
+        [
+            ("User's setting is -5", "User's setting is 5"),
+            ("User knows C", "User knows C++"),
+            ("User knows C", "User knows C#"),
+            ("User's setting is +1", "User's setting is 1"),
+        ],
+    )
+    def test_dedup_keeps_symbol_significant_values_separate(self, store, left, right):
+        """Signs and language suffixes identify distinct memory values."""
+        id1 = store.store(category="fact", content=left)
+        id2 = store.store(category="fact", content=right)
+        assert id2 != id1
+
+    def test_dedup_still_splits_hyphenated_prose(self, store):
+        """A normal word hyphen remains a separator for overlap matching."""
+        id1 = store.store(category="fact", content="User's mother-in-law lives nearby")
+        id2 = store.store(category="fact", content="User's mother in law lives nearby")
+        assert id2 == id1
 
     def test_dedup_never_downgrades_user_source(self, store):
         """A discovery re-run that merges into a user item keeps source='user'."""
@@ -874,6 +894,159 @@ class TestConversations:
 
 
 # ===========================================================================
+# 5b. Deleting one session (#5931)
+# ===========================================================================
+
+
+def _fts_rowids(store, word):
+    return {
+        r[0]
+        for r in store._conn.execute(
+            "SELECT rowid FROM conversations_fts WHERE conversations_fts MATCH ?",
+            (word,),
+        )
+    }
+
+
+def _log_tool(store, session_id, query):
+    store.log_tool_call(
+        session_id=session_id,
+        tool_name="web_search",
+        args={"query": query},
+        result_summary=f"results for {query}",
+        success=True,
+    )
+
+
+class TestDeleteSession:
+    def test_removes_only_that_session(self, store):
+        """A deleted chat's turns and tool calls go; other chats and facts stay."""
+        store.store_turn("gone", "user", "pineapple question")
+        store.store_turn("gone", "assistant", "pineapple answer")
+        _log_tool(store, "gone", "pineapple recipes")
+        store.store_turn("kept", "user", "pineapple elsewhere")
+        _log_tool(store, "kept", "pineapple prices")
+        store.store(category="fact", content="User likes pineapple")
+
+        assert store.delete_session("gone") == {"conversations": 2, "tool_history": 1}
+
+        assert store.get_history(session_id="gone") == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+        hits = store.search_conversations("pineapple")
+        assert [h["session_id"] for h in hits] == ["kept"]
+        tools = store._conn.execute(
+            "SELECT session_id, args FROM tool_history"
+        ).fetchall()
+        assert [t[0] for t in tools] == ["kept"]
+        assert "pineapple prices" in tools[0][1]
+        assert store.get_by_category("fact")[0]["content"] == "User likes pineapple"
+
+    def test_writes_after_the_delete_file_nothing(self, store):
+        """A turn still finishing under a deleted id leaves nothing behind."""
+        store.store_turn("gone", "user", "first")
+        store.delete_session("gone")
+
+        store.store_turn("gone", "assistant", "late answer")
+        _log_tool(store, "gone", "late search")
+        store.store_turn("kept", "user", "still here")
+
+        assert store.get_history(session_id="gone") == []
+        tools = store._conn.execute("SELECT session_id FROM tool_history").fetchall()
+        assert tools == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+
+    def test_nothing_left_behind(self, store):
+        """No row, FTS entry or tool call of the deleted session survives."""
+        store.store_turn("gone", "user", "zanzibar question")
+        store.store_turn("gone", "assistant", "zanzibar answer")
+        _log_tool(store, "gone", "zanzibar")
+        store.store_turn("kept", "user", "unrelated")
+        assert len(_fts_rowids(store, "zanzibar")) == 2
+
+        store.delete_session("gone")
+
+        assert _fts_rowids(store, "zanzibar") == set()
+        for table in ("conversations", "tool_history"):
+            n = store._conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE session_id = 'gone'"
+            ).fetchone()[0]
+            assert n == 0, table
+        hits = store._conn.execute(
+            "SELECT COUNT(*) FROM tool_history WHERE args LIKE '%zanzibar%'"
+        ).fetchone()[0]
+        assert hits == 0
+        # The external-content FTS index still matches its table.
+        store._conn.execute(
+            "INSERT INTO conversations_fts(conversations_fts) VALUES('integrity-check')"
+        )
+        assert store.delete_session("gone") == {"conversations": 0, "tool_history": 0}
+
+    @pytest.mark.parametrize(
+        "neighbour", ["abc%", "abc_", "ABC", "abcd", "xabc", "abc ", "", "%", "_"]
+    )
+    def test_matches_the_id_exactly(self, store, neighbour):
+        """No prefix, case or wildcard match reaches a neighbouring session."""
+        store.store_turn("abc", "user", "mine")
+        store.store_turn(neighbour, "user", "theirs")
+        _log_tool(store, neighbour, "theirs")
+
+        store.delete_session("abc")
+
+        assert [t["content"] for t in store.get_history(session_id=neighbour)] == [
+            "theirs"
+        ]
+        assert (
+            store._conn.execute(
+                "SELECT COUNT(*) FROM tool_history WHERE session_id = ?", (neighbour,)
+            ).fetchone()[0]
+            == 1
+        )
+
+    def test_wildcard_id_deletes_only_itself(self, store):
+        store.store_turn("a", "user", "one")
+        store.store_turn("%", "user", "two")
+        store.delete_session("%")
+        assert [s["session_id"] for s in store.get_sessions()] == ["a"]
+
+    def test_legacy_random_id_turns_are_untouched_until_pruned(self, store):
+        """Pre-#5931 turns under a random id survive a chat delete; age pruning
+        or a full clear removes them."""
+        chat_id = str(uuid.uuid4())
+        legacy_id = str(uuid.uuid4())
+        store.store_turn(chat_id, "user", "new turn")
+        store.store_turn(legacy_id, "user", "legacy turn")
+
+        store.delete_session(chat_id)
+        assert [s["session_id"] for s in store.get_sessions()] == [legacy_id]
+
+        old = (datetime.now().astimezone() - timedelta(days=91)).isoformat()
+        store._conn.execute(
+            "UPDATE conversations SET timestamp = ? WHERE session_id = ?",
+            (old, legacy_id),
+        )
+        store._conn.commit()
+        assert store.prune(days=90)["conversations_deleted"] == 1
+        assert store.get_sessions() == []
+
+    def test_concurrent_deletes_and_writes_stay_separate(self, store):
+        """Deleting one chat while another writes never drops the other's turns."""
+        for i in range(50):
+            store.store_turn("gone", "user", f"gone {i}")
+
+        def writer():
+            for i in range(50):
+                store.store_turn("kept", "user", f"kept {i}")
+
+        t = threading.Thread(target=writer)
+        t.start()
+        store.delete_session("gone")
+        t.join()
+
+        assert store.get_history(session_id="gone") == []
+        assert len(store.get_history(session_id="kept", limit=100)) == 50
+
+
+# ===========================================================================
 # 6. Tool History
 # ===========================================================================
 
@@ -973,6 +1146,47 @@ class TestToolHistory:
         assert "avg_duration_ms" in stats
         assert stats["last_error"] is not None
         assert "FileNotFoundError" in stats["last_error"]
+
+    def test_denied_calls_are_visible_but_not_counted_as_failures(self, store):
+        """A pre-execution denial is retained without lowering success metrics."""
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/blocked.txt"},
+            result_summary="{'status': 'denied'}",
+            success=False,
+            error="permission denied",
+            executed=False,
+        )
+        store.log_tool_call(
+            session_id="sess1",
+            tool_name="write_file",
+            args={"path": "/ok.txt"},
+            result_summary="ok",
+            success=True,
+        )
+
+        stats = store.get_tool_stats("write_file")
+        assert stats["total_calls"] == 1
+        assert stats["success_rate"] == 1.0
+        assert stats["last_error"] is None
+        assert stats["denied_count"] == 1
+        assert store.get_tool_errors(tool_name="write_file") == []
+
+        overview = store.get_stats()["tools"]
+        assert overview["total_calls"] == 1
+        assert overview["total_errors"] == 0
+        assert overview["denied_calls"] == 1
+        summary = next(
+            row for row in store.get_tool_summary() if row["tool_name"] == "write_file"
+        )
+        assert summary["total_calls"] == 1
+        assert summary["failure_count"] == 0
+        assert summary["denied_count"] == 1
+
+        history = store.get_tool_history("write_file")
+        assert len(history) == 2
+        assert any(row["executed"] is False for row in history)
 
 
 # ===========================================================================
@@ -1215,7 +1429,7 @@ class TestSensitivity:
         # Store a highly overlapping entry WITHOUT sensitive=True (e.g., heuristic extraction)
         dedup_id = store.store(
             category="fact",
-            content="Sarah email is sarah@company.com company data",
+            content="Sarah email is sarah@company.com sensitive data!",
             sensitive=False,  # No sensitive flag — default
         )
 
@@ -1715,12 +1929,12 @@ class TestEdgeCases:
             assert mode == "wal"
 
     def test_schema_version_exists(self, store):
-        """schema_version table exists at the current version (v7, decayed_at)."""
+        """schema_version table exists at the current version (v8, executed tool history)."""
         if hasattr(store, "_conn"):
             cursor = store._conn.execute("SELECT version FROM schema_version")
             row = cursor.fetchone()
             assert row is not None
-            assert row[0] == 7
+            assert row[0] == 8
 
 
 # ===========================================================================
@@ -3799,14 +4013,14 @@ class TestSchemaV2Migration:
         assert any(r["id"] == kid for r in results)
 
     def test_schema_version_is_current(self, store):
-        """A fresh database is stamped at the current schema version (v7, decayed_at)."""
+        """A fresh database is stamped at the current schema version (v8, executed tool history)."""
         with store._lock:
             cursor = store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             row = cursor.fetchone()
         assert row is not None
-        assert row[0] == 7
+        assert row[0] == 8
 
 
 # ===========================================================================
@@ -3936,7 +4150,7 @@ class TestStoreEmbedding:
         # Store a high-overlap entry — should dedup and clear embedding
         store.store(
             category="fact",
-            content="The deployment pipeline uses Kubernetes containers",
+            content="The deployment pipeline uses Docker containers on Linux",
         )
 
         with store._lock:
@@ -4901,7 +5115,7 @@ class TestProceduresMigration:
         store = MemoryStore(db_path=db)
         store.close()
 
-        assert _schema_version(db) == 7
+        assert _schema_version(db) == 8
         assert "procedures" in _table_names(db)
         assert "skill_deltas" in _table_names(db)
         assert "synthesis_marks" in _table_names(db)
@@ -4949,7 +5163,7 @@ class TestProceduresMigration:
         # Reopen — triggers the v2→v3 migration.
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 7
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
 
             con = sqlite3.connect(str(db))
@@ -4974,6 +5188,33 @@ class TestProceduresMigration:
         finally:
             store2.close()
 
+    def test_v7_db_adds_executed_tool_history_column(self, tmp_path):
+        """Opening a v7 database adds executed and preserves existing rows."""
+        import sqlite3
+
+        db = tmp_path / "memory.db"
+        store = MemoryStore(db_path=db)
+        store.log_tool_call(
+            "sess1", "write_file", {}, "{'status': 'denied'}", False, error="denied"
+        )
+        store.close()
+
+        con = sqlite3.connect(str(db))
+        con.execute("UPDATE schema_version SET version = 7")
+        con.execute("ALTER TABLE tool_history DROP COLUMN executed")
+        con.commit()
+        con.close()
+
+        store2 = MemoryStore(db_path=db)
+        try:
+            assert _schema_version(db) == 8
+            row = store2.get_tool_history("write_file")[0]
+            assert (
+                row["executed"] is False
+            )  # explicit legacy denial is safely reclassified
+        finally:
+            store2.close()
+
     def test_v1_db_chains_through_v2_to_v3(self, tmp_path):
         """A v1 DB (no embedding column, no procedures) chains v1→v2→v3 on open."""
         import sqlite3
@@ -4992,7 +5233,7 @@ class TestProceduresMigration:
 
         store2 = MemoryStore(db_path=db)
         try:
-            assert _schema_version(db) == 7
+            assert _schema_version(db) == 8
             assert "procedures" in _table_names(db)
             # The v1→v2 ALTERs are re-applied idempotently; the legacy row survives.
             rows = store2.get_by_category("fact")
@@ -5216,6 +5457,26 @@ class TestIterSessions:
         assert s["success_count"] == 3
         assert s["attempt_count"] == 4
         assert "bad" not in s["tools"]
+
+    def test_denied_calls_do_not_count_toward_synthesis_attempts(self, store):
+        """Pre-execution denials do not lower a synthesis success rate."""
+        store.store_turn("sessDenied", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessDenied", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessDenied",
+            "write_file",
+            {},
+            "{'status': 'denied'}",
+            False,
+            error="permission denied",
+            executed=False,
+        )
+
+        s = store.iter_sessions(min_steps=3)[0]
+        assert s["success_count"] == 3
+        assert s["attempt_count"] == 3
+        assert "write_file" not in s["tools"]
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

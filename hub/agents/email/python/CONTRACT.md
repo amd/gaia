@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.14`
+> **Schema version:** `2.16`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.14"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.16"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -60,6 +60,8 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.12` | Additive (#2829): `POST /v1/email/query` gains an optional `session_id`. When the host sends it, the run resolves the SAME agent every other turn on that id used, instead of a throwaway per-turn agent — so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing field changed, so `2.11` consumers keep working. |
 | `2.13` | Additive (#2900): `PreScanItem` gains `is_phishing`/`is_spam` (bool, default `false`) — a flag previously readable only inside a prose `why` string is now a real field. `EmailPreScanResult` gains `suspicious` (list of `PreScanItem`) and `suspicious_total` (int) — the phishing/spam-flagged subset of `actionable`, captured before `actionable`'s own cap so a flagged message ranked past it is never silently dropped from the count. No existing field changed, so `2.12` consumers keep working. |
 | `2.14` | Additive (#2629): a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra, distinct from the personal `microsoft` Outlook.com connector), is now valid wherever a provider string is accepted or returned. No existing field or value changed, so `2.13` consumers keep working — they simply never see the new value until a work mailbox is connected. |
+| `2.15` | Additive (#6043): the published OpenAPI contract now includes the twelve stateful `/v1/email/agent/*` operations already served by the sidecar: sessions, history, memory, autonomy, confirmations, cancellation, and the SSE query stream. No existing request or response shape changed. |
+| `2.16` | Additive (#5482): `POST /v1/email/query` gains an optional `memory` mode (`on`, `private`, or `off`). Private and memory-off turns suppress memory reads and writes; omitting the field preserves the session's current mode. |
 
 ---
 
@@ -87,7 +89,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 > []}, {}]` (bearer OR none) rather than asserting an unconditional requirement.
 > `EXEMPT_PATHS` routes (`/health`, `/version`, `/v1/email/health`, `/v1/email/version`)
 > declare an explicit empty requirement instead. See
-> [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email-integration#authentication).
+> [Email guide](https://amd-gaia.ai/docs/guides/email).
 
 ---
 
@@ -97,7 +99,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.14"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.16"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -269,7 +271,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -291,7 +293,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -318,7 +320,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -351,7 +353,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -378,7 +380,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.14"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.16"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -411,7 +413,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "items": [
     {
       "kind": "single",
@@ -441,7 +443,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.14",
+  "schema_version": "2.16",
   "results": [
     {
       "index": 0,
@@ -622,6 +624,14 @@ failure propagates as a normal connector error (403/502/503).
 
 Read-only throughout: this endpoint never archives, marks, replies, or
 sends — proven by an id-set diff in the issue's real-world test evidence.
+
+## Transient connection errors — retry, don't reconnect
+
+When another GAIA process or request is mid-save on the mailbox connection, a
+mailbox route answers `502` with a detail saying the connection "is being saved
+by another GAIA operation". The `/v1/email/agent/*` routes answer the same case
+with `503` and a `Retry-After` header. Both are transient, not a broken
+mailbox: retry shortly and don't prompt the user to reconnect.
 
 ---
 

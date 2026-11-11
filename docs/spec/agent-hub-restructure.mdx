@@ -22,7 +22,7 @@ surface, driven by a `SKILL.md` under `hub/skills/`.
 | `chat`, `email` | Migrated to `hub/agents/<id>/python/` — the pattern below still describes them |
 | `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, composing `chat` as its base class |
 | `code`, `analyst`, `browser`, `fileio`, `docqa`, `doc-search`, `summarize`, `jira`, `docker`, `blender`, `sd`, `emr`, `routing` | **Deleted.** Capability moved to flagship skills in `hub/skills/` — see [Skill Format](/plans/skill-format) |
-| `hello-world`, `word-count`, `connectors-demo` | Kept as teaching templates, not catalog agents |
+| `hello-world`, `word-count`, `connectors-demo` | **Deleted.** `hello-world` survives as the one reference package `gaia agent init` mirrors, at `tests/fixtures/agents/hello-world/` |
 
 The package format below (`gaia-agent.yaml`, `pyproject.toml`, entry-point
 discovery) is still how `chat`, `email`, and `gaia` ship, and still the
@@ -75,10 +75,10 @@ The current codebase has cross-agent tool dependencies that block independent pa
 
 | Mixin | Currently in | Used by | New location |
 |-------|-------------|---------|--------------|
-| `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent, DocQAAgent | `agents/tools/rag_tools.py` |
-| `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent, CodeAgent, DocQA, FileIO | `agents/tools/file_io_tools.py` |
-| `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent, FileIOAgent | `agents/tools/shell_tools.py` |
-| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | CodeAgent | `agents/tools/code_index_tools.py` |
+| `RAGToolsMixin` | `agents/chat/tools/rag_tools.py` | ChatAgent | `agents/tools/rag_tools.py` |
+| `FileIOToolsMixin` | `agents/code/tools/file_io.py` | ChatAgent | `agents/tools/file_io_tools.py` |
+| `ShellToolsMixin` | `agents/chat/tools/shell_tools.py` | ChatAgent | `agents/tools/shell_tools.py` |
+| `CodeIndexToolsMixin` | `agents/code_index/tools/mixin.py` | GaiaAgent | `agents/tools/code_index_tools.py` |
 
 After promotion, every `KNOWN_TOOLS` entry in `registry.py` points to `gaia.agents.tools.*`. No agent-specific tool paths remain. Old paths get deprecated re-exports for backward compatibility.
 
@@ -126,7 +126,7 @@ Not every hub package is an agent. `type` discriminates them, and two ship today
 
 | Package | `type` | `language` | What it is |
 |---------|--------|------------|------------|
-| `terminal-hub` | `component` | `go` | The `gaia tui` binary — six platform builds |
+| `terminal-hub` (moving to `tui`) | `component` | `go` | The `gaia-tui` binary — six platform builds |
 | `agent-ui` | `app` | `typescript` | The Electron desktop app installers |
 
 Their manifests live in `hub/components/<id>/gaia-agent.yaml` and publish through
@@ -137,6 +137,26 @@ Both host or drive agents rather than being one, so they declare `tools_count: 0
 and no `models`. A catalog consumer that lists *agents* must filter on `type`;
 treating every entry as an agent would offer `gaia agent install terminal-hub`,
 which is not how either is installed.
+
+`tui` is the terminal UI's neutral id. For one release cycle `agents/tui/` and
+`agents/terminal-hub/` resolve each other's objects and read as one manifest, so
+URLs pinned to the old id keep working once the publisher moves to `tui`.
+
+### Release channels
+
+Each agent-lane package has a `stable` and a `next` channel, published with the
+`channel` part of `POST /publish` (default `stable`). Release candidates go to
+`next`; finals go to `stable`.
+
+- `latest_version` is the stable channel. A pre-release is refused on `stable`,
+  so an RC never becomes what existing clients install.
+- Catalog entries and per-agent manifests carry `channels: { stable, next }`.
+  `next` is the newest version on either channel, so a final newer than every RC
+  moves both.
+- A manifest's `versions` holds stable versions only. RCs are in `next_versions`.
+
+The Worker README has the full rules:
+[`workers/agent-hub/README.md`](https://github.com/amd/gaia/blob/main/workers/agent-hub/README.md).
 
 ### The skills lane
 
@@ -260,8 +280,8 @@ Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scr
 Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_loop.py`, and apps with `registry.create_agent(id)`.
 </Step>
 <Step title="Add framework generic server">
-`src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`, and serves the agent's [inherited init](#inherited-init) routes.
-The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; `--api` on a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
+`src/gaia/agents/base/server.py` wraps any Agent into a REST API + MCP server, and serves the agent's [inherited init](#inherited-init) routes.
+The REST API admits loopback browser origins only and enforces `GAIA_API_KEY` on every route but `/health` when it is set; a non-loopback `--host` is refused without one (see [API server authentication](/sdk/infrastructure/api-server#authentication)).
 </Step>
 <Step title="Add CI/CD workflow">
 `.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries.
@@ -288,8 +308,8 @@ the deleted agent code.
 
 ## Cross-Agent Dependencies (superseded)
 
-This section tracked agent-to-agent couplings (e.g. `RoutingAgent` depending
-on `CodeAgent`) that the hub-package split needed to resolve. Both agents in
+This section tracked agent-to-agent couplings (e.g. a routing agent depending
+on a deleted agent) that the hub-package split needed to resolve. Both agents in
 that example are deleted, so the coupling no longer exists. The mixin
 promotion this section also depended on (RAG, FileIO, Shell, CodeIndex moving
 to `src/gaia/agents/tools/`) already landed and still holds — see
@@ -313,7 +333,7 @@ python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
 pip install -e hub/agents/email/python/
-gaia agent run email --prompt "Triage my inbox"
+gaia-tui chat --agent email --query "Triage my inbox"
 python -m pytest hub/agents/email/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
@@ -321,13 +341,13 @@ pip install -e ".[dev]"        # framework
 pip install -e ".[agents]"     # framework + all agents
 
 # Step 8 — generic server
-gaia agent run chat --api --port 8080
+gaia api start
 curl http://localhost:8080/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"hello"}]}'
 
 # Full integration
 gaia agent list
-gaia agent run chat --prompt "hello"
+gaia-tui chat --agent gaia --query "hello"
 ```
 
 ## Related

@@ -2,13 +2,22 @@
 # SPDX-License-Identifier: MIT
 """AudioToolsMixin — transcribe audio and video files for GAIA agents."""
 
+import hashlib
+import json
 import os
 import re
+import shutil
+import threading
+import time
+import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.agents.tools.path_access import read_access_error, write_access_error
+from gaia.agents.tools.workspace_paths import _workspace_target
+from gaia.home import gaia_home
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,7 +26,16 @@ logger = get_logger(__name__)
 DEFAULT_CONFIDENCE_THRESHOLD = 0.6
 
 # Transcripts land here unless the caller names a path.
-TRANSCRIPT_DIR = Path.home() / ".gaia" / "transcripts"
+TRANSCRIPT_DIR = gaia_home() / "transcripts"
+
+# Finished chunks of a long recording, kept until its transcript is written.
+CHUNK_CHECKPOINT_DIR = TRANSCRIPT_DIR / ".partial"
+
+# Audio fetched from links, kept so asking about the same link again is instant.
+DOWNLOAD_DIR = TRANSCRIPT_DIR / ".downloads"
+
+# The transcript is what lasts; these caches go after this long.
+MEDIA_CACHE_DAYS = 14
 
 # Transcription runs at roughly 9x realtime, so a 45-minute recording needs
 # ~5 minutes — far past the agent's 180s default, which abandons the call
@@ -36,6 +54,25 @@ MAX_REPORTED_SPANS = 25
 
 # Minimum change before another progress line is worth emitting.
 PROGRESS_STEP = 0.05
+
+# Stages of a recording, in order. The Agent UI names them by position.
+RECORDING_STAGES = ("download", "decode", "transcribe", "voices", "prepare", "analyze")
+STAGE_RUNNING, STAGE_DONE, STAGE_SKIPPED = 0, 1, 2
+
+# How often a stage that reports nothing itself gets an estimate.
+PROGRESS_TICK_SECONDS = 3.0
+
+# An estimate stops here: a bar at 100% with work left reads as a hang.
+ESTIMATE_CEILING = 0.97
+
+# Measured: 283 s of voice separation on 84 minutes of audio.
+VOICE_SECONDS_PER_MINUTE = 3.5
+
+# Speech runs near 900 characters a minute; silence and music come back far below.
+MIN_SPEECH_CHARS_PER_MINUTE = 60
+
+# A clip shorter than this is judged as this long: one word is fine in a second.
+MIN_SPEECH_CHECK_SECONDS = 15.0
 
 # Silence long enough to usually mean someone else started talking.
 TURN_GAP_SECONDS = 0.8
@@ -56,45 +93,23 @@ MAX_SPEAKERS = 8
 # Refinement is one LLM pass per section; a 46-minute meeting is ~9 sections.
 REFINE_TOOL_TIMEOUT = 3600
 
-# A section must fit the REPLY budget, not just the context window: the model
-# re-emits the whole section with speaker labels, so output ~= input.
-REFINE_SECTION_CHARS = 3500
-
 # Room for the section back out, plus a reasoning model's private thinking.
 REFINE_MAX_TOKENS = 4096
 
-# A speaker label is one to three capitalised words, or "Speaker X". Prose
-# preambles a small model emits ("Note:", "Action items:", "Here is the
-# corrected transcript:") must not become speakers — they used to, and then
-# propagated into every later section via the carried speaker list.
-_SPEAKER_LINE = re.compile(
-    r"^(?:Speaker [A-Z0-9]{1,3}|[A-Z][a-z'-]+(?: [A-Z][a-z'-]+){0,2})\s*:",
-    re.MULTILINE,
-)
-_NOT_A_SPEAKER = frozenset(
-    {"Note", "Notes", "Summary", "Transcript", "Action", "Speakers", "Output"}
-)
+# A long recording is many sections, each one a model call on a local GPU.
+ANALYZE_TOOL_TIMEOUT = 7200
 
+# One section can hold dozens of multi-field items.
+ANALYZE_MAX_TOKENS = 8192
 
-def _split_sections(text: str, limit: int) -> List[str]:
-    """Split on sentence boundaries so a turn is not cut mid-thought."""
-    if len(text) <= limit:
-        return [text]
-    pieces = re.split(r"(?<=[.!?])\s+", text)
-    sections, current = [], ""
-    for piece in pieces:
-        if current and len(current) + len(piece) + 1 > limit:
-            sections.append(current)
-            current = piece
-        else:
-            current = f"{current} {piece}".strip()
-    if current:
-        sections.append(current)
-    return sections
+# Cloud models take sections at once: 15 seconds instead of 70 on 84 minutes.
+ANALYZE_CLOUD_PARALLEL = 4
 
+# One presenter talks for minutes on end; a paragraph every minute keeps the
+# transcript readable and gives each stretch its own timestamp.
+PARAGRAPH_SECONDS = 60.0
 
-_TURN_SPAN = re.compile(r"^\s*(\d+)\s*[-–]\s*(\d+)\s*:\s*(.+?)\s*$", re.MULTILINE)
-
+EXPORT_FORMATS = ("srt", "vtt", "txt")
 
 _TURN_LABEL = re.compile(r"^\s*(\d+)\s*[:.]\s*(.+?)\s*$", re.MULTILINE)
 
@@ -184,12 +199,62 @@ def _merge_adjacent(named: List[tuple]) -> List[tuple]:
     return merged
 
 
+def _timed_paragraphs(turns: List[List[dict]], named: List[tuple]) -> List[list]:
+    """Group attributed segments into ``[start, speaker, text]`` paragraphs.
+
+    A new paragraph opens on a change of speaker and every PARAGRAPH_SECONDS
+    within one, so a single-presenter recording does not collapse into one
+    untimed block that nobody can navigate and RAG cannot cite.
+    """
+    paragraphs: List[list] = []
+    for turn, (name, _) in zip(turns, named):
+        for seg in turn:
+            text = seg["text"].strip()
+            continues = (
+                bool(paragraphs)
+                and paragraphs[-1][1] == name
+                and seg["start"] - paragraphs[-1][0] < PARAGRAPH_SECONDS
+            )
+            if continues:
+                paragraphs[-1][2] = f"{paragraphs[-1][2]} {text}"
+            else:
+                paragraphs.append([seg["start"], name, text])
+    return paragraphs
+
+
 def timings_path_for(transcript_path: Path) -> Path:
     """Where the segment timings for a transcript live."""
     return transcript_path.with_suffix(transcript_path.suffix + ".timing.json")
 
 
-def _write_timings(destination: Path, transcript, speaker_spans=None) -> None:
+def _read_timings(transcript_path: Path) -> dict:
+    """The timings saved beside a transcript, or an empty dict if there are none."""
+    timings_file = timings_path_for(transcript_path)
+    if not timings_file.is_file():
+        return {}
+    try:
+        return json.loads(timings_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("Could not read timings %s: %s", timings_file, e)
+        return {}
+
+
+def _source_record(source: Path) -> dict:
+    """What identifies a recording across moves, so reuse can tell two apart."""
+    return {"name": source.name, "size": source.stat().st_size}
+
+
+def _belongs_to_other_recording(transcript_path: Path, source: Path) -> bool:
+    """Whether the transcript at this path came from a different recording.
+
+    ``talk.mp4`` in two folders, or ``talk.mp4`` and ``talk.m4a``, map to one
+    transcript name. Without this the second silently gets the first's words.
+    """
+    recorded = _read_timings(transcript_path).get("source")
+    return bool(recorded) and recorded != _source_record(source)
+
+
+def _write_timings(destination: Path, transcript, speaker_spans=None, source=None):
     """Persist segment start/end/text next to the transcript.
 
     Speaker turns cannot be recovered from continuous prose — asked to segment
@@ -197,9 +262,8 @@ def _write_timings(destination: Path, transcript, speaker_spans=None) -> None:
     pause between segments is the one piece of real evidence available without
     acoustic diarization, so it has to survive past the transcribe call.
     """
-    import json
-
     payload = {
+        **({"source": _source_record(source)} if source else {}),
         "duration": transcript.duration,
         "speakers": [
             {
@@ -244,59 +308,6 @@ def _turns_from_gaps(segments: List[dict], gap_seconds: float) -> List[List[dict
     return turns
 
 
-def _sentences(text: str) -> List[str]:
-    """Split a section into sentences, the unit a speaker turn starts on."""
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-
-
-def _parse_turn_spans(reply: str, count: int) -> List[tuple]:
-    """Read `START-END: Name` lines into ordered, gap-free spans.
-
-    Every sentence must land in exactly one turn — a model that skips or
-    overlaps ranges would otherwise silently drop speech. Gaps are healed by
-    extending the previous turn, and anything left over is appended, so the
-    output always contains the whole section.
-    """
-    spans: List[tuple] = []
-    for raw_start, raw_end, name in _TURN_SPAN.findall(reply):
-        start, end = int(raw_start), int(raw_end)
-        label = name.strip().rstrip(":").strip()
-        if not label or start < 1 or end < start or start > count:
-            continue
-        end = min(end, count)
-        if spans and start <= spans[-1][1]:
-            start = spans[-1][1] + 1  # overlap: the earlier turn wins
-            if start > end:
-                continue
-        if spans and start > spans[-1][1] + 1:
-            prev = spans[-1]
-            spans[-1] = (prev[0], start - 1, prev[2])  # heal the gap
-        spans.append((start, end, label))
-
-    if not spans:
-        return [(1, count, "Speaker A")]
-    if spans[0][0] > 1:
-        spans[0] = (1, spans[0][1], spans[0][2])
-    if spans[-1][1] < count:
-        last = spans[-1]
-        spans[-1] = (last[0], count, last[2])
-    return spans
-
-
-def _collect_speakers(blocks: List[str]) -> List[str]:
-    """Distinct speaker labels, in first-appearance order."""
-    seen: List[str] = []
-    for block in blocks:
-        for line in _SPEAKER_LINE.findall(block):
-            clean = line.rstrip(":").strip()
-            if not clean or clean in seen:
-                continue
-            if clean.split()[0] in _NOT_A_SPEAKER:
-                continue
-            seen.append(clean)
-    return seen
-
-
 def _render_refined(
     source: Path, speakers: List[str], blocks: List[str], acoustic: bool = False
 ) -> str:
@@ -332,15 +343,145 @@ def _next_step_instructions(destination, char_count: int) -> str:
     return (
         f"Raw transcript saved to {destination} ({char_count} chars). "
         "Tell the user this path. Then, in order:\n"
-        f"1. Call refine_transcript('{destination}') — it fixes mis-hearings "
-        "and labels the speakers, and returns the path of a better transcript.\n"
+        f"1. Call refine_transcript('{destination}') — it labels the speakers "
+        "and adds timestamps, and returns the path of a better transcript.\n"
         "2. Call summarize_document on the file refine_transcript returns, for "
-        "the summary and action items.\n"
+        "the summary and action items. If the user wants every item of some "
+        "kind, timestamps, or a structured list, call analyze_transcript on "
+        "that file instead.\n"
         "Do NOT summarise this raw file, do NOT summarise from `preview` (it "
         "is the first 1200 characters only), and do NOT use query_documents "
         "for a summary — it returns only the top few matching chunks and would "
         "miss most of the meeting."
     )
+
+
+@dataclass(frozen=True)
+class _SoleSpeaker:
+    """The one voice of a recording the user said has a single speaker."""
+
+    end: float
+    start: float = 0.0
+    speaker: str = "Speaker 1"
+
+
+def _chunk_checkpoint_dir(source: Path, model: str, language: Optional[str]) -> Path:
+    """Where this recording's finished chunks wait for its transcript."""
+    stat = source.stat()
+    identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}|{model}|{language}"
+    return (
+        CHUNK_CHECKPOINT_DIR / hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    )
+
+
+class _StageEstimate:
+    """Reports progress while a blocking call that cannot report its own runs.
+
+    Starts from an expected duration, then follows the real pace once
+    ``finished`` says how far the work has got.
+    """
+
+    def __init__(self, report: Callable[[int, int], None], expected_seconds: float):
+        self._report = report
+        self._expected = max(expected_seconds, 1.0)
+        self._stop = threading.Event()
+        self._began = time.monotonic()
+        self._fraction = 0.0
+        self._fraction_at = self._began
+        self._thread = threading.Thread(
+            target=self._run, name="recording-progress", daemon=True
+        )
+
+    def __enter__(self) -> "_StageEstimate":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._stop.set()
+
+    def finished(self, fraction: float) -> None:
+        """The real share of the work that is done."""
+        self._fraction = fraction
+        self._fraction_at = time.monotonic()
+
+    def reading(self) -> tuple[int, int]:
+        """Percent done and seconds left, as of now."""
+        now = time.monotonic()
+        spent = max(self._fraction_at - self._began, 0.001)
+        if self._fraction > 0:
+            pace = self._fraction / spent
+            share = self._fraction + (now - self._fraction_at) * pace
+            left = (1.0 - share) / pace
+        else:
+            share = (now - self._began) / self._expected
+            left = self._expected - (now - self._began)
+        return int(min(share, ESTIMATE_CEILING) * 100), max(int(left), 0)
+
+    def _run(self) -> None:
+        while not self._stop.wait(PROGRESS_TICK_SECONDS):
+            self._report(*self.reading())
+
+
+def _speech_warning(text: str, seconds: float) -> Optional[str]:
+    """What to say when a recording holds almost no speech.
+
+    Whisper writes a stock phrase over silence or music, so a transcript of a
+    few characters is not evidence that anything was said.
+    """
+    minutes = max(seconds, MIN_SPEECH_CHECK_SECONDS) / 60
+    if len(text.strip()) / minutes >= MIN_SPEECH_CHARS_PER_MINUTE:
+        return None
+    return (
+        f"This recording has almost no speech: {len(text.strip())} characters in "
+        f"{_clock(seconds)}. What the transcript shows may not have been said at "
+        "all. Tell the user that, and do not summarize it or analyze it."
+    )
+
+
+def _plain_stem(source: Path) -> str:
+    """The recording's name as letters and digits joined by hyphens.
+
+    Small models retype paths: a quote, bracket, full-width bar or doubled
+    space in a video title came back changed, and every later step missed it.
+    """
+    kept = "".join(
+        (
+            char
+            if unicodedata.category(char)[0] in "LN"
+            else "" if unicodedata.category(char) == "Mn" else " "
+        )
+        for char in unicodedata.normalize("NFC", source.stem)
+    )
+    return "-".join(kept.split())[:120] or "recording"
+
+
+def _missing_transcript(source: Path) -> Dict:
+    """The error for a transcript path that isn't there, with the ones that are."""
+    nearby = (
+        sorted(TRANSCRIPT_DIR.glob("*.txt"), key=lambda p: -p.stat().st_mtime)[:5]
+        if TRANSCRIPT_DIR.is_dir()
+        else []
+    )
+    return {
+        "status": "error",
+        "error": (
+            f"No transcript at {source}. Pass the transcript_path that "
+            "transcribe_media returned, copied exactly, or run "
+            "transcribe_media first."
+            + (
+                " Transcripts that do exist: " + "; ".join(str(path) for path in nearby)
+                if nearby
+                else ""
+            )
+        ),
+    }
+
+
+def _recording_name(transcript: Path) -> str:
+    """The recording's name, whichever of its transcript files was given."""
+    if transcript.name.endswith(".transcript.md"):
+        return transcript.name.removesuffix(".transcript.md")
+    return transcript.stem
 
 
 def _clock(seconds: float) -> str:
@@ -361,14 +502,17 @@ class AudioToolsMixin:
 
     Tools provided:
     - transcribe_media: Transcribe an audio or video file via Lemonade
+    - refine_transcript: Label speakers and write a timestamped transcript
+    - analyze_transcript: Extract a structured, timestamped list from all of it
+    - export_transcript: Write subtitles or a timestamped text file
 
     Speech-to-text runs on Lemonade Server, so no local torch or Whisper
     install is involved. ffmpeg is fetched on first use, never at startup.
 
-    Deliberately one tool. A companion "is transcription available?" tool was
-    removed after a trace showed the model calling it four times in a row and
-    never reaching ``transcribe_media``: it reports readiness without changing
-    any state, so re-calling it always looks reasonable. ``transcribe_media``
+    There is deliberately no status tool. A companion "is transcription
+    available?" tool was removed after a trace showed the model calling it four
+    times in a row and never reaching ``transcribe_media``: it reports readiness
+    without changing any state, so re-calling it always looks reasonable. ``transcribe_media``
     already fails loudly and actionably when a component is missing, which is
     the same information at the moment it actually matters.
     ``transcription_status()`` remains as a plain method for diagnostics.
@@ -384,21 +528,27 @@ class AudioToolsMixin:
             language: str = "",
             model: str = "",
             output_path: str = "",
+            speakers: int = 0,
         ) -> Dict:
             """Transcribe an audio or video file and SAVE it to a text file.
 
-            Takes any format ffmpeg decodes (mp4, mkv, m4a, mp3, wav). Returns
-            a path and a 1200-character preview, never the transcript: to
-            summarize it, index_document(transcript_path) then
-            summarize_document or query_documents. A 45-minute recording takes
-            about 5 minutes.
+            Takes any format ffmpeg decodes (mp4, mkv, m4a, mp3, wav), of any
+            length, or a link to a video such as a YouTube URL. Returns a path
+            and a 1200-character preview, never the transcript: next call
+            refine_transcript on that path. A 45-minute recording takes about
+            10 minutes.
 
             Args:
-                file_path: Path to the audio or video file.
-                language: ISO 639-1 code such as "en". Empty auto-detects.
+                file_path: Path to the audio or video file, or an http(s) link
+                           to a video or podcast.
+                language: ISO 639-1 code such as "en". Leave empty unless the user
+                          said what language the recording is in: it is not the
+                          language they are writing to you in.
                 model: Lemonade transcription model. Empty uses the default.
                 output_path: Where to write the transcript. Empty writes to
                              ~/.gaia/transcripts/<name>.txt
+                speakers: How many people speak, if the user said. 1 skips voice
+                          separation for a lecture or solo video. 0 detects it.
 
             Returns:
                 transcript_path, preview, duration, low-confidence spans.
@@ -408,6 +558,7 @@ class AudioToolsMixin:
                 language=language or None,
                 model=model or None,
                 output_path=output_path or None,
+                speakers=speakers,
             )
 
         @tool(timeout=REFINE_TOOL_TIMEOUT)
@@ -415,7 +566,7 @@ class AudioToolsMixin:
             transcript_path: str,
             output_path: str = "",
         ) -> Dict:
-            """Correct mis-hearings and label the speakers in a raw transcript.
+            """Label the speakers and add timestamps to a raw transcript.
 
             Call on the file transcribe_media produced, BEFORE summarizing: a
             summary off the raw transcript has no speakers and repeats
@@ -432,24 +583,108 @@ class AudioToolsMixin:
             """
             return self._refine_transcript(transcript_path, output_path or None)
 
+        @tool(timeout=ANALYZE_TOOL_TIMEOUT)
+        def analyze_transcript(
+            transcript_path: str,
+            request: str,
+            fields: Optional[List[str]] = None,
+            output_path: str = "",
+        ) -> Dict:
+            """Find EVERY matching item across a whole recording, with timestamps.
+
+            Use when the user wants a complete list or a structured breakdown:
+            every topic, recipe, question asked, product shown, chapter. It
+            reads the entire transcript in sections and saves a
+            Markdown report. summarize_document is for prose summaries, and
+            query_documents returns only a few chunks, so neither can do this.
+
+            Args:
+                transcript_path: The file from refine_transcript or transcribe_media.
+                request: What to find, e.g. "every recipe taught in the class".
+                         Write it in the language spoken in the recording,
+                         translating the user's words if they differ.
+                fields: What to report per item, e.g. ["ingredients", "method",
+                        "cooking time"], in the same language as request. Each
+                        item always gets a title and times.
+                output_path: Where to write the report. Empty writes alongside
+                             as <name>.analysis.md
+
+            Returns:
+                analysis_path, overview, item_count, sections.
+            """
+            return self._analyze_transcript(
+                transcript_path, request, fields or [], output_path or None
+            )
+
+        @tool
+        def export_transcript(
+            transcript_path: str,
+            format: str = "srt",
+            output_path: str = "",
+        ) -> Dict:
+            """Write a transcript as subtitles or as text with timestamps.
+
+            Args:
+                transcript_path: The file from refine_transcript or transcribe_media.
+                format: "srt" or "vtt" for subtitles, "txt" for timestamped text.
+                output_path: Where to write it. Empty writes alongside the transcript.
+
+            Returns:
+                export_path, format, cues.
+            """
+            return self._export_transcript(transcript_path, format, output_path or None)
+
     def _transcribe_media(
         self,
         file_path: str,
         language: Optional[str] = None,
         model: Optional[str] = None,
         output_path: Optional[str] = None,
+        speakers: int = 0,
     ) -> Dict:
         """Decode the file to WAV, transcribe it, and persist the transcript."""
         from tempfile import TemporaryDirectory
 
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
-        from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL, LemonadeASRClient
-        from gaia.audio.media import ensure_ffmpeg, probe_duration, to_wav16k_mono
+        from gaia.audio.lemonade_asr import (
+            DEFAULT_ASR_MODEL,
+            LemonadeASRClient,
+            LemonadeASRError,
+        )
+        from gaia.audio.media import (
+            ensure_ffmpeg,
+            probe_duration,
+            prune_older_than,
+            to_wav16k_mono,
+        )
+        from gaia.audio.media_url import MediaUrlError, fetch_media, is_url
 
-        source = Path(file_path).expanduser()
+        prune_older_than(CHUNK_CHECKPOINT_DIR, MEDIA_CACHE_DAYS)
+        prune_older_than(DOWNLOAD_DIR, MEDIA_CACHE_DAYS)
+
+        source_url = None
+        if is_url(file_path):
+            source_url = file_path.strip()
+            try:
+                source = fetch_media(
+                    source_url, DOWNLOAD_DIR, self._report_download
+                ).path
+            except MediaUrlError as e:
+                return {"status": "error", "error": str(e)}
+            self._report_stage("download", "Downloaded", state=STAGE_DONE)
+        else:
+            source = _workspace_target(self, file_path)
         denied = self._transcript_access_error(source, write=False)
         if denied:
             return denied
+        if speakers < 0:
+            return {
+                "status": "error",
+                "error": (
+                    f"speakers must be 0 to detect it, or the number of people "
+                    f"who speak; got {speakers}."
+                ),
+            }
         if output_path:
             denied = self._transcript_access_error(
                 self._transcript_destination(source, output_path), write=True
@@ -464,6 +699,26 @@ class AudioToolsMixin:
                     "video file."
                 ),
             }
+        if model and model != DEFAULT_ASR_MODEL:
+            # A chat model's name here 404s only after minutes of decoding.
+            try:
+                speech_models = LemonadeASRClient().available_models()
+            except LemonadeASRError as e:
+                return {"status": "error", "error": str(e)}
+            if model not in speech_models:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"'{model}' is not a downloaded speech-to-text model. "
+                        f"Leave model empty to use {DEFAULT_ASR_MODEL}"
+                        + (
+                            f", or use one of: {', '.join(speech_models)}"
+                            if speech_models
+                            else ""
+                        )
+                        + "."
+                    ),
+                }
 
         # A second call on the same recording must not redo five minutes of
         # decode, transcription and diarization. Asking a follow-up question
@@ -498,8 +753,10 @@ class AudioToolsMixin:
                 if pct - last_shown[0] < PROGRESS_STEP and pct < 1.0:
                     return
                 last_shown[0] = pct
-                self._report_progress(
-                    f"Decoding {source.name} — {pct:.0%} of {_clock(media_seconds)}"
+                self._report_stage(
+                    "decode",
+                    f"Decoding {source.name} — {pct:.0%} of {_clock(media_seconds)}",
+                    percent=int(pct * 100),
                 )
 
             scratch = TemporaryDirectory(prefix="gaia-media-")
@@ -510,19 +767,41 @@ class AudioToolsMixin:
             )
 
             raise_if_cancelled()
+            self._report_stage("decode", "Audio ready", state=STAGE_DONE)
             client = LemonadeASRClient(model=model or DEFAULT_ASR_MODEL)
-            self._report_progress(
+            expected = media_seconds / REALTIME_FACTOR
+            self._report_stage(
+                "transcribe",
                 f"Transcribing {_clock(media_seconds)} of audio with {client.model} "
-                f"— around {_clock(media_seconds / REALTIME_FACTOR)} to go"
+                f"— around {_clock(expected)} to go",
+                percent=0,
+                eta=int(expected),
             )
-            transcript = client.transcribe(
-                wav_path, language=language, progress=self._report_progress
-            )
+
+            def _transcribing(message: str) -> None:
+                # A long recording runs for many chunks; stop between them.
+                raise_if_cancelled()
+                self._report_progress(message)
+
+            chunks_dir = _chunk_checkpoint_dir(source, client.model, language)
+            with _StageEstimate(
+                self._stage_tick("transcribe", "Transcribing"), expected
+            ) as estimate:
+                transcript = client.transcribe(
+                    wav_path,
+                    language=language,
+                    progress=_transcribing,
+                    checkpoint_dir=chunks_dir,
+                    on_chunk_done=estimate.finished,
+                )
+            self._report_stage("transcribe", "Transcribed", state=STAGE_DONE)
 
             destination = self._write_transcript(transcript, source, output_path)
             saved_path = destination
-            speaker_spans = self._diarize_if_possible(wav_path)
-            _write_timings(destination, transcript, speaker_spans)
+            speaker_spans = self._speaker_spans(wav_path, speakers, media_seconds)
+            _write_timings(destination, transcript, speaker_spans, source)
+            # Kept until here: Stop during voice separation must not lose them.
+            shutil.rmtree(chunks_dir, ignore_errors=True)
             spans = transcript.low_confidence_spans(
                 threshold=DEFAULT_CONFIDENCE_THRESHOLD
             )
@@ -536,6 +815,7 @@ class AudioToolsMixin:
             return {
                 "status": "success",
                 "transcript_path": str(destination),
+                **({"source_url": source_url} if source_url else {}),
                 "audio_duration": _clock(media_seconds),
                 "language": transcript.language,
                 "model": transcript.model,
@@ -559,12 +839,37 @@ class AudioToolsMixin:
                     if (note := self._diarization_note())
                     else {}
                 ),
+                **(
+                    {"speech_warning": warning}
+                    if (warning := _speech_warning(full_text, media_seconds))
+                    else {}
+                ),
+                **(
+                    {
+                        "unclear_audio": [
+                            f"{_clock(start)}-{_clock(end)}"
+                            for start, end in transcript.unclear_spans
+                        ],
+                        "unclear_audio_note": (
+                            "The speech model kept repeating one line at these "
+                            "times even after a second try, so what was said "
+                            "there is missing. Tell the user which parts are "
+                            "missing; do not guess what was said."
+                        ),
+                    }
+                    if transcript.unclear_spans
+                    else {}
+                ),
             }
         except ToolCancelled:
             # The agent stopped waiting; don't burn minutes of GPU finishing
             # work whose result nothing will read.
-            logger.warning("Transcription of %s cancelled after timeout", source)
-            raise
+            logger.warning("Transcription of %s stopped", source)
+            raise ToolCancelled(
+                "Transcription was stopped before it finished. The finished parts "
+                "are saved: call transcribe_media again with the same file to "
+                "continue from where it stopped."
+            ) from None
         except Exception as e:
             logger.error("Transcription failed for %s: %s", source, e)
             failure = {"status": "error", "error": str(e)}
@@ -600,13 +905,13 @@ class AudioToolsMixin:
         four-person meeting, because nothing in the text marks a change of
         voice. The model's only job here is naming turns it is handed.
         """
-        import json
-
         from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
+        from gaia.audio.transcript_analysis import format_timestamp
 
-        source = Path(transcript_path).expanduser()
+        self._report_stage("prepare", "Preparing the transcript")
+        source = _workspace_target(self, transcript_path)
         destination = (
-            Path(output_path).expanduser()
+            _workspace_target(self, output_path)
             if output_path
             else source.with_suffix(".transcript.md")
         )
@@ -616,27 +921,15 @@ class AudioToolsMixin:
         if denied:
             return denied
         if not source.is_file():
-            return {
-                "status": "error",
-                "error": (
-                    f"No transcript at {source}. Run transcribe_media first and "
-                    "pass the transcript_path it returns."
-                ),
-            }
+            return _missing_transcript(source)
 
         raw = source.read_text(encoding="utf-8", errors="replace").strip()
         if not raw:
             return {"status": "error", "error": f"{source} is empty."}
 
         timings_file = timings_path_for(source)
-        segments: List[dict] = []
-        if timings_file.is_file():
-            try:
-                segments = json.loads(timings_file.read_text(encoding="utf-8")).get(
-                    "segments", []
-                )
-            except (OSError, ValueError) as e:
-                logger.warning("Could not read timings %s: %s", timings_file, e)
+        timings = _read_timings(source)
+        segments: List[dict] = timings.get("segments", [])
 
         if not segments:
             return {
@@ -650,14 +943,7 @@ class AudioToolsMixin:
                 ),
             }
 
-        speaker_spans = []
-        if timings_file.is_file():
-            try:
-                speaker_spans = json.loads(
-                    timings_file.read_text(encoding="utf-8")
-                ).get("speakers", [])
-            except (OSError, ValueError):
-                speaker_spans = []
+        speaker_spans = timings.get("speakers", [])
 
         if speaker_spans:
             # Real voices: identity is consistent across the whole recording,
@@ -706,7 +992,10 @@ class AudioToolsMixin:
                 "source_transcript": str(source),
             }
 
-        blocks = [f"{name}: {text}" for name, text in _merge_adjacent(named)]
+        blocks = [
+            f"[{format_timestamp(start)}] {name}: {text}"
+            for start, name, text in _timed_paragraphs(turns, named)
+        ]
         speakers = list(dict.fromkeys(name for name, _ in named))
         before_change(destination, "refine_transcript")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -716,35 +1005,258 @@ class AudioToolsMixin:
             ),
             encoding="utf-8",
         )
+        # The refined file has to carry timings too: analysis and subtitles
+        # read them, and this is where each segment's speaker becomes known.
+        self._write_refined_timings(destination, timings, turns, named)
 
-        self._report_progress("Indexing transcript for questions...")
+        self._report_stage("prepare", "Indexing transcript for questions...")
         indexed = self._index_refined(destination)
+        self._report_stage("prepare", "Transcript ready", state=STAGE_DONE)
 
         return {
             "status": "success",
             "refined_path": str(destination),
             "speakers": speakers,
-            "turns": len(blocks),
+            "turns": len(_merge_adjacent(named)),
             "indexed": indexed,
             "source_transcript": str(source),
             "next_step": (
-                f"Speaker-labelled transcript saved to {destination} and "
-                "indexed, so questions about this meeting can now be "
-                "answered from it.\n\n"
+                f"Timestamped, speaker-labelled transcript saved to "
+                f"{destination} and indexed, so questions about this recording "
+                "can now be answered from it, with the time each thing was "
+                "said.\n\n"
                 "Do these two things, in this order:\n"
-                f"1. Call summarize_document('{destination}', "
-                "summary_type='detailed') and build the brief and action "
-                "items from what it returns. It folds the whole transcript "
-                "forward in sections, so the brief covers the entire "
-                "meeting. Do NOT use query_documents for this — it returns "
-                "only the top few matching chunks, so the brief would "
-                "silently miss most of what was said.\n"
-                "2. Tell the user where both files are, and that they can "
-                "now ask questions about specific details of the meeting.\n\n"
-                "Answering with a question instead of a summary is not "
+                f"1. If the user wants every item of some kind, timestamps or "
+                f"a structured list, call analyze_transcript('{destination}', "
+                "request=<what they asked for>, fields=<what to report per "
+                "item>). Otherwise call "
+                f"summarize_document('{destination}', summary_type='detailed') "
+                "and build the brief and action items from what it returns. "
+                "Both read the whole transcript. Do NOT use query_documents "
+                "for this — it returns only the top few matching chunks, so "
+                "the result would silently miss most of what was said.\n"
+                "2. Tell the user where the files are, and that they can "
+                "now ask questions about specific details of the recording.\n\n"
+                "Answering with a question instead of a result is not "
                 "acceptable here: the user already asked for one."
             ),
         }
+
+    def _write_refined_timings(self, destination, timings, turns, named) -> None:
+        """Save the timings beside the refined transcript, with final speakers."""
+        attributed = [
+            {**seg, "speaker": name}
+            for turn, (name, _) in zip(turns, named)
+            for seg in turn
+        ]
+        try:
+            before_change(timings_path_for(destination), "refine_transcript")
+            timings_path_for(destination).write_text(
+                json.dumps({**timings, "segments": attributed}), encoding="utf-8"
+            )
+        except (OSError, SnapshotError) as e:
+            logger.warning("Could not write timings for %s: %s", destination, e)
+
+    def _analyze_transcript(
+        self,
+        transcript_path: str,
+        request: str,
+        fields: List[str],
+        output_path: Optional[str] = None,
+    ) -> Dict:
+        """Read a whole transcript for one request and save the result."""
+        from gaia.agents.base.tools import ToolCancelled, raise_if_cancelled
+        from gaia.audio.transcript_analysis import (
+            analyze_segments,
+            format_timestamp,
+            render_analysis,
+        )
+
+        source = _workspace_target(self, transcript_path)
+        destination = (
+            _workspace_target(self, output_path)
+            if output_path
+            else source.with_name(f"{_recording_name(source)}.analysis.md")
+        )
+        failure = self._timed_transcript_error(source) or (
+            self._transcript_access_error(destination, write=True)
+        )
+        if failure:
+            return failure
+        if not request.strip():
+            return {
+                "status": "error",
+                "error": "Say what to find in the recording, in `request`.",
+            }
+
+        started = time.monotonic()
+        reached = [0]
+
+        def _before_window(index, total, window):
+            raise_if_cancelled()
+            reached[0] += 1
+            spent = time.monotonic() - started
+            self._report_stage(
+                "analyze",
+                f"Reading section {index} of {total} "
+                f"({format_timestamp(window.start)}-{format_timestamp(window.end)})",
+                percent=int(min(reached[0] / total, ESTIMATE_CEILING) * 100),
+                eta=int(spent / reached[0] * (total - reached[0])),
+            )
+
+        self._report_stage("analyze", "Reading the recording", percent=0)
+
+        checkpoint = destination.with_name(destination.name + ".progress.json")
+        try:
+            analysis = analyze_segments(
+                _read_timings(source)["segments"],
+                request,
+                fields,
+                self._analysis_reply,
+                checkpoint=checkpoint,
+                on_window=_before_window,
+                complete_json=self._analysis_json_reply,
+                parallel=self._analysis_parallelism(),
+                check=raise_if_cancelled,
+                embed=self._transcript_embedder(),
+                on_found=self._report_found,
+            )
+        except ToolCancelled:
+            logger.warning("Analysis of %s cancelled", source)
+            raise
+        except Exception as e:
+            logger.error("Analysis failed for %s: %s", source, e)
+            return {
+                "status": "error",
+                "error": (
+                    f"Could not finish analyzing {source}: {e}. Finished "
+                    "sections are saved, so fix the cause and call "
+                    "analyze_transcript with the same arguments to continue "
+                    "from where it stopped."
+                ),
+            }
+
+        before_change(destination, "analyze_transcript")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            render_analysis(analysis, _recording_name(source), str(source)),
+            encoding="utf-8",
+        )
+        checkpoint.unlink(missing_ok=True)
+        self._report_stage("analyze", "Report ready", state=STAGE_DONE)
+
+        return {
+            "status": "success",
+            "analysis_path": str(destination),
+            "overview": analysis.overview,
+            "item_count": len(analysis.items),
+            "sections": analysis.windows,
+            "sections_reused": analysis.windows_reused,
+            "approximate_timestamps": analysis.approximate_timestamps,
+            "next_step": (
+                f"The full report is saved at {destination}. Tell the user that "
+                f"path, the overview and that {len(analysis.items)} items were "
+                "found. To show the items, read that file: do not write them "
+                "out from memory."
+            ),
+        }
+
+    def _export_transcript(
+        self,
+        transcript_path: str,
+        export_format: str = "srt",
+        output_path: Optional[str] = None,
+    ) -> Dict:
+        """Write a timed transcript as subtitles or timestamped text."""
+        from gaia.audio.transcript_analysis import to_srt, to_vtt, transcript_lines
+
+        chosen = export_format.strip().lower().lstrip(".")
+        if chosen not in EXPORT_FORMATS:
+            return {
+                "status": "error",
+                "error": (
+                    f"Unknown format '{export_format}'. Use one of: "
+                    f"{', '.join(EXPORT_FORMATS)}."
+                ),
+            }
+        source = _workspace_target(self, transcript_path)
+        suffix = "timestamped.txt" if chosen == "txt" else chosen
+        destination = (
+            _workspace_target(self, output_path)
+            if output_path
+            else source.with_name(f"{_recording_name(source)}.{suffix}")
+        )
+        failure = self._timed_transcript_error(source) or (
+            self._transcript_access_error(destination, write=True)
+        )
+        if failure:
+            return failure
+
+        segments = _read_timings(source)["segments"]
+        rendered = {
+            "srt": to_srt,
+            "vtt": to_vtt,
+            "txt": lambda timed: "\n".join(transcript_lines(timed)) + "\n",
+        }[chosen](segments)
+        before_change(destination, "export_transcript")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered, encoding="utf-8")
+        return {
+            "status": "success",
+            "export_path": str(destination),
+            "format": chosen,
+            "cues": len(segments),
+        }
+
+    def _timed_transcript_error(self, source: Path) -> Optional[Dict]:
+        """Why this transcript cannot be read with timings, or None if it can."""
+        denied = self._transcript_access_error(source, write=False)
+        if denied:
+            return denied
+        if not source.is_file():
+            return _missing_transcript(source)
+        if not _read_timings(source).get("segments"):
+            return {
+                "status": "error",
+                "error": (
+                    f"No segment timings found next to {source} (expected "
+                    f"{timings_path_for(source).name}), so times cannot be "
+                    "reported. Re-run transcribe_media on the original recording "
+                    "to regenerate them."
+                ),
+            }
+        return None
+
+    def _analysis_parallelism(self) -> int:
+        """How many sections to read at once. A local server takes one at a time."""
+        from gaia.llm.lemonade_client import cloud_model_provider
+
+        model = getattr(self, "model_id", None)
+        return ANALYZE_CLOUD_PARALLEL if model and cloud_model_provider(model) else 1
+
+    def _analysis_json_reply(self, prompt: str) -> str:
+        """A completion constrained to JSON. Without it, one stray bracket cost a
+        section being read again in two halves."""
+        return self._analysis_reply(prompt, response_format={"type": "json_object"})
+
+    def _analysis_reply(self, prompt: str, **options) -> str:
+        """One completion for analysis, raising when the reply was cut off."""
+        from gaia.audio.transcript_analysis import ReplyOverflow
+        from gaia.llm.lemonade_client import no_thinking_kwargs
+
+        choice = self._llm_choice(
+            prompt,
+            ANALYZE_MAX_TOKENS,
+            **no_thinking_kwargs(getattr(self, "model_id", None)),
+            **options,
+        )
+        text = (choice["message"].get("content") or "").strip()
+        if not text or choice.get("finish_reason") == "length":
+            raise ReplyOverflow(
+                f"reply cut off at {ANALYZE_MAX_TOKENS} tokens "
+                f"(finish_reason={choice.get('finish_reason')!r})"
+            )
+        return text
 
     def _index_refined(self, path):
         """Index the refined transcript so summarizing and follow-ups work.
@@ -758,7 +1270,9 @@ class AudioToolsMixin:
         """
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
-        entry = _TOOL_REGISTRY.get("index_document") or {}
+        registry_getter = getattr(self, "_execution_tool_registry", None)
+        registry = registry_getter() if callable(registry_getter) else _TOOL_REGISTRY
+        entry = registry.get("index_document") or {}
         fn = entry.get("function") or entry.get("func")
         if not callable(fn):
             logger.info("index_document unavailable; leaving %s unindexed", path)
@@ -923,6 +1437,19 @@ class AudioToolsMixin:
         ``reasoning_content`` leaving ``content`` empty — which silently wrote a
         transcript with no transcript in it.
         """
+        choice = self._llm_choice(prompt, REFINE_MAX_TOKENS)
+        text = (choice["message"].get("content") or "").strip()
+        if not text:
+            raise RuntimeError(
+                "The language model returned no transcript text for this "
+                f"section (finish_reason={choice.get('finish_reason')!r}). The "
+                "section may be too large for the model's reply budget — retry, "
+                "or transcribe a shorter recording."
+            )
+        return text
+
+    def _llm_choice(self, prompt: str, max_tokens: int, **options) -> dict:
+        """The raw completion choice, on the LLM this agent already uses."""
         from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, create_lemonade_client
 
         client = getattr(self, "_refine_llm", None)
@@ -935,18 +1462,10 @@ class AudioToolsMixin:
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_completion_tokens=REFINE_MAX_TOKENS,
+            max_completion_tokens=max_tokens,
+            **options,
         )
-        choice = response["choices"][0]
-        text = (choice["message"].get("content") or "").strip()
-        if not text:
-            raise RuntimeError(
-                "The language model returned no transcript text for this "
-                f"section (finish_reason={choice.get('finish_reason')!r}). The "
-                "section may be too large for the model's reply budget — retry, "
-                "or transcribe a shorter recording."
-            )
-        return text
+        return response["choices"][0]
 
     def _existing_transcript(self, source, output_path):
         """Return the previous result for *source*, or None to transcribe it.
@@ -963,6 +1482,8 @@ class AudioToolsMixin:
         timings = timings_path_for(destination)
         if not (destination.is_file() and timings.is_file()):
             return None
+        if _belongs_to_other_recording(destination, source):
+            return None
         try:
             if source.stat().st_mtime > destination.stat().st_mtime:
                 logger.info("%s is newer than its transcript; re-transcribing", source)
@@ -974,10 +1495,14 @@ class AudioToolsMixin:
             return None
 
         logger.info("Reusing the transcript already at %s", destination)
+        self._report_stage("transcribe", "Already transcribed", state=STAGE_DONE)
+        duration = _read_timings(destination).get("duration") or 0.0
+        warning = _speech_warning(text, duration) if duration else None
         return {
             "status": "success",
             "transcript_path": str(destination),
             "reused": True,
+            **({"speech_warning": warning} if warning else {}),
             "language": "",
             "character_count": len(text),
             "preview": text[:PREVIEW_CHARS],
@@ -989,7 +1514,9 @@ class AudioToolsMixin:
                 "answering a question about the meeting, the transcript is "
                 "already indexed — use query_documents rather than calling this "
                 "tool again. If you still need the speaker-labelled version, "
-                f"call refine_transcript('{destination}')."
+                f"call refine_transcript('{destination}'). For every item of "
+                "some kind, with timestamps, call analyze_transcript on the "
+                "refined file."
             ),
         }
 
@@ -1010,10 +1537,27 @@ class AudioToolsMixin:
     def _transcript_destination(self, source, output_path):
         """Where this recording's transcript lives."""
         if output_path:
-            return Path(output_path).expanduser()
-        return TRANSCRIPT_DIR / f"{source.stem}.txt"
+            return _workspace_target(self, output_path)
+        stem = _plain_stem(source)
+        destination = TRANSCRIPT_DIR / f"{stem}.txt"
+        if _belongs_to_other_recording(destination, source):
+            tag = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:8]
+            return TRANSCRIPT_DIR / f"{stem}-{tag}.txt"
+        return destination
 
-    def _diarize_if_possible(self, wav_path):
+    def _speaker_spans(self, wav_path, speakers: int, seconds: float):
+        """Who spoke when, honouring what the caller knows about the speakers."""
+        if speakers == 1:
+            self._report_stage("voices", "One speaker", state=STAGE_SKIPPED)
+            return [_SoleSpeaker(end=seconds)]
+        expected = seconds / 60 * VOICE_SECONDS_PER_MINUTE
+        self._report_stage("voices", "Separating voices", percent=0, eta=int(expected))
+        with _StageEstimate(self._stage_tick("voices", "Separating voices"), expected):
+            spans = self._diarize_if_possible(wav_path, speakers or None)
+        self._report_stage("voices", "Voices separated", state=STAGE_DONE)
+        return spans
+
+    def _diarize_if_possible(self, wav_path, num_speakers=None):
         """Work out who spoke when, from the audio, while the WAV still exists.
 
         Runs here rather than in refine_transcript because this is the only
@@ -1023,6 +1567,7 @@ class AudioToolsMixin:
         got.
         """
         from gaia.audio import diarize as diarization
+        from gaia.tool_cancellation import ToolCancelled
 
         try:
             if not diarization.is_available():
@@ -1030,7 +1575,9 @@ class AudioToolsMixin:
                     "Setting up speaker identification (one-time download)..."
                 )
                 diarization.ensure_ready(self._report_progress)
-            return diarization.diarize(wav_path, progress=self._report_progress)
+            return diarization.diarize_in_child(wav_path, num_speakers=num_speakers)
+        except ToolCancelled:
+            raise
         except Exception as e:  # noqa: BLE001 — transcription still succeeded
             logger.warning("Speaker identification unavailable: %s", e)
             self._diarization_error = str(e)
@@ -1080,6 +1627,84 @@ class AudioToolsMixin:
         if lemonade_error:
             result["lemonade_error"] = lemonade_error
         return result
+
+    def _report_download(self, message: str) -> None:
+        """Turn the downloader's progress lines into the download stage."""
+        match = re.search(r"(\d+)%", message)
+        self._report_stage(
+            "download", message, percent=int(match.group(1)) if match else None
+        )
+
+    def _stage_tick(self, stage: str, label: str) -> Callable[[int, int], None]:
+        """A reporter for :class:`_StageEstimate`, one status line per percent."""
+
+        def tick(percent: int, eta: int) -> None:
+            self._report_stage(stage, f"{label} — {percent}%", percent=percent, eta=eta)
+
+        return tick
+
+    def _report_stage(
+        self,
+        stage: str,
+        message: str,
+        *,
+        percent: Optional[int] = None,
+        eta: Optional[int] = None,
+        state: int = STAGE_RUNNING,
+    ) -> None:
+        """Say where a recording stands, for clients that can draw it."""
+        logger.info(message)
+        console = getattr(self, "console", None)
+        if console is None or not hasattr(console, "report_phase"):
+            return
+        fields = {"stage": RECORDING_STAGES.index(stage), "state": state}
+        if percent is not None:
+            fields["percent"] = percent
+        if eta is not None:
+            fields["eta_seconds"] = eta
+        console.report_phase("recording", message, **fields)
+
+    def _transcript_embedder(self):
+        """Embeds transcript lines with the agent's memory embedder, if it has one.
+
+        Without one, analysis windows end at pauses and sentence ends instead
+        of where the topic changes.
+        """
+        get_embedder = getattr(self, "_get_embedder", None)
+        if get_embedder is None:
+            logger.info("No embedder on this agent: sections end at pauses only")
+            return None
+        model = self._active_embedding_model()
+
+        def embed(texts):
+            return get_embedder().embed(texts, model=model)
+
+        return embed
+
+    def _report_found(self, index, total, window, items, summary) -> None:
+        """Show one section's results while the rest are still being read."""
+        from gaia.audio.transcript_analysis import format_timestamp
+
+        console = getattr(self, "console", None)
+        if console is None or not hasattr(console, "report_phase"):
+            return
+        console.report_phase(
+            "recording_found",
+            f"Section {index} of {total}: {len(items)} found",
+            section=index,
+            sections=total,
+            start=format_timestamp(window.start),
+            end=format_timestamp(window.end),
+            summary=summary,
+            items=[
+                {
+                    "title": item.title,
+                    "start": format_timestamp(item.start),
+                    "seconds": item.start,
+                }
+                for item in items
+            ],
+        )
 
     def _report_progress(self, message: str) -> None:
         """Surface a progress line if the agent has a console attached.

@@ -156,9 +156,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.stashNarration()
 		m.phase = modelPhase{}
 		item := ActivityItem{
-			Kind:    "tool",
-			Tool:    e.Tool,
-			Content: toolNarration(e.Tool, e.Args, e.Narration),
+			Kind:     "tool",
+			Tool:     e.Tool,
+			Content:  toolNarration(e.Tool, e.Args, e.Narration),
+			RetryKey: retryKey(e.Tool, e.Args),
 		}
 		if m.dev {
 			// The narration says what the call MEANS; this says what was
@@ -366,8 +367,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// `final` with the "stopped" text) must still clear cancelPending here,
 		// or the next Esc/Ctrl+C's guard is stuck failing for the rest of the
 		// session (#2901 second-cycle crash).
+		// Only a reply the user asked for: not a stopped turn, a /model
+		// switch's confirmation, or the hidden warm-up.
+		readable := content != "" && !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			read, readCmd := m.autoReadAloud(content)
+			return read, readCmd, true
+		}
 		return m, nil, true
 
 	case event.CanonicalErrorEvent:

@@ -317,7 +317,7 @@ def test_switching_to_a_smaller_model_streams_the_cut(monkeypatch):
     db.close()
 
 
-def test_a_relayed_chat_says_once_when_its_window_starts_sliding(monkeypatch):
+def test_a_relayed_chat_says_once_when_older_turns_leave_the_view(monkeypatch):
     from gaia.ui.email_sidecar import daemon_client, relay
     from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
 
@@ -325,14 +325,19 @@ def test_a_relayed_chat_says_once_when_its_window_starts_sliding(monkeypatch):
     handle = SimpleNamespace(api_version="2.17", proxy=lambda: proxy)
     monkeypatch.setattr(daemon_client, "acquire_handle", lambda _id: handle)
     monkeypatch.setattr(relay, "relay_query", lambda *a, **kw: None)
+    monkeypatch.setattr(helpers, "_history_cuts", {})
+    monkeypatch.setattr(
+        "gaia.agents.base.history.relayed_history_budget", lambda *a, **kw: 60
+    )
+    monkeypatch.setattr("gaia.agents.base.history.count_tokens", lambda _: 10)
     request = SimpleNamespace(message="next")
     notices = []
-    for n in range(1, 9):
+    for n in range(1, 10):
         handler = MagicMock()
         handler.cancelled.is_set.return_value = False
         pairs = [(f"q{i}", f"a{i}") for i in range(n)]
         helpers._dispatch_sidecar_query(
-            handler, request, pairs, None, GAIA_PROFILE.agent_id
+            handler, request, pairs, None, GAIA_PROFILE.agent_id, "relayed-chat"
         )
         notices += [
             c.args[0]
@@ -340,7 +345,7 @@ def test_a_relayed_chat_says_once_when_its_window_starts_sliding(monkeypatch):
             if c.args[0].get("status") == "history_cut"
         ]
     assert len(notices) == 1
-    assert "last 5 exchanges" in notices[0]["message"]
+    assert "out of the model's view (4 turns)" in notices[0]["message"]
 
 
 @pytest.mark.parametrize(

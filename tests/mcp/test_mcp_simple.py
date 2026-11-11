@@ -8,15 +8,16 @@ Simple test to validate the MCP HTTP bridge is working.
 Run this after starting the bridge with: gaia mcp start
 """
 
-import io
 import json
 import sys
 import urllib.error
 import urllib.request
 
-# Fix Unicode on Windows
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+def _configure_windows_stdout():
+    """Configure UTF-8 output for direct script execution without replacing stdout."""
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
 
 def test_mcp_bridge():
@@ -95,6 +96,7 @@ def test_mcp_bridge():
 
 
 if __name__ == "__main__":
+    _configure_windows_stdout()
     # Check if bridge is running
     try:
         with urllib.request.urlopen("http://localhost:8765/health") as response:

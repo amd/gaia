@@ -73,7 +73,7 @@ beforeEach(() => {
     // ChatView's mount effects chain off these; auto-mocked they return undefined.
     mocked.listDocuments.mockResolvedValue({ documents: [] } as never);
     mocked.getMessageCount.mockResolvedValue({ count: 0 } as never);
-    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false } });
+    mocked.getStartScreen.mockResolvedValue({ cards: [], working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true } });
 
     useModelStore.setState({ active: null, error: null, restoreNotice: null });
     useChatStore.setState({
@@ -138,7 +138,7 @@ describe('system status poll', () => {
         render(<App />);
         await advance(120_000);
         expect(document.body.textContent).toMatch(/not answering/i);
-        expect(document.body.textContent).not.toMatch(/stopped responding/i);
+        expect(document.body.textContent).not.toMatch(/isn't running/i);
     });
 
     it('calls a backend that keeps missing answers slow, never lost', async () => {
@@ -155,7 +155,7 @@ describe('system status poll', () => {
         await advance(10_000);
         expect(useChatStore.getState().backendConnected).toBe(true);
         expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
-        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+        expect(document.body.textContent).not.toMatch(/Can’t reach GAIA’s assistant/i);
     });
 
     it('calls a backend that has answered nothing for five minutes lost, with a next step', async () => {
@@ -170,7 +170,7 @@ describe('system status poll', () => {
         expect(useChatStore.getState().backendConnected).toBe(true);
         await advance(90_000);
         expect(useChatStore.getState().backendConnected).toBe(false);
-        expect(document.body.textContent).toMatch(/Lost the connection to GAIA/i);
+        expect(document.body.textContent).toMatch(/Can’t reach GAIA’s assistant/i);
     });
 
     it('shows the connection back once a backend that was unreachable answers again, even slowly', async () => {
@@ -188,7 +188,7 @@ describe('system status poll', () => {
         expect(useChatStore.getState().backendConnected).toBe(false);
         await advance(70_000);
         expect(useChatStore.getState().backendConnected).toBe(true);
-        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+        expect(document.body.textContent).not.toMatch(/Can’t reach GAIA’s assistant/i);
         // Coming back from an outage without an answer yet is slow, not fine.
         expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
     });
@@ -223,7 +223,7 @@ describe('system status poll', () => {
         mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, lemonade_error: null, start_command: 'lemond --start' } as never);
         render(<App />);
         await advance(20_000);
-        expect(document.body.textContent).toMatch(/stopped responding/i);
+        expect(document.body.textContent).toMatch(/model server isn't running/i);
         expect(document.body.textContent).toContain('lemond --start');
     });
 });

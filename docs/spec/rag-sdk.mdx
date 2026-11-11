@@ -22,7 +22,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 
 **Key Features:**
 - Multi-format support (PDF, TXT, MD, CSV, JSON, code files)
-- VLM-based image text extraction from PDFs
+- VLM-based image text extraction from PDFs, on pages with under 200 characters of their own text, so scans are read and logos and photos on text pages aren't
 - Intelligent semantic chunking
 - Hardware-accelerated embeddings (NPU/GPU via Lemonade)
 - Per-file search optimization
@@ -40,7 +40,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3.5-35B-A3B-GGUF"
+    model: str = DEFAULT_MODEL_NAME  # "Gemma-4-E4B-it-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500  # max useful; chunks are capped at EMBED_MAX_CHARS (2000)
     chunk_overlap: int = 100
@@ -64,11 +64,21 @@ class RAGConfig:
     use_llm_chunking: bool = False
 
     # VLM settings
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
-    use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed
+    vlm_model: str = "Gemma-4-E4B-it-GGUF"
+    use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed; image files then fail to index
 
     # Security
     allowed_paths: Optional[List[str]] = None
+
+    # JSON records: index each object of a JSON array on its own
+    json_loader: Optional[JsonLoaderConfig] = None
+
+
+@dataclass
+class JsonLoaderConfig:
+    content_fields: List[str]               # searchable text, in order (required)
+    metadata_fields: List[str] = []         # "key: value" lines on every chunk
+    document_array_path: str = ""           # dotted path to the array; "" = file is the array
 ```
 
 ### RAGResponse
@@ -127,8 +137,28 @@ class RAGSDK:
                 "total_chunks": int,
                 "vlm_pages": int (pages enhanced with VLM),
                 "total_images": int (images processed),
-                "error": str (if failed)
+                "image_pages_skipped": int (pages whose images were left unread),
+                "evicted": List[str] (only when the library hit max_indexed_files
+                    or max_total_chunks; paths removed to make room, oldest first),
+                "error": str (if failed),
+                "error_type": str (some failures, see below)
             }
+
+        Indexing a path again returns "already_indexed": True when its bytes
+        are unchanged, and re-indexes it ("reindexed": True) when they changed.
+        The new version is built without the index lock and swapped in, so
+        the old one keeps serving searches until then, and stays if it fails.
+
+        error_type, when set, names a failure a caller can act on:
+            "file_locked": Windows refused the read; another program holds
+                the document exclusively or has locked part of it (or the user
+                lacks read permission, which Windows reports the same way).
+                Any format. Index it again once the program lets go.
+            "cache_busy": another GAIA process holds this document's cache.
+            "embedding_unavailable": the embedder or Lemonade could not run.
+                Two booleans come with it: "lemonade_unreachable" (Lemonade
+                Server could not be reached at all) and "embedder_busy" (the
+                server timed out, busy with another model or app).
         """
         ...
 
@@ -136,13 +166,42 @@ class RAGSDK:
         """Remove a document from the index."""
         ...
 
-    def reindex_document(self, file_path: str) -> Dict[str, Any]:
-        """Reindex a document (remove old chunks and add new ones)."""
+    def reindex_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Re-index a document that may have changed (the file watcher's path).
+        Same as index_document() on an edited file: built without the index
+        lock, so searches keep answering from the old version until the swap,
+        and the old version stays if it fails. Unchanged bytes are not
+        re-embedded and return "already_indexed": True.
+        """
+        ...
+
+    def is_current(self, file_path: str) -> bool:
+        """Whether the document is indexed from the bytes it holds now."""
+        ...
+
+    def freshness(self, file_path: str) -> str:
+        """
+        "current", "changed", "missing", "locked", "unreadable" or
+        "not_indexed". Cheap enough to call before every search: it hashes
+        only when the file's size, mtime, inode or (POSIX) ctime moved since
+        indexing, or it was written within 2 s of that stat. On Windows an
+        edit that later restores both size and mtime is caught by
+        is_current(), not here.
+        """
         ...
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
         """
         Query the indexed documents with enhanced metadata tracking.
+
+        Each call answers from the chunks retrieved for this question. Earlier
+        queries are not included in the prompt.
 
         Args:
             question: Question to ask about the documents

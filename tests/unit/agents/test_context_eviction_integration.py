@@ -387,9 +387,11 @@ def test_the_nudge_is_never_saved_into_history():
     assert _nudges(result["model_messages"]) == []
 
 
-def test_history_stubs_alone_do_not_trigger_the_nudge():
-    agent = _make_agent()
-    _stub_chat(agent, [*_script(12), _ANSWER])
+def test_history_stubs_alone_do_not_trigger_the_nudge(monkeypatch):
+    # A window whose history budget still holds last turn's results.
+    monkeypatch.setenv("GAIA_CTX_SIZE", "65536")
+    agent = _make_agent(context_eviction_threshold_tokens=30000)
+    _stub_chat(agent, [*_script(10), _ANSWER])
     first = agent.process_query("read the files")
     agent.conversation_history = first["model_messages"]
 

@@ -124,6 +124,94 @@ def test_atomic_write_json_mode_0600_and_roundtrip(daemon_home, tmp_path):
 # ===========================================================================
 
 
+def test_atomic_write_json_retries_transient_windows_replace_error(
+    daemon_home, tmp_path, monkeypatch
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+    real_replace = paths.os.replace
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise PermissionError("simulated transient share violation")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 3
+    assert delays == [0.05, 0.1]
+    with open(target, encoding="utf-8") as f:
+        assert json.load(f) == {"ok": True}
+
+
+def test_atomic_write_json_cleans_temp_after_exhausting_windows_retries(
+    daemon_home, tmp_path, monkeypatch
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        raise PermissionError("simulated persistent share violation")
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    with pytest.raises(PermissionError, match="persistent share violation"):
+        paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 5
+    assert delays == [0.05, 0.1, 0.2, 0.4]
+    assert not list(tmp_path.glob(".somefile.json.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "on_windows, error",
+    [
+        (False, PermissionError("denied")),  # POSIX never retries
+        (True, FileNotFoundError("gone")),  # only PermissionError is retried
+    ],
+)
+def test_atomic_write_json_fails_at_once_when_the_error_is_not_transient(
+    daemon_home, tmp_path, monkeypatch, on_windows, error
+):
+    from gaia.daemon import paths
+
+    target = tmp_path / "somefile.json"
+    calls = 0
+    delays = []
+
+    def _replace(source, destination):
+        nonlocal calls
+        calls += 1
+        raise error
+
+    monkeypatch.setattr(paths, "_is_windows", lambda: on_windows)
+    monkeypatch.setattr(paths.os, "replace", _replace)
+    monkeypatch.setattr(paths.time, "sleep", delays.append)
+
+    with pytest.raises(type(error)):
+        paths.atomic_write_json(target, {"ok": True})
+
+    assert calls == 1
+    assert delays == []
+    assert not list(tmp_path.glob(".somefile.json.*.tmp"))
+
+
 def test_new_registry_error_classes_are_sidecar_errors():
     from gaia.daemon.sidecars.errors import (
         CapacityError,
@@ -169,6 +257,8 @@ class _FakeManager:
         import os
 
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
+
+    uses_ignored_lemonade = False
 
     @property
     def is_running(self):
@@ -488,7 +578,9 @@ def test_record_spawn_then_read_entries_roundtrip(daemon_home):
     assert e["started_at"] == 1234567890.0
 
 
-def test_record_spawn_replaces_existing_entry_for_same_agent(daemon_home):
+def test_record_spawn_keeps_an_earlier_pid_of_the_same_agent(daemon_home):
+    # A respawn must not erase a predecessor that may have outlived its
+    # shutdown — otherwise that orphan is invisible to the next reap (#2474).
     from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
@@ -498,9 +590,74 @@ def test_record_spawn_replaces_existing_entry_for_same_agent(daemon_home):
         agent_id="email", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
     )
     entries = ledger.read_entries()
+    assert [(e["agent_id"], e["pid"], e["port"]) for e in entries] == [
+        ("email", 1, 100),
+        ("email", 2, 200),
+    ]
+
+
+def test_record_spawn_replaces_a_reused_pid(daemon_home):
+    # Two live processes cannot share a pid, so a recorded pid seen again
+    # means the old process is gone: one entry per pid, the newest wins.
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="email", pid=7, port=100, mode="user", argv=["a"], started_at=1.0
+    )
+    ledger.record_spawn(
+        agent_id="toy-a", pid=7, port=200, mode="user", argv=["b"], started_at=2.0
+    )
+    entries = ledger.read_entries()
     assert len(entries) == 1
-    assert entries[0]["pid"] == 2
+    assert entries[0]["agent_id"] == "toy-a"
     assert entries[0]["port"] == 200
+
+
+def test_remove_entry_with_pid_drops_only_that_pid(daemon_home):
+    from gaia.daemon.sidecars import ledger
+
+    for pid in (1, 2):
+        ledger.record_spawn(
+            agent_id="email",
+            pid=pid,
+            port=100 + pid,
+            mode="user",
+            argv=["a"],
+            started_at=float(pid),
+        )
+    ledger.remove_entry("email", 2)
+    assert [e["pid"] for e in ledger.read_entries()] == [1]
+
+
+def test_remove_entry_ignores_a_pid_recorded_for_another_agent(daemon_home):
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="toy-a", pid=5, port=100, mode="user", argv=["a"], started_at=1.0
+    )
+    ledger.remove_entry("email", 5)
+    assert [e["agent_id"] for e in ledger.read_entries()] == ["toy-a"]
+
+
+def test_remove_entry_with_no_pid_drops_nothing(daemon_home):
+    # A reap that cannot name its pid must not wipe the agent's survivors.
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+    )
+    ledger.remove_entry("email", None)
+    assert [e["pid"] for e in ledger.read_entries()] == [1]
+
+
+def test_remove_entry_of_an_unrecorded_pid_is_a_no_op(daemon_home):
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
+    )
+    ledger.remove_entry("email", 999)
+    assert [e["pid"] for e in ledger.read_entries()] == [1]
 
 
 def test_remove_entry_deletes_only_the_named_agent(daemon_home):
@@ -512,7 +669,7 @@ def test_remove_entry_deletes_only_the_named_agent(daemon_home):
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="user", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email")
+    ledger.remove_entry("email", 1)
     entries = ledger.read_entries()
     assert len(entries) == 1
     assert entries[0]["agent_id"] == "toy-a"
@@ -528,7 +685,7 @@ def test_ledger_file_never_contains_a_token_field(daemon_home):
     ledger.record_spawn(
         agent_id="toy-a", pid=2, port=200, mode="dev", argv=["b"], started_at=2.0
     )
-    ledger.remove_entry("email")
+    ledger.remove_entry("email", 1)
     ledger.record_spawn(
         agent_id="email", pid=3, port=300, mode="user", argv=["c"], started_at=3.0
     )
@@ -538,20 +695,25 @@ def test_ledger_file_never_contains_a_token_field(daemon_home):
 
 def test_concurrent_record_spawn_for_different_agents_no_lost_update(daemon_home):
     """Two threads doing read-modify-write record_spawn calls for TWO DIFFERENT
-    agent ids, interleaved 20x each, must never lose an update — both final
-    entries survive."""
+    agent ids, interleaved 20x each, must never lose an update — every entry
+    survives."""
     from gaia.daemon.sidecars import ledger
 
+    failures = []
+
     def _hammer(agent_id, base_port):
-        for i in range(20):
-            ledger.record_spawn(
-                agent_id=agent_id,
-                pid=1000 + i,
-                port=base_port + i,
-                mode="user",
-                argv=[agent_id],
-                started_at=float(i),
-            )
+        try:
+            for i in range(20):
+                ledger.record_spawn(
+                    agent_id=agent_id,
+                    pid=base_port + i,
+                    port=base_port + i,
+                    mode="user",
+                    argv=[agent_id],
+                    started_at=float(i),
+                )
+        except Exception as exc:
+            failures.append(exc)
 
     t1 = threading.Thread(target=_hammer, args=("toy-a", 10000))
     t2 = threading.Thread(target=_hammer, args=("toy-b", 20000))
@@ -560,11 +722,14 @@ def test_concurrent_record_spawn_for_different_agents_no_lost_update(daemon_home
     t1.join(10)
     t2.join(10)
 
-    entries = {e["agent_id"]: e for e in ledger.read_entries()}
-    assert set(entries) == {"toy-a", "toy-b"}
-    # Last write of each thread's sequence must be the one that stuck.
-    assert entries["toy-a"]["pid"] == 1000 + 19
-    assert entries["toy-b"]["pid"] == 1000 + 19
+    assert not t1.is_alive()
+    assert not t2.is_alive()
+    assert not failures
+
+    pids = sorted(e["pid"] for e in ledger.read_entries())
+    assert pids == sorted(
+        [10000 + i for i in range(20)] + [20000 + i for i in range(20)]
+    )
 
 
 # --- ledger records from Popen onward (R3) ----------------------------------
@@ -589,7 +754,7 @@ def _wire_manager_ledger(m, agent_id):
         argv=argv,
         started_at=m.started_at,
     )
-    m.on_process_reaped = lambda: ledger.remove_entry(agent_id)
+    m.on_process_reaped = lambda: ledger.remove_entry(agent_id, m.pid)
 
 
 def test_ledger_entry_exists_from_popen_through_health_wait(
@@ -842,7 +1007,9 @@ def test_pid_alive_excludes_zombies(monkeypatch):
 @pytest.mark.skipif(
     os.name == "nt", reason="Windows cannot group-kill a dead leader's survivors"
 )
-def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeypatch):
+def test_reap_stale_zombie_leader_takes_the_group_kill_path(
+    daemon_home, monkeypatch, fake_os_name
+):
     # An unreaped leader has already exited, so its re-parented child is what
     # still serves the port: group-kill, NOT the "pid reused, leave it" branch.
     import psutil
@@ -861,7 +1028,7 @@ def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeyp
     killed = []
     group_killed = []
     _fake_pid_status(monkeypatch, psutil.STATUS_ZOMBIE)
-    monkeypatch.setattr(ledger.os, "name", "posix")
+    fake_os_name(ledger, "posix")
     monkeypatch.setattr(
         ledger,
         "_probe_health",
@@ -875,6 +1042,179 @@ def test_reap_stale_zombie_leader_takes_the_group_kill_path(daemon_home, monkeyp
     assert group_killed == [4246]
     assert killed == []
     assert ledger.read_entries() == []
+
+
+def _all_alive_and_ours(monkeypatch, ledger, killed):
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
+    by_pid = {
+        e["pid"]: " ".join(e["argv"]) + " --host 127.0.0.1"
+        for e in ledger.read_entries()
+    }
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: by_pid.get(pid))
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+
+
+def test_reap_stale_kills_every_orphan_of_the_same_agent(daemon_home, monkeypatch):
+    # Repeated spawns of ONE agent that all outlived their daemon must all be
+    # reaped — not just the most recently recorded one (#2474).
+    from gaia.daemon.sidecars import ledger
+
+    for i in range(3):
+        port = 52000 + i
+        ledger.record_spawn(
+            agent_id="toy-a",
+            pid=6000 + i,
+            port=port,
+            mode="user",
+            argv=["/path/to/toy-a-agent", "--port", str(port)],
+            started_at=float(i),
+        )
+    killed = []
+    _all_alive_and_ours(monkeypatch, ledger, killed)
+
+    assert ledger.reap_stale(_reap_specs()) == [6000, 6001, 6002]
+    assert killed == [6000, 6001, 6002]
+    assert ledger.read_entries() == []
+
+
+def test_reap_stale_kills_a_live_orphan_of_an_uninstalled_agent(
+    daemon_home, monkeypatch
+):
+    # The agent's spec is gone (uninstalled), but the recorded pid is alive and
+    # its cmdline is ours: the cmdline gate alone is enough to reap it.
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="gone-agent",
+        pid=6100,
+        port=52100,
+        mode="user",
+        argv=["/path/to/gone-agent", "--port", "52100"],
+        started_at=1.0,
+    )
+    killed = []
+    _all_alive_and_ours(monkeypatch, ledger, killed)
+
+    assert ledger.reap_stale(_reap_specs()) == [6100]
+    assert killed == [6100]
+    assert ledger.read_entries() == []
+
+
+def test_reap_stale_spares_a_reused_pid_of_an_uninstalled_agent(
+    daemon_home, monkeypatch
+):
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="gone-agent",
+        pid=6101,
+        port=52101,
+        mode="user",
+        argv=["/path/to/gone-agent", "--port", "52101"],
+        started_at=1.0,
+    )
+    killed = []
+    group_killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    # Same binary, different port: a fresh process that is not this orphan.
+    monkeypatch.setattr(
+        ledger, "_pid_cmdline", lambda pid: "/path/to/gone-agent --port 52999"
+    )
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    assert ledger.reap_stale(_reap_specs()) == []
+    assert killed == [] and group_killed == []
+    assert ledger.read_entries() == []
+
+
+def test_reap_stale_never_group_kills_a_dead_uninstalled_agent(
+    daemon_home, monkeypatch
+):
+    # No spec means no service id to confirm the port against, so a dead
+    # leader is only logged — never a guessed group-kill.
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="gone-agent",
+        pid=6102,
+        port=52102,
+        mode="user",
+        argv=["/path/to/gone-agent", "--port", "52102"],
+        started_at=1.0,
+    )
+    killed = []
+    group_killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: {"service": "x"})
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    assert ledger.reap_stale(_reap_specs()) == []
+    assert killed == [] and group_killed == []
+
+
+class _HookManager:
+    """Bare manager the registry can wire its ledger hooks onto."""
+
+    def __init__(self, spec, mode=None, expected_api_version=None):
+        self.spec = spec
+        self.resolved_mode = mode or "user"
+        self.pid = None
+        self.port = None
+        self.spawn_argv = []
+        self.started_at = 0.0
+        self.on_process_spawned = None
+        self.on_process_reaped = None
+
+    def spawn(self, pid, port):
+        self.pid, self.port = pid, port
+        self.spawn_argv = ["/path/to/toy-a-agent", "--port", str(port)]
+        self.on_process_spawned(pid, port, self.spawn_argv)
+
+    def reap(self):
+        self.on_process_reaped()
+        self.pid = None
+
+
+def _daemon_registry():
+    from gaia.daemon.server import _build_registry
+
+    reg = _build_registry({"toy-a": _TOY_A}, forwarder=None)
+    reg._manager_factory = _HookManager
+    return reg
+
+
+def test_registry_keeps_a_survivor_entry_across_a_respawn(daemon_home):
+    # Attempt 1 outlives its shutdown (no reap fires), attempt 2 spawns and is
+    # cleanly reaped: attempt 1's pid must still be in the ledger.
+    from gaia.daemon.sidecars import ledger
+
+    reg = _daemon_registry()
+    m = reg._new_manager("toy-a", _TOY_A, None)
+    m.spawn(7001, 53001)
+    m.spawn(7002, 53002)
+    m.reap()
+
+    entries = ledger.read_entries()
+    assert [(e["agent_id"], e["pid"], e["port"]) for e in entries] == [
+        ("toy-a", 7001, 53001)
+    ]
+    assert entries[0]["argv"] == ["/path/to/toy-a-agent", "--port", "53001"]
+
+
+def test_registry_clean_stop_drops_only_its_own_pid(daemon_home):
+    from gaia.daemon.sidecars import ledger
+
+    reg = _daemon_registry()
+    m = reg._new_manager("toy-a", _TOY_A, None)
+    m.spawn(7101, 53101)
+    m.reap()
+    assert ledger.read_entries() == []
+
+    m.spawn(7102, 53102)
+    assert [e["pid"] for e in ledger.read_entries()] == [7102]
 
 
 # ===========================================================================
@@ -1165,6 +1505,28 @@ def test_manager_level_ensure_errors_map_to_502_with_verbatim_detail(err_cls_nam
     assert distinctive in r.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    ("err_cls_name", "kind"),
+    [
+        ("UnknownAgentError", "not_installed"),
+        ("ModeConflictError", "mode_conflict"),
+        ("DevSrcDirResolutionError", "mode_conflict"),
+        ("CapacityError", "capacity"),
+        ("SidecarSpawnError", "start_failed"),
+        ("HealthTimeoutError", "start_failed"),
+        ("VersionMismatchError", "out_of_date"),
+    ],
+)
+def test_ensure_errors_name_their_kind_in_a_header(err_cls_name, kind):
+    """A client picks the user's next step from this, not from the detail text."""
+    from gaia.daemon.sidecars import errors as sidecar_errors
+
+    reg = _FakeRegistry(ensure_error=getattr(sidecar_errors, err_cls_name)("x"))
+    client = _routes_client(reg)
+    r = client.post("/daemon/v1/agents/email/ensure", headers=_auth(), json={})
+    assert r.headers[sidecar_errors.ERROR_KIND_HEADER] == kind
+
+
 def test_stop_failed_error_maps_to_500_naming_surviving_pid():
     from gaia.daemon.sidecars.errors import StopFailedError
 
@@ -1225,3 +1587,17 @@ def test_create_app_without_registry_does_not_mount_agents_routes():
     client = TestClient(app)
     r = client.get("/daemon/v1/agents", headers=_auth("tok-1"))
     assert r.status_code == 404
+
+
+@pytest.mark.skipif(os.name != "nt", reason="taskkill is the Windows kill path")
+def test_tree_kill_names_the_pid_when_taskkill_hangs(monkeypatch):
+    import subprocess
+
+    from gaia.daemon.sidecars import ledger
+
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(ledger.subprocess, "run", hang)
+    with pytest.raises(RuntimeError, match=r"pid 4321 hung.*within 30s"):
+        ledger._tree_kill(4321)

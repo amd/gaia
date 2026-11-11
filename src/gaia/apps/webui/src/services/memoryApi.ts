@@ -5,10 +5,8 @@
 
 import { getApiBase } from '../utils/apiBase';
 
-const API_BASE = getApiBase();
-
 async function memFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${API_BASE}${path}`;
+    const url = `${getApiBase()}${path}`;
     const headers: Record<string, string> = {};
     if (method !== 'GET') headers['X-Gaia-UI'] = '1';
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -24,6 +22,8 @@ async function memFetch<T>(method: string, path: string, body?: unknown): Promis
         try { detail = JSON.parse(text).detail || text; } catch { /* noop */ }
         throw new Error(detail || `Memory API error (HTTP ${res.status})`);
     }
+    // A 204 has no body, whatever its content-type says.
+    if (res.status === 204) return undefined as T;
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return undefined as T;
     return res.json();
@@ -208,12 +208,12 @@ export interface InferenceInsight {
 
 /** Open an EventSource SSE stream for system discovery. */
 export function openDiscoveryStream(): EventSource {
-    return new EventSource(`${API_BASE}/memory/stream-discovery`);
+    return new EventSource(`${getApiBase()}/memory/stream-discovery`);
 }
 
 /** Open an EventSource SSE stream for LLM profile inference. */
 export function openInferenceStream(includeBrowser: boolean): EventSource {
-    return new EventSource(`${API_BASE}/memory/stream-inference?include_browser=${includeBrowser}`);
+    return new EventSource(`${getApiBase()}/memory/stream-inference?include_browser=${includeBrowser}`);
 }
 
 export function commitDiscovery(items: DiscoveryFinding[]) {

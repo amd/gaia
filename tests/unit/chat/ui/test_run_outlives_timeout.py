@@ -162,6 +162,7 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
     db, _manager, _http_request = runtime
     sid, agent = _seed(db)
     db.set_setting("agent_mode", "goal_driven")
+    db.set_setting(agent_loop_mod.GOALS_SESSION_SETTING, sid)
     session = db.get_session(sid)
 
     # The tick imports GaiaAgent before it checks the cache; a cache hit never uses it.

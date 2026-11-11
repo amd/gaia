@@ -70,11 +70,15 @@
 
 .turn-changes-warning ul {
     margin: 2px 0 0;
-    padding-left: 16px;
+    padding-inline-start: 16px;
     color: var(--text-secondary);
     font-family: var(--font-mono);
     font-size: 11px;
     word-break: break-all;
+}
+
+.turn-changes-warning summary {
+    cursor: pointer;
 }
 
 .turn-changes-message {

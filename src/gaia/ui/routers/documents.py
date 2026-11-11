@@ -21,8 +21,10 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
+from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -34,13 +36,16 @@ from ..models import (
 )
 from ..utils import (
     ALLOWED_EXTENSIONS,
+    FOLDER_INDEX_EXTENSIONS,
     LARGE_FILE_THRESHOLD,
     compute_file_hash,
     compute_file_hash_from_fd,
     doc_to_response,
-    ensure_within_home,
+    ensure_document_path_allowed,
+    harden_served_file,
     managed_documents_dir,
     safe_open_document,
+    unsupported_type_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -218,8 +223,11 @@ async def upload_by_path(
             if file_size <= LARGE_FILE_THRESHOLD:
                 # Small file: index synchronously
                 index_error = None
+                error_kind = None
                 try:
-                    chunk_count = await _index_document(temp_path)
+                    chunk_count = await _index_document(
+                        temp_path, display_name=safe_filepath.name
+                    )
                 except Exception as e:
                     logger.error(
                         "Indexing failed for %s: %s",
@@ -229,6 +237,7 @@ async def upload_by_path(
                     )
                     chunk_count = 0
                     index_error = str(e)
+                    error_kind = getattr(e, "kind", None)
 
                 if chunk_count == 0:
                     doc = db.add_document(
@@ -241,10 +250,14 @@ async def upload_by_path(
                     )
                     error_text = index_error or "indexing produced 0 chunks"
                     db.update_document_status(
-                        doc["id"], "failed", last_error=error_text
+                        doc["id"],
+                        "failed",
+                        last_error=error_text,
+                        error_kind=error_kind,
                     )
                     doc["indexing_status"] = "failed"
                     doc["last_error"] = error_text
+                    doc["error_kind"] = error_kind
                     return doc_to_response(doc)
 
                 doc = db.add_document(
@@ -282,7 +295,9 @@ async def upload_by_path(
                         original_name,
                         doc_id,
                     )
-                    chunk_count = await _index_document(temp_file)
+                    chunk_count = await _index_document(
+                        temp_file, display_name=original_name, progress_key=doc_id
+                    )
                     if doc_id in indexing_tasks:
                         if chunk_count == 0:
                             db.update_document_status(
@@ -308,7 +323,12 @@ async def upload_by_path(
                     db.update_document_status(doc_id, "cancelled")
                     logger.info("Background indexing cancelled for %s", original_name)
                 except Exception as e:
-                    db.update_document_status(doc_id, "failed", last_error=str(e))
+                    db.update_document_status(
+                        doc_id,
+                        "failed",
+                        last_error=str(e),
+                        error_kind=getattr(e, "kind", None),
+                    )
                     logger.error(
                         "Background indexing failed for %s: %s",
                         original_name,
@@ -368,14 +388,11 @@ async def upload_document_blob(
     display_name = Path(file.filename).name
     ext = Path(display_name).suffix.lower()
 
-    # 2. Validate extension against the strict document set (no images etc.)
+    # 2. Validate extension against the strict document set
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"File type '{ext}' is not supported. "
-                f"Allowed types: {sorted(ALLOWED_EXTENSIONS)}"
-            ),
+            detail=unsupported_type_message(display_name),
         )
 
     # 3. Ensure the managed directory exists
@@ -421,15 +438,19 @@ async def upload_document_blob(
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
         if bytes_written == 0:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "empty_file", "message": "Uploaded file is empty"},
+            )
 
         file_hash = hasher.hexdigest()
 
         # 5. Dedup by hash — if this content is already indexed, return the
         # existing doc and discard the partial. Fast path for "user dropped
-        # the same file twice."
+        # the same file twice." A row whose file is gone falls through, so
+        # add_document re-points it at this copy.
         existing = db.get_document_by_hash(file_hash)
-        if existing:
+        if existing and Path(existing.get("filepath") or "").is_file():
             logger.info(
                 "Blob upload dedup: %s matches existing doc %s",
                 display_name,
@@ -464,7 +485,7 @@ async def upload_document_blob(
 
     try:
         file_mtime = final_path.stat().st_mtime
-        chunk_count = await _index_document(final_path)
+        chunk_count = await _index_document(final_path, display_name=display_name)
         doc = db.add_document(
             filename=display_name,
             filepath=str(final_path),
@@ -476,6 +497,12 @@ async def upload_document_blob(
     except HTTPException:
         _cleanup_temp(final_path)
         raise
+    except UnreadableDocumentError as e:
+        _cleanup_temp(final_path)
+        logger.warning("Uploaded document %s can't be read: %s", display_name, e)
+        raise HTTPException(
+            status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
     except Exception as e:
         _cleanup_temp(final_path)
         logger.error(
@@ -513,19 +540,6 @@ async def upload_document_blob(
     return doc_to_response(doc)
 
 
-@router.get("/api/documents/monitor/status")
-async def monitor_status(request: Request):
-    """Get status of the document file monitor."""
-    monitor = getattr(request.app.state, "document_monitor", None)
-    if not monitor:
-        return {"running": False, "interval_seconds": 0, "reindexing": []}
-    return {
-        "running": monitor.is_running,
-        "interval_seconds": monitor._interval,
-        "reindexing": list(monitor.reindexing_docs),
-    }
-
-
 @router.get("/api/documents/{doc_id}/status")
 async def get_document_status(
     doc_id: str,
@@ -542,7 +556,41 @@ async def get_document_status(
         "indexing_status": doc.get("indexing_status", "complete"),
         "chunk_count": doc.get("chunk_count", 0),
         "is_active": is_active,
+        "progress": index_progress(doc_id),
     }
+
+
+_INLINE_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+}
+
+
+@router.get("/api/documents/{doc_id}/file")
+async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
+    """Serve a library document's file inline, so a citation can open it at its page."""
+    doc = db.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = Path(doc.get("filepath") or "")
+    real = Path(ensure_document_path_allowed(path))
+    if path.is_symlink():
+        raise HTTPException(status_code=403, detail="Symbolic links are not served")
+    if not real.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
+        )
+    response = FileResponse(
+        path=str(real),
+        media_type=_INLINE_MEDIA_TYPES.get(
+            path.suffix.lower(), "application/octet-stream"
+        ),
+        filename=doc.get("filename") or path.name,
+        content_disposition_type="inline",
+    )
+    return harden_served_file(response, path.name)
 
 
 @router.post("/api/documents/{doc_id}/cancel")
@@ -597,10 +645,19 @@ async def reindex_document(
         # path uses, rather than re-reading the stored path directly.
         with safe_open_document(filepath) as (fd, _file_stat, safe_filepath):
             temp_path = _copy_fd_to_temp(fd, safe_filepath.suffix)
-        chunk_count = await _index_document(temp_path)
+        chunk_count = await _index_document(
+            temp_path,
+            display_name=doc.get("filename") or safe_filepath.name,
+            progress_key=doc_id,
+        )
     except Exception as exc:
         error_msg = str(exc)
-        db.update_document_status(doc_id, "failed", last_error=error_msg)
+        db.update_document_status(
+            doc_id,
+            "failed",
+            last_error=error_msg,
+            error_kind=getattr(exc, "kind", None),
+        )
         logger.error("Reindex failed for %s: %s", doc_id, exc, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -654,7 +711,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
-    ALLOWED_EXTENSIONS and indexes each one using the RAG pipeline.
+    FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
+    Images are skipped: they index only when picked one by one.
     Indexing runs in a thread-pool executor to avoid blocking the
     event loop.
 
@@ -667,14 +725,11 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     if "\x00" in folder_path:
         raise HTTPException(status_code=400, detail="Invalid folder path")
 
-    raw_folder = Path(folder_path)
+    raw_folder = Path(os.path.expanduser(folder_path))
 
-    resolved = raw_folder.resolve(strict=False)
-
-    # Security: restrict folder indexing to user's home directory FIRST,
-    # before ANY filesystem operations (is_symlink/exists/is_dir can throw
-    # PermissionError on protected OS paths).
-    ensure_within_home(resolved)
+    # Same check as upload-path, and before any filesystem access
+    # (is_symlink/exists/is_dir can throw PermissionError on protected paths).
+    resolved = Path(ensure_document_path_allowed(raw_folder))
 
     # Check symlink after home restriction
     try:
@@ -693,13 +748,16 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     # Collect all candidate files
     candidate_files: List[Path] = []
+    skipped = 0
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
-            if item.is_symlink():
+            if item.is_symlink() or not item.is_file():
                 continue
-            if item.is_file() and item.suffix.lower() in ALLOWED_EXTENSIONS:
+            if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 candidate_files.append(item)
+            else:
+                skipped += 1
     except PermissionError:
         raise HTTPException(
             status_code=403,
@@ -707,7 +765,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         )
 
     if not candidate_files:
-        return IndexFolderResponse(indexed=0, failed=0, documents=[], errors=[])
+        return IndexFolderResponse(
+            indexed=0, failed=0, skipped=skipped, documents=[], errors=[]
+        )
 
     logger.info(
         "Indexing %d files from %s (recursive=%s)",
@@ -754,6 +814,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     return IndexFolderResponse(
         indexed=len(indexed_docs),
         failed=len(errors),
+        skipped=skipped,
         documents=indexed_docs,
         errors=errors,
     )

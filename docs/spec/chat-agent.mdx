@@ -2,23 +2,16 @@
 title: "ChatAgent"
 ---
 
-<Warning>
-The direct OpenAI and LiteLLM provider adapters have been removed. Any
-`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
-raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
-</Warning>
-
-
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py)
 </Info>
 
 <Note>
 **Component:** ChatAgent - Reference Conversational AI Implementation
-**Module:** `gaia_agent_chat.agent`
+**Module:** `gaia_agent.chat_agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
-> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. Its `chat` / `doc` / `file` registrations are `hidden` — still resolvable by id, so stored sessions and eval scenarios keep working, but absent from the Agent UI picker and the Hub catalog. New work should target the flagship.
+> **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. The `gaia_agent_chat` re-export shim was removed in v0.26.0; import from `gaia_agent.chat_agent`. New work should target the flagship.
 </Note>
 
 ---
@@ -99,14 +92,13 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     # None = fall back to LEMONADE_BASE_URL env var, then the default
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = config default_model, else Gemma-4-E4B-it-GGUF
 
     # Execution
-    max_steps: int = 10
+    max_steps: int = field(default_factory=default_max_steps)  # DEFAULT_MAX_STEPS (50)
     streaming: bool = False
 
     # Debug/output
@@ -167,7 +159,13 @@ class ChatAgent(
         pass
 
     def reindex_file(self, file_path: str) -> None:
-        """Reindex modified/created file (auto-called by file watcher)."""
+        """Reindex modified/created file (auto-called by file watcher).
+
+        On Windows, raises PermissionError when the file cannot be read
+        because another program holds it exclusively or has locked part of it,
+        so the watcher retries it; any other failure is logged with its
+        traceback.
+        """
         pass
 
     def stop_watching(self) -> None:
@@ -256,36 +254,24 @@ Agent: {"answer": "According to the Oil & Gas Manual, the vision is..."}
 
 ### File Change Monitoring
 
-**Implementation:**
-```python
-class FileChangeHandler(FileSystemEventHandler):
-    """Handler for file system changes to trigger re-indexing."""
+Each watched directory gets a `FileChangeHandler` from `gaia.utils.file_watcher`
+(see the [file change handler spec](/spec/file-change-handler)), with
+`reindex_file` as its created and modified callback. It watches the handler's
+default extensions: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.log`, `.csv`,
+`.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`,
+`.html` and `.css` (see [default extensions](/sdk/utils/file-watcher#default-extensions)).
+Word, PowerPoint and Excel files are not watched.
 
-    def __init__(self, agent):
-        self.agent = agent
-        self.last_indexed = {}  # LRU cache
-        self.debounce_time = 2.0  # seconds
-
-    def on_modified(self, event):
-        """Handle file modification."""
-        if not event.is_directory and self._should_index(event.src_path):
-            self._schedule_reindex(event.src_path)
-
-    def _schedule_reindex(self, file_path: str):
-        """Debounced reindexing with LRU eviction."""
-        current_time = time.time()
-        last_time = self.last_indexed.get(file_path, 0)
-
-        if current_time - last_time > self.debounce_time:
-            self.last_indexed[file_path] = current_time
-            self.agent.reindex_file(file_path)
-
-            # LRU eviction (max 1000 entries)
-            if len(self.last_indexed) > 1000:
-                oldest = sorted(self.last_indexed.items(), key=lambda x: x[1])[:100]
-                for path, _ in oldest:
-                    del self.last_indexed[path]
-```
+- A created or modified file is reindexed once it has gone a full window
+  (`debounce_seconds`, 2 s by default) with no change in size or modification
+  time, so a file still being copied in is never indexed half-written.
+- On Windows, if another program holds the file exclusively or has locked part
+  of it, `reindex_file` raises `PermissionError` and the watcher retries the
+  file 1, 2 and 4 windows later. A file saved by renaming a temp file onto it
+  is retried the same way. After the third retry it gives up and logs one
+  error telling the user to close the program and save the file again.
+- A deleted file is removed from the index, and a moved file is removed under
+  its old path and indexed under its new one.
 
 ### Security: Path Validation
 
@@ -417,7 +403,7 @@ rag = [
 ]
 
 chat = [
-    "watchdog>=2.1.0",  # File monitoring
+    "watchdog>=2.1.0,<7",  # File monitoring
     "aiohttp>=3.8.0",   # Async HTTP
 ]
 ```
@@ -429,7 +415,7 @@ chat = [
 ### Example 1: Basic Chat with RAG
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Configure agent
 config = ChatAgentConfig(

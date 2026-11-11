@@ -20,6 +20,47 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Dict, FrozenSet, Mapping, Optional, Tuple
 
+from gaia.config import gaia_agents_dir
+from gaia.daemon import paths as daemon_paths
+from gaia.daemon.sidecars.errors import (
+    KIND_CAPACITY,
+    KIND_MODE_CONFLICT,
+    KIND_NOT_INSTALLED,
+    KIND_OUT_OF_DATE,
+    KIND_SERVICE_OUTDATED,
+    KIND_SERVICE_UNREACHABLE,
+)
+
+#: What to tell the user when the agent can't start for a reason of GAIA's own,
+#: not the agent's, keyed by :attr:`SidecarError.kind`. These name GAIA's
+#: service log, because the agent never ran and its own log says nothing.
+_SERVICE_START_FAILED_MESSAGES: Mapping[str, str] = MappingProxyType(
+    {
+        KIND_CAPACITY: (
+            "GAIA is already running as many agents as it can at once, so it "
+            "couldn't start another one. Restart your PC to stop them, then send "
+            "your message again."
+        ),
+        KIND_MODE_CONFLICT: (
+            "GAIA's agent is already running from another copy of GAIA on this "
+            "PC. Close that copy, or restart your PC, then send your message again."
+        ),
+        KIND_NOT_INSTALLED: (
+            "This agent isn't installed with your copy of GAIA. Update GAIA to "
+            "the latest version or reinstall it, then send your message again."
+        ),
+        KIND_SERVICE_UNREACHABLE: (
+            "GAIA's background service isn't responding, so the agent couldn't "
+            "start. Restart GAIA, then send your message again. If it still "
+            "fails, restart your PC."
+        ),
+        KIND_SERVICE_OUTDATED: (
+            "GAIA's background service is from a different version of GAIA than "
+            "this app. Update GAIA to the latest version, then restart your PC."
+        ),
+    }
+)
+
 
 @dataclass(frozen=True)
 class RelayProfile:
@@ -30,7 +71,7 @@ class RelayProfile:
     #: agent isn't ready yet"). Lower-case except for proper nouns.
     display_name: str
     #: Terminal error when the stream closes without a ``final``/``error``.
-    #: Per-agent so it names the log the reader should actually open.
+    #: Shown through :meth:`stream_ended_text`, which adds the log folder.
     stream_ended_message: str
     #: Contract floor, as ``(major, minor)``. A sidecar below this 404s or
     #: mis-speaks the relay's request shape, so it is refused BEFORE the first
@@ -88,10 +129,12 @@ class RelayProfile:
     #: Contract version from which ``/sessions/{id}/bypass`` exists, so the
     #: chat's Full access mode can reach the agent. ``None`` means it never does.
     min_full_access_api_version: Optional[Tuple[int, int]] = None
-    #: Whether to send ``session_id`` on the ``/query`` body. Gated per agent
-    #: because the request model is ``extra="forbid"`` on both sidecars: an
-    #: unexpected field is a 422, not a shrug.
-    sends_session_id: bool = False
+    #: Contract version from which ``/query`` takes ``session_id``, so every
+    #: turn of a chat reaches the same sidecar agent and what one turn surfaced
+    #: (a thread id, an indexed document) is there on the next. ``None`` means
+    #: never. Gated because the request model is ``extra="forbid"`` on both
+    #: sidecars: an unexpected field is a 422, not a shrug.
+    min_session_id_api_version: Optional[Tuple[int, int]] = None
     #: Contract version from which this agent waits on a ``needs_confirmation``
     #: and takes the answer over ``/query/{run_id}/tool_decision``. ``None``
     #: means it never does: the confirmation ends the run, and the relay shows
@@ -112,6 +155,9 @@ class RelayProfile:
     #: so the agent works in the same scope the Agent UI shows. ``None`` means
     #: it never does, and keeps its own default scope.
     min_scope_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes the chat workspace used for
+    #: resolving relative file paths.
+    min_working_directory_api_version: Optional[Tuple[int, int]] = None
     #: Shown in the Skills settings when the installed agent is below
     #: :attr:`min_skills_api_version`.
     skills_upgrade_message: str = ""
@@ -119,8 +165,79 @@ class RelayProfile:
     #: off). ``None`` means the relay never sends it.
     min_memory_api_version: Optional[Tuple[int, int]] = None
     #: Shown instead of running a private or memory-off turn when the installed
-    #: agent is below :attr:`min_memory_api_version` — it would save to memory.
+    #: agent can't take ``memory`` — it is below :attr:`min_memory_api_version`,
+    #: or that floor is ``None`` — so it would save to memory.
     memory_upgrade_message: str = ""
+    #: Contract version from which ``/query/{run_id}/followup`` hands a running
+    #: turn a message sent mid-turn. ``None`` means it never does.
+    min_followup_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/sessions/{id}/grants`` lists and revokes
+    #: the session's "always allow" grants, so the chat may offer "always".
+    #: ``None`` means it never does, and only allow once / deny are offered.
+    min_grants_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``internet_off``. ``None``
+    #: means the relay never sends it: the agent keeps its own network rules.
+    min_internet_api_version: Optional[Tuple[int, int]] = None
+    #: Shown instead of running an internet-off turn when the installed agent is
+    #: below :attr:`min_internet_api_version` — it could go online.
+    internet_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``changes_turn_id`` and
+    #: records the run's file changes for undo. ``None`` means never sent.
+    min_changes_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query``'s ``final`` event carries
+    #: ``context``, what fills the model's window. ``None`` means it never does.
+    min_context_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in the Context panel when the installed agent is below
+    #: :attr:`min_context_api_version`.
+    context_upgrade_message: str = ""
+    #: Contract version from which ``/query`` takes ``surface``, the front-end
+    #: the turn comes from. ``None`` means the relay never sends it.
+    min_surface_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``turns`` (earlier turns
+    #: with their tool calls) and a ``final`` carries ``model_messages``.
+    #: ``None`` means the relay sends text ``context`` only.
+    min_turns_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``reasoning`` and streams the
+    #: model's reasoning as ``reasoning`` events. ``None`` means the relay never asks.
+    min_reasoning_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``GET /sessions/{id}/tools`` lists the tools
+    #: the session's agent has. ``None`` means the agent has no such route.
+    min_tools_api_version: Optional[Tuple[int, int]] = None
+    #: Shown in Agent info when the installed agent can't list its tools.
+    tools_upgrade_message: str = ""
+    #: Shown when the agent itself fails to start (it crashed or never got
+    #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
+    start_failed_message: str = ""
+
+    def stream_ended_text(self) -> str:
+        """:attr:`stream_ended_message`, plus the agent's log folder once it exists."""
+        return self._with_log_folder(self.stream_ended_message)
+
+    def start_failed_text(self, kind: str = "") -> str:
+        """What to tell the user when the agent can't start, for failure *kind*.
+
+        *kind* is a :attr:`SidecarError.kind`. A crash, or a kind with no
+        specific next step, gets :attr:`start_failed_message` and the agent's
+        log folder.
+        """
+        if kind == KIND_OUT_OF_DATE:
+            return self.version_upgrade_message
+        message = _SERVICE_START_FAILED_MESSAGES.get(kind)
+        if message is None:
+            return self._with_log_folder(self.start_failed_message)
+        log_path = daemon_paths.log_path()
+        if not log_path.is_file():
+            return message
+        return f"{message} The details are in this log: {log_path}"
+
+    def _with_log_folder(self, message: str) -> str:
+        # Resolved per call so it names the real folder under the current GAIA home.
+        if not self.agent_id:
+            return message
+        log_dir = gaia_agents_dir() / self.agent_id / "logs"
+        if not log_dir.is_dir():
+            return message
+        return f"{message} The details are in this log folder: {log_dir}"
 
 
 # --- email ------------------------------------------------------------------
@@ -224,12 +341,22 @@ EMAIL_PROFILE = RelayProfile(
     # daemon's MAJOR-only handshake and then 404s every call.
     min_api_version=(2, 4),
     stream_ended_message=(
-        "Email agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "The email agent stopped unexpectedly while working. Anything it had "
+        "already written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "The email agent couldn't start. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
-        "The installed email agent doesn't support chat queries (needs contract "
-        "2.4+). Update it from the Hub and retry."
+        "The email agent is out of date and can't answer chat messages. Update "
+        "GAIA and the email agent to the latest version, then try again."
+    ),
+    memory_upgrade_message=(
+        "The installed email agent does not support private chats or chats with "
+        "memory turned off. Your message was not sent to the email agent. Update "
+        "GAIA and the email agent, or use the GAIA agent for this chat instead."
     ),
     tool_labels=MappingProxyType(_EMAIL_TOOL_LABELS),
     mutating_tools=_EMAIL_MUTATING_TOOLS,
@@ -239,11 +366,15 @@ EMAIL_PROFILE = RelayProfile(
         "not running or unreachable from the email agent."
     ),
     always_relay=True,
-    # Left off deliberately: the email relay has never sent one, and turning it
-    # on would change which agent instance a live email session resolves to
-    # (gaia_agent_email.query_routes threads it into a session-scoped registry).
-    # That is its own change, with its own test, not a rider on this one.
-    sends_session_id=False,
+    # 2.12 added /query's session_id (#2829): a follow-up can then name a
+    # thread the previous turn showed (#2834).
+    min_session_id_api_version=(2, 12),
+    # 2.16 added /query's memory mode. Private and memory-off chats must never
+    # reach an older sidecar that would persist their email-derived memories.
+    min_memory_api_version=(2, 16),
+    tools_upgrade_message=(
+        "The email agent can't list its tools here. Its tools still work in chat."
+    ),
 )
 
 
@@ -260,6 +391,7 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "edit_file",
         "remember",
         "forget",
+        "forget_everything",
         "update_memory",
         "execute_python_file",
         "run_python",
@@ -277,6 +409,8 @@ _GAIA_MUTATING_TOOLS = frozenset(
         "index_document",
         "index_directory",
         "generate_image",
+        "generate_music",
+        "generate_sound_effect",
         "write_clipboard",
         "bookmark",
     }
@@ -358,13 +492,18 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "check_cli_setup": "Checking a CLI's setup",
     "install_cli": "Installing a CLI",
     "sign_in_cli": "Signing in to a CLI",
-    "load_tools": "Loading tools",
+    "search_tools": "Searching for a tool",
     "request_user_input": "Asking you a question",
     # Media / desktop
     "transcribe_media": "Transcribing recording",
     "refine_transcript": "Refining transcript",
+    "analyze_transcript": "Analyzing transcript",
+    "export_transcript": "Exporting transcript",
     "take_screenshot": "Taking screenshot",
     "generate_image": "Generating image",
+    "generate_music": "Generating music",
+    "generate_sound_effect": "Generating sound effect",
+    "list_audio_generation_models": "Listing audio models",
     "analyze_image": "Looking at image",
     "answer_question_about_image": "Reading image",
     "list_sd_models": "Listing image models",
@@ -381,12 +520,24 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "read_email": "Reading message",
     "list_mail_folders": "Listing mail folders",
     "check_mailbox_access": "Checking mailbox access",
+    "get_thread": "Reading conversation",
+    "list_connected_mailboxes": "Checking connected mailboxes",
+    "list_waiting_on_you": "Finding mail waiting on you",
     # Memory — the agent's own long-term store
     "remember": "Saving to memory",
     "forget": "Deleting from memory",
+    "forget_everything": "Erasing all memory",
     "update_memory": "Updating memory",
     "recall": "Recalling from memory",
     "search_past_conversations": "Searching past conversations",
+    # Cards drawn by the guides and calculators skills
+    "guides/show_recipe": "Showing recipe",
+    "guides/show_workout": "Showing workout",
+    "guides/show_how_to": "Showing how-to",
+    "guides/show_checklist": "Showing checklist",
+    "guides/show_itinerary": "Showing itinerary",
+    "calculators/show_tip_calculator": "Showing tip calculator",
+    "calculators/show_loan_calculator": "Showing loan calculator",
     # Agent internals the user still sees scroll past
     "read_tool_output": "Re-reading a tool result",
     "set_loop_state": "Tracking progress",
@@ -401,12 +552,17 @@ GAIA_PROFILE = RelayProfile(
     # exists — it guards a downgrade, not a supported install.
     min_api_version=(2, 12),
     stream_ended_message=(
-        "GAIA agent stream ended unexpectedly (the sidecar may have "
-        "crashed). Check the sidecar log under ~/.gaia/logs/ and retry."
+        "GAIA stopped unexpectedly while answering. Anything it had already "
+        "written is kept above. Send your message again."
+    ),
+    start_failed_message=(
+        "GAIA couldn't start its agent. Send your message again. If this keeps "
+        "happening, restart GAIA. If it still fails, update GAIA to the latest "
+        "version or reinstall it."
     ),
     version_upgrade_message=(
-        "The installed GAIA agent is too old for the Agent UI (needs contract "
-        "2.12+). Update it from the Hub and retry."
+        "GAIA's agent is out of date and can't answer here. Update GAIA to the "
+        "latest version, then try again."
     ),
     tool_labels=MappingProxyType(_GAIA_TOOL_LABELS),
     mutating_tools=_GAIA_MUTATING_TOOLS,
@@ -418,31 +574,65 @@ GAIA_PROFILE = RelayProfile(
     # 2.14 added /sessions/{id}/bypass.
     min_full_access_api_version=(2, 14),
     readiness_is_blocking=False,
-    sends_session_id=True,
+    min_session_id_api_version=(2, 12),
     # 2.14 added /tool_decision. Older binaries refuse a gated tool outright.
     min_confirm_api_version=(2, 14),
     # 2.16 added /query's documents field.
     min_documents_api_version=(2, 16),
     documents_upgrade_message=(
         "This chat has attached documents, but the installed GAIA agent can't "
-        "read them (needs contract 2.16+). Update the GAIA agent from the Hub, "
-        "or remove the documents from this chat, then retry."
+        "read them. Update GAIA to the latest version, or remove the documents "
+        "from this chat, then try again."
     ),
     # 2.17 added GET /skills.
     min_skills_api_version=(2, 17),
     # 2.18 added /query's allowed_paths field.
     min_scope_api_version=(2, 18),
+    # 2.24 adds the explicit workspace for relative file paths.
+    min_working_directory_api_version=(2, 24),
     skills_upgrade_message=(
-        "The installed GAIA agent is too old to list its skills here (needs "
-        "contract 2.17+). Update the GAIA agent from the Hub, then reopen this "
-        "page. Its skills still work in chat."
+        "The installed GAIA agent is too old to list its skills here. Update "
+        "GAIA to the latest version, then reopen this page. Its skills still "
+        "work in chat."
     ),
     # 2.18 added /query's memory field.
     min_memory_api_version=(2, 18),
     memory_upgrade_message=(
         "Memory is off for this chat, but the installed GAIA agent can't be "
-        "told so and would save to memory (needs contract 2.18+). Update the "
-        "GAIA agent from the Hub and retry, or turn memory back on for this chat."
+        "told so and would save to memory. Update GAIA to the latest version, "
+        "then try again, or turn memory back on for this chat."
+    ),
+    # 2.15 added /query/{run_id}/followup.
+    min_followup_api_version=(2, 15),
+    # 2.19 added /query's changes_turn_id field.
+    min_changes_api_version=(2, 19),
+    # 2.23 added /query's internet_off field.
+    min_internet_api_version=(2, 23),
+    internet_upgrade_message=(
+        "Internet is off for this chat, but the installed GAIA agent can't be "
+        "told so and could go online. Update GAIA to the latest version, then "
+        "try again, or turn the internet back on for this chat."
+    ),
+    # 2.20 added /query's surface field.
+    min_surface_api_version=(2, 20),
+    # 2.22 added /query's reasoning field.
+    min_reasoning_api_version=(2, 22),
+    # 2.21 added /query's final.context.
+    min_context_api_version=(2, 21),
+    context_upgrade_message=(
+        "The installed GAIA agent is too old to report what fills its context. "
+        "Update GAIA to the latest version, then send a message."
+    ),
+    # 2.25 added /query's turns field and final.model_messages.
+    min_turns_api_version=(2, 25),
+    # 2.26 added /sessions/{id}/grants.
+    min_grants_api_version=(2, 26),
+    # 2.27 added GET /sessions/{id}/tools.
+    min_tools_api_version=(2, 27),
+    tools_upgrade_message=(
+        "The installed GAIA agent is too old to list its tools here. Update GAIA "
+        "to the latest version, then reopen Agent info. Its tools still work in "
+        "chat."
     ),
 )
 
@@ -470,8 +660,18 @@ _NO_PROFILE = RelayProfile(
 
 
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
-    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar."""
-    return _PROFILES.get(agent_id)
+    """The relay profile for *agent_id*, or ``None`` if it is not a sidecar.
+
+    A legacy id that resolves to a sidecar agent (``chat`` -> ``gaia``) gets
+    that agent's profile, so a stored session relays like a new one.
+    """
+    from gaia.agents.registry import AgentRegistry
+
+    profile = _PROFILES.get(agent_id)
+    if profile is None:
+        canonical = AgentRegistry.legacy_alias(agent_id)
+        profile = _PROFILES.get(canonical) if canonical else None
+    return profile
 
 
 def full_access_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
@@ -513,6 +713,15 @@ def documents_supported(profile: RelayProfile, api_version: Optional[str]) -> bo
     return floor is not None and _meets(api_version, floor)
 
 
+def context_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when the sidecar's ``final`` event reports what fills its context.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_context_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def skills_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when the sidecar lists its skills on ``GET /v1/<agent>/skills``.
 
@@ -531,12 +740,101 @@ def scope_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def working_directory_supported(
+    profile: RelayProfile, api_version: Optional[str]
+) -> bool:
+    """True when the sidecar accepts the chat workspace on ``/query``."""
+    floor = profile.min_working_directory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def memory_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     """True when *api_version* takes ``/query``'s ``memory`` field.
 
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_memory_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def followups_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes a mid-turn message for a running ``/query``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_followup_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def grants_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists and revokes "always allow" grants.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_grants_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def internet_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``internet_off`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_internet_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def changes_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``changes_turn_id`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_changes_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``surface`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def turns_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``turns`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_turns_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def session_id_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``session_id`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_session_id_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def reasoning_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``reasoning`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_reasoning_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def tools_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* lists a session's tools on ``/sessions/{id}/tools``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_tools_api_version
     return floor is not None and _meets(api_version, floor)
 
 
@@ -565,5 +863,12 @@ __all__ = [
     "documents_supported",
     "skills_supported",
     "scope_supported",
+    "working_directory_supported",
     "memory_supported",
+    "followups_supported",
+    "grants_supported",
+    "internet_supported",
+    "changes_supported",
+    "session_id_supported",
+    "tools_supported",
 ]

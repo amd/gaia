@@ -94,9 +94,9 @@ func TestExternalModeReportsTheServerAndStartsNothing(t *testing.T) {
 		wantCmd    string
 		claudeMode bool
 	}{
-		{name: "running", wantState: StateOK, wantIn: []string{"v10.10.0"},
+		{name: "running", wantState: StateOK, wantIn: []string{"v2026.44.1"},
 			url: func(t *testing.T) string {
-				return healthServer(t, 200, "application/json", `{"status":"ok","version":"10.10.0"}`).URL
+				return healthServer(t, 200, "application/json", `{"status":"ok","version":"2026.44.1"}`).URL
 			}},
 		{name: "down", wantState: StateFailed,
 			wantIn: []string{"is not answering", "Start it", "gaia config set lemonade_mode gaia"},
@@ -105,9 +105,9 @@ func TestExternalModeReportsTheServerAndStartsNothing(t *testing.T) {
 			wantIn: []string{"is not answering"},
 			url:    func(*testing.T) string { return closedURL }},
 		{name: "too old", wantState: StateFailed,
-			wantIn: []string{"v10.8.0", "v10.9.0", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"},
+			wantIn: []string{"v11.9.0", "v2026.44.1", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"},
 			url: func(t *testing.T) string {
-				return healthServer(t, 200, "application/json", `{"status":"ok","version":"10.8.0"}`).URL
+				return healthServer(t, 200, "application/json", `{"status":"ok","version":"11.9.0"}`).URL
 			}},
 		{name: "needs a key", wantState: StateFailed, wantIn: []string{"needs an API key"},
 			wantCmd: "gaia lemonade connect ",
@@ -157,7 +157,7 @@ func TestExternalModeSendsTheSavedKey(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		fmt.Fprint(w, `{"status":"ok","version":"10.10.0"}`)
+		fmt.Fprint(w, `{"status":"ok","version":"2026.44.1"}`)
 	}))
 	defer srv.Close()
 	doc := externalDoc(srv.URL)
@@ -210,9 +210,9 @@ func rowByKey(t *testing.T, rep Report, key string) Row {
 func TestDetectionOffersOnlyARealLemonade(t *testing.T) {
 	html := healthServer(t, 200, "text/html", "<html>router admin</html>")
 	otherJSON := healthServer(t, 200, "application/json", `{"status":"ok","uptime":3}`)
-	old := healthServer(t, 200, "application/json", `{"status":"ok","version":"10.8.0"}`)
+	old := healthServer(t, 200, "application/json", `{"status":"ok","version":"11.9.0"}`)
 	keyed := healthServer(t, 401, "", "")
-	good := healthServer(t, 200, "application/json", `{"status":"ok","version":"10.10.0"}`)
+	good := healthServer(t, 200, "application/json", `{"status":"ok","version":"2026.44.1"}`)
 	installed := func() bool { return true }
 	notInstalled := func() bool { return false }
 
@@ -246,7 +246,7 @@ func TestDetectionOffersOnlyARealLemonade(t *testing.T) {
 }
 
 func TestTheOfferAppearsOnlyBeforeAnyoneChose(t *testing.T) {
-	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "10.10.0"}
+	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "2026.44.1"}
 	for _, tc := range []struct {
 		name     string
 		doc      map[string]any
@@ -305,7 +305,7 @@ func TestTheOfferAppearsOnlyBeforeAnyoneChose(t *testing.T) {
 }
 
 func TestAcceptingAndDecliningTheOfferSaveTheChoice(t *testing.T) {
-	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "10.10.0"}
+	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "2026.44.1"}
 	for _, tc := range []struct {
 		name      string
 		kind      FixKind
@@ -382,7 +382,7 @@ func TestAnUnreadableChoiceIsTheRowNotAStart(t *testing.T) {
 // Answering the offer with g must not save "gaia" before GAIA's server exists,
 // and the next check must not pass the user's server off as GAIA's.
 func TestDecliningTheOfferNeverCountsTheUsersServerAsGAIAs(t *testing.T) {
-	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "10.10.0"}
+	found := lemonade.ProbeResult{URL: "http://localhost:13305/api/v1", Status: lemonade.ProbeOK, Version: "2026.44.1"}
 	s, path := externalSetup(t, map[string]any{"default_model": "Gemma-4-E4B-it-GGUF"})
 	detectRunningLemonade = func(context.Context) (lemonade.ProbeResult, bool) {
 		s.detect++
