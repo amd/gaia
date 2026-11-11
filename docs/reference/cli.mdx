@@ -4202,7 +4202,10 @@ the connector with `gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tv
 
 ### Diagnostics Command
 
-Bundle system info and logs into a tarball for bug reports.
+Bundle system info and logs into a tarball for bug reports. When GAIA uses a
+Lemonade you run yourself, the bundle also holds that server's recent log lines,
+with secrets removed, as `lemonade/server-log.txt`; GAIA's own Lemonade
+contributes its `lemond.log`.
 
 ```bash
 gaia diagnostics [OPTIONS]

@@ -160,7 +160,7 @@ jobs:
   # Dependabot is excluded: claude-code-action hard-fails on a bot actor unless the bot is
   # allowlisted ("Workflow initiated by non-human actor"), so every Dependabot PR went red on
   # a job that never reviewed anything. Allowlisting instead of skipping would spend a review
-  # on a generated lockfile diff; Dependency Review and Audit Dependencies already cover those.
+  # on a generated lockfile diff; Dependency Review already covers those.
   #
   # Gate on github.actor, not pull_request.user.login: the action rejects on who INITIATED the
   # run, so a human pushing to a Dependabot branch still gets reviewed (verified on #3155-#3157).

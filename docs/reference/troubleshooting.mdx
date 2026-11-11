@@ -203,6 +203,12 @@ icon: "bug"
       `gaia lemonade embedded stop`, then start it again (or run `gaia init`).
     - **`… is stuck rather than loading a model`** — the Lemonade you installed. Restart
       it with the command the error names, then retry.
+
+    In the Agent UI, this log and every other GAIA log are one click away:
+    **Model server log** in the sidebar's model popover or under a reply that failed on a
+    local model, and **Settings → Advanced → Logs**. The model server tab shows llama.cpp's
+    and FastFlowLM's output too, and works for a Lemonade you run yourself. See
+    [Logs](/guides/agent-ui#logs).
   </Accordion>
 
   <Accordion title="gaia init can't install the GAIA agent" icon="store">
@@ -923,7 +929,8 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
     GAIA ships a `gaia diagnostics` command that bundles the logs above,
     including the rotated `gaia.log.1`, `gaia.log.2`, ... copies, plus the
-    daemon, Lemonade and agent sidecar logs, together with a short
+    daemon, Lemonade and agent sidecar logs (for a Lemonade you run yourself, its
+    recent log lines with secrets removed), together with a short
     system-info snapshot (OS version, relevant environment variables, the
     ports GAIA's daemon, Lemonade and UI backend are on, and all TCP
     listeners) into a single tarball:
@@ -937,6 +944,10 @@ error. To run the chat model in the cloud instead, see
     - `--output <path>` — write the bundle to a custom path.
     - `--no-logs` — omit log files (useful if logs might contain sensitive
       chat content). State and system info are still included.
+
+    API keys, tokens and similar secrets are removed from the logs in the
+    bundle. In the Agent UI, **Settings → Advanced → Logs → Save all logs**
+    writes the same bundle.
 
     Attach the resulting `.tgz` to your GitHub issue.
   </Accordion>
