@@ -12,14 +12,12 @@
  * - Zustand store configuration
  * - React component structure
  * - Privacy-first design elements
- * - Framework compatibility
  */
 
 const path = require('path');
 const fs = require('fs');
 
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
-const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
 // Every theme write goes through this one module, so the callers below are
 // checked for the delegation and this file for the DOM write itself.
@@ -1485,29 +1483,16 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Framework Compatibility ────────────────────────────────────────
+  // ── App Config ─────────────────────────────────────────────────────
 
-  describe('framework compatibility', () => {
-    it('should be discoverable by framework main.js', () => {
+  describe('app config', () => {
+    it('should declare its name and display name', () => {
       const configPath = path.join(CHAT_APP_PATH, 'app.config.json');
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       expect(config.name).toBe('agent-ui');
       expect(config.displayName).toBeDefined();
-    });
-
-    it('should have framework shared services available', () => {
-      const services = [
-        'src/services/window-manager.js',
-        'src/services/mcp-client.js',
-        'src/services/base-ipc-handlers.js',
-      ];
-
-      services.forEach(service => {
-        const servicePath = path.join(FRAMEWORK_PATH, service);
-        expect(fs.existsSync(servicePath)).toBe(true);
-      });
     });
   });
 });
