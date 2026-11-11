@@ -159,6 +159,23 @@ class TestListConnectors:
         }
         assert rows["mcp-test"]["display_name"] == "MCP Test"
 
+    def test_a_corrupt_activations_file_is_named_on_every_unavailable_row(
+        self, ui_api_client
+    ):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = resp.json()["connectors"]
+        assert rows
+        for row in rows:
+            assert row["error"] == "unavailable"
+            assert row["reason"] == "activations_unreadable"
+            assert row["path"] == str(path)
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")

@@ -1818,6 +1818,7 @@ export const enMessages = {
     'settings.connectors.agentServers': 'Custom agent servers',
     'settings.connectors.unavailable': 'Unavailable',
     'settings.connectors.unavailableHint': "GAIA couldn't read these connectors. Restart GAIA. If it keeps happening, save a troubleshooting report under Settings → Privacy and attach it to a bug report.",
+    'settings.connectors.activationsUnreadableHint': "GAIA couldn't read its connector settings file at {path}. Delete that file, then reopen this page. Connectors you had turned on for an agent will need to be turned on again.",
     'settings.connectors.unavailableStatus': "Couldn't load",
     'settings.connectors.notRevoked': "Disconnected locally, but the provider did not confirm the revoke ({reason}). It may still show as connected in your account's app permissions.",
     'settings.connectors.localOnly': 'Disconnected locally. {reason}',

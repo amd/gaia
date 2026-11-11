@@ -47,7 +47,11 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-from gaia.connectors.activations import list_agent_activations
+from gaia.connectors.activations import (
+    _activations_path,
+    list_agent_activations,
+    load_activations,
+)
 from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.api import resolve_declared_scopes
@@ -574,6 +578,16 @@ def _field_summary(f: ConfigField) -> Dict[str, Any]:
 async def list_connectors() -> Dict[str, Any]:
     """Return catalog specs merged with live state for all connectors."""
     specs = REGISTRY.all()
+    # Every summary reads the same ledger, so name it once instead of a generic failure.
+    ledger_cause: Dict[str, Any] = {}
+    try:
+        load_activations()
+    except ConnectorsError as exc:
+        logger.warning("connectors-list: %s", exc)
+        ledger_cause = {
+            "reason": "activations_unreadable",
+            "path": str(_activations_path()),
+        }
     summaries: List[Dict[str, Any]] = []
     for s in specs:
         try:
@@ -583,7 +597,12 @@ async def list_connectors() -> Dict[str, Any]:
                 "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
             )
             summaries.append(
-                {"id": s.id, "display_name": s.display_name, "error": "unavailable"}
+                {
+                    "id": s.id,
+                    "display_name": s.display_name,
+                    "error": "unavailable",
+                    **ledger_cause,
+                }
             )
     return {"connectors": summaries}
 

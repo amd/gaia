@@ -245,6 +245,9 @@ export interface UnavailableConnectorRow {
     id: string;
     display_name: string;
     error: 'unavailable';
+    /** Set when the shared activations file can't be read; `path` names it. */
+    reason?: 'activations_unreadable';
+    path?: string;
 }
 
 /** One entry of GET /api/connectors. */
