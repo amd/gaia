@@ -2598,10 +2598,10 @@ def _dispatch_sidecar_query(
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.config import GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
@@ -4818,7 +4818,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):
                     last_tool_args = event["args"]
-                elif event_type == "tool_result" and not event.get("render"):
+                elif event_type == "tool_result" and (
+                    not event.get("render") or event["render"] == "media"
+                ):
+                    if event.get("render") == "media":
+                        # "media" is the terminal's card, as on the relay path;
+                        # the Agent UI draws its own image/audio card below.
+                        event = {
+                            k: v
+                            for k, v in event.items()
+                            if k not in ("render", "data")
+                        }
                     card = media_card(event, last_tool_args)
                     if card is not None:
                         # A relayed result's summary-view ``data`` gives way to

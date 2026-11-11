@@ -134,3 +134,47 @@ describe('paths with spaces', () => {
         expect(links()[0].textContent).toBe(first);
     });
 });
+
+describe('files the turn wrote', () => {
+    const REPORT = 'C:\\Users\\me\\out\\recommendation.md';
+    const BOM = '/home/me/out/bom.xlsx';
+
+    function renderWithWrites(content: string, paths: string[]) {
+        const files = paths.map((path) => ({ path, name: path.split(/[\\/]/).pop() ?? path }));
+        const message: Message = {
+            id: 1, session_id: 's', role: 'assistant', content, created_at: '', rag_sources: null,
+            turnSummary: { cost: { kind: 'local' }, files },
+        };
+        return render(<MessageBubble message={message} />);
+    }
+
+    it('opens a bare name that one written file has, labelled as the answer wrote it', () => {
+        renderWithWrites('Files written: `recommendation.md` and `bom.xlsx`.', [REPORT, BOM]);
+
+        expect(links().map((l) => l.textContent)).toEqual(['recommendation.md', 'bom.xlsx']);
+        fireEvent.click(links()[0]);
+        fireEvent.click(links()[1]);
+        expect(mockedApi.openFileOrFolder).toHaveBeenNthCalledWith(1, REPORT);
+        expect(mockedApi.openFileOrFolder).toHaveBeenNthCalledWith(2, BOM);
+    });
+
+    it('opens a POSIX path the turn wrote', () => {
+        renderWithWrites(`Saved to \`${BOM}\`.`, [BOM]);
+
+        expect(links().map((l) => l.textContent)).toEqual([BOM]);
+        fireEvent.click(links()[0]);
+        expect(mockedApi.openFileOrFolder).toHaveBeenCalledWith(BOM);
+    });
+
+    it.each([
+        ['a name two written files share', 'notes.md', ['C:\\a\\notes.md', 'C:\\b\\notes.md']],
+        ['a name the turn did not write', 'other.md', [REPORT]],
+        ['a relative path to a written file', 'out/recommendation.md', [REPORT]],
+        ['a POSIX path the turn did not write', '/home/me/out/other.xlsx', [BOM]],
+    ])('keeps %s as code', (_label, code, paths) => {
+        renderWithWrites(`See \`${code}\`.`, paths);
+
+        expect(links()).toHaveLength(0);
+        expect(document.querySelector('code.inline-code')?.textContent).toBe(code);
+    });
+});

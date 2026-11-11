@@ -2385,6 +2385,102 @@ class TestRenderMapResultData:
         events = _drain(handler)
         assert events[0]["result_data"] == self._make_envelope()["data"]
 
+    def test_media_result_keeps_only_a_verified_output_path(self, handler, tmp_path):
+        image = tmp_path / "result.png"
+        image.write_bytes(b"png")
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {
+                "status": "success",
+                "image_path": str(image),
+                "model": "SD-Turbo",
+                "size": "512x512",
+            },
+            title="Result",
+        )
+        [event] = _drain(handler)
+        assert event["result_data"] == {
+            "kind": "media",
+            "path": str(image),
+            "media_type": "image",
+            "size_bytes": 3,
+            "status": "success",
+            "image_path": str(image),
+            "model": "SD-Turbo",
+            "size": "512x512",
+        }
+
+    def test_media_result_never_turns_a_missing_path_into_a_card(
+        self, handler, tmp_path
+    ):
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": str(tmp_path / "gone.png")},
+            title="Result",
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    def test_media_result_never_turns_an_unknown_extension_into_a_card(
+        self, handler, tmp_path
+    ):
+        output = tmp_path / "unexpected.txt"
+        output.write_text("not media")
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": str(output)}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            r"\\host\share\a.png",
+            "//host/share/a.png",
+            r"\\?\UNC\host\share\a.png",
+            r"\??\C:\a.png",
+        ],
+    )
+    def test_media_result_refuses_a_share_path_without_touching_it(
+        self, handler, monkeypatch, raw
+    ):
+        def _no_disk(*_a, **_k):
+            raise AssertionError("a share path must not be stat-ed")
+
+        monkeypatch.setattr(Path, "stat", _no_disk)
+        handler.print_tool_usage("generate_image")
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "image_path": raw}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert "result_data" not in event
+
+    @pytest.mark.parametrize(
+        "tool,name,kind",
+        [
+            ("text_to_speech", "speech.wav", "audio"),
+            ("generate_image", "a.png", "image"),
+        ],
+    )
+    def test_media_type_follows_the_file_not_the_key(
+        self, handler, tmp_path, tool, name, kind
+    ):
+        output = tmp_path / name
+        output.write_bytes(b"x")
+        handler.print_tool_usage(tool)
+        _drain(handler)
+        handler.pretty_print_json(
+            {"status": "success", "file_path": str(output)}, title="Result"
+        )
+        [event] = _drain(handler)
+        assert event["result_data"]["media_type"] == kind
+        assert event["result_data"]["file_path"] == str(output)
+
     def test_unparseable_string_does_not_crash_and_omits_result_data(self, handler):
         handler.print_tool_usage("pre_scan_inbox")
         _drain(handler)

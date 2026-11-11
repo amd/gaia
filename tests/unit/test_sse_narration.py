@@ -312,14 +312,13 @@ class TestTranslatorNarration:
 
     def test_render_map_result_still_gets_a_preview(self):
         """``data`` is the card payload for a render tool; preview comes from the source."""
-        translator = CanonicalTranslator(
-            RUN_ID, agent_id="gaia", render_tool_map={"draw_chart": "chart"}
-        )
+        translator = _tr()
         translator.translate({"type": "tool_start", "tool": "draw_chart"})
         translator.translate({"type": "tool_args", "args": {}})
         (result,) = translator.translate(
             {
                 "type": "tool_result",
+                "render": "chart",
                 "result_data": {"type": "chart", "points": [1, 2]},
                 "summary": "chart rendered",
                 "latency_ms": 8,
@@ -328,6 +327,22 @@ class TestTranslatorNarration:
         assert result["render"] == "chart"
         assert result["data"] == {"type": "chart", "points": [1, 2]}
         assert result["preview"] == "chart rendered · 8ms"
+
+    def test_a_card_name_without_a_card_payload_stays_a_plain_result(self):
+        """A named card with no verified payload must not draw a broken card."""
+        translator = _tr()
+        translator.translate({"type": "tool_start", "tool": "generate_image"})
+        translator.translate({"type": "tool_args", "args": {}})
+        (result,) = translator.translate(
+            {
+                "type": "tool_result",
+                "render": "media",
+                "summary": "image output is no longer available",
+                "success": True,
+            }
+        )
+        assert "render" not in result
+        assert result["data"]["summary"] == "image output is no longer available"
 
     def test_synthesized_result_from_bare_tool_end_has_a_preview(self):
         translator = _tr()

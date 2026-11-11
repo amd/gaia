@@ -1716,6 +1716,7 @@ def _machine_gate(
         manifest.get("requirements"),
         download_size_bytes=artifact.get("size_bytes", 0),
         install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
     )
     if not report.compatible:
         blockers = "; ".join(report.blockers)
@@ -2499,8 +2500,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))

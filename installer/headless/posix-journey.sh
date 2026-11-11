@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|engine|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a
@@ -352,6 +352,47 @@ no_gaia_processes() {
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
+# ── The real AI engine ────────────────────────────────────────────────────────
+# The packaged gaia starts its own real Lemonade, exactly as setup's "Check this
+# PC" does: no fake server, no model download. A bundle library leaking into
+# lemond (rc13's libstdc++) fails here, not on a user's PC.
+real_engine() {
+  local gaia="$1" rc=0
+  [ -x "${gaia}" ] || die "no packaged gaia at '${gaia}' to start the engine with"
+  env -u LEMONADE_BASE_URL "${gaia}" lemonade embedded start --timeout 180 || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "--- lemond.log (last 60 lines) ---"
+    tail -n 60 "${GAIA_HOME}/lemonade/lemond.log" 2>/dev/null || echo "(no lemond.log)"
+    die "the packaged gaia could not start its real Lemonade (exit ${rc})"
+  fi
+  env -u LEMONADE_BASE_URL "${gaia}" lemonade embedded status
+  "${gaia}" lemonade embedded stop || die "\`gaia lemonade embedded stop\` failed after a good start"
+}
+
+# The reporter of rc13's bug runs Fedora, where nothing else starts the
+# packaged gaia: install it with install.sh in the container, then start its
+# real Lemonade there, with the libraries a Fedora desktop has.
+fedora_engine() {
+  local tag rc=0
+  tag="$(rel "d['tag']")"
+  cp "${REPO}/installer/scripts/install.sh" "${WORK}/install.sh"
+  # shellcheck disable=SC2046  # one package per word
+  docker exec gaia-fedora dnf install -y --setopt=install_weak_deps=False \
+    $(grep -v '^#' "${REPO}/installer/core/fedora-engine-packages.txt") >/dev/null \
+    || die "could not prepare the Fedora container"
+  docker exec -e HOME=/root -e GAIA_RELEASE_TAG="${tag}" gaia-fedora sh /work/install.sh \
+    || die "install.sh failed in the Fedora container"
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded start --timeout 180 || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "--- lemond.log (last 60 lines) ---"
+    docker exec gaia-fedora tail -n 60 /root/.gaia/lemonade/lemond.log 2>/dev/null || echo "(no lemond.log)"
+    die "the packaged gaia could not start its real Lemonade on Fedora (exit ${rc})"
+  fi
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded status
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded stop \
+    || die "\`gaia lemonade embedded stop\` failed after a good start"
+}
+
 # ── install.sh ────────────────────────────────────────────────────────────────
 script_pins_release() { grep -q 'GAIA_RELEASE_TAG' "${REPO}/installer/scripts/install.sh"; }
 
@@ -489,6 +530,16 @@ health)
     agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
     install-sh) PATH="${GAIA_HOME}/bin:${PATH}" one_shot ;;
     *) one_shot ;;
+  esac
+  ;;
+
+engine)
+  case "${KIND}" in
+    # After quit, so the app's own Lemonade can't stand in for a fresh start.
+    agent-ui-deb|appimage) real_engine "$(backend_gaia)" ;;
+    install-sh) real_engine "${GAIA_HOME}/bin/gaia" ;;
+    tui-rpm) fedora_engine ;;
+    *) die "no packaged gaia to start the engine with for ${KIND}" ;;
   esac
   ;;
 
