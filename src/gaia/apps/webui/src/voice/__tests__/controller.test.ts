@@ -45,6 +45,7 @@ vi.mock('../audio', async (orig) => ({
             pushed: 0, played: 0, playing: false, onIdle: () => {},
             push: vi.fn(), end: vi.fn(), close: vi.fn(), level: () => 0,
             flush: vi.fn(() => fx.calls.push('flush')),
+            duck: vi.fn((on: boolean) => fx.calls.push(on ? 'duck' : 'unduck')),
         };
         fx.players.push(p);
         return p;
@@ -138,13 +139,52 @@ describe('voice mode turn loop', () => {
         expect(state().turnRunning).toBe(false);
     });
 
-    it('barge-in flushes playback locally before telling the server', async () => {
+    it('a sound over GAIA only lowers her voice; typing never cuts her off', async () => {
         await open();
         serve({ type: 'ready', speech: true });
         serve({ type: 'final', text: 'hello' });
         serve({ type: 'speaking', kind: 'spoken' });
         serve({ type: 'speech_started' });
-        expect(fx.calls).toEqual(['flush', 'interrupt']);
+        serve({ type: 'duck', on: true });
+        serve({ type: 'speech_stopped' });
+        serve({ type: 'ignored', reason: 'not_voiced' });
+        serve({ type: 'duck', on: false });
+        expect(fx.calls).toEqual(['duck', 'unduck']);
+        expect(state().phase).toBe('speaking');
+        expect(state().log.filter((r) => r.kind === 'user')).toHaveLength(1);
+    });
+
+    it('a noise while nobody is talking sends nothing and goes back to listening', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'speech_started' });
+        serve({ type: 'speech_stopped' });
+        expect(state().phase).toBe('thinking');
+        serve({ type: 'ignored', reason: 'not_words' });
+        expect(state().phase).toBe('listening');
+        expect(h.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it('a trailing half-sentence keeps listening instead of sending', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'speech_started' });
+        serve({ type: 'speech_stopped' });
+        serve({ type: 'holding', text: 'find the invoices and' });
+        expect(state()).toMatchObject({ phase: 'listening', heard: 'find the invoices and' });
+        expect(h.sendTurn).not.toHaveBeenCalled();
+        serve({ type: 'final', text: 'find the invoices and total them' });
+        expect(h.sendTurn).toHaveBeenCalledWith('find the invoices and total them', expect.anything());
+    });
+
+    it('real speech over GAIA stops her when the server says so', async () => {
+        await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'hello' });
+        serve({ type: 'speaking', kind: 'spoken' });
+        serve({ type: 'speech_started' });
+        serve({ type: 'barge_in' });
+        expect(fx.calls).toEqual(['flush']);
         expect(state().phase).toBe('listening');
         // The agent keeps working; only Stop cancels it.
         expect(state().turnRunning).toBe(true);

@@ -56,7 +56,9 @@ def test_backchannels(text):
     assert is_backchannel(text)
 
 
-@pytest.mark.parametrize("text", ["stop", "no wait", "yeah but what about Tuesday", "", "okay stop"])
+@pytest.mark.parametrize(
+    "text", ["stop", "no wait", "yeah but what about Tuesday", "", "okay stop"]
+)
 def test_not_backchannels(text):
     assert not is_backchannel(text)
 

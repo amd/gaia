@@ -38,6 +38,15 @@ export type ServerEvent =
     | { type: 'spoken_piece'; kind: SpeakKind; text: string }
     | { type: 'speaking_done' }
     | { type: 'speech_stopped_by_user' }
+    /** A sound came in over GAIA's voice: lower it (on) or bring it back. */
+    | { type: 'duck'; on: boolean }
+    /** The user took the floor: GAIA's speech has been dropped. */
+    | { type: 'barge_in' }
+    /** What was said so far sounds unfinished; more is being waited for. */
+    | { type: 'holding'; text: string }
+    /** A sound that was not speech (typing, a cough); nothing was sent. */
+    | { type: 'ignored'; reason: string }
+    | { type: 'timing'; heard_ms: number; think_ms: number; voice_ms: number; total_ms: number }
     | { type: 'flush' }
     | { type: 'limit'; seconds?: number }
     | { type: 'error'; code: VoiceErrorCode; message: string; detail?: string }

@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, List, Optional, Protocol
+from typing import Awaitable, Callable, Deque, List, Optional, Protocol
 
 import numpy as np
 
@@ -24,6 +25,13 @@ from gaia.voice.chunker import ClauseChunker, first_sentence
 from gaia.voice.errors import VoiceError
 from gaia.voice.lemonade import LemonadeTarget, require_downloaded
 from gaia.voice.listener import RealtimeListener
+from gaia.voice.noise import (
+    BARGE_VOICED_MS,
+    MIN_VOICED_MS,
+    SpeechMeter,
+    is_filler,
+    is_noise_text,
+)
 from gaia.voice.turns import Decision, TurnTaker
 
 log = get_logger(__name__)
@@ -32,6 +40,8 @@ EventSink = Callable[[dict], Awaitable[None]]
 FRAME_MS = 100
 LEVEL_INTERVAL = 0.05
 MAX_DICTATION_SECONDS = 300
+#: A lone "okay" or "so" with less voiced sound than this was a noise.
+FILLER_VOICED_MS = 350
 PURPOSES = ("dictation", "voice")
 SPEAK_KINDS = ("spoken", "status")
 
@@ -59,6 +69,7 @@ class VoiceOptions:
     silence_ms: int = 500
     hands_free: bool = True
     speak: bool = True  # False for non-English voice languages
+    english: bool = True  # the recognizer is expected to return English
 
     def __post_init__(self):
         if self.purpose not in PURPOSES:
@@ -115,6 +126,10 @@ class VoiceSession:
         self._limit_sent = False
         self.speaking = False
         self._turns = TurnTaker()
+        self._meter = SpeechMeter()
+        # Voiced milliseconds of utterances whose transcript is still to come.
+        self._voiced: Deque[int] = deque()
+        self._sustained = False
         self._hold: Optional[asyncio.Task] = None
         self._duck: Optional[asyncio.Task] = None
         # Stage marks of the turn in flight, for the timing event.
@@ -184,6 +199,16 @@ class VoiceSession:
                 await self.commit()
             return
         await self._listener.send_pcm16(frame)
+        samples = pcm.pcm16_to_float(frame)
+        self._meter.feed(samples)
+        if (
+            self.speaking
+            and not self._sustained
+            and self._meter.voiced_ms >= BARGE_VOICED_MS
+        ):
+            # Real talking over GAIA stops her now, before the words are known.
+            self._sustained = True
+            await self._apply(self._turns.sustained_speech())
         now = time.monotonic()
         if now - self._last_level >= LEVEL_INTERVAL:
             self._last_level = now
@@ -191,7 +216,7 @@ class VoiceSession:
                 {
                     "type": "level",
                     "source": "mic",
-                    "value": round(pcm.level(pcm.pcm16_to_float(frame)), 3),
+                    "value": round(pcm.level(samples), 3),
                 }
             )
 
@@ -265,18 +290,52 @@ class VoiceSession:
         kind = event["type"]
         if kind == "speech_started":
             self._cancel("_hold")
+            self._meter.begin()
+            self._sustained = False
             await self._emit(event)
             await self._apply(self._turns.speech_started(self.speaking))
         elif kind == "partial":
             await self._emit(event)
             await self._apply(self._turns.partial(event.get("text", ""), self.speaking))
         elif kind == "speech_stopped":
+            self._voiced.append(self._meter.end())
             self._marks = {"stopped": time.monotonic()}
             await self._emit(event)
         elif kind == "final":
-            await self._apply(self._turns.final(event.get("text", ""), self.speaking))
+            text = event.get("text", "")
+            voiced = self._voiced.popleft() if self._voiced else self._meter.end()
+            reason = self._noise_reason(text, voiced)
+            log.info(
+                "voice: heard %d chars, %d ms voiced: %s",
+                len(text),
+                voiced,
+                reason or "speech",
+            )
+            if reason:
+                await self._emit({"type": "ignored", "reason": reason})
+                await self._apply(self._turns.noise())
+                await self._rest()
+                return
+            await self._apply(self._turns.final(text, self.speaking))
         else:
             await self._emit(event)
+
+    def _noise_reason(self, text: str, voiced_ms: int) -> Optional[str]:
+        """Why this final is not the user speaking, or None when it is."""
+        if not text.strip():
+            return "silence"
+        if is_noise_text(text, english=self.options.english):
+            return "not_words"
+        if voiced_ms < MIN_VOICED_MS:
+            return "not_voiced"
+        if is_filler(text) and voiced_ms < FILLER_VOICED_MS:
+            return "filler"
+        return None
+
+    async def _rest(self) -> None:
+        """After a sound that was nothing: a held half-sentence keeps its clock."""
+        if self._turns.holding:
+            await self._apply(self._turns.timeout())
 
     async def _apply(self, decision: Decision) -> None:
         if decision.duck is not None:

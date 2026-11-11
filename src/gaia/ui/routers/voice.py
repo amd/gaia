@@ -307,6 +307,7 @@ async def voice_session(websocket: WebSocket) -> None:
             silence_ms=config.voice_silence_ms,
             hands_free=config.voice_turn_taking == "hands_free",
             speak=language == "en",
+            english=language == "en",
         )
         return VoiceSession(
             target,

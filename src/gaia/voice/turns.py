@@ -142,6 +142,21 @@ class TurnTaker:
         decision.turn = self._take()
         return decision
 
+    @property
+    def holding(self) -> bool:
+        """Whether part of a turn is being held for more."""
+        return bool(self._segments)
+
+    def sustained_speech(self) -> Decision:
+        """Voiced sound has gone on long enough over GAIA to be someone talking."""
+        if self._ducked and not self._barged:
+            return self._barge()
+        return Decision()
+
+    def noise(self) -> Decision:
+        """What was heard was not speech: nothing changes hands."""
+        return self._unduck()
+
     def timeout(self) -> Decision:
         """The hold ran out with nothing more said."""
         if not self._segments:
