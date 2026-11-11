@@ -53,7 +53,6 @@ BACKENDS = [
         "claude",
         True,
     ),
-    ("openai", {"model": "gpt-4o", "use_openai": True}, "openai", True),
 ]
 
 
@@ -158,7 +157,6 @@ def _agent(model: str, use_claude: bool = False, llm_client=None) -> ChatAgent:
         agent.library_documents = []
         chat_config = MagicMock()
         chat_config.use_claude = use_claude
-        chat_config.use_chatgpt = False
         agent.chat = MagicMock()
         agent.chat.config = chat_config
         agent.chat.effective_model = model
@@ -221,21 +219,6 @@ def test_the_prompt_composes_before_the_chat_client_exists():
         agent._use_claude = False
 
     assert "WHERE THIS SESSION IS PROCESSED" in agent._get_system_prompt()
-
-
-def test_an_openai_session_is_not_described_as_local_before_the_client_exists():
-    """The prompt can be composed during MCP registration, before AgentSDK."""
-    cfg = ChatAgentConfig(rag_documents=[], streaming=False, silent_mode=True)
-    cfg.use_chatgpt = True
-    cfg.model_id = "gpt-4o"
-    with patch("gaia.agents.base.agent.Agent.__init__", return_value=None):
-        agent = ChatAgent.__new__(ChatAgent)
-        agent.config = cfg
-        agent.rag = type("R", (), {"indexed_files": set()})()
-        agent.library_documents = []
-
-    assert agent._inference_location().provider == "openai"
-    assert "a personal AI running locally" not in agent._get_system_prompt()
 
 
 def test_a_claude_session_names_the_claude_model_before_the_client_exists():
@@ -309,3 +292,72 @@ def test_the_local_sentence_claims_only_gaias_own_routing():
     described = resolve_inference_location("Gemma-4-E4B-it-GGUF").describe()
     assert "GAIA is not sending" in described
     assert "nothing in this conversation goes" not in described
+
+
+# ---------------------------------------------------------------------------
+# A /model switch rebuilds the prompt from the client it just built
+# ---------------------------------------------------------------------------
+
+
+class _SwitchableChat:
+    """The AgentSDK fields a ``/model`` switch reads and moves."""
+
+    def __init__(self, model: str):
+        self.config = MagicMock()
+        self.config.use_claude = False
+        self.config.use_chatgpt = False
+        self.config.model = model
+        self.config.claude_model = None
+        self.config.base_url = "http://127.0.0.1:13305/api/v1"
+        self.config.system_prompt = None
+        self.llm_client = None
+
+    @property
+    def effective_model(self) -> str:
+        return self.config.model
+
+
+def test_a_switch_to_a_discovered_cloud_model_names_its_provider_in_the_prompt(
+    monkeypatch,
+):
+    """``custom.`` is no provider prefix GAIA knows; only the catalog says the
+    model is served by Fireworks. The prompt rebuilt during the switch is what
+    the model reads on the next turn, so it must name Fireworks too, not say
+    the session runs locally."""
+    from gaia_agent import stdio
+
+    from gaia.llm import lemonade_client
+
+    model = "custom.gemma-4-31b-it"
+    catalog = {
+        "data": [
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            }
+        ]
+    }
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", frozenset())
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "_send_request",
+        lambda self, method, url, data=None, timeout=None: catalog,
+    )
+
+    agent = _agent("Gemma-4-E4B-it-GGUF")
+    agent.chat = _SwitchableChat("Gemma-4-E4B-it-GGUF")
+    agent._use_claude = False
+    agent.model_id = "Gemma-4-E4B-it-GGUF"
+    agent.apply_model_features = lambda model_id: None
+    agent.unload_skills_needing_withheld_tools = lambda: []
+    rebuilt = []
+    agent.rebuild_system_prompt = lambda: rebuilt.append(agent._get_system_prompt())
+
+    stdio._apply_local_switch(agent, model)
+
+    assert len(rebuilt) == 1
+    assert "Fireworks AI" in rebuilt[0]
+    assert "a personal AI running locally on the user's machine" not in rebuilt[0]

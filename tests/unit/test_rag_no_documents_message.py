@@ -7,7 +7,7 @@ indexed" led the model to tell the user their RAG index was empty while the
 Document library held the very files they asked about.
 
 ChatAgent's own message is pinned in
-hub/agents/chat/python/tests/test_no_documents_message.py.
+hub/agents/gaia/python/tests/test_no_documents_message.py.
 """
 
 from types import SimpleNamespace

@@ -61,21 +61,6 @@ npm run build                                  # required before `gaia chat --ui
 
 `gaia chat --ui` expects the Vite build output — if missing, the UI won't load.
 
-## Standalone app pattern (legacy)
-
-```
-src/gaia/apps/<app>/webui/
-├── src/
-│   ├── main.js          # Electron main
-│   ├── preload.js       # IPC bridge
-│   └── renderer/        # UI
-├── public/
-├── package.json
-└── forge.config.js
-```
-
-These use Electron Forge. Shared assets live in `src/gaia/apps/_shared/`.
-
 ## Key backend touchpoints
 
 | Frontend call | Backend |

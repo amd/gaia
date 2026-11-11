@@ -72,7 +72,8 @@ PACKAGE_DATA = [
 #: through the daemon. The chat paths relay to them when they can't be imported.
 NOT_SHIPPED = ["gaia_agent", "gaia_agent_email"]
 
-COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic"]
+# reportlab: the pdf skills' scripts need it, and no gaia module imports it.
+COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic", "reportlab"]
 COLLECT_ALL = ["faiss"]
 COPY_METADATA = ["amd-gaia", "keyring"]
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]

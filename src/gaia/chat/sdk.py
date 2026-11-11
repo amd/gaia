@@ -68,9 +68,8 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
-        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+        True  # Use local LLM (computed as not use_claude if not explicitly set)
     )
     claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
@@ -141,7 +140,6 @@ class AgentSDK:
         # Initialize LLM client - factory auto-detects provider and validates
         self.llm_client = create_client(
             use_claude=self.config.use_claude,
-            use_openai=self.config.use_chatgpt,
             model=(
                 self.config.claude_model
                 if self.config.use_claude
@@ -1277,82 +1275,6 @@ class AgentSDK:
         # This is conservative to avoid overrunning context
         return len(text) // 4
 
-    def summarize_conversation_history(self, max_history_tokens: int) -> Optional[str]:
-        """
-        Summarize conversation history when it exceeds the token budget.
-
-        Args:
-            max_history_tokens: Maximum allowed tokens for stored history
-
-        Returns:
-            The generated summary (when summarization occurred) or None
-        """
-        if max_history_tokens <= 0:
-            raise ValueError("max_history_tokens must be positive")
-
-        history_entries = list(self.chat_history)
-        if not history_entries:
-            return None
-
-        history_text = "\n".join(history_entries)
-        history_tokens = self._estimate_tokens(history_text)
-
-        if history_tokens <= max_history_tokens:
-            print(
-                "History tokens are less than max history tokens, so no summarization is needed"
-            )
-            return None
-
-        print(
-            "History tokens are greater than max history tokens, so summarization is needed"
-        )
-
-        self.log.info(
-            "Conversation history (~%d tokens) exceeds budget (%d). Summarizing...",
-            history_tokens,
-            max_history_tokens,
-        )
-
-        summary_prompt = (
-            "Summarize the following conversation between a user and the GAIA web "
-            "development agent. Preserve:\n"
-            "- The app requirements and inferred schema/data models\n"
-            "- Key implementation details already completed\n"
-            "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
-            "- Any constraints or preferences the user emphasized\n\n"
-            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context.\n\n"
-            "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
-        )
-
-        # Use AgentSDK's send() so history formatting/ordering is handled consistently
-        # by the same path used for normal chat turns.
-        original_history = list(self.chat_history)
-        try:
-            chat_response = self.send(
-                summary_prompt,
-                max_tokens=min(self.config.max_tokens, 2048),
-                timeout=1200,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self.log.error("Failed to summarize conversation history: %s", exc)
-            # Restore history to avoid dropping context on failure
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        summary = chat_response.text.strip() if chat_response else ""
-        if not summary:
-            self.log.warning("Summarization returned empty content; keeping history.")
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        self.chat_history.clear()
-        self.chat_history.append(
-            f"{self.config.assistant_name}: Conversation summary so far:\n{summary}"
-        )
-        return summary
-
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """
         Truncate RAG context to fit within token budget.
@@ -1603,6 +1525,20 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
+_SESSION_OVERRIDE_KEYS = frozenset(
+    {
+        "model",
+        "max_tokens",
+        "system_prompt",
+        "max_history_length",
+        "show_stats",
+        "logging_level",
+        "use_claude",
+        "assistant_name",
+    }
+)
+
+
 class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
@@ -1648,6 +1584,18 @@ class AgentSession:
         Returns:
             AgentSDK instance for the session
         """
+        unknown = sorted(set(config_kwargs) - _SESSION_OVERRIDE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"create_session() got unexpected keyword argument(s): "
+                f"{', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
+            )
+        if config is not None and config_kwargs:
+            raise TypeError(
+                "create_session() takes either config or keyword overrides, "
+                f"not both (got config and {', '.join(sorted(config_kwargs))})."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(
@@ -1669,9 +1617,6 @@ class AgentSession:
                 ),
                 use_claude=config_kwargs.get(
                     "use_claude", self.default_config.use_claude
-                ),
-                use_chatgpt=config_kwargs.get(
-                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name

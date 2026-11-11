@@ -235,6 +235,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     enable_scratchpad: bool = True
     enable_browser: bool = True
 
+    # Qwen3.6's template re-renders earlier steps with their reasoning; dropping
+    # it at the next request re-reads the whole previous tool turn uncached.
+    resend_reasoning_across_requests: bool = True
+
     # Which declared skill set to load. None = load nothing (the #2848 default);
     # resolution order is explicit arg -> env -> manifest default.
     skill_set: Optional[str] = None
@@ -402,6 +406,9 @@ class GaiaAgent(
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
         {"install_skill", "capture_skill", "remove_skill"}
     )
+    # The calendar and send-email skills ship in this agent's bundled skills.
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = True
+    BUNDLES_SEND_EMAIL_SKILL: ClassVar[bool] = True
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         if config is not None and kwargs:

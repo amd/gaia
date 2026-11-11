@@ -54,8 +54,8 @@ drag-select with no banner (today it captures the mouse silently).
 
 The TUI structurally sniffs a `diff` field out of tool results because the
 file-edit tools never set `render`. The web Agent UI renders nothing for the
-same edit. Register the file-edit tools in `_render_tool_map`, emit
-`render: "diff"` with `{title, unified}`, teach `ChatView.tsx` the type, and
+same edit. Register the file-edit tools in `SSEOutputHandler._RENDER_TOOL_TO_LANG`
+(the handler then emits `render: "diff"` with `{title, unified}` itself), teach `ChatView.tsx` the type, and
 drop the sniff. Contract §4.3 addition — needs the doc updated in the same
 change.
 
