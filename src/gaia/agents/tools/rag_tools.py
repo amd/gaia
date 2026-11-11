@@ -211,6 +211,9 @@ def _index_within_budget(
             # Attaching it may have failed unattended; the caller attaches it now.
             _INDEX_FAILURES.get(rag, {}).pop(key, None)
             return last.result, last
+        if job is None and last is not None and since is not None:
+            # Ended before this ask: no later ask can reuse it either.
+            _INDEX_ENDED.get(rag, {}).pop(key, None)
         if job is None:
             job = _IndexJob(path)
             jobs[key] = job

@@ -238,11 +238,13 @@ def test_an_index_that_ended_before_the_ask_does_not_count(tmp_path, slow_rag):
     doc = tmp_path / "big.pdf"
     doc.write_bytes(b"%PDF-1.4")
     release.set()
-    result, job = rag_tools._index_within_budget(rag, str(doc))
+    result, job = rag_tools._index_within_budget(rag, str(doc), budget=CALL_DEADLINE_S)
     assert result["success"] and job.ended is not None
 
     # The file changed after that index: asking now must index it again.
-    again, _ = rag_tools._index_within_budget(rag, str(doc), since=time.perf_counter())
+    again, _ = rag_tools._index_within_budget(
+        rag, str(doc), budget=CALL_DEADLINE_S, since=time.perf_counter()
+    )
     assert again["success"]
     assert rag.index_document.call_count == 2
 
