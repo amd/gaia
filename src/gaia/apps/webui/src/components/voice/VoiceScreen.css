@@ -713,3 +713,11 @@
         animation: none;
     }
 }
+
+/* A picture a tool made, under its row. */
+.vs-shot {
+    display: block;
+    max-width: min(100%, 360px);
+    margin-block-start: 8px;
+    border-radius: 10px;
+}

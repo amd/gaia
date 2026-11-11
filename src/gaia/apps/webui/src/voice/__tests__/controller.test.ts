@@ -62,7 +62,7 @@ vi.mock('../../services/voiceApi', () => ({
     downloadVoiceModel: vi.fn(async (model: string) => ({ model, downloaded: true })),
 }));
 
-import { closeVoice, openVoice, primaryAction, type VoiceHost } from '../controller';
+import { afterStopWord, closeVoice, imageIn, openVoice, primaryAction, type VoiceHost } from '../controller';
 
 const state = () => useVoiceStore.getState();
 const socket = () => fx.sockets[fx.sockets.length - 1];
@@ -299,7 +299,7 @@ describe('voice mode turn loop', () => {
         expect(oldSocket.speak).not.toHaveBeenCalled();
     });
 
-    it('new words while GAIA is thinking stop that turn and are sent next', async () => {
+    it('"wait" while GAIA is thinking stops that turn, and what follows is sent next', async () => {
         const h = await open();
         serve({ type: 'ready', speech: true });
         serve({ type: 'final', text: 'check my calendar' });
@@ -309,8 +309,48 @@ describe('voice mode turn loop', () => {
         // The stopped turn ends; what was said goes next, with no "stopped" notice.
         tap!.done({ type: 'done', cancelled: true } as StreamEvent);
         expect(h.sendTurn).toHaveBeenCalledTimes(2);
-        expect(h.sendTurn.mock.calls[1][0]).toBe('actually, check my email');
+        expect(h.sendTurn.mock.calls[1][0]).toBe('check my email');
         expect(state().log.some((r) => r.kind === 'note')).toBe(false);
+    });
+
+    it('talk in the room while GAIA works never cancels the work; it is sent after', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'draw a heron' });
+        tap!.agentEvent({ type: 'tool_start', tool: 'generate_image' } as StreamEvent);
+        serve({ type: 'final', text: 'she is making a picture for you' });
+        expect(h.stopTurn).not.toHaveBeenCalled();
+        expect(state().turnRunning).toBe(true);
+        tap!.done({ type: 'done' } as StreamEvent);
+        expect(h.sendTurn).toHaveBeenCalledTimes(2);
+        expect(h.sendTurn.mock.calls[1][0]).toBe('she is making a picture for you');
+    });
+
+    it('a bare "stop" only stops', async () => {
+        const h = await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'draw a heron' });
+        serve({ type: 'final', text: 'No, wait, stop.' });
+        expect(h.stopTurn).toHaveBeenCalledOnce();
+        tap!.done({ type: 'done', cancelled: true } as StreamEvent);
+        expect(h.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it('a picture a tool made is shown under its row', async () => {
+        await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'draw a heron' });
+        tap!.agentEvent({ type: 'tool_start', tool: 'generate_image' } as StreamEvent);
+        tap!.agentEvent({ type: 'tool_result', summary: 'Saved C:\\Users\\me\\.gaia\\cache\\sd\\images\\A teal heron_1.png', success: true } as StreamEvent);
+        const row = state().log.find((r) => r.kind === 'tool');
+        expect(row?.image).toBe('C:\\Users\\me\\.gaia\\cache\\sd\\images\\A teal heron_1.png');
+    });
+
+    it('a failed tool or a result without a picture shows none', async () => {
+        expect(imageIn('3 events found')).toBeUndefined();
+        expect(imageIn('Saved /home/me/.gaia/cache/sd/images/heron.webp')).toBe('/home/me/.gaia/cache/sd/images/heron.webp');
+        expect(afterStopWord('nowhere near done')).toBeNull();
+        expect(afterStopWord('Actually, make it a cat')).toBe('make it a cat');
     });
 
     it('"mm-hm" while GAIA is thinking changes nothing', async () => {
