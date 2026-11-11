@@ -3293,6 +3293,9 @@ def _turn_inference_stats(
         input_tokens = answer_event.get("input_tokens")
         if isinstance(input_tokens, int) and input_tokens > 0:
             stats["input_tokens"] = input_tokens
+            cached = answer_event.get("cached_tokens")
+            if isinstance(cached, int) and cached >= 0:
+                stats["cached_tokens"] = cached
     steps = answer_event.get("steps")
     if isinstance(steps, int) and steps > 0:
         stats["steps"] = steps
@@ -4118,7 +4121,10 @@ async def _get_chat_response(
 
         # Without counts the turn is still recorded, as one of unknown cost.
         counts = (
-            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            {
+                k: result.get(k)
+                for k in ("input_tokens", "output_tokens", "cached_tokens")
+            }
             if isinstance(result, dict)
             else {}
         )

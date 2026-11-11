@@ -93,6 +93,26 @@ def test_a_cloud_turn_is_recorded_at_list_price(db):
     assert report["by_model"][0]["model"] == FLASH
 
 
+def test_the_month_prices_cached_input_as_each_answer_does(db):
+    """The composer's "today" and Settings' month differed ninefold on DeepSeek:
+    one priced cached input at the cached rate, the other at full price."""
+    model = "fireworks.deepseek-v4p1-flash"
+    stats = {"input_tokens": 100_000, "cached_tokens": 90_000, "output_tokens": 2_000}
+    spending.record_turn(db, model, stats)
+    assert spending.month_report(db)["total_usd"] == pytest.approx(
+        price(model, 100_000, 90_000, 2_000), abs=1e-4
+    )
+
+
+def test_the_turn_stats_keep_the_cached_tokens_the_month_is_priced_on():
+    from gaia.ui._chat_helpers import _turn_inference_stats
+
+    stats = _turn_inference_stats(
+        None, {"tokens": 2_000, "input_tokens": 100_000, "cached_tokens": 90_000}
+    )
+    assert stats["cached_tokens"] == 90_000
+
+
 def test_local_turns_cost_nothing_and_are_not_recorded(db):
     _turn(db, model="Gemma-4-E4B-it-GGUF")
     assert spending.month_report(db)["turns"] == 0
