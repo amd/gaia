@@ -12,8 +12,6 @@ import time
 
 import numpy as np
 
-from gaia.audio.sounddevice_hint import sounddevice_missing_message
-
 try:
     import sounddevice as sd
 
@@ -30,6 +28,7 @@ from gaia.audio.lemonade_tts import (
     LemonadeTTSError,
     write_wav,
 )
+from gaia.audio.sounddevice_hint import sounddevice_missing_message
 from gaia.logger import get_logger
 
 
