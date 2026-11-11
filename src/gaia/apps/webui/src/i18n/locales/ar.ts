@@ -1032,7 +1032,6 @@ const messages: Messages = {
     'setup.pc.step': 'هذا الجهاز',
     'setup.pc.backend.installed': 'مثبتة',
     'setup.pc.backend.available': 'تُنزَّل عند الحاجة',
-    'setup.pc.backend.unsupported': 'غير مدعومة هنا',
     'setup.gpu.title': 'ذاكرة GPU',
     'setup.gpu.lede': 'اختياري. لا يغيّر GAIA شيئًا ما لم تختر حجمًا جديدًا.',
     'setup.models.step': 'النماذج',
@@ -1522,7 +1521,6 @@ const messages: Messages = {
     'engine.openLog': 'فتح ملف السجل',
 
     // The GPU memory step and Settings section
-    'gpu.title': 'امنح GPU ذاكرة أكبر',
     'gpu.settingsTitle': 'ذاكرة GPU',
     'gpu.body': 'يتشارك هذا الجهاز {total} بين المعالج (CPU) والرسومات (GPU). لدى الـGPU الآن {gpu}. تعمل نماذج الذكاء الاصطناعي على الـGPU، لذا فالمزيد هنا يعني نماذج أكبر.',
     'gpu.split.aria': 'تقسيم الذاكرة: المعالج {cpu}، GPU {gpu}',

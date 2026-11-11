@@ -7,7 +7,6 @@ import userEvent from '@testing-library/user-event';
 import {
     getUnsupportedCategory,
     isExtensionSupported,
-    UnsupportedFeatureBanner,
     UploadErrorToast,
 } from '../UnsupportedFeature';
 
@@ -85,47 +84,6 @@ describe('isExtensionSupported', () => {
 });
 
 // ── Component render tests ─────────────────────────────────────────────
-
-describe('UnsupportedFeatureBanner', () => {
-    it('renders title and description', () => {
-        render(
-            <UnsupportedFeatureBanner
-                title="Image files not supported"
-                description="Cannot index image files for text search."
-            />
-        );
-
-        expect(screen.getByText('Image files not supported')).toBeInTheDocument();
-        expect(screen.getByText('Cannot index image files for text search.')).toBeInTheDocument();
-    });
-
-    it('renders alternatives when provided', () => {
-        render(
-            <UnsupportedFeatureBanner
-                title="Video files not supported"
-                description="Video files cannot be indexed."
-                alternatives={['Extract subtitles first', 'Use gaia talk']}
-            />
-        );
-
-        expect(screen.getByText('Extract subtitles first')).toBeInTheDocument();
-        expect(screen.getByText('Use gaia talk')).toBeInTheDocument();
-    });
-
-    it('renders GitHub feature request link', () => {
-        render(
-            <UnsupportedFeatureBanner
-                title="Test"
-                description="Test description"
-                featureTitle="Support XYZ"
-            />
-        );
-
-        const link = screen.getByRole('link', { name: /request it on github/i });
-        expect(link).toHaveAttribute('href', expect.stringContaining('github.com/amd/gaia'));
-        expect(link).toHaveAttribute('target', '_blank');
-    });
-});
 
 describe('UploadErrorToast', () => {
     it('renders file type error with dismiss button', async () => {

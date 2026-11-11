@@ -146,42 +146,6 @@
 .mem-range-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
 .mem-range-tab.active { background: var(--accent-fill); color: var(--accent-fill-text); }
 
-/* Global memory-disabled banner */
-.mem-disabled-banner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    margin-bottom: 20px;
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-    border-radius: var(--radius-md);
-    font-size: 12px;
-    color: var(--accent);
-    font-family: var(--font-sans);
-}
-.mem-disabled-banner svg { flex-shrink: 0; }
-.mem-disabled-banner span { flex: 1; }
-.mem-disabled-banner-action {
-    flex-shrink: 0;
-    padding: 4px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-radius: var(--radius-md);
-    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-    background: transparent;
-    color: var(--accent);
-    cursor: pointer;
-    transition: all var(--duration) var(--ease);
-}
-.mem-disabled-banner-action:hover {
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    border-color: var(--accent);
-}
-
 /* ── 1. Header Stat Cards ────────────────────────────────────── */
 .mem-stat-cards {
     display: grid;
@@ -629,25 +593,6 @@
 .mem-page-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
-}
-
-/* Add Memory button */
-.mem-add-btn {
-    display: inline-flex;
-    align-items: center; gap: 6px;
-    padding: 7px 16px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-md);
-    font-size: 12px;
-    font-family: var(--font-mono);
-    color: var(--text-secondary);
-    transition: all var(--duration) var(--ease);
-    margin-top: 8px;
-}
-.mem-add-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-    border-style: solid;
 }
 
 /* ── 4. Tool Performance Table ───────────────────────────────── */
@@ -1269,26 +1214,6 @@
 
 /* ── DB size footer ──────────────────────────────────────────── */
 /* ── Settings section ────────────────────────────────────────── */
-.mem-settings-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 10px 0;
-}
-.mem-settings-label {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    font-size: 13px;
-    color: var(--text-primary);
-}
-.mem-settings-hint {
-    font-size: 11px;
-    color: var(--text-muted);
-    max-width: 480px;
-}
-
 /* Toggle switch */
 .mem-toggle {
     position: relative;
@@ -1304,17 +1229,6 @@
 }
 .mem-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
 .mem-toggle-on { background: var(--accent-green); }
-.mem-toggle-knob {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--switch-knob);
-    transition: transform var(--duration) var(--ease);
-}
-.mem-toggle-on .mem-toggle-knob { transform: translateX(18px); }
 
 /* New-style setting rows (memory-enabled, delete-all) */
 .mem-setting-row {

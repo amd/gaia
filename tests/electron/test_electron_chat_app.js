@@ -1414,7 +1414,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone styles', () => {
-      expect(sharedCss).toContain('.danger-divider');
       expect(sharedCss).toContain('.danger-warning');
     });
   });
