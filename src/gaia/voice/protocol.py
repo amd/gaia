@@ -8,6 +8,7 @@ Client → server (JSON text frames):
     {"type": "speak_end"}            the spoken block is complete
     {"type": "interrupt"}            barge-in: drop queued and playing speech
     {"type": "commit"}               end the utterance now
+    {"type": "expect", "on": bool}   a yes/no answer is awaited: short words count
     {"type": "stop"}                 close the session
 Client → server (binary): PCM16 16 kHz mono mic frames, when the host has no
 microphone of its own.
@@ -77,6 +78,8 @@ async def run_voice_socket(
                 await session.interrupt()
             elif kind == "commit":
                 await session.commit()
+            elif kind == "expect":
+                session.expecting_answer = bool(command.get("on"))
             elif kind == "stop":
                 return
             else:

@@ -20,7 +20,7 @@ vi.mock('../socket', () => ({
     VoiceSocket: vi.fn(function (this: Record<string, unknown>, purpose: string, language: string, handlers: unknown) {
         const s = {
             purpose, language, handlers,
-            speak: vi.fn(), speakEnd: vi.fn(), commit: vi.fn(), close: vi.fn(), sendAudio: vi.fn(),
+            speak: vi.fn(), speakEnd: vi.fn(), commit: vi.fn(), close: vi.fn(), sendAudio: vi.fn(), expect: vi.fn(),
             interrupt: vi.fn(() => fx.calls.push('interrupt')),
         };
         fx.sockets.push(s);
@@ -75,6 +75,7 @@ function host(overrides: Partial<VoiceHost> = {}): VoiceHost & { sendTurn: Retur
     return {
         sendTurn: vi.fn((_text: string, t: VoiceTurnTap) => { tap = t; return true; }),
         stopTurn: vi.fn(),
+        answerPermission: vi.fn(() => true),
         ...overrides,
     } as never;
 }
@@ -238,13 +239,48 @@ describe('voice mode turn loop', () => {
         expect(h.sendTurn).toHaveBeenCalledWith('and the total?', expect.anything());
     });
 
-    it('says out loud when a permission card needs an answer', async () => {
-        await open();
+    it('asks for a permission out loud, and "yes" allows it without stopping the turn', async () => {
+        const h = await open(host({ answerPermission: vi.fn(() => true) }));
         serve({ type: 'ready', speech: true });
         serve({ type: 'final', text: 'clean up my downloads' });
         tap!.agentEvent({ type: 'permission_request', tool: 'run_shell_command' } as StreamEvent);
+        expect(socket().speak).toHaveBeenCalledWith('I need your OK for that. Yes or no?', 'status');
+        expect(socket().expect).toHaveBeenLastCalledWith(true);
+        serve({ type: 'final', text: 'Yes, go ahead.' });
+        expect(h.answerPermission).toHaveBeenCalledWith(true);
+        expect(h.stopTurn).not.toHaveBeenCalled();
+        expect(socket().expect).toHaveBeenLastCalledWith(false);
+        expect(state().turnRunning).toBe(true);
+    });
+
+    it('"no" denies the permission', async () => {
+        const h = await open(host({ answerPermission: vi.fn(() => true) }));
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'clean up my downloads' });
+        tap!.agentEvent({ type: 'permission_request', tool: 'run_shell_command' } as StreamEvent);
+        serve({ type: 'final', text: "No, don't." });
+        expect(h.answerPermission).toHaveBeenCalledWith(false);
+        expect(h.stopTurn).not.toHaveBeenCalled();
+    });
+
+    it('anything else while waiting for a yes or no asks again and keeps the turn', async () => {
+        const h = await open(host({ answerPermission: vi.fn(() => true) }));
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'clean up my downloads' });
+        tap!.agentEvent({ type: 'permission_request', tool: 'run_shell_command' } as StreamEvent);
+        serve({ type: 'final', text: 'what was that' });
+        expect(h.answerPermission).not.toHaveBeenCalled();
+        expect(h.stopTurn).not.toHaveBeenCalled();
+        expect(socket().speak).toHaveBeenLastCalledWith('Sorry, was that a yes or a no?', 'status');
+    });
+
+    it('a question card is still answered on screen', async () => {
+        await open();
+        serve({ type: 'ready', speech: true });
+        serve({ type: 'final', text: 'book it' });
+        tap!.agentEvent({ type: 'needs_input', request_id: 'q1' } as StreamEvent);
         expect(socket().speak).toHaveBeenCalledWith("I need your OK to go on. It's on screen.", 'status');
-        expect(state().log[state().log.length - 1]).toMatchObject({ kind: 'note' });
+        expect(socket().expect).not.toHaveBeenCalled();
     });
 
     it('a turn still streaming after voice mode closes writes nothing to the next session', async () => {

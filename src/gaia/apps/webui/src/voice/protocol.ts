@@ -58,6 +58,7 @@ export type ClientMessage =
     | { type: 'speak_end' }
     | { type: 'interrupt' }
     | { type: 'commit' }
+    | { type: 'expect'; on: boolean }
     | { type: 'stop' };
 
 /** A voice failure the screen shows: a stable code, plus what the server or browser said. */

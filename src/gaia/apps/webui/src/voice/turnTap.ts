@@ -35,8 +35,8 @@ export interface TurnTapOutput {
     statusLine: (text: string) => void;
     toolStarted: (step: AgentStep) => void;
     toolFinished: (result: string, ok: boolean) => void;
-    /** The turn is waiting on a permission card or a question. */
-    needsYou: () => void;
+    /** The turn is waiting on a permission prompt or a question card. */
+    needsYou: (kind: 'permission' | 'question') => void;
     /** The answer's detail so far, without the spoken block. */
     detail: (text: string) => void;
     finished: (outcome: TurnOutcome) => void;
@@ -128,7 +128,7 @@ export class VoiceTurnTap {
             return;
         }
         if (event.type === 'permission_request' || event.type === 'needs_input') {
-            this.out.needsYou();
+            this.out.needsYou(event.type === 'permission_request' ? 'permission' : 'question');
             return;
         }
         if (event.retracts_answer) this.restart();

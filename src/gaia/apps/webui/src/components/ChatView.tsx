@@ -1244,7 +1244,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return true;
         },
         stopTurn: () => handleStopRef.current(),
-    }), []);
+        answerPermission: (allow) => {
+            const prompt = selectSessionPermissionPrompt(sessionId)(useNotificationStore.getState());
+            if (!prompt) return false;
+            void useNotificationStore.getState().respondToPermission(prompt.id, allow ? 'allow' : 'deny');
+            return true;
+        },
+    }), [sessionId]);
     const openVoiceMode = useCallback(() => openVoice(sessionId, voiceHost, { phone }), [sessionId, voiceHost, phone]);
     useEffect(() => () => { if (useVoiceStore.getState().sessionId === sessionId) closeVoice(); }, [sessionId]);
     useEffect(() => { if (!isStreaming) chatIdle(); }, [isStreaming]);
