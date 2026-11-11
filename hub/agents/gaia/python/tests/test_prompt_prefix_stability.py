@@ -397,7 +397,8 @@ def test_an_embedder_that_dies_offers_every_tool(flagship, monkeypatch):
         for tool in model.requests[-1][1]
         for prop in tool["function"]["parameters"]["properties"].values()
     )
-    assert model.slots == [None, None, None]
+    # The full list, thin, is what the third slot was primed with.
+    assert model.slots == [None, FULL_TOOLS_SLOT, FULL_TOOLS_SLOT]
 
 
 def test_a_hosted_model_gets_every_tool_in_full(flagship, monkeypatch):

@@ -73,7 +73,11 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
-from gaia.agents.base.tool_loader import ToolLoader, format_tool_docs
+from gaia.agents.base.tool_loader import (
+    ToolLoader,
+    format_tool_docs,
+    thin_tool_schema,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
@@ -1303,12 +1307,33 @@ class ChatAgent(
 
     def _conversation_request_kwargs(self) -> Dict[str, Any]:
         """Continue on the primed slot once the session is on the full list."""
-        if not (self._dynamic_tools_active() and self.tool_loader.jumped):
+        if (
+            not self._thin_tool_schemas()
+            or getattr(self, "_memory_store", None) is None
+        ):
+            return {}
+        # A dead embedder also means the full list, the one that slot holds.
+        if not (self.tool_loader.jumped or self.tool_loader.session_disabled):
             return {}
         client = getattr(getattr(self, "chat", None), "llm_client", None)
         backend = getattr(client, "_backend", None)
         slots = backend.slot_count(self.model_id) if backend is not None else 1
         return {"id_slot": FULL_TOOLS_SLOT} if slots > FULL_TOOLS_SLOT else {}
+
+    def _history_tool_schemas(self):
+        """Budget history against the full list while the switch can still come.
+
+        A search mid-turn grows ``tools=`` after history was fitted.
+        """
+        if (
+            not self._dynamic_tools_active()
+            or self.tool_loader.jumped
+            or not self._uses_native_tool_calls()
+        ):
+            return super()._history_tool_schemas()
+        return [
+            thin_tool_schema(schema) for schema in self._build_openai_tool_schemas()
+        ]
 
     def _admit_skill_tools(self, names: List[str]) -> bool:
         """Put a just-loaded skill's tools on the list."""

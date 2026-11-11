@@ -554,7 +554,8 @@ def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
     ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
-    tools = getattr(agent, "_openai_tools", [])
+    budgeted = getattr(agent, "_history_tool_schemas", None)
+    tools = budgeted() if callable(budgeted) else getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
     return _budget_in_window(ctx, overhead, _reply_reserve(agent))
 

@@ -436,6 +436,15 @@ def test_memory_context_lowers_the_history_budget_by_its_size(monkeypatch):
     assert abs((plain - with_memory) - memory_tokens) <= 10
 
 
+def test_history_is_budgeted_against_the_tools_the_agent_reserves(monkeypatch):
+    monkeypatch.setattr(history, "context_window", lambda _agent: 8000)
+    agent = _budget_agent()
+    plain = history.history_budget(agent, "next question")
+    agent._history_tool_schemas = lambda: [{"name": "tool"}] * 200
+
+    assert history.history_budget(agent, "next question") < plain - 500
+
+
 def _fixed_token_counter(monkeypatch):
     # CI may lack tiktoken data and fall back to a larger estimate; pin the size.
     monkeypatch.setattr(history, "count_tokens", lambda text: len(text) // 4)

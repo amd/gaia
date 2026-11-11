@@ -4190,6 +4190,10 @@ Do NOT wrap conversational replies in JSON.
         )
         return schemas
 
+    def _history_tool_schemas(self):
+        """The tool schemas history is budgeted against."""
+        return self._openai_tools
+
     def _thin_tool_schemas(self) -> bool:
         """True when ``tools=`` carries thin schemas, with full docs on request.
 

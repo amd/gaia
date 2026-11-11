@@ -198,6 +198,7 @@ class TestOffStates:
         a = _active_agent(tool_loader=None)
         assert a._dynamic_tools_active() is False
         assert a._select_tools_for_turn("q") is None
+        assert a._conversation_request_kwargs() == {}
 
     def test_a_hosted_model_keeps_every_tool_in_full(self):
         a = _active_agent()
@@ -223,6 +224,7 @@ class TestOffStates:
     def test_memory_off_means_every_tool(self):
         a = _active_agent(_memory_store=None)
         assert a._dynamic_tools_active() is False
+        assert a._conversation_request_kwargs() == {}
         assert a._select_tools_for_turn("q") is None
 
     def test_a_dead_embedder_offers_every_tool_and_keeps_them_thin(self):
@@ -239,7 +241,23 @@ class TestOffStates:
         assert a._select_tools_for_turn("q") is None
         # Thinness must not change while a model is loaded.
         assert a._thin_tool_schemas() is True
-        assert a._conversation_request_kwargs() == {}
+        # Every tool, thin, is the list the third slot was primed with.
+        assert a._conversation_request_kwargs() == {"id_slot": FULL_TOOLS_SLOT}
+
+    def test_history_leaves_room_for_the_switch_until_it_happens(self):
+        a = _active_agent()
+        for entry in a._registry.values():
+            entry["parameters"] = {}
+        a._uses_native_tool_calls = lambda: True
+        a._apply_tool_filter(a._select_tools_for_turn("q"))
+        sent = [s["function"]["name"] for s in a._openai_tools]
+        budgeted = [s["function"]["name"] for s in a._history_tool_schemas()]
+        assert sent == ["c1"]
+        assert budgeted == ["c1", "d1", "d2"]
+
+        a.tool_loader.jump("search")
+        a._apply_tool_filter(a.tool_loader.offered(a._registry))
+        assert a._history_tool_schemas() == a._openai_tools
 
 
 # ── _select_tools_for_turn: what moves the session ────────────────────────
