@@ -55,7 +55,7 @@ Every row below was checked against the workflow or the code, not the docs. Runt
 | Linux Strix Halo (`test_linux_strix_halo.yml`) | User-reported Linux bugs on real hardware: memory guard, port reuse, idle stop, fresh install | Tags, dispatch | Linux Strix Halo | 3–90 min | No. #5169 rates it the best bugs-per-runner-hour of any layer |
 | Lemonade restart harness (`util/lemonade_restart_harness.py`) | Kills, hangs and idle-stops a real `lemond`; can stress 16 sessions | **Hand-run only** | Any | ~7 min | No (allowlisted out of CI) |
 | Live Lemonade contract tests | `/health`, `/tokenize`, residency, gateway, broker load races | **Run nowhere** (`util/test_lane_allowlist.yml`) | Needs live Lemonade | Minutes | No |
-| Agent UI stress (`tests/stress/test_agent_ui_stress.py`) | 32 HTTP checks: long chats, concurrency | **Hand-run.** Not pytest, unchanged since 2026-09-07 | Any | — | No |
+| Agent UI stress (`tests/stress/stress_agent_ui.py`) | 32 HTTP checks: long chats, concurrency | **Hand-run.** Not pytest, unchanged since 2026-09-07 | Any | — | No |
 | Agent UI visual (`webui/visual/`) | Playwright snapshots of fixture data | Local tool | — | — | No |
 | Clean-state TUI runner (`util/tui_eval.py`) | Runs `gaia_*` scenarios through the TUI control API | Local | — | — | No |
 
@@ -234,7 +234,7 @@ Wire the existing hand-run pieces into one job: `util/lemonade_restart_harness.p
 
 ### 10. Housekeeping
 
-- Port `tests/stress/test_agent_ui_stress.py` into item 2's suite as pytest, or delete it. A hand-run script nobody runs gives a false sense of coverage.
+- Port `tests/stress/stress_agent_ui.py` into item 2's suite as pytest, or delete it. A hand-run script nobody runs gives a false sense of coverage.
 - Add hosted, fault-server-backed Playwright journeys for #883 (reload mid-stream, two tabs, backend killed, Esc versus Stop). They don't need Strix Halo.
 - Give Slack and Telegram adapters a fake platform API that rate-limits and drops the socket.
 - Add the #5169 test-value rule to `REVIEW.md`: a fix's test covers the *class* of bug at the layer where it lived.
