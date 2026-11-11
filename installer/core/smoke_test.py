@@ -64,6 +64,10 @@ def entry_script(html: str) -> str | None:
     return "/" + match.group(1).removeprefix("./").lstrip("/")
 
 
+#: What the frozen `gaia api start` says: the flagship is not in this build.
+API_REFUSAL = "can't run in this GAIA install"
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -185,6 +189,26 @@ class Smoke:
             parsed and "Traceback" not in result.stderr,
             (result.stdout + result.stderr)[-1500:],
         )
+
+    def api_start(self) -> None:
+        try:
+            result = self.run(
+                "api",
+                "start",
+                "--port",
+                str(free_port()),
+                "--no-lemonade-check",
+                timeout=60,
+            )
+            ok = (
+                result.returncode == 1
+                and API_REFUSAL in result.stderr
+                and "Traceback" not in result.stderr
+            )
+            detail = (result.stdout + result.stderr)[-1500:]
+        except subprocess.TimeoutExpired:
+            ok, detail = False, "it started serving instead of refusing"
+        self.check("gaia api start refuses with its reason", ok, detail)
 
     def daemon(self) -> None:
         start = self.run("daemon", "start", timeout=120)
@@ -310,6 +334,7 @@ def main(argv=None) -> int:
         # The backend starts a daemon, which the daemon checks then stop.
         smoke.backend()
         smoke.daemon()
+        smoke.api_start()
     finally:
         smoke._kill_own_daemon()
         shutil.rmtree(home, ignore_errors=True)
