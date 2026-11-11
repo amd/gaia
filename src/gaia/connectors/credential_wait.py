@@ -13,6 +13,11 @@ If the read is still blocked it raises :class:`CredentialStoreWaiting`, which
 callers report as its own state — never as "no key". Each slot has at most one
 read in flight: later calls wait on the same read and take its result once the
 user answers, so polling never piles up threads or dialogs.
+
+With ``remember_failure`` a read that failed is kept, so polling re-raises its
+error instead of reading again: on Linux every read of a locked keyring opens a
+new unlock prompt, and a declined prompt must not come straight back.
+:func:`discard` or :func:`forget_failure` clears it when the user acts.
 """
 
 from __future__ import annotations
@@ -64,13 +69,18 @@ def _run(future: "Future[object]", read: Callable[[], object]) -> None:
 
 
 def read_within(
-    slot: str, read: Callable[[], T], what: str, timeout: Optional[float] = None
+    slot: str,
+    read: Callable[[], T],
+    what: str,
+    timeout: Optional[float] = None,
+    remember_failure: bool = False,
 ) -> T:
     """``read()``, or :class:`CredentialStoreWaiting` if it is still blocked after *timeout*.
 
     *slot* names the credential-store entry; calls with the same slot share one
     in-flight read. *what* names the entry in the user-facing message.
-    *timeout* defaults to :data:`WAIT_SECONDS`.
+    *timeout* defaults to :data:`WAIT_SECONDS`. With *remember_failure*, a read
+    that raised keeps raising the same error until the slot is cleared.
     """
     timeout = WAIT_SECONDS if timeout is None else timeout
     with _lock:
@@ -98,7 +108,7 @@ def read_within(
             )
         raise CredentialStoreWaiting(waiting_message(what)) from e
     finally:
-        if future.done():
+        if future.done() and not (remember_failure and future.exception()):
             with _lock:
                 if _in_flight.get(slot) is future:
                     del _in_flight[slot]
@@ -115,16 +125,29 @@ def discard(slot: str) -> None:
         _in_flight.pop(slot, None)
 
 
+def forget_failure(slot: str) -> None:
+    """Let the next call read *slot* again if its last read failed.
+
+    For a user action that needs the stored value, such as Connect. A read
+    still waiting on the OS is kept, so this never opens a second prompt.
+    """
+    with _lock:
+        future = _in_flight.get(slot)
+        if future is not None and future.done():
+            del _in_flight[slot]
+
+
 def in_flight_count() -> int:
     """Reads still waiting on the OS. For tests and diagnostics."""
     with _lock:
-        return len(_in_flight)
+        return sum(1 for future in _in_flight.values() if not future.done())
 
 
 __all__ = [
     "CredentialStoreWaiting",
     "WAIT_SECONDS",
     "discard",
+    "forget_failure",
     "in_flight_count",
     "read_within",
     "waiting_message",

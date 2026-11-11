@@ -243,15 +243,24 @@ def _key_slot(provider: str) -> str:
 
 
 def _bounded_recall(provider: str) -> Optional[str]:
-    """The stored key; raises ``CredentialStoreWaiting`` while the OS is prompting."""
+    """The stored key; raises ``CredentialStoreWaiting`` while the OS is prompting.
+
+    A failed read (a declined keyring prompt) is not retried on every poll, or
+    the prompt reopens each second; saving, removing or connecting clears it.
+    """
     from gaia.connectors.credential_wait import read_within
     from gaia.llm import cloud_keys
 
-    return read_within(
-        _key_slot(provider),
-        lambda: cloud_keys.recall_key(provider),
-        f"your saved {_NAMES[provider]} key",
-    )
+    try:
+        return read_within(
+            _key_slot(provider),
+            lambda: cloud_keys.read_key(provider),
+            f"your saved {_NAMES[provider]} key",
+            remember_failure=True,
+        )
+    except cloud_keys.CloudKeyError as e:
+        logger.debug("%s", e)
+        return None
 
 
 def _env_key(provider: str) -> Optional[Tuple[str, str]]:
@@ -983,11 +992,14 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
-    if key:
-        from gaia.connectors.credential_wait import discard
+    from gaia.connectors.credential_wait import discard, forget_failure
 
+    if key:
         # A read from before this key was pasted must not be served after it.
         discard(_key_slot(provider))
+    else:
+        # Connecting asks for the saved key, so a declined unlock is tried again.
+        forget_failure(_key_slot(provider))
     if provider == AMD and _gateway_check_applies():
         from gaia.llm.gateway import GatewayUnreachable
 

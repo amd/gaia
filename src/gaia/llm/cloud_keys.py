@@ -104,11 +104,12 @@ def remember_key(provider: str, key: str) -> None:
         raise CloudKeyError(_no_store_message(provider, "the write was discarded"))
 
 
-def recall_key(provider: str) -> Optional[str]:
-    """The kept key, or None when none is stored or the store cannot be read.
+def read_key(provider: str) -> Optional[str]:
+    """The kept key, or None when none is stored.
 
-    An unreadable store is "nothing stored": the caller's next step is to ask
-    for the key, which is right either way. The reason is logged.
+    Raises:
+        CloudKeyError: The store could not be read, e.g. the user declined
+            its unlock prompt.
     """
     from gaia.connectors.errors import ConnectorsError
     from gaia.connectors.store import peek_secret
@@ -117,9 +118,24 @@ def recall_key(provider: str) -> Optional[str]:
     try:
         value = peek_secret(slot)
     except ConnectorsError as e:
-        log.debug(f"Could not read the stored {provider} key: {e}")
-        return None
+        raise CloudKeyError(
+            f"Could not read the stored {_LABELS[provider]} key: {e}"
+        ) from e
     return value.strip() if value and value.strip() else None
+
+
+def recall_key(provider: str) -> Optional[str]:
+    """The kept key, or None when none is stored or the store cannot be read.
+
+    An unreadable store is "nothing stored": the caller's next step is to ask
+    for the key, which is right either way. The reason is logged.
+    """
+    _check(provider)
+    try:
+        return read_key(provider)
+    except CloudKeyError as e:
+        log.debug(str(e))
+        return None
 
 
 def forget_key(provider: str) -> bool:
@@ -407,6 +423,7 @@ __all__ = [
     "env_var_for",
     "forget_key",
     "provider_lost",
+    "read_key",
     "recall_key",
     "reconnect_provider",
     "remember_key",

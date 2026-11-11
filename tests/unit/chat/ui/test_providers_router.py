@@ -129,7 +129,10 @@ def keys(monkeypatch):
         state["remembered"].append((provider, key))
         state["stored"][provider] = key
 
-    def recall_key(provider):
+    def read_key(provider):
+        if provider in state.get("unreadable", ()):
+            state["reads"] = state.get("reads", 0) + 1
+            raise CloudKeyError("Keyring get_password failed: Prompt dismissed")
         return state["stored"].get(provider)
 
     def forget_key(provider):
@@ -146,7 +149,7 @@ def keys(monkeypatch):
         return state["ensure_result"]
 
     monkeypatch.setattr(cloud_keys, "remember_key", remember_key)
-    monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
+    monkeypatch.setattr(cloud_keys, "read_key", read_key)
     monkeypatch.setattr(cloud_keys, "forget_key", forget_key)
     monkeypatch.setattr(cloud_keys, "ensure_authenticated", ensure_authenticated)
     return state
@@ -533,7 +536,7 @@ def keychain_prompt(monkeypatch, keys):
     """The Fireworks key read blocks, as macOS does while its access dialog is open."""
     state = {"answered": threading.Event(), "returned": threading.Event(), "reads": 0}
 
-    def recall_key(provider):
+    def read_key(provider):
         if provider != "fireworks":
             return keys["stored"].get(provider)
         state["reads"] += 1
@@ -543,7 +546,7 @@ def keychain_prompt(monkeypatch, keys):
         finally:
             state["returned"].set()
 
-    monkeypatch.setattr(cloud_keys, "recall_key", recall_key)
+    monkeypatch.setattr(cloud_keys, "read_key", read_key)
     monkeypatch.setattr(credential_wait, "WAIT_SECONDS", 0.2)
     yield state
     state["answered"].set()
@@ -652,6 +655,52 @@ def test_a_saved_key_is_read_afresh_after_connect_or_forget():
     assert (
         credential_wait.read_within("cloud-key:fireworks", lambda: "new", "k") == "new"
     )
+
+
+def test_a_declined_keyring_prompt_is_not_reopened_on_every_poll(
+    client, lemonade, keys
+):
+    """Linux reopens the unlock prompt on each read; a Cancel must stick."""
+    credential_wait._in_flight.clear()
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    keys["unreadable"] = {"fireworks"}
+
+    for _ in range(5):
+        fw = client.get("/api/providers").json()["providers"][1]
+        assert fw["key_state"] == "read"
+        assert fw["key_source"] is None
+    assert keys["reads"] == 1
+    assert credential_wait.in_flight_count() == 0
+
+    # Connecting needs the saved key, so it asks the store once more.
+    client.post("/api/providers/fireworks/connect", json={})
+    assert keys["reads"] == 2
+    client.get("/api/providers")
+    assert keys["reads"] == 2
+    credential_wait._in_flight.clear()
+
+
+def test_a_failed_read_is_kept_until_the_slot_is_cleared():
+    credential_wait._in_flight.clear()
+    calls = []
+
+    def read():
+        calls.append(1)
+        raise RuntimeError("Prompt dismissed")
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            credential_wait.read_within("s", read, "k", remember_failure=True)
+    assert len(calls) == 1
+
+    credential_wait.forget_failure("s")
+    assert credential_wait.read_within("s", lambda: "v", "k") == "v"
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            credential_wait.read_within("s", read, "k")
+    assert len(calls) == 3, "without remember_failure every call reads again"
+    credential_wait._in_flight.clear()
 
 
 # ── GET /api/providers/active ──────────────────────────────────────────────
