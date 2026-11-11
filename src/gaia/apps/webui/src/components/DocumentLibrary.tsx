@@ -729,6 +729,16 @@ export function DocumentLibrary() {
                         />
                     )}
 
+                    {loadError && documents.length > 0 && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</span>
+                            <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                {t('docs.loadRetry')}
+                            </button>
+                        </div>
+                    )}
+
                     {actionError && (
                         <div className="doc-folder-notice doc-action-error" role="alert">
                             <AlertCircle size={14} />
@@ -762,7 +772,7 @@ export function DocumentLibrary() {
 
                     {/* Document list */}
                     <div className="doc-list">
-                        {loadError && (
+                        {loadError && documents.length === 0 && (
                             <div className="empty-docs doc-load-error" role="alert">
                                 <AlertCircle size={32} strokeWidth={1} />
                                 <p>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</p>

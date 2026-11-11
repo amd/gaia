@@ -127,6 +127,42 @@ describe('chat actions that fail say so', () => {
         expect(alert).toHaveTextContent("report.pdf is in your documents but isn't attached to this chat: database is locked");
     });
 
+    it('a rename that works clears the error an earlier failed rename left', async () => {
+        let attempts = 0;
+        stubFetch({
+            [`PUT /api/sessions/${session.id}`]: () => (++attempts === 1 ? refused() : json({ ...session, title: 'Trip plan' })),
+        });
+        render(<ChatView sessionId={session.id} />);
+        const rename = (title: string) => {
+            fireEvent.click(screen.getByRole('button', { name: /Notes/ }));
+            const field = screen.getByRole('textbox', { name: 'Chat title' });
+            fireEvent.change(field, { target: { value: title } });
+            fireEvent.keyDown(field, { key: 'Enter' });
+        };
+
+        rename('Trip');
+        expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't rename this chat");
+
+        rename('Trip plan');
+        await waitFor(() => expect(useChatStore.getState().sessions[0].title).toBe('Trip plan'));
+        expect(screen.queryByText(/Couldn't rename/)).not.toBeInTheDocument();
+    });
+
+    it('a private-mode toggle that works clears an earlier failure', async () => {
+        let attempts = 0;
+        stubFetch({
+            [`PATCH /api/sessions/${session.id}/private`]: () => (++attempts === 1 ? refused() : json({ ...session, private: true })),
+        });
+        render(<ChatView sessionId={session.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Turn on private chat' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't change private mode");
+
+        fireEvent.click(screen.getByRole('button', { name: 'Turn on private chat' }));
+        await waitFor(() => expect(useChatStore.getState().sessions[0].private).toBe(true));
+        expect(screen.queryByText(/Couldn't change private mode/)).not.toBeInTheDocument();
+    });
+
     it('a rename that works shows no error', async () => {
         stubFetch({ [`PUT /api/sessions/${session.id}`]: () => json({ ...session, title: 'Trip plan' }) });
         render(<ChatView sessionId={session.id} />);

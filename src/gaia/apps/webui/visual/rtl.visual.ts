@@ -700,6 +700,25 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // Over a list it already shows, the load error is a notice, not the empty-library error.
+    test(`a document library that could not reload over documents it lists (${locale})`, async ({ page }) => {
+        let listable = true;
+        let listed = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => (listable && ++listed
+                ? route.fulfill({ json: { documents: [{ id: 'd1', filename: 'q3-board.pdf', filepath: 'C:/q3-board.pdf', file_size: 2_048_000, chunk_count: 40, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }], total: 1, total_size_bytes: 2_048_000, total_chunks: 40 } })
+                : route.fulfill({ status: 500, json: { detail: 'database is locked' } })));
+        });
+        // The app's startup listing fills the store; the library's own load then fails.
+        await expect.poll(() => listed).toBeGreaterThan(0);
+        listable = false;
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await expect(page.locator('.doc-load-error')).toHaveCount(0);
+        await shot(page, `documents-${locale}-reload-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A rename the server refused used to fail with only a console line.
     test(`a chat rename the server refuses says why above the composer (${locale})`, async ({ page }) => {
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {

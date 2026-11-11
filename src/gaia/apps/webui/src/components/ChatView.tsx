@@ -1429,6 +1429,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
         // Untouched draft: never cut an old over-long title the user didn't edit.
         if (title && titleDraft !== session?.title && title !== session?.title) {
+            setActionError(null);
             try {
                 // Explicit rename — pin against the auto-retitler (#2165).
                 await api.updateSession(sessionId, { title, title_is_custom: true });
@@ -1444,6 +1445,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Toggle private (incognito) mode
     const handleTogglePrivate = useCallback(async () => {
         if (!sessionId) return;
+        setActionError(null);
         try {
             const updated = await api.toggleSessionPrivacy(sessionId);
             updateSessionInList(sessionId, { private: updated.private });
@@ -1468,6 +1470,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
+        setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
             setActionError(failures.map(({ name, stage, error }) => t(

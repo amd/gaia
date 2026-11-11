@@ -108,6 +108,22 @@ describe('Document Library actions that fail say so', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it('a load that fails over documents already listed keeps them and says so in a notice', async () => {
+        useChatStore.setState({ documents: [NOTES] });
+        mockedApi.listDocuments.mockRejectedValueOnce(new Error('backend is starting'));
+        const { container } = render(<DocumentLibrary />);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your documents: backend is starting");
+        expect(screen.getByText('notes.md')).toBeInTheDocument();
+        // The big empty-state error would read as if the listed documents were gone.
+        expect(container.querySelector('.doc-load-error')).toBeNull();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+        expect(await screen.findByText('report.pdf')).toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('a remove keeps documents a refresh added while it was in flight', async () => {
         let finishDelete: () => void = () => {};
         mockedApi.deleteDocument.mockReturnValue(new Promise<void>((resolve) => { finishDelete = resolve; }));
