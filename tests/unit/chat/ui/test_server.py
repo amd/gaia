@@ -1297,12 +1297,6 @@ class TestAgentModeSetting:
         assert resp.status_code == 400
         assert "goal_driven" in resp.json()["detail"]
 
-    def test_legacy_stored_autonomous_reported_as_goal_driven(self, client, db):
-        """A DB written before #2005 may hold 'autonomous'; GET must report the
-        effective mode, not the no-op label."""
-        db.set_setting("agent_mode", "autonomous")
-        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
-
 
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""

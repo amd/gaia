@@ -2155,7 +2155,7 @@ MODELS = {
     "qwen3-coder-30b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id="Qwen3.5-35B-A3B-GGUF",
-        display_name="Qwen3 Coder 30B",
+        display_name="Qwen3.5 35B",
         min_ctx_size=32768,
         tool_calling=True,
     ),
@@ -3780,6 +3780,10 @@ class InsufficientMemoryError(LemonadeClientError):
 
 class LoadedModelMissingError(LemonadeClientError):
     """A load returned, but ``/health`` does not list the model it loaded."""
+
+
+class ContextReloadUnverifiedError(LemonadeClientError):
+    """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
 class UsersServerUnchangedError(LemonadeClientError):

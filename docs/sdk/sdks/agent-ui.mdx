@@ -91,7 +91,7 @@ from gaia.ui.database import ChatDatabase
 db = ChatDatabase()  # Uses default path ~/.gaia/chat/gaia_chat.db
 
 # Create a session
-session = db.create_session(title="My Chat", model="Qwen3.5-35B-A3B-GGUF")
+session = db.create_session(title="My Chat", model="Qwen3.6-35B-A3B-GGUF")
 print(f"Session ID: {session['id']}")
 
 # Add messages
@@ -152,7 +152,7 @@ db = ChatDatabase()
 # Create session with attached documents
 session = db.create_session(
     title="Project Review",
-    model="Qwen3.5-35B-A3B-GGUF",
+    model="Qwen3.6-35B-A3B-GGUF",
     system_prompt="You are a code review assistant.",
     document_ids=["doc-abc123"],
 )
@@ -467,7 +467,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "lemonade_running": true,
       "lemonade_error": null,
       "lemonade_probe": "ok",
-      "model_loaded": "Qwen3.5-35B-A3B-GGUF",
+      "model_loaded": "Qwen3.6-35B-A3B-GGUF",
       "embedding_model_loaded": false,
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
@@ -594,7 +594,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -613,7 +613,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "status": "loading",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "ctx_size": 32768
     }
     ```
@@ -625,7 +625,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     **Request:**
     ```json
     {
-      "model_name": "Qwen3.5-35B-A3B-GGUF",
+      "model_name": "Qwen3.6-35B-A3B-GGUF",
       "force": false,
       "load_after": false
     }
@@ -641,7 +641,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "status": "downloading",
-      "model": "Qwen3.5-35B-A3B-GGUF"
+      "model": "Qwen3.6-35B-A3B-GGUF"
     }
     ```
 
@@ -744,7 +744,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     ```json
     {
       "title": "Code Review",
-      "model": "Qwen3.5-35B-A3B-GGUF",
+      "model": "Qwen3.6-35B-A3B-GGUF",
       "system_prompt": "You are a code reviewer.",
       "document_ids": ["doc-abc123"],
       "folders": ["/home/me/projects/site"]
@@ -2589,7 +2589,7 @@ plan and make one set of choices.
     Write a troubleshooting report for a bug report: setup's record (its last
     run, the plan and every stage's full log) saved as `setup-report.json` in
     GAIA's home, bundled with GAIA's logs and a system snapshot by `gaia
-    diagnostics`, with secret environment variables redacted; logs go in as they are. Returns `{"name", "path", "size_bytes"}`.
+    diagnostics`, with secret environment variables and secrets in the logs redacted. Returns `{"name", "path", "size_bytes"}`.
     **500** naming the cause when the bundle can't be written.
   </Accordion>
 
@@ -2808,6 +2808,39 @@ All three routes need the `X-Gaia-UI: 1` header (**403** without it).
     mobile access, **502** when the daemon did not switch. A failed switch to
     GAIA's own puts the previous mode back; a failed switch to the user's
     server stays saved.
+  </Accordion>
+</AccordionGroup>
+
+### Logs
+
+GAIA's logs and the model server's, for the log viewer. Every line is redacted
+before it is sent (API keys, bearer tokens and similar). Both routes need the
+`X-Gaia-UI: 1` header and refuse mobile access (**403**).
+
+<AccordionGroup>
+  <Accordion title="GET /api/logs">
+    `{"sources": [{"id", "files": [{"name", "path", "size_bytes", "modified"}]}]}`
+    in viewer order: `model_server`, `gaia` (`gaia.log`), `service`
+    (`daemon.log`), `agent` (`gaia-agent.log` and each agent's five newest
+    sidecar logs), `desktop` (`electron-main.log`, `electron-install.log`,
+    `electron-updater.log`) and `other` (the rest of `~/.gaia/logs`). Only files
+    that exist are listed; `model_server` lists none.
+  </Accordion>
+
+  <Accordion title="GET /api/logs/{source}">
+    A log's last lines. Query: `file` (a name `GET /api/logs` listed; the
+    source's first file when omitted), `after` (the `cursor` a previous read
+    returned, for only the lines written since), `limit` (1-5000, default 1000).
+    Returns `lines` (`text`, `severity` of `debug`/`info`/`warning`/`error` or
+    `null`, `tag`), `cursor`, `reset` (the log started over: replace, don't
+    append), `dropped`, `log_path`, and `available`; when `false`, `reason` is
+    `no_file` or `unreadable`, and for `model_server` also `not_running`,
+    `remote`, `no_stream` or `stream_failed`, with `detail`. `model_server`
+    reads GAIA's own Lemonade's `lemond.log` (`source: "file"`, readable when the
+    server is down, `server_answering` on a fresh read) or the user's Lemonade's
+    log stream (`source: "stream"`), and sets `owner` and `base_url`. **404**
+    for an unknown source or file; **409** when GAIA's Lemonade choice can't be
+    read.
   </Accordion>
 </AccordionGroup>
 
