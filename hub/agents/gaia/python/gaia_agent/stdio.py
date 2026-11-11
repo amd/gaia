@@ -687,6 +687,7 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "resend_reasoning": getattr(agent, "resend_reasoning_across_requests", None),
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
@@ -710,6 +711,8 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["resend_reasoning"] is not None:
+        agent.resend_reasoning_across_requests = snapshot["resend_reasoning"]
     if snapshot["model_features"] is not None:
         agent.model_features = snapshot["model_features"]
     if snapshot["instance_tools"] is not None:
@@ -752,6 +755,13 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # Earlier turns' reasoning belongs to the old model: it can't hit the new
+        # model's cache, and some reasoner APIs reject it in input.
+        if (
+            getattr(agent, "resend_reasoning_across_requests", False)
+            and agent.model_id != snapshot["model_id"]
+        ):
+            agent.resend_reasoning_across_requests = False
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
