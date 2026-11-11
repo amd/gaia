@@ -1721,6 +1721,34 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
+# The user told this turn not to act: "Do NOT run anything in this turn",
+# "without using any tools", "answer only with a plan". "Don't do anything
+# else" or "don't run anything destructive" only limits the work.
+_NO_ACTION_REQUEST_PATTERN = re.compile(
+    r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing)"
+    r"|do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    r"(?:anything|any\s+(?:tools?|code|commands?|scripts?|files?)|tools)"
+    r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+    r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
+    r"(?:[\w-]+\s+){0,3}plan\b"
+    r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
+    r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
+    r"|\bplan\s+only\b|\bonly\s+(?:a|the)\s+plan\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_no_action(request: str) -> bool:
+    """Whether the user's own words this turn forbid acting: a plan is the answer.
+
+    Such a request wins over GAIA's nudges to look first or to do an
+    announced step.
+    """
+    return bool(_NO_ACTION_REQUEST_PATTERN.search((request or "").replace("’", "'")))
+
+
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
     """Split a narrated answer into (what came before, the announced step).
 
@@ -10991,6 +11019,10 @@ Do NOT wrap conversational replies in JSON.
         )
         # Grounding gates that already asked for one correction this turn.
         grounding_fired: set = set()
+        # "Do not run anything, answer only with a plan": no nudge to act.
+        no_action_requested = _asks_for_no_action(self._request_text(user_input))
+        if no_action_requested:
+            grounding_fired.add(LOOK)
 
         steps_taken = 0
         final_answer = None
@@ -13166,6 +13198,9 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                if no_action_requested and unfinished_kind == "narration":
+                    # A plan or a stated next step is what this turn asked for.
+                    unfinished_kind = None
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -13212,6 +13247,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
+                    and not no_action_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
@@ -13264,6 +13300,7 @@ Do NOT wrap conversational replies in JSON.
                 # The honest ending quotes the announcement; it is final, not planning.
                 is_planning_text = (
                     not stopped_on_announced_step
+                    and not no_action_requested
                     and len(answer_candidate) < 500
                     and any(
                         phrase in answer_candidate.lower()

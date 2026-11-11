@@ -180,6 +180,38 @@ def test_an_answer_that_looked_is_left_alone(agent, workspace):
     assert len(sent) == 2
 
 
+PLAN = (
+    "1. I will read toybox/dates.py to see what it exports.\n"
+    "2. I will add a test for each date helper.\n"
+    "3. I will run the new tests."
+)
+
+
+def test_a_request_not_to_act_is_not_sent_to_look(agent, workspace):
+    """rc18, DeepSeek: the nudge read as the user's newest instruction."""
+    sent = _script(agent, _answer(PLAN), _answer(PLAN))
+
+    result = agent.process_query(
+        "For toybox/dates.py, do NOT run anything in this turn. Answer only "
+        "with a three-step plan for adding tests.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 1
+    assert PLAN in result["result"]
+
+
+def test_forbidding_extra_work_still_sends_the_answer_to_look(agent, workspace):
+    sent = _script(agent, _answer(GUESS), _answer(GUESS))
+
+    agent.process_query(
+        "Review toybox/dates.py and don't do anything else.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert "Look with your tools first" in sent[1][-1]["content"]
+
+
 def test_a_question_about_no_file_is_answered_directly(agent, workspace):
     sent = _script(agent, _answer("391"))
 

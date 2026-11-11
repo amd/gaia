@@ -16,6 +16,7 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _asks_for_no_action,
     _split_announced_step,
     _unfinished_answer_kind,
 )
@@ -680,3 +681,96 @@ def test_tool_plan_in_place_of_the_work_ends_honestly(agent):
     final = _final_text(result)
     assert final.startswith("I didn't finish:")
     assert "I will use the `run_python` tool" in final
+
+
+# rc18, DeepSeek: the user asked for a plan and said not to run anything; the
+# guard sent the plan back and the answer that replaced it had no plan in it.
+NO_ACTION_PLAN_REQUEST = (
+    "I want net revenue by region for a sales CSV I will attach later. Do NOT "
+    "run anything in this turn. Answer only with a five-step numbered plan in "
+    "the first person, each step of the form 'I will use the `run_python` tool "
+    "to ...', and close with the sentence: This should give you the exact "
+    "breakdown you asked for."
+)
+REQUESTED_PLAN = (
+    "1. I will use the `run_python` tool to load the CSV.\n"
+    "2. I will use the `run_python` tool to drop returned orders.\n"
+    "3. I will use the `run_python` tool to compute units times unit_price.\n"
+    "4. I will use the `run_python` tool to group by region.\n"
+    "5. I will use the `run_python` tool to print the totals.\n\n"
+    "This should give you the exact breakdown you asked for."
+)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        NO_ACTION_PLAN_REQUEST,
+        "For orders.csv I want net revenue by region. Do NOT run anything in "
+        "this turn.",
+        "Don't use any tools, just tell me how you'd do it.",
+        "Without running anything, how would you clean this CSV?",
+        "Without using any tools, explain it.",
+        "do not call any tools to answer this",
+        "Don’t run anything yet.",
+        "Don't open any files.",
+        "Just give me the plan for migrating the DB.",
+        "Answer only with a short plan.",
+        "Plan only, please.",
+    ],
+)
+def test_requests_not_to_act_are_recognised(request_text):
+    assert _asks_for_no_action(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "What is the net revenue excluding returned orders, broken down by region?",
+        "Fix foo.py and don't do anything else.",
+        "Clean up the folder but don't touch anything else in it.",
+        "Don't run anything destructive.",
+        "Don't use pandas.",
+        "Write a script but don't run it.",
+        "Does config.yaml set debug? Answer only yes or no.",
+        "Run the tests and don't open any other files.",
+        "Don't read anything into it, just summarize report.md.",
+        "",
+    ],
+)
+def test_requests_that_limit_the_work_are_not_requests_not_to_act(request_text):
+    assert not _asks_for_no_action(request_text)
+
+
+def test_a_plan_the_user_asked_for_is_the_answer(agent):
+    assert _unfinished_answer_kind(REQUESTED_PLAN) == "narration"
+    sent = _script(agent, *[_answer(REQUESTED_PLAN)] * 3)
+
+    result = agent.process_query(NO_ACTION_PLAN_REQUEST, max_steps=20)
+
+    assert len(sent) == 1
+    assert _final_text(result) == REQUESTED_PLAN
+
+
+def test_an_announced_step_the_user_forbade_is_not_pushed(agent):
+    answer = "I'll run the trend analysis now."
+    sent = _script(agent, *[_answer(answer)] * 3)
+
+    result = agent.process_query(
+        "Show the sales trend, but do not run anything yet.", max_steps=20
+    )
+
+    assert len(sent) == 1
+    assert _final_text(result) == answer
+
+
+def test_a_plan_is_still_sent_back_when_only_extra_work_is_forbidden(agent):
+    sent = _script(agent, *[_answer(REQUESTED_PLAN)] * 5)
+
+    result = agent.process_query(
+        "Net revenue by region for orders.csv, and don't do anything else.",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result).startswith("I didn't finish:")

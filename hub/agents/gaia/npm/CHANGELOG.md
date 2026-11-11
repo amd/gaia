@@ -145,6 +145,16 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   background index that fails is now reported instead of dropping out of
   sight.
 
+### Fixed
+
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (do not run anything, use no tools, plan only) now turns both checks off.
+  "Don't do anything else" or "don't run anything destructive" still gets them.
+
 ## [0.3.5]
 
 Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
