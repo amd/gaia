@@ -790,6 +790,48 @@ def test_restore_stops_waiting_for_a_key_that_never_lists_models(
     assert "Fireworks AI has no working key" in late["message"]
 
 
+def test_a_key_whose_models_are_listed_fails_at_once(client, lemonade, keys, db):
+    _write_config({"last_model": "fireworks.glm-5p3-flash"})
+    lemonade.cloud["fireworks"] = {
+        "name": "fireworks",
+        "runtime_key_set": True,
+        "models_discovered": True,
+    }
+    keys["ensure_result"] = False
+    late = client.get("/api/providers/active").json()["restore"]
+    assert late["status"] == "failed"
+    assert "Fireworks AI has no working key" in late["message"]
+
+
+def test_the_settle_window_ends_exactly_at_its_limit(
+    client, lemonade, keys, db, monkeypatch
+):
+    _write_config({"last_model": "fireworks.glm-5p3-flash"})
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    keys["ensure_result"] = False
+    clock = {"now": 100.0}
+    monkeypatch.setattr(providers.time, "monotonic", lambda: clock["now"])
+    assert client.get("/api/providers/active").json()["restore"]["status"] == "pending"
+    clock["now"] += providers.KEY_SETTLE_SECONDS
+    assert client.get("/api/providers/active").json()["restore"]["status"] == "failed"
+
+
+def test_picking_a_model_while_its_key_settles_says_to_try_again(
+    client, lemonade, keys, db, monkeypatch
+):
+    lemonade.models = _cloud_models()
+    lemonade.cloud["fireworks"] = {"name": "fireworks", "runtime_key_set": True}
+    keys["ensure_result"] = False
+    monkeypatch.setattr(providers.time, "monotonic", lambda: 100.0)
+    resp = client.post(
+        "/api/providers/select",
+        json={"model": "fireworks.accounts/fireworks/models/glm-5p3-flash"},
+    )
+    assert resp.status_code == 503, resp.text
+    assert "try again" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
 def test_connecting_a_new_key_restarts_the_settle_window(
     client, lemonade, keys, db, monkeypatch
 ):
