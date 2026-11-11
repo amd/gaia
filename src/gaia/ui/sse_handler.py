@@ -34,7 +34,7 @@ from gaia.agents.base.tools import (
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_metrics import turn_log_path
-from gaia.agents.base.verification import split_verification_scope
+from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
@@ -920,6 +920,9 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A refusal must not read as a site contacted, relayed or not.
+        if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
+            event[EXECUTED_KEY] = False
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.

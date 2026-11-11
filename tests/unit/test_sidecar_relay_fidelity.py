@@ -608,6 +608,20 @@ def test_a_relayed_call_the_user_denied_contacted_nothing():
     assert summary["live_data"] == {"attempted": 0, "failed": 0}
 
 
+def test_a_relayed_download_refused_before_it_ran_is_not_a_failed_lookup():
+    summary = _relayed_summary(
+        "download_file",
+        {"url": "https://example.com/", "save_to": "~/.ssh"},
+        {
+            "executed": False,
+            "status": "error",
+            "error": "Write blocked: '~/.ssh' is inside protected directory",
+        },
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
 # ── automatic memory writes ────────────────────────────────────────────────
 
 
