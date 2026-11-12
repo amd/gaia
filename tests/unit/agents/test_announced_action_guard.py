@@ -715,6 +715,14 @@ REQUESTED_PLAN = (
         "Just give me the plan for migrating the DB.",
         "Answer only with a short plan.",
         "Plan only, please.",
+        "Use no tools for this one.",
+        "Don't touch anything until I say so.",
+        "Don't do anything before I confirm.",
+        "Don't use any tools, but explain how you would do it.",
+        "Explain the bug without opening any files.",
+        "Give me only a plan, then wait for my go-ahead.",
+        "Just give me a plan. I'll decide later whether to run it.",
+        "Answer only with a short plan and close with a one-line summary.",
     ],
 )
 def test_requests_not_to_act_are_recognised(request_text):
@@ -739,6 +747,19 @@ def test_requests_not_to_act_are_recognised(request_text):
         "Does config.yaml set debug? Answer only yes or no.",
         "Run the tests and don't open any other files.",
         "Don't read anything into it, just summarize report.md.",
+        # rc18 round 2: each of these wants the work done.
+        "Last time you answered without reading any files and got it wrong. "
+        "What is the total gross in C:/x/orders.csv?",
+        "Don't touch anything until you've read C:/x/orders.csv, then tell me "
+        "the total.",
+        "Don't do anything before you check the README.",
+        "What is in C:/x/notes.txt? Don't open any files but that one.",
+        "Don't open any files except config.yaml.",
+        "Don't touch anything other than todo.txt.",
+        "Give me only a plan for the migration, then do step 1.",
+        "Just give me a plan and then carry it out.",
+        "Plan only at first, and then run step 1 once it reads well.",
+        "Answer only with a short plan. After that, execute it.",
         "",
     ],
 )
