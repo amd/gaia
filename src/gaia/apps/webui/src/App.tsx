@@ -21,6 +21,7 @@ import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
+import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { useMediaQuery } from './hooks/useMediaQuery';
@@ -75,6 +76,13 @@ const UPGRADE_WAIT_MS = 5 * 60_000;
 
 /** The embedded server's update ended in failure, as opposed to still running. */
 class UpgradeFailed extends Error {}
+
+/** The model in use could not be read, so a setup check can't be trusted to say "not set up". */
+class ModelUnread extends Error {
+    constructor(reason: string) {
+        super(getT().bare('setup.unknown.modelUnread', { error: reason }));
+    }
+}
 
 async function waitForEmbeddedUpgrade(): Promise<void> {
     const deadline = Date.now() + UPGRADE_WAIT_MS;
@@ -173,12 +181,18 @@ function App() {
         try {
             for (;;) {
                 await useModelStore.getState().refresh();
-                const remote = !!useModelStore.getState().active?.remote;
+                const active = useModelStore.getState().active;
+                const remote = !!active?.remote;
                 let check: SetupCheck;
                 try {
                     check = await api.checkSetup(remote);
+                    // Asked without the model, the answer is a local model's: a cloud install would read as not set up.
+                    if (!active && !check.ready) {
+                        throw new ModelUnread(useModelStore.getState().error ?? 'no answer');
+                    }
                 } catch (err) {
-                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    const starting = isRefused(err) || err instanceof ModelUnread;
+                    if (!waitForStart || !starting || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
@@ -391,6 +405,13 @@ function App() {
         const t = setInterval(load, 30_000);
         return () => clearInterval(t);
     }, []);
+    // Goals also run unattended: an unreadable goal store raises one notification.
+    useEffect(() => {
+        const check = () => { void useGoalHealthStore.getState().check(); };
+        check();
+        const t = setInterval(check, 30_000);
+        return () => clearInterval(t);
+    }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
     useEffect(() => startQueueDispatcher(), []);
 
@@ -557,7 +578,13 @@ function App() {
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
         const outgoing = store.currentSessionId;
-        if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
+        // A first message the chat had not sent yet comes back to the new chat's box.
+        const unsent = store.pendingPrompt?.sessionId === outgoing ? store.pendingPrompt : null;
+        if (unsent) {
+            store.setPendingPrompt(null);
+            setDraftText(unsent.text);
+        }
+        if (outgoing && isAbandonedDraft(outgoing, useChatStore.getState())) void cleanupAbandonedDraft(outgoing);
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
         choseNewChatRef.current = true;

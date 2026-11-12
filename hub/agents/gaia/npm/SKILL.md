@@ -10,8 +10,11 @@ frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
-a local model server — nothing you type or index leaves it.
+runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
+runs on the local machine against a local model server, and nothing you type or index
+leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
+in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
+that provider.
 
 Two ways in:
 
@@ -341,7 +344,7 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{ type, message, level?, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `level: "warning"` marks a warning for the user (for example, configured MCP servers that were dropped); show it, don't only put it on the live line. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{ type, delta }` — answer text to append |
 | `reasoning` | `{ type, delta, retracts_answer? }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning: drop it from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |

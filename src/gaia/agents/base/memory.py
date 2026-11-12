@@ -2369,10 +2369,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
-            # Preserve FAISS ranking order, only keep items that pass filters
+            # Preserve FAISS ranking order, only keep items that pass filters.
+            # The embedding BLOB is for the index; results go to the model.
             for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
+                    item.pop("embedding", None)
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search
