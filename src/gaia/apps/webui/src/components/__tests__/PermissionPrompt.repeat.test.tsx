@@ -25,7 +25,7 @@ const mockedApi = vi.mocked(api);
 const originalRespond = useNotificationStore.getState().respondToPermission;
 const respond = vi.fn();
 
-const PY_SCOPE = 'Python snippets (run_python)';
+const PY_SCOPE = 'Python snippets';
 
 function prompt(over: Partial<GaiaNotification> = {}): GaiaNotification {
     return {
@@ -110,7 +110,7 @@ describe('repeated identical permission prompts', () => {
     it('still asks a different tool even after many allows of another', () => {
         const earlier = Array.from({ length: 5 }, () => prompt({ response: 'allow' }));
         seed(earlier, prompt({ tool: 'run_shell_command', alwaysScope: 'git status', risk: 'read', toolArgs: { command: 'git status' } }));
-        expect(screen.getByRole('alertdialog')).toHaveTextContent('Allow GAIA to use run_shell_command?');
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('Run this command?');
         expect(hint()).toBeNull();
         expect(respond).not.toHaveBeenCalled();
     });
