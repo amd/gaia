@@ -482,15 +482,17 @@ def _normalize_key(path: str, base: str) -> str:
         return os.path.normcase(os.path.normpath(joined))
 
 
-def _placed_in(query: str, name: str, folder: str) -> bool:
-    """True when *query* puts *name* straight into *folder* ("page.html in .ssh")."""
-    leaf = os.path.basename(folder.rstrip("/\\"))
+def _named_as_download(query: str, name: str, folder: str) -> bool:
+    """True when *query* gives the file *name* in *folder* ("as page.html in .ssh")."""
+    leaf = re.escape(os.path.basename(folder.rstrip("/\\")))
     if not leaf:
         return False
+    name = re.escape(os.path.basename(name))
+    prefix = r"(?:[^\s`\"']*[/\\])?"
     pattern = (
-        rf"(?<![\w.-]){re.escape(os.path.basename(name))}[`\"']?\s+"
-        r"(?:in|into|to|under|inside)\s+(?:the\s+|my\s+)?[`\"']?"
-        rf"(?:[^\s`\"']*[/\\])?{re.escape(leaf)}(?![\w-]|\.\w)"
+        rf"\bas\s+[`\"']?(?:{prefix}{leaf}[/\\]{name}(?![\w-]|\.\w)"
+        rf"|{name}[`\"']?\s+(?:in|into|to|under|inside)\s+(?:the\s+|my\s+)?"
+        rf"[`\"']?{prefix}{leaf}(?![\w-]|\.\w))"
     )
     return re.search(pattern, query, re.I) is not None
 
@@ -1047,8 +1049,9 @@ class CompletionEvidence:
                 return (path in bare or _inside(path, folder)) and os.path.normcase(
                     os.path.basename(path)
                 ) == os.path.normcase(url_name)
-            return _inside(path, folder) or (
-                path in bare and _placed_in(self.query, path, folder)
+            # No file name anywhere: only the name the request gives the download.
+            return (path in bare or _inside(path, folder)) and _named_as_download(
+                self.query, path, folder
             )
 
         for path in sorted(required):

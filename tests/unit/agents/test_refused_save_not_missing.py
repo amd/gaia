@@ -331,3 +331,39 @@ def test_a_folder_name_inside_another_word_does_not_place_a_file(tmp_path):
     )
     found = " ".join(_gaps(ledger, HONEST))
     assert "No successful write to `page.html`" in found
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Download https://example.com/ into {folder}, and save a summary to notes.md "
+        "in {folder}.",
+        "Download https://example.com/ into {folder}, and save {folder}/notes.md.",
+    ],
+)
+def test_a_folder_download_does_not_excuse_another_file_in_that_folder(
+    tmp_path, request_text
+):
+    """A prompt declined for the download is not a decline for notes.md."""
+    folder = tmp_path / "docs"
+    ledger = _refused_download(
+        tmp_path,
+        request_text.format(folder=folder),
+        folder,
+        url="https://example.com/",
+        save_to=str(folder),
+    )
+    found = " ".join(_gaps(ledger, "I couldn't download it: you declined."))
+    assert "notes.md" in found and "not permitted" not in found
+
+
+def test_a_full_path_given_as_the_downloads_name_is_excused(tmp_path):
+    folder = tmp_path / ".ssh"
+    ledger = _refused_download(
+        tmp_path,
+        f"Download https://example.com/ and save it as {folder / 'page.html'}.",
+        folder,
+        url="https://example.com/",
+        save_to=str(folder),
+    )
+    assert _gaps(ledger, HONEST) == []
