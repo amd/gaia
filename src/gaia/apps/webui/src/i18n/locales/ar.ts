@@ -2594,6 +2594,7 @@ const messages: Messages = {
     'schedules.new': 'مهمة مجدولة جديدة',
     'schedules.when': 'موعد التشغيل',
     'schedules.whenPlaceholder': 'اكتب الموعد بالإنجليزية…\nأمثلة: ⁦"every 30m"⁩، ⁦"daily at 9pm"⁩، ⁦"every hour from 8am to 6pm on weekdays"⁩',
+    'schedules.whenHint': 'اكتب الموعد بالإنجليزية، مثل ⁦"every 30m"⁩ أو ⁦"daily at 9pm"⁩ أو ⁦"every hour from 8am to 6pm on weekdays"⁩.',
     'schedules.parsing': 'جارٍ قراءة الموعد…',
     'schedules.notUnderstood': 'لم يفهم GAIA هذا الموعد.',
     'schedules.nextRun': 'التشغيل التالي: {when}',

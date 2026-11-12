@@ -2262,6 +2262,16 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-parsed-hint')).toBeVisible();
             await check(page, 'form-invalid');
         });
+
+        test('new schedule with a "when" typed in Arabic', async ({ page }) => {
+            await openSchedules(page, []);
+            await page.locator('.schedule-modal .btn-primary').click();
+            await page.locator('.schedule-nl-input').fill('كل يوم الساعة 8 صباحا');
+            await expect(page.locator('.schedule-parsed-preview.invalid')).toBeVisible();
+            await expect(page.locator('.schedule-field-hint')).toBeVisible();
+            await expect(page.locator('.schedule-parsed-hint')).toHaveCount(0);
+            await check(page, 'form-arabic-input');
+        });
     });
 }
 

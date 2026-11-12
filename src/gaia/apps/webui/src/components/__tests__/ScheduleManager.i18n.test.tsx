@@ -84,6 +84,23 @@ describe('Scheduled tasks in Arabic', () => {
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
     });
 
+    it('explains in Arabic that a schedule typed in Arabic must be written in English', async () => {
+        vi.mocked(parseScheduleInput).mockResolvedValue({
+            interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null,
+            description: "GAIA couldn't read 'كل يوم الساعة 8 صباحا'. Use a form like 'every 30m'.", next_run_at: null, valid: false,
+        });
+        const { container } = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
+        const field = screen.getByLabelText(readsAs('موعد التشغيل (When to run)'));
+        fireEvent.change(field, { target: { value: 'كل يوم الساعة 8 صباحا' } });
+        expect(await screen.findByText(readsAs('لم يفهم GAIA هذا الموعد. (GAIA didn\'t understand that schedule.)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(screen.queryByText(/couldn't read/)).not.toBeInTheDocument();
+        const hint = container.querySelector('.schedule-field-hint')!;
+        expect(stripIsolates(hint.textContent ?? '')).toContain('اكتب الموعد بالإنجليزية، مثل "every 30m"');
+        expect(field.getAttribute('aria-describedby')).toContain(hint.id);
+        expect(leftoverEnglish(container)).toEqual([]);
+    });
+
     it('translates a list row and every action on it', () => {
         useScheduleStore.setState({ schedules: [schedule] });
         const { container } = render(<ScheduleManager />);
