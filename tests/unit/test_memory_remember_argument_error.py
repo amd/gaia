@@ -1,12 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""A remember call that fails on an argument must not read as "nothing saved".
+"""A bad optional argument must not cost the user the fact they asked to keep.
 
 On v0.26.0-rc18 ``remember(category="banana")`` returned "Invalid category",
-the answer said "nothing was saved", and seconds later the turn's extraction
-stored the fact, as the user had asked. The error now says what is true: this
-call stored nothing, and the fact may still be learned from the chat.
+the answer said "nothing was stored", and seconds later the turn's extraction
+stored the fact, as the user had asked. A reworded error still opened with
+"This call stored nothing", which the model repeated. The save no longer fails
+on a label: the fact is stored as a plain fact, or without a date, and the
+result opens with "Saved" and names what was ignored.
 """
 
 from __future__ import annotations
@@ -21,7 +23,8 @@ from gaia.agents.base.memory_store import EXTRACTABLE_CATEGORIES, MemoryStore
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 FACT = "My favourite fruit stand is on Elm Street."
-MAY_STILL = "may still learn"
+# Words that read to the user as "it won't be remembered".
+NOT_KEPT = ("nothing", "failed", "not stored", "not saved", "invalid")
 
 
 class _ToolBase:
@@ -48,63 +51,104 @@ def store(tmp_path):
 
 
 @contextmanager
-def _remember(host: _Host):
+def _tools(host: _Host):
     saved = dict(_TOOL_REGISTRY)
     _TOOL_REGISTRY.clear()
     try:
         host.register_memory_tools()
-        yield _TOOL_REGISTRY["remember"]["function"]
+        yield {name: entry["function"] for name, entry in _TOOL_REGISTRY.items()}
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
 
 
-def _contents(store: MemoryStore):
-    return [r[0] for r in store._conn.execute("SELECT content FROM knowledge")]
+def _rows(store: MemoryStore):
+    return store._conn.execute(
+        "SELECT content, category, due_at FROM knowledge"
+    ).fetchall()
 
 
-@pytest.mark.parametrize(
-    "bad", [{"category": "banana"}, {"category": "reminder", "due_at": "next week"}]
-)
-def test_an_argument_error_does_not_claim_the_fact_is_lost(store, bad):
-    host = _Host(store)
-    with _remember(host) as remember:
-        result = remember(fact=FACT, **bad)
+def test_an_unknown_category_saves_the_fact_as_a_fact(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category="banana")
+
+    assert result["status"] == "stored"
+    assert result["ignored"] == {"category": "banana"}
+    assert _rows(store) == [(FACT, "fact", None)]
+    message = result["message"]
+    assert message.startswith("Saved.")
+    assert "'banana'" in message
+    assert str(sorted(EXTRACTABLE_CATEGORIES)) in message
+    assert not any(word in message.lower() for word in NOT_KEPT), message
+
+
+def test_a_bad_due_date_saves_the_reminder_without_one(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](
+            fact=FACT, category="reminder", due_at="next blursday"
+        )
+
+    assert result["status"] == "stored"
+    assert result["ignored"] == {"due_at": "next blursday"}
+    assert _rows(store) == [(FACT, "reminder", None)]
+    message = result["message"]
+    assert message.startswith("Saved.")
+    assert "'next blursday'" in message
+    # The model is told how to add the date, with the id to add it to.
+    assert f"update_memory(knowledge_id='{result['knowledge_id']}'" in message
+    assert not any(word in message.lower() for word in NOT_KEPT), message
+
+
+def test_both_bad_arguments_are_named(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category="banana", due_at="soon")
+
+    assert result["ignored"] == {"category": "banana", "due_at": "soon"}
+    assert _rows(store) == [(FACT, "fact", None)]
+
+
+def test_the_date_can_be_added_as_the_result_says(store):
+    with _tools(_Host(store)) as tools:
+        saved = tools["remember"](fact=FACT, category="reminder", due_at="soon")
+        updated = tools["update_memory"](
+            knowledge_id=saved["knowledge_id"], due_at="2026-11-20T09:00"
+        )
+
+    assert updated["status"] == "updated"
+    assert _rows(store)[0][2].startswith("2026-11-20T09:00")
+
+
+@pytest.mark.parametrize("category", ["profile", "system", "permission"])
+def test_a_privileged_category_is_still_refused(store, category):
+    """Not a slip of a label: these rows lead every prompt, so nothing is
+    saved under another name either."""
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category=category)
 
     assert result["status"] == "error"
-    assert _contents(store) == []
-    assert "This call stored nothing" in result["message"]
-    assert MAY_STILL in result["message"]
-    # The note must not talk the model out of fixing the argument and retrying.
-    assert "Call remember again" in result["message"]
+    assert result["message"].startswith("Not saved")
+    assert _rows(store) == []
 
 
-def test_a_corrected_retry_still_saves(store):
-    with _remember(_Host(store)) as remember:
-        remember(fact=FACT, category="banana")
-        result = remember(fact=FACT, category="fact")
+def test_valid_arguments_report_nothing_ignored(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category="reminder", due_at="2026-11-20")
 
-    assert result["status"] != "error"
-    assert len(_contents(store)) == 1
-
-
-def test_the_category_error_still_lists_the_valid_categories(store):
-    with _remember(_Host(store)) as remember:
-        message = remember(fact=FACT, category="banana")["message"]
-
-    assert str(sorted(EXTRACTABLE_CATEGORIES)) in message
+    assert result["status"] == "stored"
+    assert "ignored" not in result
+    assert result["message"].startswith("Remembered:")
 
 
-def test_extraction_still_keeps_what_the_user_asked_to_remember(store):
-    """The failed call must not stop the turn's extraction: they asked to keep it."""
+def test_extraction_after_the_save_leaves_one_memory(store):
+    """The turn's extraction restates the fact; it must merge, not double it."""
     host = _Host(store)
-    with _remember(host) as remember:
-        remember(fact=FACT, category="banana")
+    with _tools(host) as tools:
+        tools["remember"](fact=FACT, category="banana")
         host._execute_extraction_operations(
             [
                 {
                     "op": "add",
-                    "category": "preference",
+                    "category": "fact",
                     "content": "User's favourite fruit stand is on Elm Street.",
                     "grounded": "user",
                 }
@@ -113,13 +157,36 @@ def test_extraction_still_keeps_what_the_user_asked_to_remember(store):
             context="global",
         )
 
-    assert _contents(store) == ["User's favourite fruit stand is on Elm Street."]
+    assert len(_rows(store)) == 1
 
 
-def test_a_refused_credential_makes_no_such_promise(store):
-    """Extraction refuses a credential too, so there "nothing saved" is true."""
-    with _remember(_Host(store)) as remember:
-        result = remember(fact="My API key is sk-ant-api03-abcdefghijklmnopqrstuvwx")
+def test_an_empty_fact_is_still_an_error(store):
+    """Only an optional label is forgiven; there is nothing to save here."""
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact="  ", category="banana")
+
+    assert result["status"] == "error"
+    assert _rows(store) == []
+
+
+def test_a_refused_credential_is_still_refused(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](
+            fact="My API key is sk-ant-api03-abcdefghijklmnopqrstuvwx",
+            category="banana",
+        )
 
     assert result["status"] == "skipped"
-    assert MAY_STILL not in result["message"]
+    assert _rows(store) == []
+
+
+def test_update_memory_still_rejects_a_bad_argument(store):
+    """Nothing new is at stake in an edit, so a bad value changes nothing."""
+    with _tools(_Host(store)) as tools:
+        saved = tools["remember"](fact=FACT)
+        result = tools["update_memory"](
+            knowledge_id=saved["knowledge_id"], category="banana"
+        )
+
+    assert result["status"] == "error"
+    assert _rows(store) == [(FACT, "fact", None)]
