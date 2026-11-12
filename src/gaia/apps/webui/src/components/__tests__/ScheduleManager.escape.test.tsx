@@ -46,4 +46,16 @@ describe('ScheduleManager', () => {
         expect(await screen.findByText(/didn.t understand that schedule/, {}, { timeout: 3000 })).toBeInTheDocument();
         expect(screen.getByText(/Try "every 30m"/).closest('.schedule-parsed-hint')).not.toBeNull();
     });
+
+    it('previews the next run the way the schedule list does', async () => {
+        vi.mocked(api.parseScheduleInput).mockResolvedValue({
+            valid: true,
+            description: 'Every 3 hours',
+            next_run_at: new Date(Date.now() + 3 * 3_600_000 + 30_000).toISOString(),
+        } as never);
+        render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'every 3 hours' } });
+        expect(await screen.findByText(/^Next run: .+ \(in 3h\)$/, {}, { timeout: 3000 })).toBeInTheDocument();
+    });
 });
