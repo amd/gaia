@@ -49,11 +49,18 @@ CATEGORIES = (
     CATEGORY_TIER_CLAIM,
 )
 
-#: Directories excluded from the digest. Loading a skill writes ``__pycache__``,
-#: which must not read as drift; the audit reports a shipped one instead.
+#: The interpreter's bytecode cache. Never copied into GAIA with a bundle
+#: (:func:`ignore_bytecode_caches`), so one found in an installed skill was
+#: written locally from the audited source.
+BYTECODE_CACHE_DIR = "__pycache__"
+BYTECODE_SUFFIXES = (".pyc", ".pyo")
+
+#: Directories excluded from the digest and the audit: the bytecode cache and
+#: VCS / tool caches. Loading a skill writes ``__pycache__``, which must not
+#: read as drift.
 DIGEST_EXCLUDED_DIRS = frozenset(
     {
-        "__pycache__",
+        BYTECODE_CACHE_DIR,
         ".git",
         ".mypy_cache",
         ".pytest_cache",
@@ -66,11 +73,25 @@ PYTHON_SOURCE_SUFFIXES = frozenset({".py", ".pyw"})
 
 #: Directories whose contents the analyzers cannot vouch for, though the whole
 #: bundle is copied on install and the skill directory is put on ``sys.path``.
-UNINSPECTABLE_DIRS = frozenset({"__pycache__", "node_modules"})
+UNINSPECTABLE_DIRS = frozenset({"node_modules"})
 
 #: Compiled or archived files Python can import or run without passing through
-#: the source analyzer.
+#: the source analyzer. A ``.pyc`` outside ``__pycache__`` is imported with no
+#: source at all, and the interpreter never writes one there.
 UNINSPECTABLE_SUFFIXES = frozenset({".pyc", ".pyo", ".pyd", ".so", ".zip"})
+
+
+def ignore_bytecode_caches(_directory: str, names: list[str]) -> set[str]:
+    """``shutil.copytree`` *ignore* that drops ``__pycache__`` and ``.pyc``/``.pyo``.
+
+    Used wherever a skill bundle is copied into GAIA: a shipped cache could be
+    loaded in place of the audited source, and dropping it costs nothing.
+    """
+    return {
+        name
+        for name in names
+        if name == BYTECODE_CACHE_DIR or name.lower().endswith(BYTECODE_SUFFIXES)
+    }
 
 
 def _utc_now_iso() -> str:
@@ -269,7 +290,8 @@ class AuditReport:
 def auditable_files(directory: Path | str) -> list[Path]:
     """Every file the content digest covers, sorted by relative POSIX path.
 
-    Only VCS and tool caches (:data:`DIGEST_EXCLUDED_DIRS`) are left out.
+    Only the bytecode cache and VCS / tool caches (:data:`DIGEST_EXCLUDED_DIRS`)
+    are left out.
     Compiled modules, archives and ``node_modules`` ship with the skill and are
     hashed; :func:`uninspectable_content` names them for the audit.
     """
@@ -298,7 +320,7 @@ def uninspectable_content(directory: Path | str) -> list[str]:
         if not path.is_file() or path.is_symlink():
             continue
         parts = path.relative_to(directory).parts
-        if any(part in DIGEST_EXCLUDED_DIRS - UNINSPECTABLE_DIRS for part in parts):
+        if any(part in DIGEST_EXCLUDED_DIRS for part in parts):
             continue
         inside = next(
             (i for i, part in enumerate(parts[:-1]) if part in UNINSPECTABLE_DIRS),

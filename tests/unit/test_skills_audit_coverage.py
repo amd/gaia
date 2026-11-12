@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: MIT
 """The audit covers everything a skill ships, and reads Python as Python does.
 
-Compiled modules, archives, ``__pycache__`` and ``node_modules`` are copied on
-install and importable from the skill directory, so the audit names them
-instead of skipping them. Source is parsed from bytes so a BOM or a PEP 263
-coding declaration is read the way the interpreter reads it.
+Compiled modules, archives and ``node_modules`` are copied on install and
+importable from the skill directory, so the audit names them instead of skipping
+them. ``__pycache__`` is never copied in, so one in a skill was written locally
+and is ignored. Source is parsed from bytes so a BOM or a PEP 263 coding
+declaration is read the way the interpreter reads it.
 """
 
 from __future__ import annotations
@@ -46,7 +47,6 @@ def _unreadable(analysis) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("relative", "reported"),
     [
-        ("__pycache__/tools.cpython-312.pyc", "__pycache__/"),
         ("node_modules/pkg/index.js", "node_modules/"),
         ("scripts/node_modules/pkg/index.js", "scripts/node_modules/"),
         ("helper.pyc", "helper.pyc"),
@@ -123,6 +123,18 @@ def test_shipped_binaries_and_node_modules_are_in_the_digest(tmp_path):
 
     assert with_zip != before
     assert content_digest(directory) != with_zip
+
+
+def test_a_locally_written_bytecode_cache_audits_allow(tmp_path):
+    """The loader writes __pycache__ next to tools.py; that is not a finding."""
+    directory = _skill(tmp_path)
+    cache = directory / "__pycache__"
+    cache.mkdir()
+    (cache / "tools.cpython-312.pyc").write_bytes(b"\x00")
+    (cache / "native.cpython-312.so").write_bytes(b"\x00")
+
+    assert uninspectable_content(directory) == []
+    assert audit_skill(directory).verdict == "ALLOW"
 
 
 def test_a_bytecode_cache_still_leaves_the_digest_alone(tmp_path):

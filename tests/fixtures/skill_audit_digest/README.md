@@ -36,8 +36,9 @@ relative POSIX path. Each record is:
 
 The path is included so a rename changes the digest; the length keeps the
 concatenation unambiguous. `__pycache__`, `.git`, and tool caches are excluded —
-a build cache appearing must not invalidate a valid report. Compiled modules,
-archives and `node_modules` ship with the skill, so they are hashed (and the
-audit reports them, since it cannot read them as source). Unlike
+a build cache appearing must not invalidate a valid report, and no bundle copy
+into GAIA carries a `__pycache__`. Compiled modules, archives, a `.pyc` outside
+`__pycache__`, and `node_modules` ship with the skill, so they are hashed (and
+the audit reports them, since it cannot read them as source). Unlike
 `manifest_digest`, file bytes are hashed **raw**, with no line-ending
 normalization, because it covers arbitrary content and not just text.

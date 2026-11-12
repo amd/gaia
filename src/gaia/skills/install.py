@@ -47,7 +47,7 @@ from typing import Any, Callable, Optional
 
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
-from gaia.skills.audit.findings import content_digest
+from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import (
     SKILL_FILENAME,
@@ -287,7 +287,7 @@ def install_skill(
         undo_incomplete = False
         try:
             staged = staging / name
-            shutil.copytree(source_dir, staged)
+            shutil.copytree(source_dir, staged, ignore=ignore_bytecode_caches)
 
             # Re-stamp only when the signature did not support the claim, so
             # `gaia skill info` and the loader read the enforced tier rather than the

@@ -18,6 +18,8 @@ from gaia.skills.binaries import (
     BINARY_POLICIES,
     CONFIRM,
     REFUSE,
+    BinaryPolicy,
+    Subcommand,
     _split_flag,
     classify_invocation,
 )
@@ -126,10 +128,76 @@ def test_git_denied_flags_are_matched_in_every_spelling_git_accepts(command, rea
         ("git stash push -mfix", CONFIRM),
         ("git checkout main", CONFIRM),
         ("git checkout -b topic", CONFIRM),
+        # A value attached to a value-taking short option is not more flags.
+        ("git log -SOAuth", ALLOW),
+        ("git log -S OAuth", ALLOW),
+        ("git log -GOpen", ALLOW),
+        ("git log -L:Open:f.py", ALLOW),
+        ("git log -n5", ALLOW),
+        ("git log -M50%", ALLOW),
+        ("git diff -U5", ALLOW),
+        ("git diff -IOld", ALLOW),
+        ("git show -SOAuth HEAD", ALLOW),
+        ("git grep -eOpen", ALLOW),
+        ("git grep -e Open", ALLOW),
+        ("git grep -A3 -eOpen", ALLOW),
+        ("git blame -L1,5 f.py", ALLOW),
+        ("git ls-files -xOld", ALLOW),
+        ("git checkout -bfix", CONFIRM),
+        ("git switch -cfeature", CONFIRM),
     ],
 )
 def test_ordinary_git_flags_still_run(command, outcome):
     assert _decide(command).outcome == outcome
+
+
+@pytest.mark.parametrize(
+    ("command", "read_as"),
+    [
+        # An optional value is attached only, so the next word is a flag again.
+        ("git log -M --output=x", "--output"),
+        ("git diff -U --outp=x", "--output"),
+        ("git blame -C --textc f.py", "--textconv"),
+        # A required value is the next word; what follows it is a flag again.
+        ("git grep -e Open -O", "-O"),
+        ("git log -S x --ext", "--ext-diff"),
+    ],
+)
+def test_a_flag_after_a_value_taking_option_is_still_checked(command, read_as):
+    decision = _decide(command)
+    assert decision.outcome == REFUSE
+    assert read_as in decision.message
+
+
+def test_both_scan_paths_word_an_abbreviated_denial_the_same():
+    """The positional path names the typed token and what the CLI reads it as."""
+    policy = BinaryPolicy(
+        binary="tool",
+        summary="tool",
+        install_hint="install tool",
+        abbreviated_options=True,
+        positional=Subcommand(
+            value_flags=frozenset({"-k"}),
+            denied_flags=frozenset({"--danger", "-x"}),
+            denied_flag_reasons={"--danger": "it is dangerous", "-x": "it is bad"},
+        ),
+    )
+
+    abbreviated = classify_invocation(policy, ["tool", "--dang"])
+    clustered = classify_invocation(policy, ["tool", "-qx"])
+    exact = classify_invocation(policy, ["tool", "--danger"])
+
+    assert abbreviated.message == (
+        "'tool --dang' is not allowed (tool reads it as --danger): it is dangerous."
+    )
+    assert clustered.message == (
+        "'tool -qx' is not allowed (tool reads it as -x): it is bad."
+    )
+    assert exact.message == "'tool --danger' is not allowed: it is dangerous."
+    assert _decide("git diff --ext").message == (
+        "'git diff --ext' is not allowed (git reads it as --ext-diff): "
+        + _decide("git diff --ext-diff").message.split(": ", 1)[1]
+    )
 
 
 def test_exact_denied_flag_message_is_unchanged():

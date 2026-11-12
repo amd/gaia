@@ -197,6 +197,10 @@ class Subcommand:
             it refuses — ``--omit dev`` and ``--omit left-pad`` parse the same
             here. Attached, the value is unambiguous, so ``npm ci --omit=dev``
             works without the value-flag that would swallow a package name.
+        optional_value_flags: Short options whose value is optional and only
+            ever attached (git's ``-M50%``). In a short cluster the rest of the
+            token is their value; a spaced next token is never consumed, because
+            the CLI reads it as a word of its own.
         path_value_flags: Value-taking flags whose value is a FILE this
             command reads or writes (``go test -coverprofile=cover.out``). The
             value must stay inside the checkout, by the same lexical test that
@@ -260,6 +264,7 @@ class Subcommand:
     denied_flag_reasons: Mapping[str, str] = field(default_factory=dict)
     strict_flags: bool = False
     inline_value_flags: frozenset[str] = frozenset()
+    optional_value_flags: frozenset[str] = frozenset()
     path_value_flags: frozenset[str] = frozenset()
     no_operands: bool = False
     confirm: bool = False
@@ -807,6 +812,14 @@ _GIT_BRANCH_DENIED_FLAGS = frozenset(
 )
 
 
+#: Short options of git's diff machinery that need a value (``-SOAuth``,
+#: ``-S OAuth``), and those whose value is optional and attached only (``-M50%``).
+#: Either way git reads the rest of a short cluster as the value.
+_GIT_DIFF_VALUE_SHORT = frozenset({"-S", "-G", "-l", "-I"})
+_GIT_DIFF_OPTIONAL_VALUE_SHORT = frozenset({"-U", "-M", "-C", "-B", "-X"})
+_GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
+
+
 def _git_read(
     *,
     denied_flags: frozenset[str] = frozenset(),
@@ -814,6 +827,7 @@ def _git_read(
     denied_actions: frozenset[str] = frozenset(),
     no_operands: bool = False,
     value_flags: frozenset[str] = frozenset(),
+    optional_value_flags: frozenset[str] = frozenset(),
 ) -> Subcommand:
     """One read-only git subcommand — free-form, because its operands are
     revisions and pathspecs rather than an action word.
@@ -831,6 +845,7 @@ def _git_read(
         free_form=True,
         no_operands=no_operands,
         value_flags=value_flags,
+        optional_value_flags=optional_value_flags,
         denied_actions=denied_actions,
         denied_flags=_GIT_READ_DENIED_FLAGS | denied_flags,
         denied_flag_reasons={
@@ -1626,18 +1641,32 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         ),
         subcommands={
             "status": _git_read(),
-            "log": _git_read(),
-            "show": _git_read(),
-            "diff": _git_read(),
-            "blame": _git_read(),
-            "shortlog": _git_read(),
+            "log": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "show": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "diff": _git_read(
+                value_flags=_GIT_DIFF_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "blame": _git_read(
+                value_flags=frozenset({"-L", "-S"}),
+                optional_value_flags=frozenset({"-C", "-M"}),
+            ),
+            "shortlog": _git_read(optional_value_flags=frozenset({"-w"})),
             "describe": _git_read(),
             "rev-parse": _git_read(),
             "merge-base": _git_read(),
-            "ls-files": _git_read(),
+            "ls-files": _git_read(value_flags=frozenset({"-x", "-X"})),
             "ls-tree": _git_read(),
             "cat-file": _git_read(),
-            "grep": _git_read(),
+            "grep": _git_read(
+                value_flags=frozenset({"-e", "-f", "-A", "-B", "-C", "-m"})
+            ),
             # Flags only: `git branch` lists, and `git branch <name>`
             # CREATES a ref, which free-form would have called the same read.
             "branch": _git_read(
@@ -1748,6 +1777,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "switches branches or overwrites files in the working tree — "
                 "any uncommitted change to a file it touches is lost, and "
                 "nothing recovers it",
+                value_flags=frozenset({"-b"}),
                 denied_flags=frozenset({"-f", "--force", "-B", "--orphan"}),
                 denied_flag_reasons={
                     "-f": "it discards uncommitted changes without reporting "
@@ -1762,6 +1792,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             ),
             "switch": _git_write(
                 "switches branches in this repository",
+                value_flags=frozenset({"-c"}),
                 denied_flags=frozenset(
                     {"-f", "--force", "--discard-changes", "-C", "--orphan"}
                 ),
@@ -2431,6 +2462,7 @@ def _value_taking_flags(rule: Subcommand) -> frozenset[str]:
         | frozenset(rule.flag_values)
         | rule.path_value_flags
         | rule.inline_value_flags
+        | rule.optional_value_flags
         | frozenset(rule.flag_value_prefixes)
     )
 
@@ -2465,6 +2497,18 @@ def _spelled_denied_flag(
         if flag in value_taking:
             break
     return None
+
+
+def _denied_flag_message(
+    policy: BinaryPolicy, prefix: str, token: str, name: str, denied: str, reason: str
+) -> str:
+    """The refusal for a denied flag, naming the flag the CLI reads *token* as."""
+    if denied == name:
+        return f"'{policy.binary} {prefix}{denied}' is not allowed: {reason}."
+    return (
+        f"'{policy.binary} {prefix}{token}' is not allowed "
+        f"({policy.binary} reads it as {denied}): {reason}."
+    )
 
 
 def _empty_value(spelled: str, name: str, *, attached_only: bool = False) -> str:
@@ -2709,13 +2753,10 @@ def classify_invocation(
                 denied,
                 "that flag sends a request body, which makes the call a write",
             )
-            read_as = (
-                "" if denied == name else f" ({policy.binary} reads it as {denied})"
-            )
             return _refuse(
-                f"'{policy.binary} {subcommand} "
-                f"{denied if denied == name else token}' is not allowed{read_as}: "
-                f"{reason}."
+                _denied_flag_message(
+                    policy, f"{subcommand} ", token, name, denied, reason
+                )
             )
 
         # A flag this rule only ever reviewed as VALUELESS must not arrive
@@ -2982,7 +3023,9 @@ def _classify_positional_invocation(
             reason = rule.denied_flag_reasons.get(
                 denied, "it is outside this grant's read-only flag set"
             )
-            return _refuse(f"'{policy.binary} {denied}' is not allowed: {reason}.")
+            return _refuse(
+                _denied_flag_message(policy, "", token, name, denied, reason)
+            )
 
         if name in rule.allowed_flags or name in policy.bare_flags:
             if inline is not None:

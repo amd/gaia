@@ -489,7 +489,7 @@ def capture_skill(
         )
 
     resolver = manager if manager is not None else SkillManager()
-    from gaia.skills.audit.findings import content_digest
+    from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
 
     kind = _classify_source(source)
     failed_verification = tuple(failed_verification)
@@ -558,7 +558,7 @@ def capture_skill(
             if source_dir is not None:
                 # The WHOLE bundle lands — tools.py/scripts included — so
                 # promote trusts exactly the bytes that were audited.
-                shutil.copytree(source_dir, target)
+                shutil.copytree(source_dir, target, ignore=ignore_bytecode_caches)
                 landed = parse_skill_file(target, check_directory_name=False)
             else:
                 target.mkdir(parents=True)
@@ -688,7 +688,7 @@ def import_bundle(
         SkillPermissionError: a permission is un-bridged or above the ceiling.
         SkillValidationError: the ``SKILL.md`` fails the schema gate.
     """
-    from gaia.skills.audit.findings import content_digest
+    from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
     from gaia.skills.install import SkillInstallError, _gate_tier
 
     resolver = manager if manager is not None else SkillManager()
@@ -732,7 +732,7 @@ def import_bundle(
     try:
         if target.exists():
             shutil.rmtree(target)
-        shutil.copytree(source_dir, target)
+        shutil.copytree(source_dir, target, ignore=ignore_bytecode_caches)
         landed = parse_skill_file(target, check_directory_name=False)
         landed.name = final_name
         previous_tier = reset_security_tier(landed)

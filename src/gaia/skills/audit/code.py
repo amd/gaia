@@ -1189,8 +1189,9 @@ def analyze_code(directory: Path | str) -> CodeAnalysis:
 
     Covers ``tools.py`` and ``scripts/`` — and any other ``*.py`` / ``*.pyw``,
     so a skill cannot escape the scan by hiding the payload in ``helper.py``.
-    Compiled modules, archives, ``__pycache__`` and ``node_modules`` cannot be
-    read as source, so each is reported as ``code.unreadable`` by path.
+    Compiled modules, archives and ``node_modules`` cannot be read as source,
+    so each is reported as ``code.unreadable`` by path. ``__pycache__`` is not:
+    no bundle copy into GAIA carries one, so it was written from audited source.
     """
     directory = Path(directory)
     analysis = CodeAnalysis(findings=_uninspectable_findings(directory))
