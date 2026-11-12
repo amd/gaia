@@ -397,15 +397,65 @@ def test_a_cancelled_one_shot_build_closes_the_agent(capped, monkeypatch):
     assert built and built[0].closed == 1, "the abandoned one-shot agent leaked"
 
 
+class _WatchedLock:
+    """A run_lock that signals when a turn blocks on it and counts releases."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.waiting = threading.Event()
+        self.released_twice = threading.Event()
+        self.releases = 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        if blocking:
+            self.waiting.set()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+        self.releases += 1
+        if self.releases == 2:
+            self.released_twice.set()
+
+    def locked(self):
+        return self._lock.locked()
+
+
 def test_a_cancelled_wait_for_a_stopped_turn_releases_the_lock(capped):
+    """Driven by events: a timed release can beat the cancel on a slow runner."""
+    import asyncio
+
     reg, client = capped
     session = reg.get_or_create("stopping")
     stopped = threading.Event()
     stopped.set()
     session.active_cancel = stopped
-    session.run_lock.acquire()  # the stopped turn, still winding down
-    threading.Timer(1.0, session.run_lock.release).start()
+    lock = _WatchedLock()
+    session.run_lock = lock
+    assert lock.acquire(blocking=False)  # the stopped turn, still winding down
 
-    _run_query_then_cancel(_body("stopping"), 0.3)
+    async def go():
+        task = asyncio.ensure_future(
+            server_mod.query(server_mod.QueryRequest(**_body("stopping")))
+        )
+        # The bound only guards a hang; a cold first call can take seconds.
+        waiter = asyncio.ensure_future(asyncio.to_thread(lock.waiting.wait, 60))
+        done, _ = await asyncio.wait(
+            {task, waiter}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if task in done:
+            lock.waiting.set()  # frees the waiter thread
+            task.result()  # surfaces why the route ended early
+            pytest.fail("the route returned without waiting for the stopped turn")
+        assert waiter.result(), "the new turn never waited for the stopped one"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        lock.release()  # the stopped turn ends; the abandoned wait takes the lock
+        released = await asyncio.to_thread(lock.released_twice.wait, 60)
+        assert released, "the abandoned wait kept the turn"
 
-    assert not session.run_lock.locked(), "the abandoned wait kept the turn"
+    asyncio.run(go())
+
+    assert not lock.locked(), "the abandoned wait kept the turn"
+    assert lock.releases == 2
