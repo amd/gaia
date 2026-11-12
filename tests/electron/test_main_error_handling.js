@@ -362,6 +362,44 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  // ── Test 9d: a renderer's clean exit is a shutdown, not a crash ────────────
+  // Stopping the app's unit (logout, `systemctl --user stop`) signals every
+  // process at once; the renderer exits cleanly before the main process quits.
+
+  test("render-process-gone with clean-exit logs it and shows no crash dialog", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("render-process-gone", {}, {}, { reason: "clean-exit", exitCode: 0 });
+
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/RENDER_PROCESS_EXITED reason=clean-exit/);
+
+    exitSpy.mockRestore();
+  });
+
+  test.each([["crashed"], ["killed"], ["oom"], ["abnormal-exit"]])(
+    "render-process-gone with %s still shows the crash dialog",
+    (reason) => {
+      const { installSafetyNet } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+      app.emit("render-process-gone", {}, {}, { reason, exitCode: 1 });
+
+      expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+
+      exitSpy.mockRestore();
+    }
+  );
+
   // ── Test 10: fatal handler writes to log before showing dialog ─────────────
   // If dialog.showErrorBox itself crashes, the log must already have the entry.
 

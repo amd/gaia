@@ -15,9 +15,7 @@ Endpoints covered:
   DELETE /api/memory/knowledge/{id}
   GET  /api/memory/entities
   GET  /api/memory/entities/{entity}
-  GET  /api/memory/contexts
   GET  /api/memory/tools
-  GET  /api/memory/errors
   GET  /api/memory/conversations
   GET  /api/memory/conversations/search
   GET  /api/memory/conversations/{session_id}
@@ -260,6 +258,33 @@ class TestKnowledgeCRUD:
         resp = client.delete("/api/memory/knowledge/no-such-id")
         assert resp.status_code == 404
 
+    def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
+        """A copy saved under another context must not keep the fact alive."""
+        kid = test_store.store(
+            category="fact",
+            content="User is allergic to mango",
+            sensitive=True,
+            entity="user",
+        )
+        copy = test_store.store(
+            category="fact", content="Allergic to mango.", context="personal"
+        )
+        apps = test_store.store(
+            category="fact", content="Allergic to mango", entity="app:slack"
+        )
+        other = test_store.store(
+            category="fact", content="User is allergic to green mango"
+        )
+
+        resp = client.delete(f"/api/memory/knowledge/{kid}")
+
+        assert resp.status_code == 200
+        assert set(resp.json()["knowledge_ids"]) == {kid, copy}
+        assert test_store.get_item(kid) is None
+        assert test_store.get_item(copy) is None
+        assert test_store.get_item(apps) is not None
+        assert test_store.get_item(other) is not None
+
 
 # ===========================================================================
 # Entities & Contexts
@@ -288,17 +313,9 @@ class TestEntitiesAndContexts:
         assert isinstance(items, list)
         assert any("Bob" in item["content"] for item in items)
 
-    def test_contexts_returns_list(self, client):
-        _create_knowledge(client, "Work fact", context="work")
-        resp = client.get("/api/memory/contexts")
-        assert resp.status_code == 200
-        data = resp.json()
-        contexts = [c["context"] for c in data]
-        assert "work" in contexts
-
 
 # ===========================================================================
-# Tool Performance & Errors
+# Tool Performance
 # ===========================================================================
 
 
@@ -322,25 +339,6 @@ class TestToolPerformance:
         data = resp.json()
         names = [t["tool_name"] for t in data]
         assert "my_tool" in names
-
-    def test_tool_history(self, client, test_store):
-        test_store.log_tool_call(
-            session_id="s1",
-            tool_name="hist_tool",
-            args={"x": 1},
-            result_summary="done",
-            success=True,
-        )
-        resp = client.get("/api/memory/tools/hist_tool/history")
-        assert resp.status_code == 200
-        items = resp.json()
-        assert len(items) >= 1
-        assert items[0]["tool_name"] == "hist_tool"
-
-    def test_errors_returns_list(self, client):
-        resp = client.get("/api/memory/errors")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
 
 
 # ===========================================================================

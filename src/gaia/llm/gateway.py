@@ -629,12 +629,6 @@ def resolve_gateway_token_with_source() -> tuple[str, str]:
     )
 
 
-def resolve_gateway_token() -> str:
-    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry."""
-    token, _source = resolve_gateway_token_with_source()
-    return token
-
-
 def lemonade_token_with_source(
     recall: Optional[Callable[[], Optional[str]]] = None,
     lemonade_url: Optional[str] = None,

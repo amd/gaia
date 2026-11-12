@@ -579,6 +579,46 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
 
 
+def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
+    flm_box, monkeypatch
+):
+    fake = flm_box()
+    listed = fake.list_models
+    cloud = {
+        "id": "fireworks.deepseek-v4p1-flash",
+        "downloaded": True,
+        "recipe": "cloud",
+        "labels": ["chat", "cloud"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [cloud]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert FLM in ids
+    assert cloud["id"] not in ids
+
+
+@pytest.mark.parametrize(
+    "entry, kept",
+    [
+        ({"id": "fireworks.glm-5p3-flash", "labels": ["chat"]}, False),
+        ({"id": "openrouter.some-model", "labels": ["chat", "cloud"]}, False),
+        ({"id": "user.My-Local-GGUF", "labels": ["chat"], "device": "none"}, True),
+    ],
+)
+def test_catalog_tells_a_local_model_from_a_cloud_one(
+    flm_box, monkeypatch, entry, kept
+):
+    fake = flm_box()
+    listed = fake.list_models
+    row = {"downloaded": True, "recipe": "llamacpp", **entry}
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [row]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert (row["id"] in ids) is kept
+
+
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     flm_box()
     plan = sp.build_plan()
