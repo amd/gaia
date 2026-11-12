@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Dropped MCP servers are shown as a warning, including ones that fail to
+  start.** The notice that configured MCP servers were left out reached the
+  Agent UI as a plain progress line, so it never appeared in the window, and a
+  server whose command failed to start was not reported at all. A `status`
+  event that warns the user now carries `level: "warning"`, and a server that
+  could not start is named with its error and where it is set up: Settings >
+  Connectors for a connector, the `mcp_servers.json` file for one added by hand.
 - **The default step limit is now 1000, up from 150.** Long multi-part tasks
   reached 150 steps and were cut off before their last part. The limit is now
   only a backstop for a turn that never finishes; the repeated-call and
