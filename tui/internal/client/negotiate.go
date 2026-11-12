@@ -124,9 +124,9 @@ const (
 const surfaceAgentID = "gaia"
 
 // workingDirectoryContract is the contract version from which the flagship's
-// `/query` takes `working_directory` (schema 2.24). Without it the sidecar,
-// spawned by the daemon, resolves a bare file name against the daemon's folder.
-// Gaia only, like surface.
+// `/query` takes `working_directory` (schema 2.24). Without it the
+// daemon-spawned sidecar resolves relative paths and the project map against
+// the daemon's folder. Gaia only, like surface.
 const (
 	workingDirectoryContractMajor = 2
 	workingDirectoryContractMinor = 24
@@ -279,7 +279,7 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
 	supportsWorkingDirectory := s.agentID == surfaceAgentID &&
 		contractAtLeast(payload.APIVersion, workingDirectoryContractMajor, workingDirectoryContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t, surface: %t, launch folder: %t)",
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t, surface: %t, start folder: %t)",
 		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision,
 		supportsSurface, supportsWorkingDirectory)
 	agentVersion := payload.Version
@@ -287,15 +287,14 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		agentVersion = payload.AgentVersion
 	}
 	return peerContract{
-		version:              payload.APIVersion,
-		agentVersion:         agentVersion,
-		canAnswerQuestions:   supports,
-		supportsSession:      supportsSession,
-		supportsFollowUp:     supportsFollowUp,
-		supportsToolDecision: supportsDecision,
-		supportsSurface:      supportsSurface,
-		answered:             true,
-
+		version:                  payload.APIVersion,
+		agentVersion:             agentVersion,
+		canAnswerQuestions:       supports,
+		supportsSession:          supportsSession,
+		supportsFollowUp:         supportsFollowUp,
+		supportsToolDecision:     supportsDecision,
+		supportsSurface:          supportsSurface,
+		answered:                 true,
 		supportsWorkingDirectory: supportsWorkingDirectory,
 	}
 }

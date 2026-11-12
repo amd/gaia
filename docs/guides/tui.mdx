@@ -619,8 +619,10 @@ the answer set apart below:
 ```
 
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
-  a path that is still long keeps its end. A file you name without a folder,
-  such as `note.txt`, is read from and saved to that same folder.
+  a path that is still long keeps its end. The agent works in that folder too:
+  a file you name without a full path, such as `note.txt` or `src/app.py`, is
+  read from and saved to that folder, and the
+  [project map](/guides/project-map) is of the project that folder is in.
 - **The folder you started GAIA in is the chat's folder**, the same as
   `gaia -p`: GAIA looks there first and reads files in it, and in the folders
   under it, without asking. A file anywhere else asks first, and saying yes

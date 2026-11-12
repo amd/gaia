@@ -447,28 +447,32 @@ func TestTheFlagshipAt220IsToldTheTUIIsAsking(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// working_directory (contract 2.24): without it the sidecar resolves a bare
-// file name against the daemon's own folder, not the one GAIA was started in.
+// working_directory (contract 2.24): without it the daemon-spawned sidecar
+// resolves relative paths and the project map against the daemon's folder.
 // ---------------------------------------------------------------------------
 
-func TestTheFlagshipAt224GetsTheLaunchFolder(t *testing.T) {
+func TestTheFlagshipAt224IsToldTheStartFolder(t *testing.T) {
 	want, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := newFakeRelay(t)
-	f.contractVersion = "2.24"
-	sendOnce(t, f, "gaia")
-	got := f.queries[0].WorkingDirectory
-	if got != want || !filepath.IsAbs(got) {
-		t.Errorf("working_directory = %q, want the absolute launch folder %q: %s",
-			got, want, f.lastRawBody())
+	for _, version := range []string{"2.24", "2.27", "3.0"} {
+		t.Run(version, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = version
+			sendOnce(t, f, "gaia")
+			got := f.queries[0].WorkingDirectory
+			if got != want || !filepath.IsAbs(got) {
+				t.Errorf("working_directory = %q, want the absolute start folder %q: %s",
+					got, want, f.lastRawBody())
+			}
+		})
 	}
 }
 
 // With only working_directory the agent's prompt named the home folder as the
-// place to look first, and a read in the launch folder asked for approval.
-func TestTheFlagshipAt224GetsTheLaunchFolderAsItsScope(t *testing.T) {
+// place to look first, and a read in the start folder asked for approval.
+func TestTheFlagshipAt224GetsTheStartFolderAsItsScope(t *testing.T) {
 	want, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -478,15 +482,39 @@ func TestTheFlagshipAt224GetsTheLaunchFolderAsItsScope(t *testing.T) {
 	sendOnce(t, f, "gaia")
 	got := f.queries[0].AllowedPaths
 	if len(got) != 1 || got[0] != want || got[0] != f.queries[0].WorkingDirectory {
-		t.Errorf("allowed_paths = %q, want exactly the launch folder [%q]: %s",
+		t.Errorf("allowed_paths = %q, want exactly the start folder [%q]: %s",
 			got, want, f.lastRawBody())
+	}
+}
+
+func TestEveryTurnCarriesTheStartFolder(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRelay(t)
+	f.contractVersion = "2.24"
+	sendOnce(t, f, "gaia")
+	sendOnce(t, f, "gaia")
+	if len(f.queries) != 2 {
+		t.Fatalf("got %d queries, want 2", len(f.queries))
+	}
+	for i, q := range f.queries {
+		if q.WorkingDirectory != want {
+			t.Errorf("turn %d working_directory = %q, want %q", i, q.WorkingDirectory, want)
+		}
+		if len(q.AllowedPaths) != 1 || q.AllowedPaths[0] != want {
+			t.Errorf("turn %d allowed_paths = %q, want [%q]", i, q.AllowedPaths, want)
+		}
 	}
 }
 
 func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct{ agent, version string }{
 		{"gaia", "2.23"},
+		{"gaia", "2.2"},
 		{"gaia", ""},
+		{"gaia", "garbage"},
 		{"email", "2.24"},
 	} {
 		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
@@ -495,7 +523,7 @@ func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 			sendOnce(t, f, tc.agent)
 			raw := f.lastRawBody()
 			if strings.Contains(raw, "working_directory") || strings.Contains(raw, "allowed_paths") {
-				t.Errorf("the launch folder was sent to a peer that rejects it: %s", raw)
+				t.Errorf("the start folder was sent to a peer that rejects it: %s", raw)
 			}
 		})
 	}

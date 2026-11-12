@@ -234,8 +234,8 @@ type queryRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
 	Surface string `json:"surface,omitempty"`
-	// The folder GAIA was started in, so relative paths resolve there rather
-	// than in the daemon's own folder. Sent only to a peer proven >= 2.24.
+	// The folder GAIA was started in: where relative paths and the project map
+	// resolve. Sent only to a peer proven >= 2.24.
 	WorkingDirectory string `json:"working_directory,omitempty"`
 	// That same folder as the session's file scope, as `gaia -p` sends it, so
 	// the agent looks there first and reads there without asking.
@@ -310,7 +310,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	if peer.supportsWorkingDirectory {
 		workingDirectory, err = os.Getwd()
 		if err != nil {
-			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to find files you name without a full path: %w", err)
+			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to resolve file names you give without a full path; restart GAIA from a folder that exists: %w", err)
 		}
 		allowedPaths = []string{workingDirectory}
 	}
