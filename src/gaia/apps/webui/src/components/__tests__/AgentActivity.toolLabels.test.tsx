@@ -127,5 +127,7 @@ it('names a declined call in a folded summary', () => {
     ];
     render(<AgentActivity steps={steps} isActive={false} />);
 
-    expect(screen.getByRole('button', { name: /^Read file, you declined a step$/ })).toBeInTheDocument();
+    const summary = screen.getByRole('button', { name: /^Read file, you declined a step$/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+    expect(summary.querySelector('.lucide-circle-check')).toBeNull();
 });
