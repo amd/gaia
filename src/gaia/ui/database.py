@@ -1531,7 +1531,6 @@ class ChatDatabase:
         anything rather than now, for a turn whose process ended some unknown
         time ago.
 
-
         *owner* is the process the turn must belong to, this one by default,
         so one server never closes another's live turn. Whatever the turn had
         streamed is kept above the notice; an empty notice keeps it alone.
