@@ -42,7 +42,7 @@ describe('SkillsSettings', () => {
         const onUseSkill = vi.fn();
         render(<SkillsSettings onUseSkill={onUseSkill} />);
         const row = (await screen.findByText('pdf-forms')).closest('li')!;
-        fireEvent.click(within(row).getByRole('button', { name: 'Use pdf-forms in a new chat' }));
+        fireEvent.click(within(row).getByRole('button', { name: 'Try pdf-forms in a new chat' }));
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('pdf-forms');
     });
 
@@ -60,15 +60,36 @@ describe('SkillsSettings', () => {
         expect(within(row).getByText('· Always on')).toBeInTheDocument();
         expect(within(row).queryByRole('button')).not.toBeInTheDocument();
         const selectableRow = screen.getByText('gh-cli').closest('li')!;
-        fireEvent.click(within(selectableRow).getByRole('button', { name: 'Use gh-cli in a new chat' }));
+        fireEvent.click(within(selectableRow).getByRole('button', { name: 'Try gh-cli in a new chat' }));
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('gh-cli');
     });
 
-    it('names skills that could not be read', async () => {
-        mockedApi.listSkills.mockResolvedValue({ skills: [], invalid: { '/skills/broken/SKILL.md': 'missing name' } });
+    it('explains a skipped skill in one plain line, without paths or developer advice', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [],
+            invalid: {
+                '/home/me/.claude/skills/modsmith': "/home/me/.claude/skills/modsmith/SKILL.md: description is 1025 characters; the limit is 1024. It is a trigger signal, not documentation — move the detail into the Markdown body. See https://amd-gaia.ai/docs/spec/agent-skills#x",
+                '/skills/broken': 'missing name',
+            },
+        });
         render(<SkillsSettings onUseSkill={vi.fn()} />);
-        expect(await screen.findByRole('alert')).toHaveTextContent('missing name');
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent("modsmith couldn't be loaded: its description is too long for GAIA");
+        expect(alert).toHaveTextContent("broken couldn't be loaded: it isn't a valid skill file");
+        expect(alert).not.toHaveTextContent('/home/me');
+        expect(alert).not.toHaveTextContent('trigger signal');
+        expect(alert).not.toHaveTextContent('https://');
         expect(screen.getByText('No skills are installed.')).toBeInTheDocument();
+    });
+
+    it('explains a skipped skill in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [],
+            invalid: { '/x/modsmith': 'description is 1025 characters; the limit is 1024.' },
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent(/تعذّر تحميل .*modsmith.*وصفه أطول/);
     });
 
     it('shows a load failure', async () => {
@@ -91,6 +112,30 @@ describe('SkillsSettings', () => {
         const imported = screen.getByRole('region', { name: 'From Claude Code' });
         expect(within(imported).getByText('old-helper')).toBeInTheDocument();
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
+    });
+
+    it('counts only the matching skills in each group while searching', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('image-gen', 'Make pictures', null, 'agent-bundled'),
+                skill('web-research', 'Research', null, 'agent-bundled'),
+                skill('summarize', 'Summarize', null, 'agent-bundled'),
+                skill('coding', 'Code', null, 'agent-bundled'),
+                skill('old-helper', 'Imported', null, 'claude-import'),
+                skill('image-resize', 'Resize images', null, 'claude-import'),
+                skill('pdf-tools', 'PDFs', null, 'claude-import'),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const countOf = (title: string) =>
+            screen.getByText(title).closest('summary')!.querySelector('.settings-disclosure-count')!.textContent;
+        await screen.findByRole('region', { name: 'Built into GAIA' });
+        expect(countOf('Built into GAIA')).toBe('4');
+        expect(countOf('From Claude Code')).toBe('3');
+        fireEvent.change(screen.getByRole('searchbox', { name: 'Search skills' }), { target: { value: 'image' } });
+        expect(countOf('Built into GAIA')).toBe('1');
+        expect(countOf('From Claude Code')).toBe('1');
     });
 
     it('shows every skill, flat, when one comes from a source it has no group for', async () => {

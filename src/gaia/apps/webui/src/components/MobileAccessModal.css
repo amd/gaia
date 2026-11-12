@@ -30,24 +30,20 @@
     flex-shrink: 0;
 }
 
-.tunnel-status .status-dot.active {
+.tunnel-status .status-dot.is-active {
     background: var(--accent-green);
 }
 
-.tunnel-status .status-dot.starting {
+.tunnel-status .status-dot.is-starting {
     background: var(--accent-yellow);
     animation: pulse-dot var(--duration-pulse) var(--ease-in-out) infinite;
 }
 
-.tunnel-status .status-dot.error {
+.tunnel-status .status-dot.is-error {
     background: var(--danger);
 }
 
-.tunnel-status .status-dot.setup {
-    background: var(--text-muted);
-}
-
-.tunnel-status .status-dot.inactive {
+.tunnel-status .status-dot.is-setup {
     background: var(--text-muted);
 }
 
@@ -107,10 +103,6 @@
 .tunnel-setup-title {
     font-weight: 600;
     color: var(--text-primary);
-}
-
-.tunnel-setup-command input {
-    font-family: var(--font-mono);
 }
 
 .tunnel-setup-link {

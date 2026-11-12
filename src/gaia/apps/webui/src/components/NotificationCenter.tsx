@@ -19,7 +19,6 @@ import {
   useNotificationStore,
   selectUnreadCount,
   selectVisibleNotifications,
-  PATH_ACCESS_TOOL,
   permissionPromptText,
 } from '../stores/notificationStore';
 import type { GaiaNotification, NotificationType } from '../types/agent';
@@ -219,13 +218,6 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                       )}
                       <span className="notification-message">{n.message}</span>
                     </>
-                  )}
-
-                  {/* Tool info for permission requests */}
-                  {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (
-                    <span className="notification-tool">
-                      {t('activity.policy.tool')}: <code dir="ltr">{n.tool}</code>
-                    </span>
                   )}
 
                   {n.type === 'policy_alert' && (
