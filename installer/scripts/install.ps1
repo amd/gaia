@@ -27,8 +27,9 @@ $GAIA_RELEASES_URL = $GAIA_RELEASES_URL.TrimEnd('/')
 # release (Resolve-Pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 $GAIA_RELEASE_TAG = $env:GAIA_RELEASE_TAG
 $TUI_SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
-# Set by Install-Core: this install had the Terminal UI as gaia-tui.
-$HAD_GAIA_TUI = $false
+# Set by Install-Core: this install had the Terminal UI as gaia-tui. A
+# hashtable, like $RELEASE, so Install-Core can set it under iex.
+$LEGACY_TUI = @{ Present = $false }
 $CORE_SUMS_FILE = "gaia-core-SHA256SUMS.txt"
 # The release this run installs from, resolved once. A hashtable so functions
 # can set it without reaching the caller's scope under iex.
@@ -106,7 +107,7 @@ function Install-Core {
             New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
         }
         # Read before the cleanup below can delete gaia-tui.exe.old (Install-Tui).
-        $script:HAD_GAIA_TUI = Test-LegacyTui
+        $LEGACY_TUI.Present = Test-LegacyTui
         # What an earlier upgrade moved aside; one still in use is removed next time.
         Get-ChildItem -LiteralPath $GAIA_BIN -Filter "*.exe*.old" -File |
             Remove-Item -Force -ErrorAction SilentlyContinue
@@ -527,7 +528,7 @@ function Install-Tui {
     # old binary it would start the old version. A GAIA updating itself puts
     # its moved-aside binary back unless a new one is here.
     $legacy = "$GAIA_BIN\gaia-tui.exe"
-    if ($script:HAD_GAIA_TUI -or (Test-LegacyTui)) {
+    if ($LEGACY_TUI.Present -or (Test-LegacyTui)) {
         try {
             Copy-Item -LiteralPath "$GAIA_BIN\gaia-cli.exe" -Destination $legacy -Force
         }

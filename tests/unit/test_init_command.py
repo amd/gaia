@@ -3181,7 +3181,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         cmd = InitCommand(profile=profile, yes=True)
         cmd._is_hub_agent_available = MagicMock(return_value=agent_available)
-        cmd._tui_installed = MagicMock(return_value=True)
+        cmd._tui_command = MagicMock(return_value="gaia-cli")
         return cmd
 
     def _render(self, cmd, rich):

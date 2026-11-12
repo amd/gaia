@@ -530,13 +530,14 @@ def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
     return ""
 
 
-#: GAIA's CLI under each name it answers to: the entry points and ``-m``.
+#: GAIA's CLI under each name it answers to. ``gaia-cli`` stays because an
+#: install from before 0.26 still has it as an alias of the Python CLI.
 _GAIA_CLI_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
 
 
 def _runs_gaia_unattended_family(segment: Sequence[str]) -> bool:
     """True when *segment* reaches ``gaia automation`` or ``gaia discord``,
-    however GAIA's CLI is spelled (``gaia-cli``, ``python -m gaia.cli``)."""
+    however GAIA's CLI is spelled (``python -m gaia.cli``, an old ``gaia-cli``)."""
     words = list(segment)
     return any(
         _names_gaia_cli(word) and words[i + 1].lower() in ("automation", "discord")

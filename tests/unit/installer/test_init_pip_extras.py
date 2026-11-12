@@ -252,12 +252,12 @@ class TestTuiDetection:
     ):
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
-        assert InitCommand._tui_installed() is False
+        assert InitCommand._tui_command() is None
 
         name = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
         (tmp_path / "bin").mkdir()
         (tmp_path / "bin" / name).write_text("")
-        assert InitCommand._tui_installed() is True
+        assert InitCommand._tui_command() == "gaia-cli"
 
     def test_an_install_from_before_gaia_cli_still_counts(self, monkeypatch, tmp_path):
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
@@ -265,7 +265,7 @@ class TestTuiDetection:
         name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
         (tmp_path / "bin").mkdir()
         (tmp_path / "bin" / name).write_text("")
-        assert InitCommand._tui_installed() is True
+        assert InitCommand._tui_command() == "gaia-tui"
 
     def test_completion_does_not_tell_an_installed_user_to_reinstall(
         self, monkeypatch, tmp_path
@@ -282,6 +282,24 @@ class TestTuiDetection:
         with patch.object(init_command, "RICH_AVAILABLE", False):
             cmd._print_completion()
         assert init_command._INSTALLER_HINT not in "\n".join(printed)
+
+    def test_completion_names_the_command_an_older_install_has(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
+        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        cmd = InitCommand(profile="gaia", yes=True)
+        cmd._is_hub_agent_available = lambda _id: True
+        printed = []
+        cmd._print = lambda msg, end="\n": printed.append(str(msg))
+        with patch.object(init_command, "RICH_AVAILABLE", False):
+            cmd._print_completion()
+        start = [line for line in printed if "Start the GAIA agent" in line]
+        assert len(start) == 1
+        assert start[0].split()[0] == "gaia-tui"
 
 
 class _FakeWinreg:
@@ -324,10 +342,10 @@ class TestWindowsInstallerTuiDetection:
         install_dir.mkdir()
         fake = _FakeWinreg(install_dir)
         monkeypatch.setitem(sys.modules, "winreg", fake)
-        assert InitCommand._tui_installed() is False
+        assert InitCommand._tui_command() is None
 
         (install_dir / "gaia-cli.exe").write_text("")
-        assert InitCommand._tui_installed() is True
+        assert InitCommand._tui_command() == "gaia-cli"
         assert fake.opened[-1] == r"Software\AMD\GAIA"
 
     def test_absent_value_uses_the_installer_default_dir(
@@ -337,7 +355,7 @@ class TestWindowsInstallerTuiDetection:
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
         default_dir = tmp_path / "lad" / "Programs" / "GAIA"
         default_dir.mkdir(parents=True)
-        assert InitCommand._tui_installed() is False
+        assert InitCommand._tui_command() is None
 
         (default_dir / "gaia-cli.exe").write_text("")
-        assert InitCommand._tui_installed() is True
+        assert InitCommand._tui_command() == "gaia-cli"

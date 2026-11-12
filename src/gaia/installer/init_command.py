@@ -1664,8 +1664,8 @@ class InitCommand:
             self.events.line_open = True
 
     @staticmethod
-    def _tui_installed() -> bool:
-        """True if the Terminal UI is on PATH or in GAIA's own bin dir.
+    def _tui_command() -> Optional[str]:
+        """The Terminal UI's command if it is on PATH or in GAIA's own bin dir.
 
         It is ``gaia-cli``; an install from before that name has ``gaia-tui``.
         """
@@ -1677,15 +1677,15 @@ class InitCommand:
         )
         for command in ("gaia-cli", "gaia-tui"):
             if shutil.which(command) is not None:
-                return True
+                return command
             if (gaia_home() / "bin" / f"{command}{suffix}").is_file():
-                return True
+                return command
             if (
                 install_dir is not None
                 and (install_dir / f"{command}{suffix}").is_file()
             ):
-                return True
-        return False
+                return command
+        return None
 
     @staticmethod
     def _nsis_install_dir() -> Optional[Path]:
@@ -4011,7 +4011,8 @@ class InitCommand:
         # The flagship is a downloaded BINARY, so the remedy is `gaia init`,
         # never a pip install from a git checkout.
         agent_note = self._agent_install_note()
-        has_tui = self._tui_installed()
+        tui_command = self._tui_command()
+        has_tui = tui_command is not None
         tui_install_note = (
             f"Terminal UI (gaia-cli) ships with the installer -- run: {_INSTALLER_HINT}"
         )
@@ -4055,7 +4056,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self.console.print(
-                        "    [cyan]gaia-cli[/cyan]                             Start the GAIA agent (terminal UI)"
+                        f"    [cyan]{tui_command:<37}[/cyan]Start the GAIA agent (terminal UI)"
                     )
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
@@ -4133,7 +4134,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self._print(
-                        "    gaia-cli                             # Start the GAIA agent (terminal UI)"
+                        f"    {tui_command:<37}# Start the GAIA agent (terminal UI)"
                     )
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
