@@ -43,6 +43,7 @@ const meta = () => document.querySelector('meta[name="theme-color"]');
 describe('applyTheme', () => {
     beforeEach(() => {
         document.documentElement.removeAttribute('data-theme');
+        document.documentElement.style.removeProperty('color-scheme');
         meta()?.remove();
         const tag = document.createElement('meta');
         tag.setAttribute('name', 'theme-color');
@@ -67,6 +68,14 @@ describe('applyTheme', () => {
         ).toBe(theme);
     });
 
+    it.each(['light', 'dark'] as const)('%s: themes native controls', (theme) => {
+        applyTheme(theme);
+        expect(
+            document.documentElement.style.colorScheme,
+            'checkboxes and scrollbars keep the light style without color-scheme',
+        ).toBe(theme);
+    });
+
     it.each(['light', 'dark'] as const)('%s: repaints the browser frame', (theme) => {
         applyTheme(theme);
         expect(
@@ -79,6 +88,7 @@ describe('applyTheme', () => {
         applyTheme('light');
         applyTheme('dark');
         expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+        expect(document.documentElement.style.colorScheme).toBe('dark');
         expect(meta()?.getAttribute('content')?.toLowerCase()).toBe(CANVAS.dark);
     });
 

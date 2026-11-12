@@ -31,6 +31,8 @@ const CANVAS: Record<Theme, string> = {
 /** Single writer for the theme, so the frame can never disagree with the app. */
 export function applyTheme(theme: Theme): void {
     document.documentElement.setAttribute('data-theme', theme);
+    // Native checkboxes, radios and scrollbars only follow the theme through this.
+    document.documentElement.style.colorScheme = theme;
     const meta = document.querySelector('meta[name="theme-color"]');
     if (!meta) {
         // Not thrown: the app is already themed by the line above, and blanking
