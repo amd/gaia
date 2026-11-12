@@ -2283,8 +2283,12 @@ class TestStreamInferenceModel:
         custom_model=None,
         reply="[]",
         downloaded=True,
+        picked=None,
     ):
-        """``downloaded=None`` leaves the download check to the patched catalog."""
+        """``downloaded=None`` leaves the download check to the patched catalog.
+
+        *picked* is ``last_model``: the model chat runs after a pick.
+        """
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
         fake_llm.chat.return_value = reply
@@ -2320,11 +2324,40 @@ class TestStreamInferenceModel:
                     ),
                 )
             )
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.resolve_chat_model",
+                    return_value=picked or default_model,
+                )
+            )
             create = stack.enter_context(
                 patch("gaia.llm.create_client", return_value=fake_llm)
             )
             resp = client.get("/api/memory/stream-inference")
         return resp, create
+
+    def test_uses_the_local_model_chat_was_switched_to(self, client, tmp_path):
+        """The default would load a second chat model behind the one in use."""
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="gemma4-it-e4b-FLM",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_cloud_pick_leaves_inference_on_the_local_default(self, client, tmp_path):
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="fireworks.accounts/fireworks/models/kimi-k2",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
 
     def test_uses_the_default_chat_model_not_the_cloud_custom_model(
         self, client, tmp_path
