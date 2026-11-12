@@ -650,7 +650,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                        : visible.some((r) => r.type === 'tool' && r.declined)
+                                            ? <Ban size={13} className="flow-steps-done" />
+                                            : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>
