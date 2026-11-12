@@ -110,7 +110,7 @@ _TRIGGERS = (
 def redact(text: str, secrets: Iterable[str] = ()) -> str:
     """*text* with every known secret and anything shaped like one replaced."""
     for secret in secrets:
-        if secret and len(secret) >= 6:
+        if secret and _is_secret_value(secret):
             text = text.replace(secret, REDACTED)
     lower = text.lower()
     if not any(word in lower for word in _TRIGGERS):
@@ -127,7 +127,7 @@ def redact_lines(data: bytes, secrets: Iterable[str] = ()) -> bytes:
     costs seconds, not a regex pass per line.
     """
     for secret in secrets:
-        if secret and len(secret) >= 6:
+        if secret and _is_secret_value(secret):
             data = data.replace(secret.encode("utf-8"), REDACTED.encode())
     lower = data.lower()  # ASCII only, so offsets match *data*
     starts = set()
@@ -153,12 +153,24 @@ def redact_lines(data: bytes, secrets: Iterable[str] = ()) -> bytes:
     return b"".join(out)
 
 
+#: Stock placeholder keys for local servers; each is also a word in paths and module names.
+_PLACEHOLDER_KEYS = frozenset({"lemonade", "ollama", "placeholder", "changeme"})
+
+
+def _is_secret_value(value: str) -> bool:
+    """False for a short value or a known placeholder key such as "lemonade".
+
+    Removing a placeholder everywhere leaves a log nobody can read.
+    """
+    return len(value) >= 6 and value.lower() not in _PLACEHOLDER_KEYS
+
+
 def env_secrets() -> List[str]:
     """Values of this process's secret-named environment variables."""
     return [
         value.strip()
         for name, value in os.environ.items()
-        if _SECRET_ENV_RE.search(name) and value and len(value.strip()) >= 6
+        if _SECRET_ENV_RE.search(name) and value and _is_secret_value(value.strip())
     ]
 
 

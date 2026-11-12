@@ -22,6 +22,7 @@ from typing import Any, Dict, List
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.install_hints import source_install_command
+from gaia.api.flagship import api_unavailable_reason
 from gaia.api.sse_handler import SSEOutputHandler
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,9 @@ class AgentRegistry:
             return agent_class(**init_params)
         except ImportError as e:
             logger.error(f"Failed to load agent {model_id}: {e}")
+            reason = api_unavailable_reason()
+            if reason:
+                raise ValueError(reason) from e
             hint = ""
             if model_id == "gaia":
                 hint = (

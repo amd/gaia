@@ -25,6 +25,13 @@ export type SettingsSection =
     | 'voice'
     | 'advanced';
 
+export interface SettingsJump {
+    section: SettingsSection;
+    /** CSS selector for the setting inside that section. */
+    target: string;
+    from: SettingsSection;
+}
+
 /**
  * Read a UI preference, saying so when the store is unreadable.
  *
@@ -122,12 +129,23 @@ function readQueues(): Record<string, QueuedMessage[]> {
 export interface PendingPrompt {
     sessionId: string;
     text: string;
+    /** Its chat has scheduled the send; New chat can still take it back until then. */
+    sending?: boolean;
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
+export interface QuestionOption {
+    value: string;
+    label: string;
+}
+
 export interface LiveQuestion {
     sessionId: string;
     expiresAt: number | null;
+    /** Lets the message box answer it: the choices, and whether any text will do. */
+    options?: QuestionOption[];
+    allowFreeText?: boolean;
+    sensitive?: boolean;
 }
 
 /** One stage of a recording: 0 running, 1 done, 2 skipped. */
@@ -237,9 +255,17 @@ interface ChatState {
     /** Mid-run questions the agent is still blocked on, by request id. A card
      *  missing from here can no longer be answered. */
     liveQuestions: Record<string, LiveQuestion>;
-    openQuestion: (requestId: string, sessionId: string, timeoutSeconds?: number | null) => void;
+    openQuestion: (
+        requestId: string,
+        sessionId: string,
+        timeoutSeconds?: number | null,
+        shape?: Pick<LiveQuestion, 'options' | 'allowFreeText' | 'sensitive'>,
+    ) => void;
     closeQuestion: (requestId: string) => void;
     closeSessionQuestions: (sessionId: string) => void;
+    /** What the user answered, by request id, so the card keeps it as a record; null hides a sensitive one. */
+    questionAnswers: Record<string, string | null>;
+    recordAnswer: (requestId: string, shown: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -272,6 +298,10 @@ interface ChatState {
     runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
+    /** A setting to scroll to in the open section, and the section that sent the user there. */
+    settingsJump: SettingsJump | null;
+    /** The section Settings was last closed on, so it reopens there this session. */
+    lastSettingsSection: SettingsSection;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -307,6 +337,7 @@ interface ChatState {
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
+    jumpToSetting: (jump: SettingsJump, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -536,16 +567,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
-    openQuestion: (requestId, sessionId, timeoutSeconds) =>
+    openQuestion: (requestId, sessionId, timeoutSeconds, shape) =>
         set((state) => ({
             liveQuestions: {
                 ...state.liveQuestions,
                 [requestId]: {
                     sessionId,
                     expiresAt: timeoutSeconds != null && timeoutSeconds > 0 ? Date.now() + timeoutSeconds * 1000 : null,
+                    ...shape,
                 },
             },
         })),
+    questionAnswers: {},
+    recordAnswer: (requestId, shown) =>
+        set((state) => ({ questionAnswers: { ...state.questionAnswers, [requestId]: shown } })),
     closeQuestion: (requestId) =>
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
@@ -586,6 +621,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
+    settingsJump: null,
+    lastSettingsSection: 'general',
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -636,8 +673,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
-    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
+    openSettings: (section, provider) => set((s) => ({
+        settingsSection: section ?? s.lastSettingsSection,
+        settingsProvider: provider ?? null,
+        settingsJump: null,
+    })),
+    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsJump: jump }),
+    closeSettings: () => set((s) => ({
+        settingsSection: null,
+        settingsProvider: null,
+        settingsJump: null,
+        lastSettingsSection: s.settingsSection ?? s.lastSettingsSection,
+    })),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>

@@ -1961,9 +1961,18 @@ class TestHelperFunctions:
         """Partial overlap returns correct Szymkiewicz-Simpson coefficient."""
         from gaia.agents.base.memory_store import _word_overlap
 
-        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 → 0.5
-        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # intersection = {"one", "quick"} = 2, min(4, 4) = 4 → 0.5
+        result = _word_overlap("one quick brown fox", "one quick red cat")
         assert result == pytest.approx(0.5)
+
+    def test_word_overlap_ignores_filler(self):
+        """ "I am" and "User is" say nothing, so they don't lower the overlap."""
+        from gaia.agents.base.memory_store import _word_overlap
+
+        assert (
+            _word_overlap("I am allergic to mango.", "User is allergic to mango.")
+            == 1.0
+        )
 
     def test_word_overlap_empty(self):
         """Empty strings return 0.0."""
@@ -5477,6 +5486,32 @@ class TestIterSessions:
         assert s["success_count"] == 3
         assert s["attempt_count"] == 3
         assert "write_file" not in s["tools"]
+        assert s["declined_count"] == 1
+
+    def test_a_session_with_no_denials_reports_none(self, store):
+        store.store_turn("sessClean", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessClean", f"good{i}", {}, "ok", True)
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
+
+    def test_only_a_call_stopped_before_it_ran_counts_as_declined(self, store):
+        """A tool that ran and reported "denied", or a refusal that isn't a denial,
+        is not a decline."""
+        store.store_turn("sessMixed", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessMixed", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessMixed", "http_get", {}, "{'status': 'denied'}", True, executed=True
+        )
+        store.log_tool_call(
+            "sessMixed",
+            "run_shell",
+            {},
+            "{'status': 'error', 'error': 'not allowlisted'}",
+            False,
+            executed=False,
+        )
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

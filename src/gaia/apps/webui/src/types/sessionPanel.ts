@@ -11,6 +11,8 @@ export type ScopeSource =
 
 export interface ScopeEntry {
     path: string;
+    /** A document's own name; its library copy's file name carries an id prefix. */
+    name?: string | null;
     kind: 'folder' | 'file';
     source: ScopeSource;
     removable: boolean;

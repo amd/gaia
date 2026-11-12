@@ -85,6 +85,22 @@ class TestGoalStoreFailure:
         ):
             assert AgentLoop()._get_actionable_goals() == ["g1", "g2"]
 
+    def test_failure_is_kept_for_the_ui_until_the_store_opens(self, tmp_path):
+        loop = AgentLoop()
+        target = "gaia.agents.base.goal_store.GoalStore.get_actionable_goals"
+        with patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}):
+            with patch(
+                target,
+                side_effect=sqlite3.DatabaseError("file is not a database"),
+            ):
+                with pytest.raises(RuntimeError) as excinfo:
+                    loop._get_actionable_goals()
+            assert loop.goal_store_error == str(excinfo.value)
+            assert "restart GAIA" in loop.goal_store_error
+            with patch(target, return_value=[]):
+                loop._get_actionable_goals()
+        assert loop.goal_store_error is None
+
 
 class TestRunStepModeGate:
     """_run_step pauses on 'manual' and idles without goals otherwise."""

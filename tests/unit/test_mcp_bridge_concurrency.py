@@ -585,7 +585,7 @@ def test_concurrent_chats_share_one_conversation_in_turn(serve, monkeypatch):
     import gaia.chat.sdk as chat_sdk_module
 
     monkeypatch.setattr(chat_sdk_module, "AgentSDK", _make_sdk)
-    monkeypatch.setattr(chat_sdk_module, "AgentConfig", lambda: None)
+    monkeypatch.setattr(chat_sdk_module, "AgentConfig", lambda **_: None)
     base = serve(GAIAMCPBridge(port=0))
 
     results = []

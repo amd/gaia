@@ -343,7 +343,7 @@ describe('Try again never deletes an answer written since the failure', () => {
 
         await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']));
         expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(document.querySelector('.msg-error')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
@@ -372,7 +372,7 @@ describe('Try again never deletes an answer written since the failure', () => {
         await pollServer();
         await waitFor(() => expect(useChatStore.getState().messages[1]?.content).toBe('REAL ANSWER'));
         expect(useChatStore.getState().messages[1].failed).toBeFalsy();
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
 

@@ -476,6 +476,17 @@ class StreamCancelledError(Exception):
     """Stop was pressed while a model stream was waiting for data."""
 
 
+def stopped_by_user(error: BaseException) -> bool:
+    """Whether *error* is, or wraps, a :class:`StreamCancelledError`."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, StreamCancelledError):
+            return True
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return False
+
+
 def classify_exception(error: BaseException) -> Optional[str]:
     """Is the exception a model call raised worth another attempt?
 

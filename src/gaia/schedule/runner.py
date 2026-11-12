@@ -37,12 +37,13 @@ def fire(schedule: Schedule) -> str:
     # Imported lazily so the scheduler/store can be used without spinning up the
     # full agent stack (and so tests can register schedules without an LLM).
     from gaia.chat.sdk import AgentConfig, AgentSDK
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
     prompt = resolve_input(schedule)
     sinks.validate(schedule.sink, schedule.sink_args)
     log.info("schedule %r firing (sink=%s)", schedule.name, schedule.sink)
 
-    sdk = AgentSDK(AgentConfig())
+    sdk = AgentSDK(AgentConfig(model=resolve_default_chat_model()))
     response = sdk.send(prompt, no_history=True)
     output = response.text
 

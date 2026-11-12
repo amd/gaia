@@ -2,7 +2,7 @@
 
 One chat window for the GAIA agent — local and private by default on AMD Ryzen AI hardware, with cloud models (Fireworks AI, AMD LLM Gateway) when you choose them.
 
-No cloud. No API keys. No data leaves your device.
+By default there is no cloud and no API key, and no data leaves your device. Picking a cloud model sends that conversation to its provider.
 
 ## Install
 
@@ -43,7 +43,7 @@ Then open [http://localhost:4200](http://localhost:4200) in your browser.
 
 ## Features
 
-- **Private** — All processing runs locally on your AMD hardware. No data leaves your device.
+- **Private** — Processing runs locally on your AMD hardware by default, and no data leaves your device unless you pick a cloud model.
 - **Streaming responses** — Real-time token streaming with live agent activity visualization.
 - **Document Q&A** — Upload PDFs, code files, and documents for RAG-powered question answering.
 - **Agent activity** — Watch the AI think, plan, and use tools in real time.

@@ -176,14 +176,15 @@ jobs:
           npm run build
           test -f dist/index.html
 
-      # The same packages `pip install amd-gaia[ui]` gives an Agent UI user today.
+      # Every extra a listed command needs (FREEZE_EXTRAS in freeze.py): the
+      # frozen app has no pip to add one later.
       - name: Install the core + PyInstaller (frozen-build env)
         if: steps.want.outputs.build == 'true'
         shell: bash
         run: |
           set -euo pipefail
           uv venv .venv-freeze --python 3.12
-          uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+          uv pip install --python .venv-freeze -e ".[ui,mcp,talk,notify]" pyinstaller
 
       - name: Freeze
         if: steps.want.outputs.build == 'true'

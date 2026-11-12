@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import zlib
 from typing import List, Optional
@@ -207,12 +208,90 @@ def _kr_raw_set(username: str, value: str) -> None:
     _set()
 
 
-def _kr_raw_get(username: str) -> Optional[str]:
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
+class KeyringRefused(ConnectorsError):
+    """The credential store stayed locked: its unlock prompt was dismissed."""
 
-    return _get()
+
+#: How long a dismissed prompt holds reads back. Long enough that pollers stop
+#: reopening it; short enough that a process nobody retries in (the daemon's
+#: token refresh) recovers once the user unlocks the store elsewhere.
+HOLD_SECONDS = 300.0
+
+_refusal_lock = threading.Lock()
+_refusal: Optional[str] = None
+_refused_at = 0.0
+# One read probes the store once a hold expires; the rest stay held until it ends.
+_probing = False
+
+
+def _held_locked() -> bool:
+    return _refusal is not None and (
+        _probing or time.monotonic() - _refused_at < HOLD_SECONDS
+    )
+
+
+def keyring_refusal() -> Optional[str]:
+    """Why reads are held back after a dismissed unlock prompt, or None."""
+    with _refusal_lock:
+        return _refusal if _held_locked() else None
+
+
+def retry_keyring() -> None:
+    """Let the next read ask the OS again; for an action the user just took."""
+    global _refusal
+    with _refusal_lock:
+        _refusal = None
+
+
+def _refuse(error: Exception) -> KeyringRefused:
+    global _refusal, _refused_at
+    minutes = max(1, round(HOLD_SECONDS / 60))
+    message = (
+        "The OS credential store is locked: its unlock prompt was closed "
+        f"({error}). GAIA won't ask again for {minutes} minutes; to unlock it "
+        "now, choose Try again under Settings → Model, or connect or test a "
+        "connector."
+    )
+    with _refusal_lock:
+        _refusal = message
+        _refused_at = time.monotonic()
+    logger.warning(
+        "Keyring read refused; holding reads for %ds or until the user retries",
+        HOLD_SECONDS,
+    )
+    return KeyringRefused(message)
+
+
+def _kr_raw_get(username: str) -> Optional[str]:
+    global _probing
+    # Every read after a dismissed prompt would open a new one at once.
+    with _refusal_lock:
+        if _held_locked():
+            raise KeyringRefused(_refusal)
+        probe = _refusal is not None
+        if probe:
+            _probing = True
+    try:
+        value = keyring.get_password(SERVICE_NAME, username)
+    except (keyring.errors.KeyringLocked, keyring.errors.InitError) as e:
+        raise _refuse(e) from e
+    except keyring.errors.KeyringError as e:
+        if probe:
+            retry_keyring()
+        raise ConnectorsError(
+            f"Keyring get_password failed: {e}. Install a system "
+            "credential store (gnome-keyring on Linux, or rely on "
+            "the macOS Keychain / Windows Credential Locker), "
+            "configure it, and restart GAIA. See "
+            "docs/security/connections.mdx."
+        ) from e
+    finally:
+        if probe:
+            with _refusal_lock:
+                _probing = False
+    if probe:
+        retry_keyring()
+    return value
 
 
 def _kr_raw_delete(username: str) -> None:
@@ -239,6 +318,7 @@ def _kr_set(username: str, payload: str) -> None:
     """Store ``payload`` under ``username``, chunking if it exceeds the
     single-slot ceiling. Chunks are written BEFORE the manifest so a reader
     never sees a manifest pointing at not-yet-written parts."""
+    retry_keyring()
     if len(payload) <= _CHUNK_CHARS:
         _kr_raw_set(username, payload)
         # A prior write may have been chunked; sweep stale chunk slots.
@@ -312,6 +392,7 @@ def _kr_get(username: str) -> Optional[str]:
 
 def _kr_delete(username: str) -> None:
     """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
+    retry_keyring()
     raw = _kr_raw_get(username)
     _kr_raw_delete(username)
     if raw is not None and raw.startswith(_CHUNK_SENTINELS):

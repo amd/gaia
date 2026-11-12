@@ -198,7 +198,52 @@ def fit_turns(
         plan.hidden_tokens,
         on_cut,
     )
-    return [plan.turn(index) for index, _ in plan.retained]
+    kept = [plan.turn(index) for index, _ in plan.retained]
+    if plan.evicted or plan.unreplayable:
+        kept = _note_hidden_turns(kept)
+    return kept
+
+
+#: Opens the oldest turn the model still sees once earlier ones were left out.
+HIDDEN_TURNS_NOTE = (
+    "[GAIA note: earlier turns of this chat are no longer shown to you; if asked "
+    "about them, say you can no longer see them, not that they never happened.]"
+)
+
+
+def _note_hidden_turns(kept: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """*kept* with ``HIDDEN_TURNS_NOTE`` opening its oldest user question.
+
+    The stored turns are left as they are: only the noted message is copied.
+    A tool result recorded as a user message is passed over, since its prefix
+    is parsed. With no question left in view there is nothing to carry it.
+    """
+    for at, turn in enumerate(kept):
+        for index, message in enumerate(turn):
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                if content.startswith(_RECORDED_RESULT_PREFIX):
+                    continue
+                if content.startswith(HIDDEN_TURNS_NOTE):
+                    return kept
+                noted: Any = f"{HIDDEN_TURNS_NOTE}\n\n{content}"
+            elif isinstance(content, list):
+                opening = {"type": "text", "text": HIDDEN_TURNS_NOTE}
+                if content and content[0] == opening:
+                    return kept
+                noted = [opening, *content]
+            else:
+                continue
+            copy = list(turn)
+            copy[index] = {**message, "content": noted}
+            return [*kept[:at], copy, *kept[at + 1 :]]
+    logger.warning(
+        "Older turns were left out, but no user message is in view to tell the "
+        "model so; it may deny what they said."
+    )
+    return kept
 
 
 def _turn_cost(turn: list[dict[str, Any]]) -> int:

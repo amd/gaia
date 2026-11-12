@@ -327,6 +327,48 @@ class TestUnusableEpisodes:
         host._synthesize_skills()
         assert host.chat.calls == 1
 
+    def test_runs_where_a_step_was_declined_teach_nothing(self, host, store):
+        """A declined step never ran, so the rest of the run looked like a clean
+        success: three such runs relearned the refused procedure and superseded
+        the one being declined, resetting its record (#7207)."""
+        for n in range(3):
+            session = f"declined_{n}"
+            _seed_episode(store, session, "Produce the daily status snapshot")
+            store.log_tool_call(
+                session,
+                "write_file",
+                {"path": "snapshot.txt"},
+                "{'status': 'denied', 'error': 'The user declined write_file.'}",
+                False,
+                error="The user declined write_file.",
+                executed=False,
+            )
+
+        result = host._synthesize_skills()
+
+        assert host.chat.calls == 0
+        assert result["stored"] == 0
+        assert result["consumed"] == 3
+        marks = store.get_synthesis_marks()
+        assert {marks[f"declined_{n}"]["outcome"] for n in range(3)} == {"unusable"}
+        assert store.get_synthesis_watermark() is not None
+
+    def test_a_refusal_that_is_not_a_denial_still_teaches(self, host, store):
+        """Only a denied call disqualifies a run, not every call that did not run."""
+        for n in range(3):
+            session = f"capped_{n}"
+            _seed_episode(store, session, "Triage an inbound support ticket")
+            store.log_tool_call(
+                session,
+                "search_tools",
+                {},
+                "{'executed': False, 'status': 'error', 'error': 'search cap'}",
+                False,
+                executed=False,
+            )
+
+        assert host._synthesize_skills()["stored"] == 1
+
     def test_infra_failure_leaves_the_cluster_unmarked(self, host, store):
         """Lemonade being down is not "undistillable" — the next pass retries."""
         _seed_cluster(store, "t_", "Triage an inbound support ticket")

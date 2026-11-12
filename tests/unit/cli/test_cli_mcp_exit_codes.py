@@ -251,6 +251,31 @@ class TestFailuresExitOne:
         assert _run_main(monkeypatch, "mcp", action) == 1
         assert "❌ Error: Could not load" in capsys.readouterr().out
 
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ("mcp", "serve", "--stdio"),
+            ("mcp", "tui", "--stdio"),
+            ("mcp", "code-index"),
+        ],
+    )
+    @pytest.mark.parametrize("frozen", [True, False])
+    def test_server_without_the_mcp_package(self, argv, frozen, monkeypatch, capsys):
+        """No traceback, and a fix that exists for this kind of install."""
+        for name in ("mcp", "mcp.server", "mcp.server.mcpserver"):
+            monkeypatch.setitem(sys.modules, name, None)
+        monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+        assert _run_main(monkeypatch, *argv) == 1
+        out = capsys.readouterr().out
+        assert "❌ Error: Could not load" in out
+        assert "mcp" in out
+        assert "Agent UI backend is running" not in out
+        if frozen:
+            assert "isn't bundled in this GAIA build" in out
+            assert "pip install" not in out
+        else:
+            assert "Install with:" in out
+
     def test_tools_for_an_unknown_server(self, monkeypatch, capsys, in_tmp):
         config = in_tmp / "mcp_servers.json"
         config.write_text('{"mcpServers": {}}', encoding="utf-8")

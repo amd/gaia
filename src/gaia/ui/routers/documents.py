@@ -776,34 +776,37 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         request.recursive,
     )
 
+    from .._chat_helpers import one_embedder_load
+
     _index_document = _server_mod()._index_document
     indexed_docs: List[DocumentResponse] = []
     errors: List[str] = []
 
-    for filepath in candidate_files:
-        try:
-            file_hash = await asyncio.get_running_loop().run_in_executor(
-                None, compute_file_hash, filepath
-            )
-            file_stat = filepath.stat()
-            file_size = file_stat.st_size
-            file_mtime = file_stat.st_mtime
+    with one_embedder_load():
+        for filepath in candidate_files:
+            try:
+                file_hash = await asyncio.get_running_loop().run_in_executor(
+                    None, compute_file_hash, filepath
+                )
+                file_stat = filepath.stat()
+                file_size = file_stat.st_size
+                file_mtime = file_stat.st_mtime
 
-            chunk_count = await _index_document(filepath)
+                chunk_count = await _index_document(filepath)
 
-            doc = db.add_document(
-                filename=filepath.name,
-                filepath=str(filepath),
-                file_hash=file_hash,
-                file_size=file_size,
-                chunk_count=chunk_count,
-                file_mtime=file_mtime,
-            )
-            indexed_docs.append(doc_to_response(doc))
-        except Exception as e:
-            error_msg = f"{filepath.name}: {e}"
-            logger.warning("Failed to index %s: %s", filepath, e)
-            errors.append(error_msg)
+                doc = db.add_document(
+                    filename=filepath.name,
+                    filepath=str(filepath),
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    chunk_count=chunk_count,
+                    file_mtime=file_mtime,
+                )
+                indexed_docs.append(doc_to_response(doc))
+            except Exception as e:
+                error_msg = f"{filepath.name}: {e}"
+                logger.warning("Failed to index %s: %s", filepath, e)
+                errors.append(error_msg)
 
     logger.info(
         "Folder indexing complete: %d indexed, %d failed",

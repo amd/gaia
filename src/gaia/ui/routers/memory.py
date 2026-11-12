@@ -513,11 +513,19 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    remove = store.forget if is_about_user(item) else store.delete
-    success = remove(knowledge_id, allow_privileged=True)
-    if not success:
+    if is_about_user(item):
+        # Copies of the same fact go too, or the deleted fact is still recalled.
+        deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
+    elif store.delete(knowledge_id, allow_privileged=True):
+        deleted = [knowledge_id]
+    else:
+        deleted = []
+    if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "deleted", "knowledge_id": knowledge_id}
+    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    if len(deleted) > 1:
+        result["knowledge_ids"] = deleted
+    return result
 
 
 @router.get("/api/memory/knowledge/{knowledge_id}")
@@ -1240,8 +1248,10 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
         ``(items, message)``. `message` is a user-facing line to stream when the
         source cannot run or failed, and is None when the scan succeeded.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return [], None
     reason = unsupported_reason(source_key)
     if reason:
         return [], f"  {reason}"
@@ -1250,6 +1260,22 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
     except Exception as e:
         cid = _log_server_error(f"inference scanner '{source_key}' failed", e)
         return [], f"  {source_key} unavailable — see server logs (id={cid})"
+
+
+def _downloaded_on_this_pc(model_id: str) -> bool:
+    """True when Lemonade lists *model_id* as downloaded.
+
+    Raises:
+        LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
+    """
+    from gaia.llm.lemonade_client import LemonadeClient, _model_ids_match
+
+    # list_models raises on anything but {"data": [{...}, ...]}.
+    catalog = LemonadeClient(verbose=False).list_models(show_all=True)
+    return any(
+        _model_ids_match(entry.get("id"), model_id) and entry.get("downloaded") is True
+        for entry in catalog["data"]
+    )
 
 
 @router.get("/api/memory/stream-discovery")
@@ -1268,6 +1294,7 @@ def stream_discovery():
         try:
             from gaia.agents.base.discovery import (
                 SystemDiscovery,
+                covered_by_twin,
                 unsupported_reason,
             )
 
@@ -1293,6 +1320,8 @@ def stream_discovery():
 
             total = 0
             for source_key in _DISCOVERY_SOURCES:
+                if covered_by_twin(source_key):
+                    continue
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
                 reason = unsupported_reason(source_key)
@@ -1521,6 +1550,8 @@ def stream_inference(include_browser: bool = Query(False)):
             model = resolve_default_chat_model()
             try:
                 local = _runs_on_this_pc(model)
+                # Lemonade downloads a missing model on first use, unasked.
+                downloaded = local and _downloaded_on_this_pc(model)
             except LemonadeClientError as e:
                 cid = _log_server_error("inference locality check failed", e)
                 yield _sse(
@@ -1528,7 +1559,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             "Profile inference runs only on a local model, and "
-                            f"GAIA couldn't confirm that '{model}' is one: Lemonade's "
+                            f"GAIA couldn't check '{model}' on this PC: Lemonade's "
                             "model list didn't load. Check that Lemonade is running "
                             f"in Settings > Setup, then try again (id={cid})."
                         ),
@@ -1545,6 +1576,20 @@ def stream_inference(include_browser: bool = Query(False)):
                             f"the default model '{model}' isn't one this PC runs. "
                             "Open Settings > Setup, press Run setup again and "
                             "choose a local chat model, then try again."
+                        ),
+                    }
+                )
+                yield _sse({"type": "done", "total": 0})
+                return
+            if not downloaded:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Profile inference runs only on a local model, and "
+                            f"'{model}' isn't downloaded on this PC. Download it "
+                            "under Settings > Model > Manage downloads and disk "
+                            "space, then try again."
                         ),
                     }
                 )

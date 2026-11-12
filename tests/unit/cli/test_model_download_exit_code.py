@@ -43,3 +43,33 @@ def test_download_exits_nonzero_when_the_server_is_unreachable(
 
     assert code == 1
     assert "not running or not accessible" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv", [["download", "--list"], ["download", "--list", "--agent", "chat"]]
+)
+def test_download_list_exits_nonzero_when_the_server_is_unreachable(
+    argv, gaia_home, monkeypatch, capsys
+):
+    monkeypatch.setattr(cli, "check_lemonade_health", lambda *a, **k: False)
+
+    def must_not_probe(self, model_id):
+        raise AssertionError(f"probed {model_id} with the server down")
+
+    monkeypatch.setattr(cli.LemonadeClient, "check_model_available", must_not_probe)
+    code = _run_main(argv, monkeypatch)
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "not running or not accessible" in captured.err
+    assert "⬜" not in captured.out
+
+
+def test_download_list_names_an_unknown_agent_before_the_server_check(
+    gaia_home, monkeypatch, capsys
+):
+    monkeypatch.setattr(cli, "check_lemonade_health", lambda *a, **k: False)
+    code = _run_main(["download", "--list", "--agent", "nope"], monkeypatch)
+
+    assert code == 1
+    assert "Unknown agent: nope" in capsys.readouterr().out

@@ -347,6 +347,69 @@ def test_background_index_is_saved_to_the_session_without_a_second_call(
     assert rag_tools.documents_failed_indexing(rag) == []
 
 
+def test_a_document_reached_by_two_tools_is_saved_to_the_session_once(
+    tmp_path, slow_rag, monkeypatch
+):
+    """index_document goes to the background; query_specific_file, given the
+    path in another spelling, waits for the same job. One session entry."""
+    rag, release = slow_rag
+    (tmp_path / "sub").mkdir()
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    roundabout = str(tmp_path / "sub" / ".." / "big.pdf")
+    host = _RagHost(rag)
+    host.current_session = MagicMock(indexed_documents=[])
+    host.session_manager = MagicMock()
+    host.session_manager.save_session.return_value = True
+    host.register_rag_tools()
+
+    assert _call("index_document", file_path=roundabout)["status"] == "in_progress"
+    monkeypatch.setattr(rag_tools, "INDEX_FOREGROUND_BUDGET_S", 3.0, raising=False)
+    threading.Timer(0.3, release.set).start()
+    _call("query_specific_file", file_path=roundabout, query="needle")
+
+    assert _until(lambda: not rag_tools._INDEX_JOBS.get(rag))
+    assert host.current_session.indexed_documents == [str(doc.resolve())]
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("index_document", "query_specific_file"),
+        ("query_specific_file", "index_document"),
+    ],
+)
+def test_two_spellings_from_either_tool_first_save_one_session_entry(
+    tmp_path, slow_rag, monkeypatch, first, second
+):
+    """A relative name and a roundabout absolute path, in either tool order,
+    still record the one resolved path once."""
+    rag, release = slow_rag
+    (tmp_path / "sub").mkdir()
+    doc = tmp_path / "big.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    spellings = {first: "big.pdf", second: str(tmp_path / "sub" / ".." / "big.pdf")}
+    host = _RagHost(rag)
+    host.working_directory = str(tmp_path)
+    host.current_session = MagicMock(indexed_documents=[])
+    host.session_manager = MagicMock()
+    host.session_manager.save_session.return_value = True
+    host.register_rag_tools()
+
+    def args(tool):
+        extra = {"query": "needle"} if tool == "query_specific_file" else {}
+        return {"file_path": spellings[tool], **extra}
+
+    assert _call(first, **args(first))["status"] == "in_progress"
+    monkeypatch.setattr(rag_tools, "INDEX_FOREGROUND_BUDGET_S", 3.0, raising=False)
+    threading.Timer(0.3, release.set).start()
+    _call(second, **args(second))
+
+    assert _until(lambda: not rag_tools._INDEX_JOBS.get(rag))
+    assert rag.index_document.call_count == 1
+    assert host.current_session.indexed_documents == [str(doc.resolve())]
+
+
 def test_a_finished_background_job_is_not_handed_back_as_a_stale_result(tmp_path):
     release = threading.Event()
     rag = MagicMock()

@@ -72,7 +72,9 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
     uv pip install -e ".[api]"
     ```
 
-    Installs FastAPI and Uvicorn required for the API server.
+    Installs FastAPI and Uvicorn required for the API server. The `gaia` the
+    GAIA installer ships can't run it: it runs the agent as a separate
+    program, so `gaia api start` says so and exits.
   </Card>
 
   <Card title="Lemonade Server" icon="server">

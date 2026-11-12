@@ -173,7 +173,10 @@
 }
 .doc-context-pills-expanded {
     flex-wrap: wrap;
-    overflow: visible;
+    align-content: flex-start;
+    max-height: min(30vh, 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 .doc-pill {
     display: inline-flex;
@@ -203,6 +206,13 @@
 .doc-pill-icon {
     flex-shrink: 0;
     color: var(--accent-green);
+}
+.doc-context-icon-failed,
+.doc-pill-failed .doc-pill-icon {
+    color: var(--danger);
+}
+.doc-pill-failed {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 /* Remove button - hidden by default, shown on pill hover */
 .doc-pill-remove {
@@ -357,6 +367,8 @@
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
+/* A finished answer takes the live bubble's place as it stands: no second entrance. */
+.msg-settled > .msg { animation: none; }
 /* Message delete animation -- fade + shrink before removal */
 .msg-deleting {
     animation: msgDelete var(--duration) var(--ease) forwards;
@@ -391,6 +403,13 @@
     .task-header { padding-inline-start: var(--sidebar-toggle-clearance); }
     .messages-column,
     .input-column { padding: 0 12px; }
+}
+
+/* Phone: the title takes its own row so five icons cannot squeeze it to a few letters. */
+@media (max-width: 480px) {
+    .task-header { flex-wrap: wrap; row-gap: 0; }
+    .task-header-left { flex: 1 1 100%; }
+    .task-header-right { margin-inline-start: auto; }
 }
 
 /* Scroll to bottom FAB */

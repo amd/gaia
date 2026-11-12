@@ -21,7 +21,7 @@ on:
       - '.github/workflows/test_examples.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -72,7 +72,7 @@ on:
       - '.github/workflows/test_examples.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -208,7 +208,7 @@ jobs:
               # Start Lemonade server and load the compact Qwen3-4B model.
               # We reuse the repo helper so we share the health-check and
               # cleanup logic used by the rest of the stx workflows.
-              .\installer\scripts\start-lemonade.ps1 `
+              .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped `
                   -ModelName "Qwen3-4B-Instruct-2507-GGUF" `
                   -Port 8000 `
                   -CtxSize 8192 `
