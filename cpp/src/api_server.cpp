@@ -585,31 +585,34 @@ struct ApiServer::Impl {
 
     void setupRoutes() {
         server.set_payload_max_length(opts.maxRequestBytes);
-        server.set_pre_routing_handler(
-            [this](const httplib::Request& req, httplib::Response& res) { return gate(req, res); });
+        // A refusal sent before the body is read leaves it unread in the socket,
+        // and closing that socket resets the connection: the client loses the
+        // status it was just sent. So a request with a body is refused by its
+        // route, after httplib has read it.
+        server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+            return carriesBody(req) ? httplib::Server::HandlerResponse::Unhandled : gate(req, res);
+        });
 
-        server.Post("/v1/chat/completions",
-                    [this](const httplib::Request& req, httplib::Response& res) {
-                        handleChatCompletions(req, res);
-                    });
-        server.Get("/v1/models", [this](const httplib::Request&, httplib::Response& res) {
+        server.Post("/v1/chat/completions", gated([this](const httplib::Request& req, httplib::Response& res) {
+            handleChatCompletions(req, res);
+        }));
+        server.Get("/v1/models", gated([this](const httplib::Request&, httplib::Response& res) {
             json data = {{"object", "list"},
                          {"data", json::array({{{"id", modelName()},
                                                 {"object", "model"},
                                                 {"created", startedAt},
                                                 {"owned_by", "gaia"}}})}};
             res.set_content(data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
-        });
-        server.Get("/v1/tools", [this](const httplib::Request&, httplib::Response& res) {
+        }));
+        server.Get("/v1/tools", gated([this](const httplib::Request&, httplib::Response& res) {
             handleListTools(res);
-        });
+        }));
         if (opts.exposeToolRoutes) {
-            server.Post(R"(/v1/tools/([^/]+))",
-                        [this](const httplib::Request& req, httplib::Response& res) {
-                            handleExecuteTool(req, res);
-                        });
+            server.Post(R"(/v1/tools/([^/]+))", gated([this](const httplib::Request& req, httplib::Response& res) {
+                handleExecuteTool(req, res);
+            }));
         }
-        server.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
+        server.Get("/health", gated([this](const httplib::Request&, httplib::Response& res) {
             json body = {{"status", "ok"},
                          {"version", GAIA_CORE_VERSION},
                          {"model", modelName()},
@@ -617,14 +620,28 @@ struct ApiServer::Impl {
                          {"busy", busy.load()}};
             if (!opts.agentVersion.empty()) body["agent_version"] = opts.agentVersion;
             res.set_content(body.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
-        });
-        server.Get("/sessions", [this](const httplib::Request&, httplib::Response& res) {
+        }));
+        server.Get("/sessions", gated([this](const httplib::Request&, httplib::Response& res) {
             handleListSessions(res);
-        });
-        server.Delete(R"(/sessions/([^/]+))",
-                      [this](const httplib::Request& req, httplib::Response& res) {
-                          handleDeleteSession(req, res);
-                      });
+        }));
+        server.Delete(R"(/sessions/([^/]+))", gated([this](const httplib::Request& req, httplib::Response& res) {
+            handleDeleteSession(req, res);
+        }));
+    }
+
+    static bool carriesBody(const httplib::Request& req) {
+        if (req.has_header("Transfer-Encoding")) return true;
+        const std::string length = req.get_header_value("Content-Length");
+        return !length.empty() && length.find_first_not_of('0') != std::string::npos;
+    }
+
+    /// Every route goes through this: the pre-routing gate let a request with
+    /// a body past, so its route applies the gate once the body has been read.
+    httplib::Server::Handler gated(httplib::Server::Handler route) {
+        return [this, route = std::move(route)](const httplib::Request& req, httplib::Response& res) {
+            if (carriesBody(req) && gate(req, res) == httplib::Server::HandlerResponse::Handled) return;
+            route(req, res);
+        };
     }
 
     // ---- POST /v1/chat/completions ----
