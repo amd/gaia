@@ -108,6 +108,80 @@ TEST(ProcessRunnerTest, TimeoutKillsProcess) {
 }
 
 // ---------------------------------------------------------------------------
+// stdin
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+// This process's stdin can be a host's control pipe (`gaiacpp --stdio`): a
+// command that reads stdin must get end of input, never the host's lines.
+TEST(ProcessRunnerTest, CommandDoesNotReadThisProcessStdin) {
+    const std::string line = "for the parent\n";
+#ifdef _WIN32
+    const char* readsStdin = "findstr parent";
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    ASSERT_TRUE(CreatePipe(&readEnd, &writeEnd, &sa, 0));
+    SetHandleInformation(writeEnd, HANDLE_FLAG_INHERIT, 0);
+    DWORD written = 0;
+    ASSERT_TRUE(WriteFile(writeEnd, line.data(), static_cast<DWORD>(line.size()), &written, nullptr));
+    const HANDLE saved = GetStdHandle(STD_INPUT_HANDLE);
+    SetStdHandle(STD_INPUT_HANDLE, readEnd);
+    auto unread = [&] {
+        DWORD n = 0;
+        PeekNamedPipe(readEnd, nullptr, 0, nullptr, &n, nullptr);
+        return static_cast<size_t>(n);
+    };
+#else
+    const char* readsStdin = "cat";
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+    ASSERT_EQ(write(fds[1], line.data(), line.size()), static_cast<ssize_t>(line.size()));
+    const int saved = dup(STDIN_FILENO);
+    dup2(fds[0], STDIN_FILENO);
+    auto unread = [&] {
+        int n = 0;
+        ioctl(fds[0], FIONREAD, &n);
+        return static_cast<size_t>(n);
+    };
+#endif
+
+    // With the writer still open, a command that got the pipe would wait for more.
+    const auto limited = ProcessRunner::run(readsStdin, 10000);
+    const size_t afterLimited = unread();
+#ifdef _WIN32
+    CloseHandle(writeEnd);
+#else
+    close(fds[1]);
+#endif
+    const auto unlimited = ProcessRunner::run(readsStdin, 0);
+    const size_t afterUnlimited = unread();
+
+#ifdef _WIN32
+    SetStdHandle(STD_INPUT_HANDLE, saved);
+    CloseHandle(readEnd);
+#else
+    dup2(saved, STDIN_FILENO);
+    close(saved);
+    close(fds[0]);
+#endif
+
+    EXPECT_FALSE(limited.timedOut);
+    EXPECT_EQ(limited.stdout_output.find("for the parent"), std::string::npos) << limited.stdout_output;
+    EXPECT_EQ(afterLimited, line.size()) << "the line is still there for this process to read";
+    EXPECT_EQ(unlimited.stdout_output.find("for the parent"), std::string::npos) << unlimited.stdout_output;
+    EXPECT_EQ(afterUnlimited, line.size());
+}
+
+// ---------------------------------------------------------------------------
 // Working directory
 // ---------------------------------------------------------------------------
 

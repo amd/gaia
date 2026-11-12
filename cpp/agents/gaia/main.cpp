@@ -6,6 +6,7 @@
 //   gaiacpp                                  Interactive session
 //   gaiacpp -p "prompt" [--output-format json]   One headless run (prompt from stdin when omitted)
 //   gaiacpp serve [--host H] [--port N]      OpenAI-compatible server (for Lemonade / apps)
+//   gaiacpp --stdio                          The GAIA terminal UI's agent child (JSON Lines)
 
 #include <atomic>
 #include <chrono>
@@ -31,12 +32,15 @@
 
 #include "gaia_agent.h"
 #include "sidecar.h"
+#include "stdio_server.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
 #else
+#include <poll.h>
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #ifndef GAIACPP_VERSION
@@ -85,7 +89,7 @@ double selfPeakRssMb() {
 constexpr const char* kFireworksUrl = "https://api.fireworks.ai/inference/v1";
 
 struct Cli {
-    enum class Mode { Interactive, Print, Serve, Mcp } mode = Mode::Interactive;
+    enum class Mode { Interactive, Print, Serve, Mcp, Stdio } mode = Mode::Interactive;
     std::optional<std::string> prompt;
     std::string promptFile;
     std::string outputFormat = "text";
@@ -115,8 +119,10 @@ struct Cli {
     bool noMemory = false;
     bool screenshots = false;
     bool fullAccess = false;
+    bool acceptEdits = false;
     std::vector<std::string> allowDirs;
     bool debug = false;
+    bool dev = false;
     bool exposeToolRoutes = false;
 };
 
@@ -129,6 +135,8 @@ void printUsage() {
         "  gaiacpp serve [options]              OpenAI-compatible server\n"
         "  gaiacpp --mcp [options]              MCP server on stdin/stdout: the tools,\n"
         "                                        for another program's agent to call\n"
+        "  gaiacpp --stdio [options]            Agent child of the GAIA terminal UI:\n"
+        "                                        queries in, JSON Lines events out\n"
         "  gaiacpp skills list|install DIR|NAME[@VER] [--allow-experimental]|remove NAME\n"
         "                                        Manage installed skills (hub or folder)\n"
         "  gaiacpp models list|pull NAME [--checkpoint C --recipe R]\n"
@@ -175,6 +183,12 @@ void printUsage() {
         "  --server-key-env VAR      Require 'Authorization: Bearer $VAR' from clients\n"
         "  --allow-origin ORIGIN     Allow a browser origin (repeatable)\n"
         "  --expose-tool-routes      Enable POST /v1/tools/:name (direct tool runs)\n"
+        "Stdio (the terminal UI passes these):\n"
+        "  --full-access             With --stdio: approval prompts off. The tools stay\n"
+        "                            inside the working directory and --allow-dir\n"
+        "  --accept-edits            File edits inside the working directory run\n"
+        "                            without asking; everything else still asks\n"
+        "  --dev                     Step-by-step status events, debug lines on stderr\n"
         "Other:\n"
         "  --debug, -v/--version, -h/--help\n\n"
         "Environment: GAIA_BASE_URL, GAIA_MODEL_ID, GAIA_API_KEY, LEMONADE_BASE_URL,\n"
@@ -213,6 +227,14 @@ Cli parseArgs(int argc, char** argv) {
             if (i + 1 < argc && argv[i + 1][0] != '-') cli.prompt = argv[++i];
         }
         else if (a == "--mcp") cli.mode = Cli::Mode::Mcp;
+        else if (a == "--stdio") cli.mode = Cli::Mode::Stdio;
+        else if (a == "--accept-edits") cli.acceptEdits = true;
+        else if (a == "--dev") cli.dev = true;
+        else if (a == "--use-claude" || a == "--claude-model") {
+            usageError(a + " isn't supported: gaiacpp has no Claude provider and runs models through "
+                           "Lemonade only. Drop the flag and pick a model with --model, or use the "
+                           "Python agent (gaia-agent) for Claude.");
+        }
         else if (a == "--prompt-file") { cli.mode = Cli::Mode::Print; cli.promptFile = need(i, a); }
         else if (a == "--output-format") cli.outputFormat = need(i, a);
         else if (a == "-m" || a == "--model") cli.model = need(i, a);
@@ -251,6 +273,9 @@ Cli parseArgs(int argc, char** argv) {
     }
     if (cli.outputFormat != "text" && cli.outputFormat != "json") {
         usageError("--output-format must be text or json");
+    }
+    if (cli.mode != Cli::Mode::Stdio && (cli.acceptEdits || cli.dev)) {
+        usageError("--accept-edits and --dev go with --stdio");
     }
     return cli;
 }
@@ -460,6 +485,79 @@ int runMcp(const Cli& cli) {
     gaia::McpStdioServer server(agent, "gaiacpp", GAIACPP_VERSION, std::cin, transport);
     server.run();
     return 0;
+}
+
+// False once stdout is a pipe nobody reads any more.
+bool stdoutHasReader() {
+#ifdef _WIN32
+    const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == nullptr || out == INVALID_HANDLE_VALUE) return false;
+    if (GetFileType(out) != FILE_TYPE_PIPE) return true;
+    // An empty write reaches no reader but still fails on a broken pipe.
+    DWORD written = 0;
+    if (WriteFile(out, "", 0, &written, nullptr)) return true;
+    const DWORD err = GetLastError();
+    return err != ERROR_BROKEN_PIPE && err != ERROR_NO_DATA;
+#else
+    struct pollfd p {};
+    p.fd = STDOUT_FILENO;
+    p.events = POLLOUT;
+    if (poll(&p, 1, 0) < 0) return true;
+    return (p.revents & (POLLERR | POLLHUP | POLLNVAL)) == 0;
+#endif
+}
+
+// The GAIA terminal UI's agent child: queries and controls on stdin, events on stdout.
+int runStdio(const Cli& cli) {
+#ifndef _WIN32
+    // A host that closed stdout shows up as a failed write, not as a signal that kills.
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
+    // stdout is the wire; anything else printed goes to stderr.
+    std::ostream wire(std::cout.rdbuf());
+    std::cout.rdbuf(std::cerr.rdbuf());
+    try {
+        const Settings settings = buildSettings(cli);
+        gaia::AgentConfig cfg = settings.cfg;
+        cfg.silentMode = true;
+        cfg.debug = cli.debug || cli.dev;
+        const gaia::NativeToolCalls launchMode = cfg.nativeToolCalls;
+        gaia::applyStdioModel(cfg, cfg.modelId, launchMode);
+        gaia::GaiaAgent::Options options = agentOptions(cli, settings);
+        // Here --full-access turns approval prompts off; it does not widen the folders.
+        options.fullAccess = false;
+        gaia::GaiaAgent agent(cfg, options);
+        pinConfig(agent, cfg);
+        if (!settings.mcpConfig.empty()) connectMcp(agent, settings.mcpConfig);
+
+        gaia::StdioOptions so;
+        so.fullAccess = cli.fullAccess || cli.skipPermissions;
+        so.acceptEdits = cli.acceptEdits;
+        so.dev = cli.dev;
+        so.agentVersion = GAIACPP_VERSION;
+        // UTF-8, as the server reads it: workspaceRoots holds the code page's spelling.
+        so.editRoots = {gaia::workingFolderUtf8()};
+        so.memory = options.memory;
+        so.nativeTools = launchMode;
+        so.hostAlive = stdoutHasReader;
+        so.exitWhenHostGone = true;
+        gaia::StdioServer server(agent, std::cin, wire, so);
+        g_agent = &agent;
+        const int code = server.run();
+        g_agent = nullptr;
+        // The reader may still be blocked on stdin, which a normal exit would wait for.
+        if (code != 0 || server.hostGone()) {
+            std::cerr.flush();
+            std::_Exit(code);
+        }
+        return code;
+    } catch (const std::exception& e) {
+        // The UI reads the failure off the wire; main() prints it on stderr.
+        wire << gaia::json{{"type", "error"}, {"detail", std::string("gaiacpp could not start: ") + e.what()}}
+                    .dump(-1, ' ', false, gaia::json::error_handler_t::replace)
+             << std::endl;
+        throw;
+    }
 }
 
 int runPrint(const Cli& cli) {
@@ -772,6 +870,7 @@ int main(int argc, char** argv) {
             case Cli::Mode::Print: return runPrint(cli);
             case Cli::Mode::Serve: return runServe(cli);
             case Cli::Mode::Mcp: return runMcp(cli);
+            case Cli::Mode::Stdio: return runStdio(cli);
             case Cli::Mode::Interactive: return runInteractive(cli);
         }
     } catch (const std::exception& e) {
