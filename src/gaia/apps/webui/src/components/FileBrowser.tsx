@@ -16,6 +16,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
@@ -45,10 +46,10 @@ function formatDate(iso: string | null, t: Translate): string {
     return d.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
-function formatSearchScope(locations: string[]): string {
+function formatSearchScope(locations: string[], t: Translate): string {
     if (locations.length === 0) return '';
     const [first, ...rest] = locations;
-    return rest.length > 0 ? `${first} (+${rest.length} more)` : first;
+    return rest.length > 0 ? t('fileBrowser.scopeMore', { first, n: rest.length }) : first;
 }
 
 // Quick link icon mapping
@@ -64,12 +65,19 @@ function getQuickLinkIcon(icon: string) {
 
 // File type filter options
 const FILE_TYPE_FILTERS = [
-    { label: 'All Files', value: '' },
-    { label: 'Documents', value: 'pdf,doc,docx,txt,md' },
-    { label: 'Spreadsheets', value: 'csv,xlsx,xls,tsv' },
-    { label: 'Code', value: 'py,js,ts,java,c,cpp,go,rs,rb,sh' },
-    { label: 'Data', value: 'json,xml,yaml,yml,csv,tsv' },
-];
+    { label: 'fileBrowser.filter.all', value: '' },
+    { label: 'fileBrowser.filter.documents', value: 'pdf,doc,docx,txt,md' },
+    { label: 'fileBrowser.filter.spreadsheets', value: 'csv,xlsx,xls,tsv' },
+    { label: 'fileBrowser.filter.code', value: 'py,js,ts,java,c,cpp,go,rs,rb,sh' },
+    { label: 'fileBrowser.filter.data', value: 'json,xml,yaml,yml,csv,tsv' },
+] as const;
+
+const QUICK_LINK_LABELS: Record<string, MessageKey> = {
+    home: 'fileBrowser.home',
+    desktop: 'fileBrowser.desktop',
+    documents: 'fileBrowser.documents',
+    download: 'fileBrowser.downloads',
+};
 
 interface FilePreview {
     name: string;
@@ -447,7 +455,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         label: seg,
         path: pathSegments.slice(0, i + 1).join('/') + (i === 0 && seg.includes(':') ? '/' : ''),
     }));
-    const searchScope = formatSearchScope(searchedLocations);
+    const searchScope = formatSearchScope(searchedLocations, t);
 
     // Items to display: search results or browse entries
     const visibleEntries = entries.filter(e => !isHiddenName(e.name));
@@ -473,12 +481,12 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     }, [showHidden, searchResults]);
 
     return (
-        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label={t('fileBrowser.title')}>
             <div className={`modal-panel file-browser-modal ${previewFile ? 'has-preview' : ''}`} onClick={(e) => e.stopPropagation()}>
                 {/* Header */}
                 <div className="modal-header">
-                    <h3><FolderOpen size={18} /> File browser</h3>
-                    <button className="btn-icon" onClick={() => setShowFileBrowser(false)} aria-label="Close">
+                    <h3><FolderOpen size={18} /> {t('fileBrowser.title')}</h3>
+                    <button className="btn-icon" onClick={() => setShowFileBrowser(false)} aria-label={t('fileBrowser.close')}>
                         <X size={18} />
                     </button>
                 </div>
@@ -494,7 +502,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                 title={link.path}
                             >
                                 {getQuickLinkIcon(link.icon)}
-                                <span>{link.name}</span>
+                                <span>{QUICK_LINK_LABELS[link.icon] ? t(QUICK_LINK_LABELS[link.icon]) : link.name}</span>
                             </button>
                         ))}
                     </div>
@@ -506,17 +514,17 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                             <input
                                 type="text"
                                 className="fb-search-input"
-                                placeholder="Search files on your PC..."
+                                placeholder={t('fileBrowser.searchPlaceholder')}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 onKeyDown={handleSearchKeyDown}
-                                aria-label="Search files"
+                                aria-label={t('fileBrowser.searchAria')}
                             />
                             {searchQuery && (
                                 <button
                                     className="fb-search-clear"
                                     onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchedLocations([]); }}
-                                    aria-label="Clear search"
+                                    aria-label={t('fileBrowser.clearSearch')}
                                 >
                                     <X size={12} />
                                 </button>
@@ -526,10 +534,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                             className="fb-type-filter"
                             value={typeFilter}
                             onChange={(e) => setTypeFilter(e.target.value)}
-                            aria-label="File type filter"
+                            aria-label={t('fileBrowser.typeFilter')}
                         >
                             {FILE_TYPE_FILTERS.map(f => (
-                                <option key={f.value} value={f.value}>{f.label}</option>
+                                <option key={f.value} value={f.value}>{t(f.label)}</option>
                             ))}
                         </select>
                         <button
@@ -537,7 +545,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                             onClick={handleSearch}
                             disabled={!searchQuery.trim() || isSearching}
                         >
-                            {isSearching ? 'Searching...' : 'Search'}
+                            {isSearching ? t('fileBrowser.searching') : t('fileBrowser.search')}
                         </button>
                     </div>
 
@@ -560,7 +568,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     <button
                                         className="fb-up-btn"
                                         onClick={() => loadDirectory(parentPath)}
-                                        title="Go up"
+                                        title={t('fileBrowser.goUp')}
                                     >
                                         <ArrowUp size={14} />
                                     </button>
@@ -572,7 +580,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     checked={showHidden}
                                     onChange={(e) => setShowHidden(e.target.checked)}
                                 />
-                                Show hidden
+                                {t('fileBrowser.showHidden')}
                             </label>
                         </div>
                     )}
@@ -581,23 +589,23 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     {searchResults && (
                         <div className="fb-search-header">
                             <div className="fb-search-summary">
-                                <span>Found {searchResults.length} result(s) for "{searchQuery}"</span>
+                                <span>{t.plural('fileBrowser.found', searchResults.length, { query: searchQuery })}</span>
                                 {searchScope && (
                                     <span
                                         className="fb-search-scope"
                                         title={searchedLocations.join('\n')}
                                     >
-                                        Searching in: <code>{searchScope}</code>
+                                        {t('fileBrowser.searchingIn')} <code>{searchScope}</code>
                                     </span>
                                 )}
                                 {searchTruncated && (
                                     <span>
-                                        Search stopped early, so some matches may be missing. Try a more specific name.
+                                        {t('fileBrowser.searchStopped')}
                                     </span>
                                 )}
                             </div>
                             <button className="fb-back-btn" onClick={() => { setSearchResults(null); setSearchQuery(''); setSearchedLocations([]); }}>
-                                Back to browsing
+                                {t('fileBrowser.backToBrowsing')}
                             </button>
                         </div>
                     )}
@@ -608,22 +616,21 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     {/* File list + Preview split */}
                     <div className="fb-content">
                         <div className="fb-file-list">
-                            {loading && <div className="fb-loading">Loading...</div>}
+                            {loading && <div className="fb-loading">{t('fileBrowser.loading')}</div>}
 
                             {!loading && displayItems.length === 0 && (
                                 <div className="fb-empty">
                                     {searchResults
-                                        ? 'No files found'
+                                        ? t('fileBrowser.noFiles')
                                         : hiddenCount > 0
-                                            ? 'Only hidden items here. Turn on Show hidden to see them.'
-                                            : 'This folder is empty'}
+                                            ? t('fileBrowser.onlyHidden')
+                                            : t('fileBrowser.empty')}
                                 </div>
                             )}
 
                             {!loading && displayItems.map((entry) => {
                                 const ext = entry.extension || (entry.name.includes('.') ? '.' + entry.name.split('.').pop()?.toLowerCase() : '');
                                 const fileUnsupported = entry.type === 'file' && ext && !isExtensionSupported(ext);
-                                const unsupportedCat = fileUnsupported ? getUnsupportedCategory(ext) : null;
 
                                 return (
                                 <div
@@ -631,7 +638,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
                                     onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : toggleSelection(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
-                                    title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
+                                    title={fileUnsupported ? t('fileBrowser.notIndexableTitle') : entry.path}
                                 >
                                     <input
                                         type="checkbox"
@@ -639,13 +646,13 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         checked={selectedFiles.has(entry.path)}
                                         onChange={() => toggleSelection(entry.path)}
                                         onClick={(e) => e.stopPropagation()}
-                                        aria-label={`Select ${entry.name}`}
+                                        aria-label={t('fileBrowser.selectAria', { name: entry.name })}
                                     />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
                                     <span className="fb-entry-name" title={entry.path}>{entry.name}</span>
                                     {fileUnsupported && (
                                         <span className="fb-unsupported-badge">
-                                            Not indexable
+                                            {t('fileBrowser.notIndexable')}
                                         </span>
                                     )}
                                     {entry.type === 'file' && (
@@ -653,8 +660,8 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                             type="button"
                                             className="fb-entry-preview-btn"
                                             onClick={(e) => { e.stopPropagation(); handleFilePreview(entry.path); }}
-                                            aria-label={`Preview ${entry.name}`}
-                                            title="Preview file"
+                                            aria-label={t('fileBrowser.previewAria', { name: entry.name })}
+                                            title={t('fileBrowser.previewTitle')}
                                         >
                                             <Eye size={14} />
                                         </button>
@@ -671,29 +678,29 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                             <div className="fb-preview">
                                 <div className="fb-preview-header">
                                     <span className="fb-preview-name">{previewFile.name}</span>
-                                    <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label="Close preview">
+                                    <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label={t('fileBrowser.closePreview')}>
                                         <X size={14} />
                                     </button>
                                 </div>
                                 <div className="fb-preview-meta">
                                     <span>{previewFile.size_display}</span>
-                                    {previewFile.total_lines && <span>{previewFile.total_lines} lines</span>}
-                                    {previewFile.columns && <span>{previewFile.columns.length} columns</span>}
-                                    {previewFile.row_count !== null && <span>{previewFile.row_count} rows</span>}
+                                    {previewFile.total_lines && <span>{t('fileBrowser.lines', { n: previewFile.total_lines })}</span>}
+                                    {previewFile.columns && <span>{t('fileBrowser.columnCount', { n: previewFile.columns.length })}</span>}
+                                    {previewFile.row_count !== null && <span>{t('fileBrowser.rows', { n: previewFile.row_count })}</span>}
                                 </div>
                                 {previewFile.columns && (
                                     <div className="fb-preview-columns">
-                                        <strong>Columns:</strong> {previewFile.columns.join(', ')}
+                                        <strong>{t('fileBrowser.columnsLabel')}</strong> {previewFile.columns.join(', ')}
                                     </div>
                                 )}
                                 {previewLoading ? (
-                                    <div className="fb-preview-loading">Loading preview...</div>
+                                    <div className="fb-preview-loading">{t('fileBrowser.previewLoading')}</div>
                                 ) : previewFile.is_text && previewFile.preview_lines.length > 0 ? (
                                     <pre className="fb-preview-content">
                                         {previewFile.preview_lines.slice(0, 30).join('\n')}
                                     </pre>
                                 ) : (
-                                    <div className="fb-preview-binary">Binary file - no preview available</div>
+                                    <div className="fb-preview-binary">{t('fileBrowser.binary')}</div>
                                 )}
                             </div>
                         )}
