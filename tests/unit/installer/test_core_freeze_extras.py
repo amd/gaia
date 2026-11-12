@@ -11,8 +11,11 @@ pip, so the build has to carry them, and the smoke test has to start them.
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import importlib.util
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -164,7 +167,20 @@ def test_smoke_recognises_an_initialize_answer(stdout, answered):
 
 def test_smoke_talk_check_runs_against_this_checkout():
     """The script the smoke test hands the executable is valid where audio is."""
-    pytest.importorskip("sounddevice")
+    try:
+        importlib.metadata.distribution("sounddevice")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("sounddevice is not installed")
     if sys.platform.startswith("linux"):
         pytest.skip("Linux wheels carry no PortAudio")
-    exec(compile(smoke.TALK_AUDIO_CHECK, "<talk-check>", "exec"), {})
+    # A fresh interpreter, like the executable: another test's sounddevice stub
+    # in sys.modules makes find_spec raise.
+    result = subprocess.run(
+        [sys.executable, "-c", smoke.TALK_AUDIO_CHECK],
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
