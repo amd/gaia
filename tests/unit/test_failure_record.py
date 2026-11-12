@@ -5,6 +5,7 @@
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -339,6 +340,136 @@ def test_url_passwords_and_any_spelling_of_home_are_redacted(home):
     assert "hunter2" not in out
     assert tmp.lower() not in out.lower()
     assert json.dumps(tmp)[1:-1].lower() not in out.lower()
+
+
+# Assembled at runtime so no key-shaped literal sits in the repo.
+_PEM_BEGIN = "-----BEGIN " + "RSA PRIVATE KEY-----"
+_PEM_END = "-----END " + "RSA PRIVATE KEY-----"
+_PEM_BODY = "NOTAREALKEY" * 3
+
+
+def test_private_keys_are_redacted_whole_even_when_truncated():
+    pem = f"{_PEM_BEGIN}\n{_PEM_BODY}\nNOTAREALKEYTOO\n{_PEM_END}"
+    out = fr.redact(f"before\n{pem}\nafter")
+    assert _PEM_BODY not in out and "NOTAREALKEYTOO" not in out
+    assert "before" in out and "after" in out
+    assert _PEM_BODY not in fr.redact(f"tail\n{_PEM_BEGIN}\n{_PEM_BODY}")
+    encrypted = f"{_PEM_BEGIN}\nProc-Type: 4,ENCRYPTED\n\n{_PEM_BODY}\n{_PEM_END}"
+    assert _PEM_BODY not in fr.redact(encrypted)
+
+
+def test_a_quoted_pem_header_alone_is_not_wiped_to_the_end():
+    text = f"error: expected {_PEM_BEGIN}\nthen the rest of the log\n"
+    assert fr.redact(text) == text
+    assert fr.matched_pattern_names(text) == []
+
+
+def test_header_like_lines_after_a_pem_header_do_not_backtrack():
+    text = f"{_PEM_BEGIN}\n" + "-:\r\n" * 5000 + "!"
+    start = time.perf_counter()
+    assert fr.matched_pattern_names(text) == []
+    fr.redact(text)
+    assert time.perf_counter() - start < 5
+
+
+def test_a_json_escaped_or_indented_private_key_is_caught_and_redacted():
+    body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+    cases = [
+        json.dumps({"private_key": f"{_PEM_BEGIN}\n{body}\n{_PEM_END}\n", "n": 1}),
+        json.dumps({"k": f"{_PEM_BEGIN}\r\n{body}\r\n{_PEM_END}\r\n"}),
+        json.dumps(
+            {"k": f"{_PEM_BEGIN}\nProc-Type: 4,ENCRYPTED\n\n{body}\n{_PEM_END}"}
+        ),
+        f"tls:\n  key: |\n    {_PEM_BEGIN}\n    {body}\n    {_PEM_END}\n",
+    ]
+    for text in cases:
+        assert fr.matched_pattern_names(text) == ["PEM private key"], text
+        assert body not in fr.redact(text), text
+    escaped = json.dumps({"private_key": f"{_PEM_BEGIN}\n{body}\n{_PEM_END}", "n": 1})
+    assert json.loads(fr.redact(escaped))["n"] == 1
+
+
+def test_a_json_quoted_pem_header_alone_is_not_flagged():
+    text = json.dumps({"msg": f"expected {_PEM_BEGIN}\nthen the rest"})
+    assert fr.matched_pattern_names(text) == []
+    assert fr.redact(text) == text
+
+
+@pytest.mark.parametrize(
+    "first, line, count",
+    [
+        ("\\n", "-:\\n", 20000),
+        ("\\n", "a:b\\r\\n", 20000),
+        ("\n", " \\n", 20000),
+        ("\n", " ", 100000),
+    ],
+    ids=["escaped-header", "escaped-crlf-header", "indent-escaped", "spaces"],
+)
+def test_escaped_header_lines_after_a_pem_header_do_not_backtrack(first, line, count):
+    text = _PEM_BEGIN + first + line * count + "!"
+    start = time.perf_counter()
+    assert fr.matched_pattern_names(text) == []
+    fr.redact(text)
+    assert time.perf_counter() - start < 5
+
+
+_ASSIGN = "key/token/password assignment"
+_PREFIX = "provider key prefix (sk-, ghp_, xoxb-...)"
+_JSON_AUTH = "auth header or cookie in JSON"
+
+
+# (before, secret, after): assembled at runtime so no credential sits in the repo.
+@pytest.mark.parametrize(
+    "before, secret, after, kind",
+    [
+        ("secret_access_key = ", "a1" * 32, "", _ASSIGN),
+        ("AWS_SECRET_ACCESS_KEY=", "x" * 40, "", _ASSIGN),
+        ("access_key_id = ", "b2" * 16, "", _ASSIGN),
+        ("id ", "AKIA" + "ABCDEFGHIJKLMNOP", "", "AWS/R2-style access key ID"),
+        ("", "github_" + "pat_" + "A1" * 15, "", _PREFIX),
+        ("", "ghu_" + "Z9" * 8, "", _PREFIX),
+        ("", "hf_" + "c" * 34, "", "Hugging Face token"),
+        ("", "AI" + "za" + "d" * 35, "", "Google API key"),
+        (
+            "",
+            "eyJ" + "hbGciOiJI" + ".eyJ" + "zdWIiOiIx" + "." + "e" * 16,
+            "",
+            "JSON web token",
+        ),
+        ('{"authorization": "', "f" * 20, '"}', _JSON_AUTH),
+        ('{"name": "Cookie", "value": "', "sid=" + "g" * 12, '"}', _JSON_AUTH),
+        ('{"x-api-key": "', "h" * 20, '"}', _JSON_AUTH),
+    ],
+    ids=lambda v: v if v in (_ASSIGN, _PREFIX, _JSON_AUTH) else None,
+)
+def test_common_credential_formats_are_caught_and_redacted(before, secret, after, kind):
+    text = before + secret + after
+    assert kind in fr.matched_pattern_names(text)
+    out = fr.redact(text)
+    assert fr.REDACTED in out and secret not in out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "max_tokens=500 tokens_per_second: 3",
+        '{"authorization": "[redacted]"}',
+        '{"name": "Content-Type", "value": "application/json"}',
+        "AKIA is a prefix; AKIAshort",
+        "the hf_ prefix and an eyJ string",
+        "access_key_id is a field name",
+    ],
+)
+def test_lookalikes_are_not_flagged(text):
+    assert fr.matched_pattern_names(text) == []
+
+
+def test_matched_pattern_names_name_patterns_never_values():
+    assert fr.matched_pattern_names("agent answered in 3.2s; basic") == []
+    found = fr.matched_pattern_names(f"Authorization: Bearer {KEY}")
+    assert found and all(KEY not in name for name in found)
+    pem = f"{_PEM_BEGIN}\n{_PEM_BODY}\n{_PEM_END}"
+    assert fr.matched_pattern_names(pem) == ["PEM private key"]
 
 
 def test_probe_ignores_proxies_and_redirects(monkeypatch):
