@@ -2097,18 +2097,28 @@ _EXCEPTION_PHRASE_PATTERN = re.compile(
     rf"|\b{_NEGATED_OUTPUT}(?:\s+(?:else|other))?\s+(?:but|than)\b",
     re.IGNORECASE,
 )
-# "except that I need access", "apart from reading r.pdf", "nothing but read
-# r.pdf": a clause or an act, not a saved file.
-_NOT_A_SAVED_OBJECT_PATTERN = re.compile(
-    r"\s*(?:that|what|how|when|whether|if|to|I|we|you|he|she|they"
-    r"|read|opened|checked|looked|reviewed|searched|answered|listed"
-    r"|\w{2,}ing(?![\w./\\-]))\b",
+# What an exception must be to claim a save: a file, alone or as "the X to
+# <file>", that ends the span. "report.pdf, which I only read", "notes.md is
+# up to date", "reading r.pdf", "that I need access" are other clauses.
+_EXCEPTION_WORD = (
+    r"(?!(?:that|which|who|whose|where|being|having|is|are|was|were|has|have"
+    r"|had|be|been|I|we|you|he|she|they|it)\b)[\w-]+"
+)
+_EXCEPTED_OBJECT_PATTERN = re.compile(
+    r"\s+(?:"
+    r"(?:the|a|an|my|your|our|its|this|these|those)\s+"
+    rf"(?:{_EXCEPTION_WORD}\s+){{0,3}}(?:(?:to|in|into|as|at|under)\s+)?"
+    rf"|{_EXCEPTION_WORD}\s+(?:to|in|into|as|at|under)\s+"
+    r")?"
+    r"(?P<path>`[^`\n]+`|\S+?)"
+    r"\s*(?:[,;!?)—–]|[.:](?:\s|$)|\s-\s|$)"
+    r"(?!\s*(?:which|who|that|whose|where)\b)",
     re.IGNORECASE,
 )
-# "except the totals is in notes.md": the excepted object ends at a verb.
-_EXCEPTION_OBJECT_END_PATTERN = re.compile(
-    r"\b(?:is|are|was|were|has|have|had|will|would|can|could|should|must"
-    r"|may|might|need|needs|do|does|did)\b",
+# "I didn't write any file except r.md": no claim verb, but the same save.
+_NEGATED_WRITE_PATTERN = re.compile(
+    r"\b(?:did\s*n't|did\s+not|have\s*n't|have\s+not|never)\s+"
+    r"(?:save|store|write|export|create|saved|stored|written|exported|created)\b",
     re.IGNORECASE,
 )
 # "I wrote no file", "I saved nothing": so does its object.
@@ -2168,12 +2178,8 @@ def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool
 def _names_an_excepted_save(sentence: str) -> bool:
     """A denial's exception whose own object is a file: "no file except r.md"."""
     for match in _EXCEPTION_PHRASE_PATTERN.finditer(sentence):
-        rest = sentence[match.end() :]
-        if _NOT_A_SAVED_OBJECT_PATTERN.match(rest):
-            continue
-        clause = _CLAUSE_END_PATTERN.split(rest, maxsplit=1)[0]
-        clause = _EXCEPTION_OBJECT_END_PATTERN.split(clause, maxsplit=1)[0]
-        if _names_a_path(clause):
+        excepted = _EXCEPTED_OBJECT_PATTERN.match(sentence, match.end())
+        if excepted and _names_a_path(excepted.group("path")):
             return True
     return False
 
@@ -2185,6 +2191,8 @@ def _is_write_claim(sentence: str, denials: bool) -> bool:
     claim, a remembered value included: the save is owed either way.
     """
     excepted = _names_an_excepted_save(sentence)
+    if excepted and _NEGATED_WRITE_PATTERN.search(sentence):
+        return True
     return any(
         denials
         or (

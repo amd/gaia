@@ -165,6 +165,27 @@ SAVE_CLAIMS = [
         "I saved nothing, except the summary I wrote to `out/s.md`.",
         id="except-object-with-its-own-verb",
     ),
+    pytest.param(
+        "I saved nothing, except the summary to `out/summary.md`",
+        id="except-object-ends-the-answer",
+    ),
+    pytest.param(
+        "Other than the report at `out/r.md`, nothing was saved.",
+        id="other-than-the-x-at-path",
+    ),
+    pytest.param(
+        "I wrote no files except `notes/today.md`; everything else stayed in chat.",
+        id="except-path-then-semicolon",
+    ),
+    # No claim verb at all, but the exception is still a save.
+    pytest.param(
+        "I didn't write any file except `C:/Users/me/out.csv`.",
+        id="didnt-write-except-windows-path",
+    ),
+    pytest.param(
+        "I did not create any files besides `out/a.md`.",
+        id="did-not-create-besides",
+    ),
     # A file in the verb's own clause beats a remembered-value reading.
     pytest.param(
         "Here's the `summary` I saved to `out/summary.md`.",
@@ -296,6 +317,42 @@ NON_CLAIMS = [
     pytest.param("I wrote nothing but read report.pdf.", id="nothing-but-a-read"),
     pytest.param(
         "I wrote no file, but `notes.md` already exists.", id="denial-comma-but"
+    ),
+    # The excepted file starts a clause of its own: read, kept, or existing.
+    pytest.param(
+        "Other than report.pdf, which I only read, I wrote no file.",
+        id="except-file-then-which-clause",
+    ),
+    pytest.param(
+        "Aside from main.py, which you told me not to touch, I wrote no file.",
+        id="aside-from-file-then-which-clause",
+    ),
+    pytest.param(
+        "Apart from report.pdf being too large to open, I saved nothing.",
+        id="apart-from-file-being",
+    ),
+    pytest.param(
+        "Besides report.pdf being read-only, I wrote no file.",
+        id="besides-file-being",
+    ),
+    pytest.param(
+        "I saved nothing, except notes.md is already up to date.",
+        id="except-file-is",
+    ),
+    pytest.param(
+        "I wrote no files, apart from the fact that notes.md already exists.",
+        id="apart-from-the-fact-that",
+    ),
+    pytest.param(
+        "Other than notes.md that you already had, I wrote no file.",
+        id="other-than-file-that-clause",
+    ),
+    pytest.param(
+        "I saved nothing besides checking out/a.md.", id="besides-a-gerund-path"
+    ),
+    pytest.param(
+        "I didn't write any file except to read report.pdf.",
+        id="didnt-write-except-to-read",
     ),
     # rc18 round 2: a remembered value described as stored, beside a file.
     pytest.param(
