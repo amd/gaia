@@ -4168,7 +4168,12 @@ async def _get_chat_response(
             if isinstance(result, dict)
             else {}
         )
-        spending.record_turn(db, model_id, counts)
+        spending.record_turn(
+            db,
+            model_id,
+            counts,
+            failed=isinstance(result, dict) and bool(result.get("model_failed")),
+        )
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -5164,6 +5169,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
         # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
+        # Reply text reached the user (a failure notice isn't one), before any error is added.
+        turn_replied = bool(full_response.strip()) and not (
+            isinstance(answer_event, dict) and answer_event.get("failed")
+        )
 
         # Signal cancellation (handles client disconnect) then wait for producer.
         await _cleanup_stream()
@@ -5401,12 +5410,12 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
-            # A stopped answer may still be billed; one that failed unanswered is not.
+            # A begun answer may be billed even if stopped; one that failed unanswered is not.
             spending.record_turn(
                 db,
                 model_id,
                 inference_stats,
-                failed=turn_failed and not turn_cancelled,
+                failed=turn_failed and not turn_replied,
             )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
