@@ -113,7 +113,7 @@ A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaia
+sudo rm -f /usr/local/bin/{gaia-tui,gaia-agent,gaia}
 sudo rm -rf /usr/local/lib/gaia
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
