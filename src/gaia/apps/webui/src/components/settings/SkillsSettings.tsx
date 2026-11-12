@@ -36,7 +36,13 @@ function SkillDescription({ text }: { text: string }) {
 
     useLayoutEffect(() => {
         const el = ref.current;
-        if (el && !open) setCut(el.scrollHeight > el.clientHeight + 1);
+        if (!el || open) return;
+        const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
     }, [text, open]);
 
     return (
