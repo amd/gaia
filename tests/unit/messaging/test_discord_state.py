@@ -114,3 +114,36 @@ def test_a_background_start_refuses_foreground_only_limits(capsys):
     )
     assert cli.main(args) == 2
     assert "foreground only" in capsys.readouterr().err
+
+
+def test_setup_with_no_terminal_says_so_instead_of_a_traceback(monkeypatch):
+    """`gaia discord setup` with stdin closed (a pipe, CI, a service) ended in
+    an EOFError traceback from getpass."""
+    from gaia.messaging.discord import cli
+
+    def no_terminal(_prompt):
+        raise EOFError
+
+    def never(_token):
+        raise AssertionError("nothing was typed, so nothing may be connected")
+
+    monkeypatch.setattr(cli, "connect", never)
+    lines = []
+    code = cli.run_setup(prompt=no_terminal, emit=lines.append, open_browser=False)
+
+    assert code == 1
+    assert "gaia discord connect" in lines[-1]
+    assert not state.is_running()
+
+
+def test_setup_with_an_empty_token_is_refused_not_connected(monkeypatch):
+    from gaia.messaging.discord import cli
+
+    started = []
+    monkeypatch.setattr(cli, "start_detached", lambda **_: started.append(1) or 0)
+    lines = []
+    code = cli.run_setup(prompt=lambda _p: "", emit=lines.append, open_browser=False)
+
+    assert code == 1
+    assert lines[-1].startswith("\n❌")
+    assert started == []
