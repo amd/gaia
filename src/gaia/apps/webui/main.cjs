@@ -89,7 +89,7 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
 const { probeTrayHost } = require("./services/tray-host.cjs");
-const { shareTmpDirAcrossLaunches } = require("./services/flatpak.cjs");
+const { restoreTmpDir, shareTmpDirAcrossLaunches } = require("./services/flatpak.cjs");
 const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
 const { revealWhenReady } = require("./services/window-reveal.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
@@ -1019,6 +1019,7 @@ async function goBackToPreviousVersion() {
 // A Flatpak launch has a private /tmp, where Chromium keeps the lock's socket.
 shareTmpDirAcrossLaunches();
 const gotTheSingleInstanceLock = app.requestSingleInstanceLock();
+restoreTmpDir();
 if (!gotTheSingleInstanceLock) {
   console.log("[main] Another GAIA Agent UI instance is already running — quitting");
   app.quit();

@@ -22,6 +22,7 @@ const {
   BACKGROUND_MONITOR,
   isFlatpak,
   isGnomeFlatpak,
+  restoreTmpDir,
   shareTmpDirAcrossLaunches,
 } = require("../../src/gaia/apps/webui/services/flatpak.cjs");
 const { probeTrayHost, WATCHER } = require("../../src/gaia/apps/webui/services/tray-host.cjs");
@@ -83,6 +84,40 @@ describe("shareTmpDirAcrossLaunches", () => {
     expect(() => shareTmpDirAcrossLaunches({ FLATPAK_ID: "ai.amd.gaia" })).toThrow(
       /XDG_RUNTIME_DIR is not set.*flatpak run ai\.amd\.gaia/s
     );
+  });
+});
+
+describe("restoreTmpDir", () => {
+  test("puts TMPDIR back once the lock is held, so children don't fill /run/user", () => {
+    const env = { ...FLATPAK, TMPDIR: "/var/tmp" };
+    shareTmpDirAcrossLaunches(env);
+    restoreTmpDir(env);
+    expect(env).toEqual({ ...FLATPAK, TMPDIR: "/var/tmp" });
+  });
+
+  test("an unset TMPDIR goes back to unset, not to an empty string", () => {
+    const env = { ...FLATPAK };
+    shareTmpDirAcrossLaunches(env);
+    expect(env.TMPDIR).toBe(path.join("/run/user/1000", "app", "ai.amd.gaia"));
+    restoreTmpDir(env);
+    expect(env).toEqual(FLATPAK);
+    expect("TMPDIR" in env).toBe(false);
+  });
+
+  test("sharing twice still restores the TMPDIR from before the first time", () => {
+    const env = { ...FLATPAK, TMPDIR: "/tmp" };
+    shareTmpDirAcrossLaunches(env);
+    shareTmpDirAcrossLaunches(env);
+    restoreTmpDir(env);
+    expect(env.TMPDIR).toBe("/tmp");
+  });
+
+  test("outside GAIA's Flatpak, and when called twice, it changes nothing", () => {
+    const env = { TMPDIR: "/tmp", FLATPAK_ID: "com.visualstudio.code" };
+    shareTmpDirAcrossLaunches(env);
+    restoreTmpDir(env);
+    restoreTmpDir(env);
+    expect(env).toEqual({ TMPDIR: "/tmp", FLATPAK_ID: "com.visualstudio.code" });
   });
 });
 

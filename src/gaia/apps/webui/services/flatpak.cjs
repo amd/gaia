@@ -17,6 +17,9 @@ const APP_ID = "ai.amd.gaia";
 /** The bus name xdg-desktop-portal owns while it keeps GNOME's Background Apps list. */
 const BACKGROUND_MONITOR = "org.freedesktop.background.Monitor";
 
+/** Where shareTmpDirAcrossLaunches() keeps the TMPDIR it replaced ("" if unset). */
+const TMPDIR_BEFORE = "GAIA_FLATPAK_TMPDIR_BEFORE";
+
 /**
  * Whether this process is GAIA's own Flatpak. Another app's sandbox (a
  * terminal inside a Flatpak IDE) sets FLATPAK_ID too, and is not it.
@@ -54,8 +57,29 @@ function shareTmpDirAcrossLaunches(env = process.env) {
     );
   }
   const shared = path.join(env.XDG_RUNTIME_DIR, "app", APP_ID);
+  if (!(TMPDIR_BEFORE in env)) env[TMPDIR_BEFORE] = env.TMPDIR ?? "";
   env.TMPDIR = shared;
   return shared;
 }
 
-module.exports = { APP_ID, BACKGROUND_MONITOR, isFlatpak, isGnomeFlatpak, shareTmpDirAcrossLaunches };
+/**
+ * Put TMPDIR back once the single-instance lock is held. The shared directory
+ * is on /run/user, a small tmpfs, and the backend and its installers would
+ * otherwise inherit it for downloads and archive extraction.
+ */
+function restoreTmpDir(env = process.env) {
+  if (!(TMPDIR_BEFORE in env)) return;
+  const before = env[TMPDIR_BEFORE];
+  delete env[TMPDIR_BEFORE];
+  if (before) env.TMPDIR = before;
+  else delete env.TMPDIR;
+}
+
+module.exports = {
+  APP_ID,
+  BACKGROUND_MONITOR,
+  isFlatpak,
+  isGnomeFlatpak,
+  restoreTmpDir,
+  shareTmpDirAcrossLaunches,
+};
