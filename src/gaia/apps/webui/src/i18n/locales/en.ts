@@ -287,6 +287,8 @@ export const enMessages = {
     'msg.confirmDeleteAria': 'Confirm delete message',
     'msg.error': 'Something went wrong',
     'msg.tryAgain': 'Try again',
+    'msg.continue': 'Continue',
+    'msg.continuePrompt': 'Continue your answer from where it stopped.',
     'msg.reportNote': "GAIA saved what it saw when this failed. The report adds GAIA's logs and this PC's details, to attach to a bug report; nothing is sent unless you share it.",
     'chatError.context': 'This conversation is longer than the model can read at once. Start a new chat, or ask about fewer documents, then ask again.',
     'chatError.modelServer': 'The model server did not answer. Open Settings → Model to check it, then try again.',
