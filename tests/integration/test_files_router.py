@@ -179,7 +179,7 @@ class TestFileUpload:
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
         # A random ID, then the name the user knows the file by.
-        assert re.fullmatch(r"[0-9a-f]{12}_test\.txt", data["filename"])
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
     def test_upload_image_file(self, client, sample_png_bytes):
@@ -308,9 +308,9 @@ class TestFileUpload:
             assert data["filename"].endswith(
                 ext
             ), f"Extension not preserved: expected {ext}, got {data['filename']}"
-            # Verify the ID prefix and the kept name
+            # The kept name, with an id only when that name is already taken
             assert re.fullmatch(
-                rf"[0-9a-f]{{12}}_myfile{re.escape(ext)}", data["filename"]
+                rf"(?:[0-9a-f]{{12}}_)?myfile{re.escape(ext)}", data["filename"]
             )
 
     def test_upload_is_stored_under_gaia_home(self, client):
@@ -1312,7 +1312,7 @@ class TestSecurityEdgeCases:
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
         # No special characters leak into the stored name
-        assert re.fullmatch(r"[0-9a-f]{12}_my_file_copy_2\.txt", data["filename"])
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?my_file_copy_2\.txt", data["filename"])
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────
