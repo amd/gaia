@@ -58,11 +58,25 @@ function relativeDay(iso: string, t: Translate): MessageRef | string | null {
     return then.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
-export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn): { text: string; past: boolean } | null {
+/** A stored due date; a bare "YYYY-MM-DD" is local midnight, not UTC. */
+function parseDue(iso: string): Date | null {
     const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
     const due = bare ? new Date(+bare[1], +bare[2] - 1, +bare[3]) : new Date(iso);
-    if (Number.isNaN(due.getTime())) return null;
+    return Number.isNaN(due.getTime()) ? null : due;
+}
+
+/** A stored due date as a date-and-time field shows it, in local time. */
+export function dueInputValue(iso: string | null | undefined): string {
+    const due = iso ? parseDue(iso) : null;
+    if (!due) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T${pad(due.getHours())}:${pad(due.getMinutes())}`;
+}
+
+/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
+export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn): { text: string; past: boolean } | null {
+    const due = parseDue(iso);
+    if (!due) return null;
     const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const past = allDay ? due.getTime() < startOfToday : due.getTime() < now.getTime();
@@ -89,10 +103,12 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const [loadError, setLoadError] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [draft, setDraft] = useState('');
+    const [draftDue, setDraftDue] = useState('');
     const [forgotten, setForgotten] = useState<AboutYouItem[]>([]);
     const [revealed, setRevealed] = useState<Set<string>>(new Set());
     const [newText, setNewText] = useState('');
     const [newCategory, setNewCategory] = useState('fact');
+    const [newDue, setNewDue] = useState('');
     const [busyId, setBusyId] = useState<string | null>(null);
     const [total, setTotal] = useState(0);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -160,10 +176,14 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     const saveEdit = useCallback(async (item: AboutYouItem) => {
         const content = draft.trim();
-        if (!content || content === item.content) { setEditingId(null); return; }
+        const dueChanged = item.category === 'reminder' && !!draftDue && draftDue !== dueInputValue(item.due_at);
+        if (!content || (content === item.content && !dueChanged)) { setEditingId(null); return; }
         setBusyId(item.id);
         try {
-            await memoryApi.editKnowledge(item.id, { content });
+            await memoryApi.editKnowledge(item.id, {
+                ...(content !== item.content ? { content } : {}),
+                ...(dueChanged ? { due_at: draftDue } : {}),
+            });
             setEditingId(null);
             showToast(t('mem.about.updated'), 'success');
             await load();
@@ -174,7 +194,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [draft, load, onChanged, showToast, t]);
+    }, [draft, draftDue, load, onChanged, showToast, t]);
 
     const forget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
@@ -218,11 +238,13 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     const add = useCallback(async () => {
         const content = newText.trim();
-        if (!content) return;
+        const reminder = newCategory === 'reminder';
+        if (!content || (reminder && !newDue)) return;
         setBusyId('new');
         try {
-            await memoryApi.createKnowledge({ content, category: newCategory });
+            await memoryApi.createKnowledge({ content, category: newCategory, ...(reminder ? { due_at: newDue } : {}) });
             setNewText('');
+            setNewDue('');
             showToast(t('mem.about.saved'), 'success');
             await load();
             onChanged();
@@ -232,7 +254,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [newText, newCategory, load, onChanged, showToast, t]);
+    }, [newText, newCategory, newDue, load, onChanged, showToast, t]);
 
     if (!memoryEnabled) {
         return (
@@ -277,7 +299,20 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     <option value="reminder">{t.bare('mem.about.kind.reminder')}</option>
                     <option value="note">{t.bare('mem.about.kind.note')}</option>
                 </select>
-                <button className="btn-primary" type="submit" disabled={!newText.trim() || busyId === 'new'}>
+                {newCategory === 'reminder' && (
+                    <input
+                        type="datetime-local"
+                        className="mem-input mem-about-when"
+                        aria-label={t('mem.about.when')}
+                        value={newDue}
+                        onChange={e => setNewDue(e.target.value)}
+                    />
+                )}
+                <button
+                    className="btn-primary"
+                    type="submit"
+                    disabled={!newText.trim() || (newCategory === 'reminder' && !newDue) || busyId === 'new'}
+                >
                     <Plus size={14} /> {t('mem.about.add')}
                 </button>
             </form>
@@ -334,6 +369,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(item); }
                                                     }}
                                                 />
+                                                {item.category === 'reminder' && (
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="mem-input mem-about-when"
+                                                        aria-label={t('mem.about.when')}
+                                                        value={draftDue}
+                                                        onChange={e => setDraftDue(e.target.value)}
+                                                    />
+                                                )}
                                                 <div className="mem-about-edit-actions">
                                                     <button className="btn-primary" type="submit" disabled={busyId === item.id}>{t('mem.about.save')}</button>
                                                     <button className="btn-secondary" type="button" onClick={() => setEditingId(null)}>{t('mem.about.cancel')}</button>
@@ -366,7 +410,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                         className="mem-about-btn"
                                                         aria-label={t('mem.about.editAria', { name })}
                                                         title={t('mem.about.edit')}
-                                                        onClick={() => { setEditingId(item.id); setDraft(item.content); }}
+                                                        onClick={() => { setEditingId(item.id); setDraft(item.content); setDraftDue(dueInputValue(item.due_at)); }}
                                                     >
                                                         <Pencil size={14} />
                                                     </button>

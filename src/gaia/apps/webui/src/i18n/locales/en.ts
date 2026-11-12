@@ -2766,6 +2766,7 @@ export const enMessages = {
     'mem.about.kind.preference': 'Preference',
     'mem.about.kind.reminder': 'Reminder',
     'mem.about.kind.note': 'Note',
+    'mem.about.when': 'When to remind you',
     'mem.about.addPlaceholder': 'Tell GAIA something about you, e.g. “I prefer short answers”',
     'mem.about.addLabel': 'Something GAIA should know about you',
     'mem.about.add': 'Add',

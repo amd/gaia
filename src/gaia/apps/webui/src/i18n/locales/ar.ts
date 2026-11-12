@@ -2767,6 +2767,7 @@ const messages: Messages = {
     'mem.about.kind.preference': 'تفضيل',
     'mem.about.kind.reminder': 'تذكير',
     'mem.about.kind.note': 'ملاحظة',
+    'mem.about.when': 'موعد التذكير',
     'mem.about.addPlaceholder': 'أخبر GAIA بشيء عنك، مثل «أفضّل الإجابات القصيرة»',
     'mem.about.addLabel': 'شيء ينبغي أن يعرفه GAIA عنك',
     'mem.about.add': 'إضافة',
