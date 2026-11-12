@@ -59,6 +59,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -1295,12 +1296,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }, 250);
     }, [sessionId, isStreaming, removeMessage, setMessages, isStale]);
 
-    // Resend a user message: delete it and everything below, then re-send
+    // Resend a user message, or its edited text: delete it and everything below, then send.
     const resendingRef = useRef(false);
-    const handleResendMessage = useCallback(async (message: Message, failedReply?: Message) => {
+    const handleResendMessage = useCallback(async (message: Message, failedReply?: Message, editedText?: string) => {
         if (isStreaming || message.role !== 'user' || resendingRef.current) return;
         resendingRef.current = true;
-        const text = message.content;
+        const text = editedText ?? message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
 
         const notify = (detail: string) => addNotification({
@@ -1442,7 +1443,19 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [messages, handleResendMessage]);
 
-
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const handleEditLast = useCallback(() => {
+        const last = lastSentMessage(messages);
+        if (last) setEditingId(last.id);
+    }, [messages]);
+    const handleEditCancel = useCallback(() => {
+        setEditingId(null);
+        inputRef.current?.focus();
+    }, []);
+    const handleEdit = useCallback((message: Message, text: string) => {
+        setEditingId(null);
+        void handleResendMessage(message, undefined, text);
+    }, [handleResendMessage]);
 
     // Title editing
     const startEditTitle = () => {
@@ -1647,6 +1660,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
                                     onDelete={!busy ? handleDeleteMessage : undefined}
                                     onResend={!busy && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
+                                    onEditStart={!busy && msg.role === 'user' && !retiredAgent ? () => setEditingId(msg.id) : undefined}
+                                    editing={editingId === msg.id && !busy}
+                                    onEdit={handleEdit}
+                                    onEditCancel={handleEditCancel}
+                                    onRegenerate={canRetry ? () => handleTryAgain(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
@@ -1783,6 +1801,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         disabledReason={composerBlocked}
                         attachments={attach}
                         inputRef={inputRef}
+                        onEditLast={!busy && !retiredAgent ? handleEditLast : undefined}
                         placeholder={isStreaming
                             ? t('composer.queueNext')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}

@@ -499,6 +499,25 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`a sent message opened for editing (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('ArrowUp');
+        const editor = page.locator('.msg-edit-input');
+        await expect(editor).toBeFocused();
+        await editor.press('End');
+        await page.keyboard.type(' and the owners');
+        expect(await audit(page)).toEqual([]);
+        const [box, bubble] = [await editor.boundingBox(), await page.locator('.msg-user:has(.msg-edit) .msg-inner').boundingBox()];
+        expect(box!.width).toBeGreaterThan(bubble!.width * 0.8);
+        await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
+        await page.locator('.msg-assistant').last().hover();
+        await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
