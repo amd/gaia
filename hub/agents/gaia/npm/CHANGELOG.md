@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **`/init` says a missing model once.** On a PC with no Lemonade client, the
+  `hint` read "The model X is not downloaded. X is not downloaded, and no
+  Lemonade client CLI was found …, then re-check." It is now the one sentence.
+
 - **Add skills from a pasted link (`/skills`).** On the stdio transport,
   `/skills add <link>` lists the skills in a GitHub repository or folder, a
   skills.sh page or an https `.zip`, with what each one is allowed to do (its
