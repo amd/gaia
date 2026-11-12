@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
     Bell, Brain, Check, Clock, EyeOff, FileText, MoreHorizontal, PanelLeftClose, PanelLeftOpen,
-    Pencil, Pin, PinOff, Plug, Search, Settings, Smartphone, SquarePen, Trash2, X,
+    Pencil, Pin, PinOff, Plug, Search, Settings, Smartphone, Sparkles, SquarePen, Trash2, X,
 } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
@@ -309,6 +309,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const addPendingDelete = useChatStore((s) => s.addPendingDelete);
     const removePendingDelete = useChatStore((s) => s.removePendingDelete);
     const openSettings = useChatStore((s) => s.openSettings);
+    const skillsOpen = useChatStore((s) => s.settingsSection === 'skills');
     const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
     const setShowSchedules = useChatStore((s) => s.setShowSchedules);
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
@@ -523,6 +524,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         { key: 'schedules', label: t('sidebar.schedules'), icon: Clock, on: showSchedules, onClick: () => { setShowSchedules(true); closeOnMobile(); } },
         { key: 'connectors', label: t('settings.section.connectors'), icon: Plug, on: false, onClick: () => { openSettings('connectors'); closeOnMobile(); } },
         { key: 'documents', label: t('sidebar.documents'), icon: FileText, on: false, onClick: () => { setShowDocLibrary(true); closeOnMobile(); } },
+        { key: 'skills', label: t('settings.section.skills'), icon: Sparkles, on: skillsOpen, onClick: () => { openSettings('skills'); closeOnMobile(); } },
     ];
 
     return (
