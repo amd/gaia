@@ -375,6 +375,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [cloudModel, setCloudModel] = useState<string | null>(null);
     /** The cloud model the user picked from the price list; null keeps the provider's top pick. */
     const [cloudPick, setCloudPick] = useState<string | null>(null);
+    /** The price list's top row, shown as chosen until another is picked; null without a priced list. */
+    const [cloudDefault, setCloudDefault] = useState<string | null>(null);
     const [showKey, setShowKey] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // Optional models added from the Download step, fetched and tested after the run.
@@ -795,10 +797,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 () => !mounted.current,
             );
             const { models } = await api.listProviderModels(choice);
-            const pick = cloudPick
-                ? models.find((m) => m.id === cloudPick)
+            // Connect the row shown as chosen; only a provider with no price list (the gateway) takes its top pick.
+            const wanted = cloudPick ?? cloudDefault;
+            const pick = wanted
+                ? models.find((m) => m.id === wanted)
                 : models.find((m) => m.rank === 1) ?? models[0];
-            if (!pick) throw new Error(cloudPick ? t('setup.key.modelNotOffered', { model: shortModelName(cloudPick) }) : t('setup.key.noModels'));
+            if (!pick) throw new Error(wanted ? t('setup.key.modelNotOffered', { model: shortModelName(wanted) }) : t('setup.key.noModels'));
             await selectModel(pick.id);
             setCloudModel(pick.id);
             setKey('');
@@ -807,12 +811,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, cloudPick, selectModel, usersServer, download, t, running]);
+    }, [choice, key, cloudPick, cloudDefault, selectModel, usersServer, download, t, running]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
         setCloudPick(null);
+        setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
@@ -1214,7 +1219,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             )}
                             {!cloudProviderBlocked(choice) && (
-                                <CloudPrices provider={choice} limit={3} picked={cloudPick} onPick={setCloudPick} pickDisabled={keyState.busy || runGoing} />
+                                <CloudPrices provider={choice} limit={3} picked={cloudPick} onPick={setCloudPick} onDefault={setCloudDefault} pickDisabled={keyState.busy || runGoing} />
                             )}
                             {!usersServer && (
                                 <>

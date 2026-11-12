@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
@@ -15,20 +15,31 @@ interface Props {
     picked?: string | null;
     onPick?: (model: string) => void;
     pickDisabled?: boolean;
+    /** Told the row shown as chosen when nothing is picked (null with no priced rows), once per load. */
+    onDefault?: (model: string | null) => void;
 }
 
 /** A provider's list prices, shown before it is connected or a model is picked. */
-export function CloudPrices({ provider, limit, picked = null, onPick, pickDisabled = false }: Props) {
+export function CloudPrices({ provider, limit, picked = null, onPick, pickDisabled = false, onDefault }: Props) {
     const t = useT();
     const [list, setList] = useState<CloudPriceList | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const defaultTo = useRef(onDefault);
+    defaultTo.current = onDefault;
 
     useEffect(() => {
+        let live = true;
         setList(null);
         setError(null);
+        defaultTo.current?.(null);
         api.getCloudPrices(provider)
-            .then(setList)
-            .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+            .then((l) => {
+                if (!live) return;
+                setList(l);
+                defaultTo.current?.(l.models[0]?.model ?? null);
+            })
+            .catch((err) => { if (live) setError(err instanceof Error ? err.message : String(err)); });
+        return () => { live = false; };
     }, [provider]);
 
     if (error) return <p className="settings-error" role="alert">{t('settings.price.loadFailed', { reason: error })}</p>;

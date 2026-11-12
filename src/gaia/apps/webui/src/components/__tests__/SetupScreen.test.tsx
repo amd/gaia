@@ -1303,6 +1303,43 @@ describe('SetupScreen: cloud', () => {
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
 
+    it('connects the row shown as Default when nothing is clicked, and fails loudly if the key lacks it', async () => {
+        connects('fireworks');
+        // The live list ranks another model first and lacks the Default row: setup must not switch to it.
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: [{ id: 'fireworks.other', context_length: null, downloaded: true, labels: [], rank: 1, note: null, evidence: null }],
+        });
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [{ model: 'fireworks.m1', name: 'm1', rank: 1, note: null, price: null }],
+        });
+        await open();
+        await toKey();
+        expect(await screen.findByRole('radio', { name: /^m1/ })).toBeChecked();
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("m1 isn't offered to this key. Pick another model.");
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('connects the Default row by its id, not by the live list order', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m2', name: 'm2', rank: 1, note: null, price: null },
+                { model: 'fireworks.m1', name: 'm1', rank: 2, note: null, price: null },
+            ],
+        });
+        await open();
+        await toKey();
+        expect(await screen.findByRole('radio', { name: /^m2/ })).toBeChecked();
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m2'));
+    });
+
     it('blocks cloud setup choices under Local only without loading their prices', async () => {
         mockedApi.listProviders.mockResolvedValue({
             providers: [
