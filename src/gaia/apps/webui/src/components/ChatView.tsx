@@ -1651,7 +1651,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         return (
                             <div
                                 key={messageKeysRef.current.get(msg.id) ?? msg.id}
-                                className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(msg.id) ? 'msg-settled' : undefined}
+                                className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(messageKeysRef.current.get(msg.id) ?? msg.id) ? 'msg-settled' : undefined}
                                 data-message-id={msg.id}
                                 data-role={msg.role}
                             >

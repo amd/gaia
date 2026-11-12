@@ -76,6 +76,23 @@ describe('a finished answer', () => {
         await waitFor(() => expect(document.querySelector('[data-message-id="41"]')).not.toBeNull());
         expect(document.querySelector('.msg-user')).toBe(question);
     });
+
+    it('stays settled when an unconfirmed ending gets its saved id on refresh', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: QUESTION } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+
+        // A synthesized done carries no message_id, so the answer starts on a temporary id.
+        await act(async () => {
+            callbacks!.onDone({ type: 'done', content: ANSWER } as StreamEvent);
+        });
+        // The refresh gives it its saved id; it keeps the settled mark made under the temporary one.
+        await waitFor(() => expect(document.querySelector('[data-message-id="42"]')).not.toBeNull());
+        const saved = document.querySelector('[data-message-id="42"]');
+        expect(saved?.classList.contains('msg-settled')).toBe(true);
+    });
 });
 
 describe('carryMessageKeys', () => {
