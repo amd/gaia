@@ -768,7 +768,6 @@ jobs:
     permissions:
       contents: read
       id-token: write   # npm trusted publishing (OIDC) — no npm token
-      actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1256,21 +1255,6 @@ jobs:
           if-no-files-found: error
           overwrite: true   # a re-run of publish replaces it
           retention-days: 30
-
-      - name: Redeploy the website to publish the new catalog entry
-        shell: bash
-        # The website builds its Agent Hub pages at deploy time from the live hub
-        # index.json (website/src/data/catalog.ts, HUB_CATALOG_URL), so a freshly
-        # published agent only appears after the site rebuilds. deploy_website.yml
-        # auto-triggers only on website/** changes — a hub publish touches no such
-        # file — so trigger it explicitly. Least-privilege: this job's
-        # GITHUB_TOKEN (actions: write), no extra secret.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh workflow run deploy_website.yml --ref main
-          echo "✓ requested website redeploy (deploy_website.yml on main)"
 
       - name: Release summary
         if: always()

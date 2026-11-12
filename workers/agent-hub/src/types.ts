@@ -367,8 +367,8 @@ export interface IndexRequirements {
 
 /**
  * One entry in the top-level catalog index.json. This is the contract the
- * website Hub pages build from (`website/src/data/catalog.ts` `Agent`) — keep
- * the two in sync.
+ * website Hub page reads skill entries from (`website/src/data/hub.ts`
+ * `HubCatalogEntry`) — keep the two in sync.
  */
 export interface IndexEntry {
   id: string;

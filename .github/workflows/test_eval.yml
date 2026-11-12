@@ -71,8 +71,10 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv pip install --system pytest pytest-cov pytest-mock anthropic rich
-          
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run eval unit tests
         run: |
           pytest tests/test_eval.py -v --cov=src/gaia/eval --cov-report=term-missing
@@ -81,5 +83,7 @@ jobs:
         run: |
           # Test help command
           python -m gaia.cli eval --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Test agent eval help
           python -m gaia.cli eval agent --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
