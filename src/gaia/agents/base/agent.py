@@ -2009,15 +2009,34 @@ _VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
 _CLAUSE_END_PATTERN = re.compile(r"[,;:—–]|\s-\s")
 
 
+def _has_file_extension(text: str) -> bool:
+    """A dotted token whose suffix is a file extension."""
+    # A suffix with no letter is a version or a clock time, not an extension.
+    return any(
+        any(char.isalpha() for char in suffix)
+        and suffix.lower() not in _NON_FILE_SUFFIXES
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(text)
+    )
+
+
+def _names_a_path(text: str) -> bool:
+    """A slash or a file name with an extension: somewhere on disk."""
+    if re.search(r"[\\/]", text):
+        return True
+    return _has_file_extension(text)
+
+
 def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
     """Whether this write verb tells of a fact kept in memory, not of a file."""
     after = _REMEMBERED_AFTER_PATTERN.match(sentence, match.end())
     if after and "memor" in after.group().lower():
         return True
-    # "saved as your `todo.md`", "the `summary` I saved to out/s.md": a file
-    # in the verb's own clause makes it a save.
+    # "the `summary` I saved, at out/s.md": a path anywhere makes it a save.
+    if _names_a_path(sentence):
+        return False
+    # "saved to `notes`": so does a destination in the verb's own clause.
     clause = _CLAUSE_END_PATTERN.split(sentence[match.end() :], maxsplit=1)[0]
-    if re.search(r"[\\/]", clause) or _names_a_file(clause):
+    if _names_a_file(clause):
         return False
     if after:
         return True
@@ -2029,18 +2048,20 @@ def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool
 
 
 def _is_write_claim(sentence: str, denials: bool) -> bool:
-    """A write verb in *sentence*; with *denials* false, not one negated."""
+    """A write verb in *sentence*; with *denials* false, not one negated.
+
+    *denials* (a turn that asked for a save) reads every write verb as a
+    claim, a remembered value included: the save is owed either way.
+    """
     return any(
-        not _describes_a_remembered_value(sentence, match)
-        and (
-            denials
-            or (
-                not (
-                    _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
-                    and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
-                )
-                and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        denials
+        or (
+            not _describes_a_remembered_value(sentence, match)
+            and not (
+                _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
             )
+            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
         )
         for pattern in _FILE_WRITE_CLAIM_PATTERNS
         for match in pattern.finditer(sentence)
@@ -2051,12 +2072,7 @@ def _names_a_file(sentence: str) -> bool:
     """True when the sentence names somewhere on disk."""
     if _FILE_TARGET_PATTERN.search(sentence):
         return True
-    # A suffix with no letter is a version or a clock time, not an extension.
-    return any(
-        any(char.isalpha() for char in suffix)
-        and suffix.lower() not in _NON_FILE_SUFFIXES
-        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
-    )
+    return _has_file_extension(sentence)
 
 
 def _is_plan_narration(sentence: str) -> bool:

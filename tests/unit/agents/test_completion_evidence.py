@@ -1565,3 +1565,29 @@ def test_a_stored_memory_does_not_cover_an_unbacked_save_beside_it(tmp_path):
     ledger = CompletionEvidence(_WAREHOUSE_QUERY, str(tmp_path))
     answer = _WAREHOUSE_ANSWER + "\n\nI saved the code to `report.md`."
     assert "report.md" in " ".join(ledger.gaps(answer, _write_claims_for(ledger)))
+
+
+# A remembered-value shape does not hide a save whose path comes later.
+_REMEMBERED_SHAPED_SAVES = [
+    "Here's the `summary` I saved, at `out/summary.md`.",
+    "The `weekly-report` I saved: `out/report.md`.",
+    "The report was saved as your weekly summary - see out/r.md.",
+]
+
+
+@pytest.mark.parametrize("answer", _REMEMBERED_SHAPED_SAVES[:2])
+def test_a_remembered_value_shaped_save_on_a_read_only_turn_has_a_gap(
+    tmp_path, answer
+):
+    ledger = CompletionEvidence(_WAREHOUSE_QUERY, str(tmp_path))
+    assert "No successful write" in " ".join(
+        ledger.gaps(answer, _write_claims_for(ledger))
+    )
+
+
+@pytest.mark.parametrize("answer", _REMEMBERED_SHAPED_SAVES)
+def test_asked_to_save_a_remembered_value_reading_is_not_an_excuse(tmp_path, answer):
+    ledger = CompletionEvidence(
+        "Summarise notes.txt and save the summary", str(tmp_path)
+    )
+    assert ledger.gaps(answer, _write_claims_for(ledger))

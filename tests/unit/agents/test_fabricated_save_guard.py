@@ -148,6 +148,23 @@ SAVE_CLAIMS = [
         id="value-before-then-a-path",
     ),
     pytest.param("The file was saved as your `todo.md`.", id="saved-as-your-file"),
+    # A path past the first comma, colon or dash still makes it a save.
+    pytest.param(
+        "Here's the `summary` I saved, at `out/summary.md`.",
+        id="value-before-then-a-path-after-a-comma",
+    ),
+    pytest.param(
+        "The `weekly-report` I saved: `out/report.md`.",
+        id="value-before-then-a-path-after-a-colon",
+    ),
+    pytest.param(
+        "The report was saved as your weekly summary - see out/r.md.",
+        id="saved-as-your-then-a-path-after-a-dash",
+    ),
+    pytest.param(
+        "The `notes` I stored — they are in notes.txt.",
+        id="value-before-then-a-file-after-an-em-dash",
+    ),
 ]
 
 NON_CLAIMS = [
