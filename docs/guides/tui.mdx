@@ -620,7 +620,11 @@ the answer set apart below:
 ```
 
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
-  a path that is still long keeps its end.
+  a path that is still long keeps its end. The agent works in that folder too:
+  a file you name without a full path, such as `src/app.py`, is looked up
+  there, and the [project map](/guides/project-map) is of the project
+  that folder is in. Which folders the agent may read without asking does not
+  change.
 - **A failed step** keeps its reason under it, remedy included — that row is
   where a failure lives, not a separate error. While the turn is still running
   it reads `error` in amber, since the agent may fix it and try again. Once a

@@ -994,7 +994,7 @@ function OAuthClientEditor({
                     )}
                     <div className="configure-actions">
                         <button
-                            className={`btn-model-save${saved ? ' saved' : ''}`}
+                            className="btn-primary"
                             disabled={busy || !values['client_id']?.trim()}
                             onClick={() => void handleSave()}
                         >
@@ -1214,7 +1214,7 @@ function MCPServerConfigureBody({
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button
-                        className={`btn-model-save${saved ? ' saved' : ''}`}
+                        className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
                         onClick={() => void handleSave()}
                     >
