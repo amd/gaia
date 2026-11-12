@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -278,4 +279,8 @@ def test_the_server_keeps_answering_past_a_full_pipe():
         for _ in range(200):
             with urllib.request.urlopen(server.base_url + url_with_padding, timeout=10):
                 pass
+        # The server writes a request down after it answers it.
+        deadline = time.monotonic() + 10
+        while len(server.requests) < 200 and time.monotonic() < deadline:
+            time.sleep(0.05)
         assert len(server.requests) == 200
