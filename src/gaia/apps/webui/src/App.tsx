@@ -578,7 +578,13 @@ function App() {
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
         const outgoing = store.currentSessionId;
-        if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
+        // A first message the chat had not sent yet comes back to the new chat's box.
+        const unsent = store.pendingPrompt?.sessionId === outgoing ? store.pendingPrompt : null;
+        if (unsent) {
+            store.setPendingPrompt(null);
+            setDraftText(unsent.text);
+        }
+        if (outgoing && isAbandonedDraft(outgoing, useChatStore.getState())) void cleanupAbandonedDraft(outgoing);
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
         choseNewChatRef.current = true;
