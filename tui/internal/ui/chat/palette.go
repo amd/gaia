@@ -50,6 +50,8 @@ var paletteCommands = []paletteCommand{
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
+	{"/sessions", "Reopen a past session — ones waiting on you come first"},
+	{"/sessions all", "Every session, eval and scheduled runs included"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the
