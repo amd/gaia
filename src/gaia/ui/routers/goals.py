@@ -213,13 +213,23 @@ def get_goal_stats():
 
 @router.get("/api/goals/health")
 def get_goal_store_health():
-    """Why the background loop could not read the goal store, or null."""
+    """Why the goal store can't be read, and whether it is damaged; null when it reads."""
     from gaia.ui.agent_loop import agent_loop
 
-    return {
-        "error": agent_loop.goal_store_error,
-        "damaged": agent_loop.goal_store_damaged,
-    }
+    if agent_loop.goal_store_error:
+        return {
+            "error": agent_loop.goal_store_error,
+            "damaged": agent_loop.goal_store_damaged,
+        }
+    # The loop may not have ticked yet; the page still needs to offer the fix.
+    try:
+        _get_store().get_stats()
+    except sqlite3.Error as exc:
+        return {
+            "error": _store_failure(exc).detail,
+            "damaged": is_damaged_store_error(exc),
+        }
+    return {"error": None, "damaged": False}
 
 
 @router.post("/api/goals/store/reset")

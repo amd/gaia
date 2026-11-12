@@ -125,6 +125,12 @@ class TestDamagedGoalStore:
         assert "damaged" in detail and "Start a new goal list" in detail
         assert "restart" not in detail.lower()
 
+    def test_health_reports_damage_before_the_loop_has_ticked(self, damaged_home):
+        _, c = damaged_home
+        health = c.get("/api/goals/health").json()
+        assert health["damaged"] is True
+        assert "damaged" in health["error"]
+
     def test_listing_fails_instead_of_looking_empty(self, damaged_home):
         _, c = damaged_home
         assert c.get("/api/goals").status_code == 503

@@ -2420,9 +2420,10 @@ with a `detail` that says why and what the user can do.
   </Accordion>
 
   <Accordion title="GET /api/goals/health">
-    `{"error": string | null, "damaged": bool}`. `error` says why the
-    background loop could not read the goal store on its last tick, so
-    approved goals are not running; it is `null` once the store reads again.
+    `{"error": string | null, "damaged": bool}`. `error` says why the goal
+    store can't be read (on the background loop's last tick, or when this
+    call opens it), so approved goals are not running; it is `null` once the
+    store reads again.
     `damaged` is true when `goals.db` is not a readable database at all, which
     only a new goal list fixes. The UI shows it as a notification and in
     Memory › Goals.
