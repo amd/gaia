@@ -1404,8 +1404,8 @@ class Scheduler:
         plan = self._plan(task, due, now)
         claimed = self._following(task, now).isoformat()
         if not self._db.claim_scheduled_run(task.id, task.next_run_at, claimed):
-            # Another server sharing this database took this run, or paused it.
-            stored = self._db.scheduled_task_timing(task.id)
+            # Another server sharing this database took this run, paused or edited it.
+            stored = self._db.scheduled_task_state(task.id)
             logger.info(
                 "Scheduled task '%s': run due %s was taken by another GAIA "
                 "server, or the task is now %s",
@@ -1413,9 +1413,12 @@ class Scheduler:
                 due.isoformat(),
                 stored["status"],
             )
-            # A pause elsewhere stops this timer too.
+            # A pause or an edit elsewhere applies to this timer too.
             task.status = stored["status"]
             task.next_run_at = stored["next_run_at"]
+            task.prompt = stored["prompt"]
+            task.interval_seconds = stored["interval_seconds"]
+            task.schedule_config = stored["schedule_config"]
             return
         task.next_run_at = claimed
         if plan.missed:

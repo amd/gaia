@@ -2153,12 +2153,14 @@ class ChatDatabase:
             )
             return cursor.rowcount == 1
 
-    def scheduled_task_timing(self, task_id: str) -> Dict[str, Any]:
-        """The task's stored ``status`` and ``next_run_at``, as another server
-        may have set them."""
+    def scheduled_task_state(self, task_id: str) -> Dict[str, Any]:
+        """The task's stored ``status``, ``next_run_at``, ``prompt``,
+        ``interval_seconds`` and ``schedule_config``, as another server may
+        have set them."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT status, next_run_at FROM scheduled_tasks WHERE id = ?",
+                "SELECT status, next_run_at, prompt, interval_seconds, "
+                "schedule_config FROM scheduled_tasks WHERE id = ?",
                 (task_id,),
             ).fetchone()
         if row is None:

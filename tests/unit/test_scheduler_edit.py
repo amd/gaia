@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers.schedules import get_scheduler, router
-from gaia.ui.scheduler import Scheduler
+from gaia.ui.scheduler import Scheduler, _parse_due
 
 
 async def fake_executor(prompt: str) -> str:
@@ -134,6 +134,40 @@ def test_edit_refuses_while_a_run_is_in_flight(setup):
         assert "running now" in resp.json()["detail"]
     finally:
         scheduler._tasks["report"]._executing = False
+
+
+def test_an_edit_on_one_server_reaches_another_sharing_the_database():
+    async def scenario():
+        db = ChatDatabase(":memory:")
+        ran: list[str] = []
+
+        async def recording_executor(prompt: str) -> str:
+            ran.append(prompt)
+            return "done"
+
+        here = Scheduler(db=db, executor=recording_executor)
+        there = Scheduler(db=db, executor=recording_executor)
+        await here.start()
+        await here.create_task("report", "every 6h", "Old prompt", tz="UTC")
+        await there.start()
+        stale = there._tasks["report"]
+        try:
+            await here.edit_task("report", interval="every 2h", prompt="New prompt")
+
+            # The stale claim loses, and the losing server picks up the edit.
+            await there._take_due_run(stale, _parse_due(stale))
+            assert ran == []
+            assert stale.prompt == "New prompt"
+            assert stale.interval_seconds == 7200
+
+            await there._take_due_run(stale, _parse_due(stale))
+            assert ran == ["New prompt"]
+        finally:
+            await here.shutdown()
+            await there.shutdown()
+            db.close()
+
+    asyncio.run(scenario())
 
 
 def test_edit_unknown_schedule_is_404(setup):
