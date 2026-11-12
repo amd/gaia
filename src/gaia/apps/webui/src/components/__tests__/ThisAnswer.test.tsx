@@ -202,7 +202,7 @@ describe('ThisAnswer', () => {
     });
 
     it('says a turn no reply came from cost nothing, not that it was stopped', () => {
-        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'no_reply' } }))} />);
+        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'no_reply', usd: null } }))} />);
         expect(screen.getByText('None: no reply came, so nothing was counted')).toBeInTheDocument();
         expect(screen.queryByText(/Not reported/)).not.toBeInTheDocument();
     });
