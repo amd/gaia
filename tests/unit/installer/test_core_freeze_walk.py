@@ -71,6 +71,13 @@ def test_every_command_never_started_is_a_real_command():
     assert set(smoke.NEVER_STARTED) <= paths
 
 
+def test_every_known_broken_command_is_one_the_walk_starts():
+    started = {" ".join(c["path"]) for c in STARTED}
+    assert set(smoke.KNOWN_BROKEN) <= started
+    for issue in smoke.KNOWN_BROKEN.values():
+        assert issue.startswith("amd/gaia#"), "name the issue that tracks it"
+
+
 def test_a_command_nobody_listed_is_started():
     assert smoke.never_started(["a-command-added-tomorrow"]) is None
     assert smoke.never_started(["lemonade", "embedded", "start"])

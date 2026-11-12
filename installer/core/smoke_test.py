@@ -146,6 +146,27 @@ NEVER_STARTED = {
     "test": "runs model smoke tests that need a loaded model",
 }
 
+#: Commands that fail the walk today, each with its issue. Strict: once one
+#: starts cleanly the walk fails until its line is deleted.
+KNOWN_BROKEN = {
+    "schedule show": "amd/gaia#7333",
+    "schedule remove": "amd/gaia#7333",
+    "schedule pause": "amd/gaia#7333",
+    "schedule resume": "amd/gaia#7333",
+    "schedule run": "amd/gaia#7333",
+    "connectors connect": "amd/gaia#7334",
+    "mcp engineering": "amd/gaia#7335",
+    "mcp code-index": "amd/gaia#7335",
+    "slack setup": "amd/gaia#7336",
+    "youtube": "amd/gaia#7337",
+    "perf-vis": "amd/gaia#7337",
+    "agent init": "amd/gaia#7337",
+}
+
+if sys.platform != "win32":
+    # Windows reads the token from the console and waits; elsewhere it crashes.
+    KNOWN_BROKEN["gateway auth"] = "amd/gaia#7336"
+
 #: Output that means a command could not load its own code. A frozen app has no
 #: pip, so a remedy that names it is as dead as the import.
 BROKEN_START = (
@@ -365,6 +386,15 @@ class Smoke:
                 continue
             output = self._start(start_args(command))
             mark = broken_start(output)
+            issue = KNOWN_BROKEN.get(" ".join(command["path"]))
+            if issue:
+                self.check(
+                    f"{name} still fails, as {issue} says",
+                    mark is not None,
+                    f"It starts cleanly now: delete its KNOWN_BROKEN line.\n"
+                    f"{output[-800:]}",
+                )
+                continue
             self.check(f"{name} starts", mark is None, f"{mark}\n{output[-1500:]}")
 
     def _start(self, args: list[str]) -> str:
