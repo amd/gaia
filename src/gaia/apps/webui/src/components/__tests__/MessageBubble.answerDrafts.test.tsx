@@ -75,10 +75,27 @@ describe('one answer per turn', () => {
         expect(container.textContent).toContain('read back to confirm');
     });
 
-    it('drops the last draft once the restated answer starts streaming', () => {
-        const partial = FINAL.slice(0, FINAL.indexOf('| October'));
+    it('drops the last draft once most of the restated answer has streamed', () => {
+        const partial = FINAL.slice(0, FINAL.indexOf('**Not done:**'));
         const { container } = renderTurn(partial, checkedTurn(), true);
         expect(copies(container)).toBe(1);
+    });
+
+    it('keeps the last draft while only the start of the answer has streamed', () => {
+        const partial = FINAL.slice(0, FINAL.indexOf('`summary.md`'));
+        const { container } = renderTurn(partial, checkedTurn(), true);
+        expect(copies(container)).toBe(2);
+    });
+
+    it('keeps a note with several findings when the answer repeats only one of them', () => {
+        const steps = [
+            note('Three problems in the logs. The service failed to start because port 8080 was already in use by another process. '
+                + 'The config still sets the deprecated key cache_dir, which this version ignores. '
+                + 'The data disk is at 94 percent, so the next large import will fail.'),
+            tool('read_file'),
+        ];
+        const answer = 'The service failed to start because port 8080 was already in use by another process.';
+        expect(dropAnswerDrafts(steps, answer)).toEqual(steps);
     });
 
     it('keeps notes that only narrate the work', () => {

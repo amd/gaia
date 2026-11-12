@@ -6,7 +6,7 @@ import type { AgentStep } from '../types';
 /** Below this many word pairs a note is narration ("Reading the file first."), never a draft. */
 const MIN_DRAFT_PAIRS = 10;
 
-/** Share of the shorter text's word pairs the other must repeat for the two to be one answer. */
+/** Share of the earlier note's word pairs a later text must repeat for the note to be a draft of it. */
 const SAME_ANSWER_OVERLAP = 0.6;
 
 function wordPairs(text: string): Set<string> {
@@ -20,7 +20,8 @@ function restates(earlier: Set<string>, later: Set<string>): boolean {
     if (earlier.size < MIN_DRAFT_PAIRS || later.size < MIN_DRAFT_PAIRS) return false;
     let shared = 0;
     for (const pair of earlier) if (later.has(pair)) shared++;
-    return shared / Math.min(earlier.size, later.size) >= SAME_ANSWER_OVERLAP;
+    // Of the note, not of the shorter text: a one-line answer must not hide a note's other findings.
+    return shared / earlier.size >= SAME_ANSWER_OVERLAP;
 }
 
 /**
