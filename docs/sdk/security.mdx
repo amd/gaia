@@ -116,6 +116,21 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   separation: a separate user account, a container, or a VM.
 </Warning>
 
+### Code that names a protected path
+
+`run_python`, `execute_python_file` (the script and the arguments it is handed) and a
+shell line that hands code to an interpreter (`python -c`, `powershell -Command`,
+`node -e`) are screened before the approval card: code whose text names a credential
+folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
+own settings is refused outright, and an earlier "Always allow" does not cover it.
+Paths are judged in the canonical form above, after folding the plain ways of building
+one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`). The screen is
+in `gaia.agents.base.code_path_screen`.
+
+It reads the code's text, so it is not a sandbox: code that works a path out while it
+runs (from characters, base64, a file or the network) is not caught. The card for a
+code tool says so.
+
 ---
 
 ## 18.2 Symlink Detection

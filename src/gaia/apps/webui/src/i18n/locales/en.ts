@@ -821,6 +821,7 @@ export const enMessages = {
     'prompt.in': 'in',
     'prompt.showAllLines': 'Show all {n} lines',
     'prompt.showLess': 'Show less',
+    'prompt.codeRisk': "Can run any code with your permissions. GAIA checks the code's text, not what it does when it runs.",
     'prompt.timer': 'Denied automatically when the time runs out',
     'prompt.expired': 'No answer in time, so GAIA was told no.',
     'prompt.repeated.one': "You've allowed this once already.",

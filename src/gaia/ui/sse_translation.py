@@ -74,6 +74,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import (
+    CODE_RISK_NOTE,
     EXACT_TEXT_ARG,
     RISK_NOTE_ARG,
     plain_risk_note,
@@ -554,6 +555,8 @@ class CanonicalTranslator:
             note = str(args.get(RISK_NOTE_ARG) or "") or plain_risk_note(
                 event.get("risk")
             )
+        elif tool in CODE_SUMMARY_TOOLS:
+            note = str(args.get(RISK_NOTE_ARG) or "") or CODE_RISK_NOTE
         elif tool in PATH_TOOLS or tool in CALENDAR_WRITE_TOOLS:
             # A file prompt's note says what else a yes grants; a calendar
             # prompt's, that its text holds characters that don't show.

@@ -33,6 +33,9 @@ function summarize(n: GaiaNotification): string {
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition']);
 
+/** Tools that run code GAIA hands over whole (`CODE_SUMMARY_TOOLS` in sse_translation.py). */
+const CODE_TOOLS = new Set(['run_python', 'execute_python_file']);
+
 /** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). The flagship runs them from its send-email skill, so they also arrive namespaced. */
 const EXACT_MAIL_TOOLS = ['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft'];
 const EXACT_SUMMARY_TOOLS = new Set([...EXACT_MAIL_TOOLS, ...EXACT_MAIL_TOOLS.map((tool) => `send-email/${tool}`)]);
@@ -141,6 +144,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
     const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
+    // GAIA screens a script's text but can't see what it does when it runs.
+    const codeNote = (code || CODE_TOOLS.has(notification.tool ?? '')) && !riskNote ? t('prompt.codeRisk') : '';
     // An email is approved as it will be sent, so all of it shows, uncollapsed.
     // Over the sidecar relay it arrives as the summary.
     const exactText = typeof args._exact_text === 'string'
@@ -213,6 +218,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={code} />}
+                    {codeNote && <p className="perm-card-risk" role="note" data-testid="perm-code-risk"><bdi>{codeNote}</bdi></p>}
                     {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
                     {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}

@@ -581,7 +581,9 @@ the conversation's scope without that extra prompt, but still cannot widen this
 environment-level restriction. The scratch directory stays writable. An empty,
 relative or missing entry stops the sidecar at startup. It confines the agent's
 tools, not code they run: a `run_python` script or shell command can still read
-anything the OS user can, so isolating a run from files it must not see needs a
+anything the OS user can (code whose text names a credential folder or file is
+refused before it runs, but code that works a path out while it runs is not
+caught), so isolating a run from files it must not see needs a
 separate OS user, container or VM. Embedding `GaiaAgent` lets you pass an explicit
 list instead (the variable still narrows it):
 

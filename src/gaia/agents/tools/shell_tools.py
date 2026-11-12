@@ -4048,6 +4048,45 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
+        for segment in segments:
+            refusal = self._inline_code_refusal(segment, cwd)
+            if refusal:
+                return refusal
+        return None
+
+    def _inline_code_refusal(self, segment: list, cwd: str) -> Optional[Dict[str, Any]]:
+        """Refuse code handed to an interpreter that names a protected path.
+
+        The word-by-word check above sees literal paths; this also reads the
+        names a script builds (``os.path.join(home, '.ssh')``, ``$HOME``), the
+        same screen ``run_python`` gets.
+        """
+        from gaia.agents.base.code_path_screen import (
+            code_refusal,
+            protected_paths_in_code,
+        )
+
+        program = _interpreter_name(segment[0])
+        for index, dialect in _inline_script_positions(segment).items():
+            dialect = dialect.rstrip(_MAYBE)
+            if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+                continue
+            body = segment[index]
+            if dialect == _PS_ENCODED:
+                body = " ".join(_script_words(body, dialect))
+            elif dialect == _CMD_ATTACHED:
+                body = body[2:]
+            mentions = protected_paths_in_code(
+                body,
+                python=program == "python",
+                cwd=cwd,
+                validator=getattr(self, "path_validator", None),
+            )
+            if mentions:
+                return {
+                    **code_refusal(f"the {program} script", mentions),
+                    "tier": TIER_REFUSE,
+                }
         return None
 
     def _path_candidate_refusal(

@@ -821,6 +821,7 @@ const messages: Messages = {
     'prompt.in': 'في',
     'prompt.showAllLines': 'عرض كل الأسطر ({n})',
     'prompt.showLess': 'عرض أقل',
+    'prompt.codeRisk': 'يمكنه تشغيل أي تعليمات برمجية بصلاحياتك. يتحقق GAIA من نص التعليمات البرمجية، لا مما تفعله عند تشغيلها.',
     'prompt.timer': 'يُرفض تلقائيًا عند انتهاء الوقت',
     'prompt.expired': 'لم تُجب في الوقت المحدد، فأُبلغ GAIA بالرفض.',
     'prompt.repeated.one': 'سبق أن سمحت بهذا مرة واحدة.',

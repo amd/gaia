@@ -325,7 +325,9 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-tui
   downloads, capturing a skill from a local folder, and the path checks on shell
   commands. The agent's own scratch folder stays writable.
 - **It does not sandbox code.** A `run_python` script or a shell command the
-  agent runs can open any file your OS account can read. This setting confines
+  agent runs can open any file your OS account can read (code whose text names a
+  credential folder or file is refused, but code that works a path out while it
+  runs is not caught). This setting confines
   GAIA's tools, not arbitrary code — for real isolation, run the agent as a
   separate OS user, in a container, or in a VM, and keep answer keys where that
   account cannot read them.

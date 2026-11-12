@@ -10,6 +10,9 @@ tests/`.
 
 import os
 
+import pytest
+
+from gaia.agents.base.call_risk import CODE_RISK_NOTE
 from gaia.ui.sse_translation import CanonicalTranslator, render_command_summary
 
 WS = os.path.join(os.path.expanduser("~"), "work", "proj")
@@ -121,6 +124,21 @@ def test_the_translator_uses_it_and_carries_the_risk():
     assert event["summary"] == "pytest -q\nCan run any code, with your permissions."
     assert event["risk"] == "execute"
     assert "run_shell_command" not in event["summary"]
+
+
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("run_python", {"code": "print(1)"}),
+        ("execute_python_file", {"file_path": f"{WS}/job.py"}),
+    ],
+)
+def test_a_code_prompt_says_gaia_cannot_see_what_the_code_does(tool, args):
+    translator = CanonicalTranslator(run_id="r1", agent_id="gaia", debug=False)
+    [event] = translator.translate(
+        {"type": "permission_request", "tool": tool, "args": args, "risk": "execute"}
+    )
+    assert event["summary"].splitlines()[-1] == CODE_RISK_NOTE
 
 
 def test_a_read_command_gets_no_risk_line():
