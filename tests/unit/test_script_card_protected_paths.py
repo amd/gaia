@@ -23,14 +23,12 @@ from gaia.agents.base.code_path_screen import python_file_preflight
 from gaia.agents.base.script_preview import script_prompt_args
 from gaia.security import PathValidator
 from gaia.ui.sse_translation import CanonicalTranslator, render_command_summary
-from tests.unit.test_path_spellings import (  # noqa: F401  (home is a fixture)
-    ENV,
-    KEY,
-    PROTECTED,
-    _spellings,
-    home,
-    windows_only,
-)
+from tests.unit.test_path_spellings import ENV, KEY, PROTECTED, _spellings
+from tests.unit.test_path_spellings import home as _fake_home
+from tests.unit.test_path_spellings import windows_only
+
+# The shared fake-home fixture, under the name the tests ask for.
+home = _fake_home
 
 TOOL = "execute_python_file"
 
