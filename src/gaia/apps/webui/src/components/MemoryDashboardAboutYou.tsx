@@ -71,6 +71,21 @@ export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn
     return { text: t(past ? 'mem.due.past' : 'mem.due.upcoming', { when }), past };
 }
 
+/** The server's largest page. */
+const PAGE_SIZE = 200;
+
+function fetchPage(offset: number) {
+    // Filtered on the server, so paging never fills up with GAIA's own notes.
+    return memoryApi.getKnowledge({
+        about_user: true,
+        include_sensitive: true,
+        sort_by: 'updated_at',
+        order: 'desc',
+        offset,
+        limit: PAGE_SIZE,
+    });
+}
+
 interface Props {
     memoryEnabled: boolean;
     /** Bumped by the parent whenever another tab changes memory. */
@@ -95,19 +110,28 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     // cannot put back an item the user just forgot.
     const generation = useRef(0);
 
+    const [total, setTotal] = useState(0);
+    const [loadingMore, setLoadingMore] = useState(false);
+    // How many rows are showing, so a refresh keeps the pages the user already opened.
+    const shown = useRef(0);
+
     const load = useCallback(async () => {
         const mine = ++generation.current;
         try {
-            // Filtered on the server, so paging never fills up with GAIA's own notes.
-            const data = await memoryApi.getKnowledge({
-                about_user: true,
-                include_sensitive: true,
-                sort_by: 'updated_at',
-                order: 'desc',
-                limit: 200,
-            });
-            if (mine !== generation.current) return;
-            setItems(data.items as AboutYouItem[]);
+            const want = Math.max(PAGE_SIZE, shown.current);
+            let rows: AboutYouItem[] = [];
+            let count = 0;
+            do {
+                const data = await fetchPage(rows.length);
+                if (mine !== generation.current) return;
+                const page = data.items as AboutYouItem[];
+                rows = rows.concat(page);
+                count = data.total;
+                if (page.length === 0) break;
+            } while (rows.length < want && rows.length < count);
+            shown.current = rows.length;
+            setItems(rows);
+            setTotal(count);
             setLoadError(null);
         } catch (err) {
             if (mine !== generation.current) return;
@@ -115,6 +139,27 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             setLoadError(err instanceof Error ? err.message : String(err));
         }
     }, []);
+
+    const loadMore = useCallback(async () => {
+        const mine = generation.current;
+        setLoadingMore(true);
+        try {
+            const data = await fetchPage(shown.current);
+            if (mine !== generation.current) return;
+            setItems(prev => {
+                const have = new Set((prev ?? []).map(i => i.id));
+                const next = (prev ?? []).concat((data.items as AboutYouItem[]).filter(i => !have.has(i.id)));
+                shown.current = next.length;
+                return next;
+            });
+            setTotal(data.total);
+        } catch (err) {
+            log.system.error('Failed to load more memories', err);
+            showToast(t('mem.about.moreFailed', { error: errorText(err) }), 'error');
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [showToast, t]);
 
     useEffect(() => { load(); }, [load, reloadKey]);
 
@@ -141,7 +186,9 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         try {
             await memoryApi.deleteKnowledge(item.id);
             generation.current++;
+            shown.current = Math.max(0, shown.current - 1);
             setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
+            setTotal(prev => Math.max(0, prev - 1));
             setForgotten(prev => [item, ...prev]);
             onChanged();
         } catch (err) {
@@ -347,6 +394,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                         </ul>
                     </section>
                 ))
+            )}
+
+            {!loadError && items !== null && total > items.length && (
+                <div className="mem-about-more">
+                    <span>{t('mem.about.showing', { shown: items.length, total })}</span>
+                    <button className="btn-secondary" disabled={loadingMore} onClick={loadMore}>
+                        {t('mem.about.showMore')}
+                    </button>
+                </div>
             )}
         </div>
     );

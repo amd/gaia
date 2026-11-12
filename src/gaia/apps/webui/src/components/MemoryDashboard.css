@@ -1946,3 +1946,12 @@
     .mem-tab-bar { overflow-x: auto; padding: 0 12px; }
     .mem-tab-btn { flex-shrink: 0; white-space: nowrap; padding: 10px 12px; }
 }
+.mem-about-more {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
