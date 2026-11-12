@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
@@ -126,6 +126,43 @@ describe('SetupScreen', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
         const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         expect(amd).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByRole('button', { name: /Download and start/ })).toBeNull();
+    });
+
+    it('setup run again keeps the cloud model in use selected and connects it, even below the top rows', async () => {
+        useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.glm', label: 'glm · Fireworks AI', remote: true, is_default: false },
+        });
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: ['deepseek', 'm2', 'm3', 'glm'].map((n, i) => ({ model: `fireworks.${n}`, name: n, rank: i + 1, note: null, price: null })),
+        } as unknown as Awaited<ReturnType<typeof api.getCloudPrices>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue({} as Awaited<ReturnType<typeof api.connectProviderWaitingForOs>>);
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: ['deepseek', 'glm'].map((n, i) => ({ id: `fireworks.${n}`, context_length: null, downloaded: true, labels: [], rank: i + 1, note: null, evidence: null })),
+        } as unknown as Awaited<ReturnType<typeof api.listProviderModels>>);
+        mockedApi.selectModel.mockResolvedValue({ provider: 'fireworks', model: 'fireworks.glm', label: 'glm', remote: true, is_default: false });
+        mockedApi.listSessions.mockResolvedValue({ sessions: [], total: 0 } as unknown as Awaited<ReturnType<typeof api.listSessions>>);
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        const group = await screen.findByRole('radiogroup', { name: 'The model GAIA uses' });
+        expect(within(group).getByRole('radio', { name: /^glm/ })).toBeChecked();
+        expect(within(group).getByRole('radio', { name: /^deepseek/ })).not.toBeChecked();
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.glm'));
+    });
+
+    it('Back from the cloud step for a cloud user keeps "Use a cloud model" selected', async () => {
+        useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.glm', label: 'glm · Fireworks AI', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        await screen.findByRole('button', { name: /Test and connect/ });
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        const cloud = await screen.findByRole('radio', { name: 'Use a cloud model' });
+        expect(cloud).toBeChecked();
         expect(screen.queryByRole('button', { name: /Download and start/ })).toBeNull();
     });
 

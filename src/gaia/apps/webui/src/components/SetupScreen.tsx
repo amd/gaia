@@ -716,8 +716,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         stepTo('models');
     }, [stepTo, running, viewing]);
 
-    // The plan screen's two ways to run GAIA; this PC is the one recommended.
+    // Chat already runs in the cloud: carry on there rather than recommend a local download.
+    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
+    const inUseModel = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.model : null));
+
+    // The plan screen's two ways to run GAIA; this PC is the one recommended, unless chat already runs in the cloud.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
+    useEffect(() => {
+        if (inUseCloud && !cloudBlocked) setWhere('cloud');
+    }, [inUseCloud, cloudBlocked]);
 
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
@@ -725,10 +732,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setChoice(provider);
         stepTo('key');
     }, [stepTo, running, viewing]);
-    const useCloud = useCallback(() => toCloud(readChoice() === 'amd' ? 'amd' : 'fireworks'), [toCloud]);
+    const useCloud = useCallback(() => toCloud(inUseCloud ?? (readChoice() === 'amd' ? 'amd' : 'fireworks')), [toCloud, inUseCloud]);
 
-    // Chat already runs in the cloud: carry on there rather than recommend a local download.
-    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
     const continueFromChecks = useCallback(() => {
         if (inUseCloud) toCloud(inUseCloud);
         else stepTo('plan');
@@ -813,6 +818,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         retryRun();
     }, [cancel, retryRun]);
 
+    // Re-running setup keeps the cloud model in use unless another row is picked.
+    const cloudChosen = cloudPick ?? (inUseCloud === choice ? inUseModel : null);
     const connect = useCallback(async () => {
         if (running) return;
         setKeyState({ busy: true, error: null, done: false });
@@ -825,7 +832,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             );
             const { models } = await api.listProviderModels(choice);
             // Connect the row shown as chosen; only a provider with no price list (the gateway) takes its top pick.
-            const wanted = cloudPick ?? cloudDefault;
+            const wanted = cloudChosen ?? cloudDefault;
             const pick = wanted
                 ? models.find((m) => m.id === wanted)
                 : models.find((m) => m.rank === 1) ?? models[0];
@@ -838,7 +845,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, cloudPick, cloudDefault, selectModel, usersServer, download, t, running]);
+    }, [choice, key, cloudChosen, cloudDefault, selectModel, usersServer, download, t, running]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
@@ -1290,7 +1297,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             )}
                             {!cloudProviderBlocked(choice) && (
-                                <CloudPrices provider={choice} limit={3} picked={cloudPick} onPick={setCloudPick} onDefault={setCloudDefault} pickDisabled={keyState.busy || runGoing} />
+                                <CloudPrices provider={choice} limit={3} picked={cloudChosen} onPick={setCloudPick} onDefault={setCloudDefault} pickDisabled={keyState.busy || runGoing} />
                             )}
                             {!usersServer && (
                                 <>
