@@ -181,6 +181,57 @@ class ModelServerInfo(BaseModel):
     system_info_error: Optional[str] = None
 
 
+class LogLineInfo(BaseModel):
+    """One redacted log line."""
+
+    text: str
+    # debug | info | warning | error; None for a line naming no level.
+    severity: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class LogReadResponse(BaseModel):
+    """A log's recent lines for the viewer, or a reason code when it can't be read."""
+
+    # Model server only: gaia (GAIA's own) | user (another local one) | remote
+    owner: Optional[str] = None
+    base_url: Optional[str] = None
+    # file | stream; None when nothing was read.
+    source: Optional[str] = None
+    available: bool = False
+    lines: List[LogLineInfo] = Field(default_factory=list)
+    # Pass back as ``after`` for the lines written since.
+    cursor: Optional[str] = None
+    # The log started over since ``after``: replace the lines, don't append.
+    reset: bool = False
+    dropped: int = 0
+    log_path: Optional[str] = None
+    server_answering: Optional[bool] = None
+    # no_file | unreadable | not_running | remote | no_stream | stream_failed
+    reason: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class LogFileInfo(BaseModel):
+    """One log file a source offers."""
+
+    name: str
+    path: str
+    size_bytes: Optional[int] = None
+    modified: Optional[float] = None
+
+
+class LogSourceInfo(BaseModel):
+    """A group of logs: model_server | gaia | service | agent | desktop | other."""
+
+    id: str
+    files: List[LogFileInfo] = Field(default_factory=list)
+
+
+class LogSourcesResponse(BaseModel):
+    sources: List[LogSourceInfo]
+
+
 class ModelServerBackendRequest(BaseModel):
     """Choose the llama.cpp backend for chat models: ``auto`` or a backend name."""
 
@@ -238,21 +289,6 @@ class InitTaskInfo(BaseModel):
     status: str  # pending | running | done | failed
 
 
-class TaskResponse(BaseModel):
-    """A single background task visible to the frontend."""
-
-    id: str
-    name: str
-    status: str  # pending | running | done | failed
-    error: Optional[str] = None
-
-
-class TaskListResponse(BaseModel):
-    """List of background tasks."""
-
-    tasks: List[TaskResponse]
-
-
 # ── Settings ────────────────────────────────────────────────────────────────
 
 
@@ -262,6 +298,8 @@ class ModelStatus(BaseModel):
     found: bool = False
     downloaded: bool = False
     loaded: bool = False
+    #: The model list was read, so ``found`` False means the id isn't in it.
+    checked: bool = False
 
 
 class PolicyNotice(BaseModel):
@@ -599,6 +637,8 @@ class AgentStepResponse(BaseModel):
     receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
+    # The user said no to this call; a reload must not show it as failed.
+    declined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
@@ -844,19 +884,6 @@ class IndexFolderResponse(BaseModel):
 
 
 # ── File Search & Preview ─────────────────────────────────────────────
-
-
-class FileSearchRequest(BaseModel):
-    """Request to search for files across the filesystem."""
-
-    query: str = Field(..., description="Search pattern (file name or keywords)")
-    file_types: Optional[str] = Field(
-        None, description="Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf')"
-    )
-    locations: Optional[List[str]] = Field(
-        None, description="Specific directories to search in"
-    )
-    max_results: int = Field(default=20, ge=1, le=100)
 
 
 class FileSearchResult(BaseModel):

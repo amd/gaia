@@ -805,8 +805,8 @@ def describe(
     else:
         method = METHOD_GUIDED
         reason = (
-            "On Windows this is set in AMD Software. AMD's way to set it from "
-            "an app restarts the PC by itself, so GAIA shows you where instead."
+            "On Windows this is changed in AMD Software, and it needs a restart. "
+            "GAIA shows you where."
         )
     models = _models(machine)
     presets = _presets(machine, models)

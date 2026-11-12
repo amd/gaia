@@ -360,7 +360,7 @@
 .render-needs-input {
     background: var(--bg-card);
     border: 1px solid var(--border-light);
-    border-left-width: 3px;
+    border-inline-start-width: 3px;
     border-radius: 8px;
     padding: 10px 12px;
     font-size: 13px;
@@ -465,9 +465,28 @@
 }
 
 .render-needs-input--answered {
-    color: var(--text-secondary);
-    font-size: 12px;
     border-style: dashed;
+}
+
+.render-needs-input--answered .render-needs-input__question {
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+}
+
+.render-needs-input__answered-note {
+    margin: 0;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.render-needs-input__hint {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.render-needs-input__hint + .render-needs-input__hint {
+    margin-top: 2px;
 }
 
 .render-needs-input--expired {
@@ -482,4 +501,122 @@
     color: var(--text-secondary);
     font-size: 12px;
     margin: 8px 0 0;
+}
+
+/* ── connect_account (a tool found no usable account) ───────────────── */
+
+.render-connect {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-inline-start: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.render-connect__text {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+.render-connect__icon {
+    color: var(--accent);
+    flex-shrink: 0;
+    margin-block-start: 2px;
+}
+
+.render-connect__providers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.render-connect__provider {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.render-connect__connected {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.render-connect__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--accent-fill);
+    color: var(--accent-fill-text);
+    border: 1px solid var(--accent-fill);
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--duration-fast) var(--ease);
+}
+
+.render-connect__button:hover:not(:disabled) {
+    background: var(--accent-fill-hover);
+    border-color: var(--accent-fill-hover);
+}
+
+.render-connect__button--quiet,
+.render-connect__button--quiet:hover:not(:disabled) {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-color: var(--border-light);
+}
+
+.render-connect__button:focus-visible,
+.render-connect__settings:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.render-connect__button:disabled {
+    opacity: 0.7;
+    cursor: progress;
+}
+
+.render-connect__spinner {
+    animation: render-connect-spin var(--duration-spin) var(--ease-linear) infinite;
+}
+
+@keyframes render-connect-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.render-connect__error {
+    max-width: 44ch;
+    color: var(--danger);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.render-connect__settings {
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.render-connect__settings:hover {
+    color: var(--text-primary);
 }

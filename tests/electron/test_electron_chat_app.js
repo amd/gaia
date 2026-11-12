@@ -12,14 +12,12 @@
  * - Zustand store configuration
  * - React component structure
  * - Privacy-first design elements
- * - Framework compatibility
  */
 
 const path = require('path');
 const fs = require('fs');
 
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
-const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
 // Every theme write goes through this one module, so the callers below are
 // checked for the delegation and this file for the DOM write itself.
@@ -1131,7 +1129,10 @@ describe('Chat App Integration', () => {
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expectTranslated(chatContent, "messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}", 'composer.placeholder', 'Ask GAIA anything');
       expect(EN_MESSAGES['composer.reply']).toBe('Reply to GAIA');
-      expect(chatContent).toContain('placeholder={isStreaming');
+      // A waiting question outranks the queue: the box answers it.
+      expect(chatContent).toContain('placeholder={answeringId');
+      expect(chatContent).toContain("? t('composer.answerQuestion')");
+      expect(chatContent).toContain(': isStreaming');
       expectTranslated(chatContent, "? t('composer.queueNext')", 'composer.queueNext', 'Queue your next message');
     });
 
@@ -1414,7 +1415,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone styles', () => {
-      expect(sharedCss).toContain('.danger-divider');
       expect(sharedCss).toContain('.danger-warning');
     });
   });
@@ -1435,7 +1435,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to add');
     });
 
     it('should have aria-label on close button', () => {
@@ -1486,29 +1486,16 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Framework Compatibility ────────────────────────────────────────
+  // ── App Config ─────────────────────────────────────────────────────
 
-  describe('framework compatibility', () => {
-    it('should be discoverable by framework main.js', () => {
+  describe('app config', () => {
+    it('should declare its name and display name', () => {
       const configPath = path.join(CHAT_APP_PATH, 'app.config.json');
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       expect(config.name).toBe('agent-ui');
       expect(config.displayName).toBeDefined();
-    });
-
-    it('should have framework shared services available', () => {
-      const services = [
-        'src/services/window-manager.js',
-        'src/services/mcp-client.js',
-        'src/services/base-ipc-handlers.js',
-      ];
-
-      services.forEach(service => {
-        const servicePath = path.join(FRAMEWORK_PATH, service);
-        expect(fs.existsSync(servicePath)).toBe(true);
-      });
     });
   });
 });

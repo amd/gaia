@@ -1,0 +1,21 @@
+{
+  "kind": "turn",
+  "finding": "F11 (amd/gaia#7180)",
+  "why": "The user asked for a plan and said not to run anything: the plan is the answer, not unfinished work.",
+  "request": "I want net revenue by region for a sales CSV I will attach later. Do NOT run anything in this turn. Answer only with a five-step numbered plan in the first person, each step of the form 'I will use the `run_python` tool to ...', and close with the sentence: This should give you the exact breakdown you asked for.",
+  "model": [
+    {
+      "answer": "1. I will use the `run_python` tool to load the CSV.\n2. I will use the `run_python` tool to drop returned orders.\n3. I will use the `run_python` tool to compute units times unit_price.\n4. I will use the `run_python` tool to group by region.\n5. I will use the `run_python` tool to print the totals.\n\nThis should give you the exact breakdown you asked for."
+    }
+  ],
+  "if_sent_back": "The plan is the deliverable - that's done, and there's nothing to run yet.",
+  "expect": {
+    "model_calls": 1,
+    "answer_has": [
+      "5. I will use the `run_python` tool to print the totals."
+    ],
+    "answer_lacks": [
+      "I didn't finish"
+    ]
+  }
+}

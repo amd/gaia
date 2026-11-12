@@ -691,9 +691,12 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/gpu` | Give the GPU more memory so bigger models fit. Offered only on a PC with an integrated GPU |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
+| `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts) |
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
+| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). Also a clickable entry in the status bar. See [Connectors](/connectors) |
+| `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Read-only; creates no schedules |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
@@ -706,9 +709,11 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
+| `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
+| `/sessions all` | The same list with eval and scheduled runs included |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
+their own — `/model`, `/skills`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 
@@ -938,7 +943,8 @@ RUNS CODE  Run this command?
 ```
 
 The first line is a risk badge — `READ`, `WRITE`, `RUNS CODE` or
-`DESTRUCTIVE` — and the question. Tools GAIA knows get a plain question (`Run
+`DESTRUCTIVE` — and the question. A prompt to let GAIA into a file or folder
+outside the chat's folders is headed `ACCESS`. Tools GAIA knows get a plain question (`Run
 this command?`, `Write this file?`, `Install this skill?`); any other tool reads
 `Allow <tool>?`. A `DESTRUCTIVE` prompt adds a warning line under the call.
 
@@ -958,6 +964,38 @@ shell for the session.
 `--full-access` runs every tool without asking, and the TUI shows a
 persistent warning the whole time it is on. `/full-access off` turns it off
 mid-session.
+
+## Reopening a session
+
+Quitting doesn't lose a conversation. `/sessions`, or launching with
+`gaia-tui --resume`, lists your recent sessions with their title, how long ago
+they were active, and where they stand:
+
+| Status | Means |
+|---|---|
+| `waiting on you` | Paused on a permission prompt in another window. Listed first |
+| `running` | A turn is in progress in another window |
+| `done` | The last turn finished |
+| `failed` | The last turn ended in an error |
+| `stopped mid-turn` | GAIA closed before the last turn finished |
+
+Pick one with `Enter` and its conversation is redrawn, the agent restarts on
+that session, and you carry on where you left off — the model remembers what
+was said, not just the screen. `gaia-tui --resume=<id>` reopens one directly; a
+unique prefix of the id is enough. A session that is still open in another
+window can't be reopened until you close it there. If a turn is still running
+when you pick a session, GAIA asks first: `s` stops the turn and switches (the
+new chat says which turn it stopped), `k` or `Esc` keeps it running. A session
+you only just left in this window may take a few seconds to finish saving; GAIA
+says it is still closing and reopens it as soon as it can. If `GAIA_HISTORY_FILE` pins
+GAIA to one transcript, every launch keeps using that file and `--resume`
+refuses to run until you unset it.
+
+The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
+scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
+under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
+through the background service instead, it doesn't keep them yet: `/sessions`
+and `--resume` say so rather than showing an empty list.
 
 ## Running another agent
 

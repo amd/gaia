@@ -12,8 +12,8 @@ import pytest
 
 from gaia.agents.registry import KNOWN_TOOLS
 from gaia.agents.tools import audio_tools
-from gaia.agents.tools.audio_tools import AudioToolsMixin
-from gaia.audio.lemonade_asr import Segment, Transcript, Word
+from gaia.agents.tools.audio_tools import RECORDING_STAGES, AudioToolsMixin
+from gaia.audio.lemonade_asr import LemonadeASRError, Segment, Transcript, Word
 
 
 class Host(AudioToolsMixin):
@@ -171,6 +171,80 @@ class TestTranscribeMedia:
         assert len(decoded) == 1
         assert not decoded[0].parent.exists()
         assert source.read_bytes() == b"source"
+
+    def test_a_speech_model_download_is_shown_before_transcribing(self, tmp_path):
+        """The first transcription must not sit on "Transcribing" while 1.5 GB downloads."""
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        shown = []
+        host = Host()
+        host.console = type(
+            "Console",
+            (),
+            {
+                "start_progress": lambda self, msg: shown.append(("status", msg)),
+                "report_phase": lambda self, phase, msg, **f: shown.append(
+                    (RECORDING_STAGES[f["stage"]], msg)
+                ),
+            },
+        )()
+
+        def ensure_model(say=None, on_percent=None):
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.55 GB)")
+            for percent in (0, 40, 100):
+                on_percent(percent)
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.ensure_model.side_effect = ensure_model
+            client.return_value.transcribe.return_value = _transcript()
+            result = host._transcribe_media(
+                str(source), output_path=str(tmp_path / "standup.txt")
+            )
+
+        assert result["status"] == "success", result
+        downloading = [msg for kind, msg in shown if "speech model" in msg]
+        assert downloading == [
+            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), one time",
+            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
+            "one time — 0%",
+            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
+            "one time — 40%",
+            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
+            "one time — 100%",
+        ]
+        # Its own state: nothing says "Transcribing" until the download is over.
+        first_transcribe = next(
+            i for i, (kind, _) in enumerate(shown) if kind == "transcribe"
+        )
+        last_download = max(
+            i for i, (_, msg) in enumerate(shown) if "speech model" in msg
+        )
+        assert last_download < first_transcribe
+
+    def test_a_failed_speech_model_download_is_the_tools_error(self, tmp_path):
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.ensure_model.side_effect = LemonadeASRError(
+                "Download of Whisper-Large-v3-Turbo failed: disk full"
+            )
+            result = Host()._transcribe_media(str(source))
+
+        assert result["status"] == "error"
+        assert "disk full" in result["error"]
+        client.return_value.transcribe.assert_not_called()
 
     def test_missing_file_is_actionable_and_does_no_work(self, tmp_path):
         """A bad path must not trigger an ffmpeg install or a model pull."""

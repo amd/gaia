@@ -180,6 +180,168 @@ def test_an_answer_that_looked_is_left_alone(agent, workspace):
     assert len(sent) == 2
 
 
+PLAN = (
+    "1. I will read toybox/dates.py to see what it exports.\n"
+    "2. I will add a test for each date helper.\n"
+    "3. I will run the new tests."
+)
+
+
+def test_a_request_not_to_act_is_not_sent_to_look(agent, workspace):
+    """rc18, DeepSeek: the nudge read as the user's newest instruction."""
+    sent = _script(agent, _answer(PLAN), _answer(PLAN))
+
+    result = agent.process_query(
+        "For toybox/dates.py, do NOT run anything in this turn. Answer only "
+        "with a three-step plan for adding tests.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 1
+    assert PLAN in result["result"]
+
+
+def test_a_touch_ban_on_an_investigation_still_sends_the_answer_to_look(
+    agent, workspace
+):
+    sent = _script(agent, _answer(GUESS), _read("toybox/dates.py"), _answer(REVIEW))
+
+    result = agent.process_query(
+        "Find out why toybox/dates.py fails. Don't touch anything.", max_steps=10
+    )
+
+    assert "`toybox/dates.py`" in sent[1][-1]["content"]
+    assert "without opening anything" in sent[1][-1]["content"]
+    assert REVIEW in result["result"]
+
+
+ANNOUNCED_EDIT = "The bug is on line 1. Let me check toybox/dates.py and patch it."
+
+
+def test_a_touch_ban_keeps_an_announced_edit_from_being_pushed(agent, workspace):
+    sent = _script(agent, _read("toybox/dates.py"), _answer(ANNOUNCED_EDIT))
+
+    result = agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert ANNOUNCED_EDIT in result["result"]
+
+
+def test_small_talk_before_a_touch_ban_is_not_sent_to_look(agent, workspace):
+    sent = _script(agent, _answer(GUESS))
+
+    agent.process_query(
+        "Hi, how are you? Don't touch anything, toybox/dates.py stays as is.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 1
+
+
+READ_NOTHING_PLAN = (
+    "1. I will load the module.\n2. I will add a test for each date helper.\n"
+    "3. I will run the new tests."
+)
+PLAN_ONLY_REQUEST = (
+    "For toybox/dates.py I want tests. Use no tools in this turn. Answer only "
+    "with a three-step plan."
+)
+
+
+def test_a_plan_the_user_asked_for_gets_no_note_about_not_looking(agent, workspace):
+    """rc18 round 2: "I haven't confirmed this works - I didn't read `x` this turn"."""
+    _script(agent, _answer(READ_NOTHING_PLAN))
+
+    result = agent.process_query(PLAN_ONLY_REQUEST, max_steps=10)
+
+    assert result["result"].strip() == READ_NOTHING_PLAN
+
+
+@pytest.mark.parametrize(
+    "answer, reason",
+    [
+        (
+            "I read toybox/dates.py and it exports three helpers.",
+            "I didn't read `toybox/dates.py` this turn",
+        ),
+        (
+            "toybox/dates.py doesn't exist in this workspace.",
+            "I said something doesn't exist without searching for it this turn",
+        ),
+    ],
+)
+def test_a_plan_only_turn_still_notes_a_false_claim_about_the_file(
+    agent, workspace, answer, reason
+):
+    # Another check may ask once for a rewrite; the model repeats itself.
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(PLAN_ONLY_REQUEST, max_steps=10)
+
+    assert reason in result["result"]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Without using any tools, what does toybox/dates.py set `x` to?",
+        "Don't use any tools. What does toybox/dates.py set x to?",
+        "Use no tools: what does toybox/dates.py set x to?",
+    ],
+)
+def test_a_no_tools_answer_stating_a_file_unread_keeps_its_note(
+    agent, workspace, request_text
+):
+    """Not sent to look, since the user said not to, but the guess is still marked."""
+    answer = "toybox/dates.py sets `x` to 2."
+    sent = _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(request_text, max_steps=10)
+
+    assert not [m for m in sent[-1] if "Look with your tools first" in m["content"]]
+    assert "I didn't read `toybox/dates.py` this turn" in result["result"]
+
+
+def test_the_verifiers_version_question_keeps_its_note(agent, workspace):
+    (workspace / "src" / "gaia").mkdir(parents=True)
+    (workspace / "src" / "gaia" / "version.py").write_text(
+        '__version__ = "0.26.0"\n', encoding="utf-8"
+    )
+    answer = "src/gaia/version.py sets `__version__` to 0.9.1."
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(
+        "Without using any tools, what does src/gaia/version.py set "
+        "`__version__` to?",
+        max_steps=10,
+    )
+
+    assert "I didn't read `src/gaia/version.py` this turn" in result["result"]
+
+
+def test_an_unread_file_is_still_noted_when_the_user_did_not_forbid_looking(
+    agent, workspace
+):
+    _script(agent, _answer(GUESS), _answer(GUESS))
+
+    result = agent.process_query("What does toybox/dates.py do?", max_steps=10)
+
+    assert "I didn't read `toybox/dates.py` this turn" in result["result"]
+
+
+def test_forbidding_extra_work_still_sends_the_answer_to_look(agent, workspace):
+    sent = _script(agent, _answer(GUESS), _answer(GUESS))
+
+    agent.process_query(
+        "Review toybox/dates.py and don't do anything else.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert "Look with your tools first" in sent[1][-1]["content"]
+
+
 def test_a_question_about_no_file_is_answered_directly(agent, workspace):
     sent = _script(agent, _answer("391"))
 

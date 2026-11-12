@@ -14,21 +14,6 @@ import (
 // Decimal units throughout: 1 GB = 1000 MB = 10^9 bytes, the unit the backend
 // and model_fit use, so "needs ~27 GB" and the GPU split compare directly.
 
-// formatGB is a download size: one decimal, MB below 1 GB.
-func formatGB(gb float64) string {
-	if gb < 0 {
-		gb = 0
-	}
-	if gb < 1 {
-		mb := math.Round(gb * 1000)
-		if mb < 1 && gb > 0 {
-			mb = 1
-		}
-		return fmt.Sprintf("%.0f MB", mb)
-	}
-	return fmt.Sprintf("%.1f GB", gb)
-}
-
 // formatGBShort is a memory size, one decimal like the Agent UI's
 // formatFitGb, so a number reads the same in both.
 func formatGBShort(gb float64) string {

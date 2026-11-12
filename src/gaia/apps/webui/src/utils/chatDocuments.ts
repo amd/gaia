@@ -29,6 +29,13 @@ export function showAddedDocuments(sessionId: string, added: Document[]): void {
     attachInList(sessionId, added.map((d) => d.id));
 }
 
+/** A dropped file that didn't make it: not uploaded, or uploaded but not attached. */
+export interface DropFailure {
+    name: string;
+    stage: 'upload' | 'attach';
+    error: unknown;
+}
+
 /**
  * Upload dropped files, attach each to the chat, then reload the library list
  * (the document bar lists only documents the store knows about).
@@ -36,8 +43,10 @@ export function showAddedDocuments(sessionId: string, added: Document[]): void {
  * Uploads the blob rather than relying on File.path, which browsers leave
  * undefined and Electron 32+ removed. The Document Library is not opened, so a
  * drop doesn't interrupt the chat; it still shows a large file's progress (#728).
+ * Returns the files that failed, for the chat to show.
  */
-export async function addDroppedFiles(sessionId: string | null, files: File[]): Promise<void> {
+export async function addDroppedFiles(sessionId: string | null, files: File[]): Promise<DropFailure[]> {
+    const failures: DropFailure[] = [];
     for (const file of files) {
         log.doc.info(`Dropped on chat view: ${file.name}`);
         try {
@@ -49,10 +58,12 @@ export async function addDroppedFiles(sessionId: string | null, files: File[]): 
                     log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
                 } catch (attachErr) {
                     log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
+                    failures.push({ name: file.name, stage: 'attach', error: attachErr });
                 }
             }
         } catch (err) {
             log.doc.error(`Upload failed: ${file.name}`, err);
+            failures.push({ name: file.name, stage: 'upload', error: err });
         }
     }
     try {
@@ -61,4 +72,5 @@ export async function addDroppedFiles(sessionId: string | null, files: File[]): 
     } catch (err) {
         log.doc.error('Could not refresh the document list after a drop', err);
     }
+    return failures;
 }
