@@ -607,6 +607,27 @@ SAVE_WHEN_ASKED_PROMPT = (
 )
 
 
+def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
+    """What remember tells the model after saving without a bad optional argument.
+
+    Opens with "Saved": the model repeats a tool result's first words to the user.
+    """
+    parts = ["Saved."]
+    if "category" in ignored:
+        parts.append(
+            f"Filed as a fact: '{ignored['category']}' is not a category "
+            f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
+        )
+    if "due_at" in ignored:
+        parts.append(
+            f"No due date was set: '{ignored['due_at']}' is not an ISO 8601 "
+            "date, so there is no reminder yet. To add one, call "
+            f"update_memory(knowledge_id='{knowledge_id}', due_at=...) with a "
+            "date like 2026-11-20T09:00."
+        )
+    return " ".join(parts)
+
+
 def _own_words(text: str) -> List[str]:
     """The paragraphs where a user gives instructions: the first, and the last
     unless the first introduces what follows ("Translate this letter:")."""
@@ -5751,13 +5772,21 @@ class MemoryMixin(ProceduralMemoryMixin):
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
-            if category not in EXTRACTABLE_CATEGORIES:
+            # A bad label must not lose the fact: save without it and say so.
+            ignored: Dict[str, str] = {}
+            if category in VALID_CATEGORIES - EXTRACTABLE_CATEGORIES:
+                # Not a slip: these rows lead every prompt, so a chat can't write one.
                 return {
                     "status": "error",
                     "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
+                        f"Not saved: a chat can't write the '{category}' "
+                        "category. Call remember again with one of "
+                        f"{sorted(EXTRACTABLE_CATEGORIES)}."
                     ),
                 }
+            if category not in EXTRACTABLE_CATEGORIES:
+                ignored["category"] = category
+                category = "fact"
 
             if category == "error" and MemoryMixin._is_unlearnable_error(fact):
                 return {
@@ -5817,10 +5846,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 try:
                     datetime.fromisoformat(due_at)
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format.",
-                    }
+                    ignored["due_at"] = due_at
+                    due_at = ""
 
             # The agent owns scoping. A label the model picks can file a
             # memory where no later session reads it.
@@ -5856,14 +5883,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
 
             msg = f"Remembered: {fact[:80]}"
+            if ignored:
+                msg = f"{_saved_despite(ignored, knowledge_id)} {msg}"
             if was_truncated:
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
-            return {
+            result = {
                 "status": "stored",
                 "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
+            if ignored:
+                result["ignored"] = ignored
+            return result
 
         @tool
         def recall(

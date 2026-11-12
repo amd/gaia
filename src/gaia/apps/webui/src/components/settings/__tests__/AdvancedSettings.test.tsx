@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
@@ -190,5 +190,75 @@ describe('AdvancedSettings', () => {
         expect(await screen.findByText('Start Lemonade from the tray icon.')).toBeInTheDocument();
         expect(screen.getByText('Not Running')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    describe('Custom model ID', () => {
+        async function save(id: string, modelStatus: { found: boolean; checked: boolean }) {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.updateSettings.mockResolvedValue({
+                custom_model: id, model_status: { downloaded: false, loaded: false, ...modelStatus },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+            const input = await screen.findByRole('textbox', { name: 'Custom model override' });
+            await waitFor(() => expect(input).toBeEnabled());
+            fireEvent.change(input, { target: { value: id } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
+            await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: id }));
+        }
+
+        it('says when the model server does not list the saved ID', async () => {
+            await save('fireworks.no-such-model', { found: false, checked: true });
+            expect(await screen.findByText(
+                "Saved, but the model server doesn't list “fireworks.no-such-model”. Check the ID: messages will fail if the model doesn't exist.",
+            )).toBeInTheDocument();
+        });
+
+        it('says when the ID could not be checked', async () => {
+            await save('Qwen3-4B-GGUF', { found: false, checked: false });
+            expect(await screen.findByText(
+                "Saved, but GAIA couldn't check this ID because the model server isn't answering.",
+            )).toBeInTheDocument();
+        });
+
+        it('adds nothing for an ID the model server lists', async () => {
+            await save('Qwen3-4B-GGUF', { found: true, checked: true });
+            expect(await screen.findByText('Saved')).toBeInTheDocument();
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
+        it('still carries the note when Settings is opened again on the saved bad ID', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'fireworks.no-such-model',
+                model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            expect(await screen.findByDisplayValue('fireworks.no-such-model')).toBeInTheDocument();
+            expect(await screen.findByText(/the model server doesn't list “fireworks.no-such-model”/)).toBeInTheDocument();
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('opens with no note on a saved ID the model server lists', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'Qwen3-4B-GGUF',
+                model_status: { found: true, checked: true, downloaded: true, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            await screen.findByDisplayValue('Qwen3-4B-GGUF');
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
+        it('drops the note once the ID is edited', async () => {
+            await save('fireworks.no-such-model', { found: false, checked: true });
+            await screen.findByText(/Saved, but the model server/);
+            fireEvent.change(screen.getByRole('textbox', { name: 'Custom model override' }), { target: { value: 'x' } });
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
     });
 });

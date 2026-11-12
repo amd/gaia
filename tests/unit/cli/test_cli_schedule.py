@@ -399,3 +399,30 @@ def test_no_subcommand_prints_usage_hint_to_stderr(parser, mock_store, capsys):
     err = capsys.readouterr().err
     assert "No schedule action specified" in err
     assert "add|list|show|remove|pause|resume|run|daemon" in err
+
+
+# ---- A name the store doesn't have ----
+
+
+@pytest.mark.parametrize("action", ["show", "remove", "pause", "resume", "run"])
+def test_an_unknown_schedule_name_exits_1_with_one_line_not_a_traceback(
+    parser, mocker, tmp_path, capsys, action
+):
+    """The store's KeyError already holds the right message; the CLI must print it."""
+    from gaia.schedule.store import TomlScheduleStore
+
+    # A real store, so the real KeyError reaches the handler.
+    mocker.patch(
+        "gaia.schedule.store.TomlScheduleStore",
+        return_value=TomlScheduleStore(tmp_path / "schedules.toml"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, [action, "nope"]))
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("❌ no schedule named 'nope'")
+    assert "gaia schedule list" in captured.err
+    assert "Traceback" not in captured.err

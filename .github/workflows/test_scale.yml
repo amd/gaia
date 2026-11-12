@@ -1,0 +1,62 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# GAIA at the size a real user reaches: a large folder index and a search
+# over 500 memories, against the installer journeys' fake model server
+# (tests/integration/test_scale_run.py). No model, no Lemonade, no GPU.
+#
+# It takes minutes, so it runs on release tags (every RC and final), not on
+# every PR. A PR that changes the test, its fixture or this file runs it too.
+
+name: Scale Run
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - '.github/workflows/test_scale.yml'
+      - 'tests/integration/test_scale_run.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'tests/integration/conftest.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scale-run:
+    name: Scale Run (py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-timeout psutil keyring
+          uv pip install --system -e ".[api,ui,rag]"
+
+      - name: Index a large folder and search 500 memories
+        run: |
+          python -m pytest tests/integration/test_scale_run.py \
+            -v --tb=short -rfE --durations=10

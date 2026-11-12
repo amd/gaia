@@ -70,6 +70,21 @@ describe('Runs on', () => {
 });
 
 describe('Can read and write', () => {
+    it('shows a document the turn indexed once the reply ends, without a reload', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('list');
+        expect(screen.queryByText('outside.md')).toBeNull();
+
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [...ENV.folders, { path: 'C:\\Users\\me\\.gaia\\documents\\outside.md', kind: 'file', source: 'document', removable: false }],
+        } as never);
+        rerender(<EnvironmentSection sessionId={SID} busy />);
+        rerender(<EnvironmentSection sessionId={SID} busy={false} />);
+
+        expect(await screen.findByText('outside.md')).toBeInTheDocument();
+    });
+
     it('lists folders first, with where each came from', async () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const list = await screen.findByRole('list');
