@@ -1614,6 +1614,12 @@ def test_a_write_that_did_happen_is_still_a_claim(tmp_path):
         "I would have written it to a.txt, but I saved it to `{other}`.",
         "I would have written it to a.txt but I saved it to `{other}`.",
         "I’d have written it to a.txt but then I saved it to `{other}`.",
+        "I would have written it to a.txt and then saved a copy to `{other}`.",
+        "Normally I would have saved it as a.txt - instead I saved it to `{other}`.",
+        "I could have created a.txt so I saved the totals to `{other}` instead.",
+        "I would have written a.txt — I saved it to `{other}`.",
+        "I would have written a.txt; then I saved it to `{other}`.",
+        "I would have exported a.txt then saved the totals to `{other}`.",
     ],
 )
 def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path, sentence):
@@ -1624,3 +1630,38 @@ def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path, senten
 
     assert any("b.txt" in g for g in found)
     assert not [g for g in found if "a.txt" in g]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I would have written it to a.txt and then saved a copy to `{other}`.",
+        "Normally I would have saved it as a.txt - instead I saved `{other}`.",
+        "I could have created a.txt so I saved the totals to `{other}` instead.",
+    ],
+)
+def test_a_real_save_after_a_would_have_clause_counts_on_a_read_only_turn(
+    tmp_path, sentence
+):
+    """The verifier's repros: main flags each, so the strip must not hide them."""
+    other = tmp_path / "b.txt"
+    ledger = CompletionEvidence("What are the totals in data.csv?", str(tmp_path))
+
+    found = gaps(ledger, sentence.format(other=other))
+
+    assert found
+    assert not [g for g in found if "a.txt" in g]
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I would have written it to a.txt and b.txt.",
+        "I would have saved it as a.txt so you could open it.",
+        "I would have created a.txt or b.txt, from data.csv.",
+    ],
+)
+def test_a_would_have_clause_with_no_later_save_names_no_file(tmp_path, sentence):
+    ledger = CompletionEvidence("What are the totals in data.csv?", str(tmp_path))
+
+    assert gaps(ledger, sentence) == []

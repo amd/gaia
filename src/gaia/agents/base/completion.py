@@ -140,13 +140,35 @@ _FIRST_PERSON = re.compile(
     re.I,
 )
 # "What I would have written, from x.xlsx": a write that did not happen is
-# not a claim. Only that clause goes; "..., but I saved y.md" still counts.
+# not a claim. Only that clause goes: it ends at punctuation, a conjunction
+# or the next write verb, so "... and then saved y.md" still counts.
+_WRITE_VERB = (
+    r"(?:saved|wrote|written|stored|exported|created|put|generated|made|copied)"
+)
 _COUNTERFACTUAL = re.compile(
     r"(?:\b(?:would|could|should|might)(?:n['’]t|\s+not)?|\b(?:I|we)['’]d)\s+have\s+"
-    r"(?:\w+\s+)?(?:saved|written|stored|exported|created|put|generated|made|copied)"
-    r"\b(?:(?!\bbut\b)[^,;])*",
+    rf"(?:\w+\s+)?{_WRITE_VERB}\b"
+    r"(?:(?!\b(?:but|and|so|then|instead|or|yet|while|whereas|though|although)\b"
+    rf"|\b{_WRITE_VERB}\b|\s-\s)[^,;:—–])*"
+    # The clause's own ";" or dash goes too, or the save after it reads as
+    # a second clause that destination_paths never reaches.
+    r"(?:\s*(?:[;—–]|-(?=\s)))?"
+    rf"(?P<join>(?:\s*\b(?:and|so|then|instead)\b)+\s+(?={_WRITE_VERB}\b))?",
     re.I,
 )
+
+
+def _drop_counterfactual(sentence: str) -> str:
+    """Strip each "would have written" clause.
+
+    "... and then saved b.txt" loses its subject with the clause, so it
+    gets one back: "I saved b.txt" is still a claim.
+    """
+    return _COUNTERFACTUAL.sub(
+        lambda match: "I " if match.group("join") else "", sentence
+    )
+
+
 _EARLIER = re.compile(
     r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
     r"\b(?:earlier|yesterday)\b",
@@ -984,7 +1006,7 @@ class CompletionEvidence:
             if _EARLIER.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub(
-                "", _CONDITION.sub("", _COUNTERFACTUAL.sub("", sentence))
+                "", _CONDITION.sub("", _drop_counterfactual(sentence))
             )
             if not claims_file_write(sentence):
                 continue
