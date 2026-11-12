@@ -607,8 +607,9 @@ SAVE_WHEN_ASKED_PROMPT = (
 )
 #: Ends a remember error caused by an argument: extraction can still keep the fact.
 SAVE_FAILED_ON_ARGUMENT = (
-    " This call stored nothing, but GAIA may still learn the fact from this "
-    "chat: tell the user the save failed, not that it won't be remembered."
+    " This call stored nothing. Call remember again with a valid value; if you "
+    "don't, tell the user the save failed, not that it won't be remembered: "
+    "GAIA may still learn the fact from this chat."
 )
 
 

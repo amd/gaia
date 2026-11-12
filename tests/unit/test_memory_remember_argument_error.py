@@ -75,6 +75,17 @@ def test_an_argument_error_does_not_claim_the_fact_is_lost(store, bad):
     assert _contents(store) == []
     assert "This call stored nothing" in result["message"]
     assert MAY_STILL in result["message"]
+    # The note must not talk the model out of fixing the argument and retrying.
+    assert "Call remember again" in result["message"]
+
+
+def test_a_corrected_retry_still_saves(store):
+    with _remember(_Host(store)) as remember:
+        remember(fact=FACT, category="banana")
+        result = remember(fact=FACT, category="fact")
+
+    assert result["status"] != "error"
+    assert len(_contents(store)) == 1
 
 
 def test_the_category_error_still_lists_the_valid_categories(store):
