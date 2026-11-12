@@ -2358,7 +2358,9 @@ def test_selecting_a_cloud_model_is_refused_under_local_only(
     )
     assert resp.status_code == 409
     assert "Local only is on" in resp.json()["detail"]
-    assert "network_policy cloud_allowed" in resp.json()["detail"]
+    # The app names its own setting, never a command to run.
+    assert "Settings > Privacy" in resp.json()["detail"]
+    assert "gaia config" not in resp.json()["detail"]
     assert lemonade.calls == []
     assert db.get_setting("custom_model") is None
 
@@ -2504,3 +2506,34 @@ def test_restore_keeps_a_listed_cloud_model_off_under_local_only(
     assert restore["status"] == "failed", restore
     assert "Local only is on" in restore["message"]
     assert db.get_setting("custom_model") is None
+
+
+def test_selecting_a_listed_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "Can't switch to big-model · othercloud: Local only is on." in detail
+    assert "Settings > Privacy" in detail and "gaia config" not in detail
+    assert lemonade.paths() == ["models?show_all=true"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_refuses_an_id_it_cannot_classify_while_the_server_is_down(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.down = True
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 503
+    assert "couldn't check that it isn't a cloud model" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_key_refusal_names_the_app_setting(
+    client, lemonade, keys, local_only_on
+):
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert "Settings > Privacy" in resp.json()["detail"]
+    assert "gaia config" not in resp.json()["detail"]
