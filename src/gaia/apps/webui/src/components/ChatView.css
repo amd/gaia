@@ -173,7 +173,10 @@
 }
 .doc-context-pills-expanded {
     flex-wrap: wrap;
-    overflow: visible;
+    align-content: flex-start;
+    max-height: min(30vh, 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 .doc-pill {
     display: inline-flex;

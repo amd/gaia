@@ -80,12 +80,12 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                         +{hiddenCount} more
                     </button>
                 )}
-                {docsExpanded && hiddenCount > 0 && (
-                    <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
-                        show less
-                    </button>
-                )}
             </div>
+            {docsExpanded && hiddenCount > 0 && (
+                <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
+                    show less
+                </button>
+            )}
         </div>
     );
 }
