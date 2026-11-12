@@ -254,13 +254,16 @@ class MCPClientManager:
                 continue
             transport_type = server_config.get("type", "stdio")
             if transport_type != "stdio":
-                logger.warning(
-                    f"Skipping server '{name}': GAIA MCP client only supports stdio "
-                    f"transport at this time (found '{transport_type}')"
+                reason = (
+                    "GAIA MCP client only supports stdio transport at this "
+                    f"time (found '{transport_type}')"
                 )
+                logger.warning(f"Skipping server '{name}': {reason}")
+                self._failed[name] = reason
                 continue
             if "command" not in server_config:
                 logger.warning(f"No command specified for server: {name}")
+                self._failed[name] = "No command specified"
                 continue
             to_connect[name] = server_config
 

@@ -193,9 +193,6 @@ def _normalize_time_to(time_to: str) -> str:
 #: Auto-refresh system context after this many days (hardware/software changes over time).
 _SYSTEM_CONTEXT_REFRESH_DAYS: int = 7
 
-#: Auto-refresh LLM-inferred profile facts after this many days.
-_INFERRED_PROFILE_REFRESH_DAYS: int = 30
-
 
 def _live_software_versions() -> Dict[str, str]:
     """Map of tracked software-version fact labels → current live value.

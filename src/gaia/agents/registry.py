@@ -815,6 +815,9 @@ class AgentRegistry:
                     exc,
                     exc_info=True,
                 )
+                self._record_load_error(
+                    entry_point.name, f"{type(exc).__name__}: {exc}"
+                )
                 continue
 
             if registration.id in self._LEGACY_ID_ALIASES:

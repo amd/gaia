@@ -6,9 +6,11 @@ CLI entry point for GAIA OpenAI-compatible API server
 This module provides command-line interface for managing the API server.
 
 Usage:
-    gaia api start [--host HOST] [--port PORT] [--background]
-    gaia api status
-    gaia api stop
+    python -m gaia.api.app start [--host HOST] [--port PORT] [--background]
+    python -m gaia.api.app status
+    python -m gaia.api.app stop
+
+``gaia api start|status|stop`` covers the same commands without ``--background``.
 """
 
 import argparse
@@ -252,10 +254,10 @@ def main() -> None:
     CLI entry point for API server commands.
 
     Example:
-        $ gaia api start
-        $ gaia api start --host 0.0.0.0 --port 8000 --background
-        $ gaia api status
-        $ gaia api stop
+        $ python -m gaia.api.app start
+        $ python -m gaia.api.app start --host 0.0.0.0 --port 8000 --background
+        $ python -m gaia.api.app status
+        $ python -m gaia.api.app stop
     """
     parser = argparse.ArgumentParser(description="GAIA OpenAI-compatible API server")
 

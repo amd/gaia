@@ -180,9 +180,8 @@ INIT_PROFILES = {
     "gaia": {
         "description": "The flagship GAIA agent — chat, documents, data, web, memory",
         # Installs the flagship from the Agent Hub, which publishes it as a
-        # native binary (`gaia-agent`), not a wheel -- so nothing it installs is
-        # importable. `gaia chat` still needs the `gaia-agent-gaia` wheel
-        # separately; the completion message says so.
+        # native binary (`gaia-agent`), not a wheel, so nothing it installs is
+        # importable.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
@@ -4040,8 +4039,8 @@ class InitCommand:
             if self.profile == "sd":
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            "
-                    "Then ask for an image — image generation runs through the "
-                    "agent's SD tools"
+                    "Then ask for an image. The image tools are off while chat "
+                    "runs on Gemma 4 E4B; pick a larger chat model to use them"
                 )
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
@@ -4077,7 +4076,7 @@ class InitCommand:
                     "    [cyan]gaia download --list --agent vlm[/cyan]  Check the vision model is downloaded"
                 )
                 self.console.print(
-                    "    [dim]Vision model ready! Use with the driver logs processor or VLM SDK:[/dim]"
+                    "    [dim]Vision model ready! Use it with the VLM SDK:[/dim]"
                 )
                 self.console.print(
                     "    [cyan]from gaia.vlm import StructuredVLMExtractor[/cyan]"
@@ -4118,8 +4117,9 @@ class InitCommand:
             # Profile-specific quick start commands
             if self.profile == "sd":
                 self._print(
-                    "    gaia chat                    Then ask for an image — "
-                    "image generation runs through the agent's SD tools"
+                    "    gaia chat                    Then ask for an image. "
+                    "The image tools are off while chat runs on Gemma 4 E4B; "
+                    "pick a larger chat model to use them"
                 )
             elif self.profile in ("gaia", "npu"):
                 if has_tui:

@@ -142,12 +142,6 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
     return detail
 
 
-#: Email's own maps, now owned by ``profiles.EMAIL_PROFILE``. Re-exported
-#: under their original names so existing importers keep working.
-_MUTATING_TOOLS = EMAIL_PROFILE.mutating_tools
-_TOOL_LABELS = EMAIL_PROFILE.tool_labels
-
-
 #: ``final.usage`` fields copied onto the UI's ``answer`` event, under the
 #: names :meth:`SSEOutputHandler.print_final_answer` gives them.
 _ANSWER_USAGE_KEYS = (

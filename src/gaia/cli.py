@@ -2489,14 +2489,6 @@ Examples:
         help="Output format for results (default: json+markdown as today). "
         "'junit' writes a JUnit XML file for CI integration.",
     )
-    agent_eval_parser.add_argument(
-        "--device",
-        choices=["cpu", "gpu", "npu"],
-        default=None,
-        help="Inference device for eval scenarios: cpu, gpu (default), or npu. "
-        "Selects the model and backend from the agent's device_configs. "
-        "Results are tagged with the device for cross-device comparison.",
-    )
 
     # Email-triage throughput benchmark subcommand: gaia eval benchmark [OPTIONS] (#1233)
     benchmark_eval_parser = eval_subparsers.add_parser(
@@ -5915,25 +5907,9 @@ Let me know your answer!
 
             from gaia.eval.runner import AgentEvalRunner
 
-            # Resolve --device to model when --model not explicit
-            eval_model = args.model
-            eval_device = getattr(args, "device", None)
-            if eval_device and not eval_model:
-                from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
-
-                for dc in DEFAULT_DEVICE_CONFIGS:
-                    if dc.device == eval_device:
-                        eval_model = dc.model
-                        break
-                device_labels = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
-                print(
-                    f"🖥️  Eval device: {device_labels.get(eval_device, eval_device)}  |  "
-                    f"Model: {eval_model}"
-                )
-
             runner = AgentEvalRunner(
                 backend_url=args.backend,
-                model=eval_model,
+                model=args.model,
                 budget_per_scenario=args.budget,
                 timeout_per_scenario=args.timeout,
                 agent_type=getattr(args, "agent_type", DEFAULT_AGENT_TYPE),
@@ -5965,7 +5941,7 @@ Let me know your answer!
                 resume_dir=resume_dir,
                 # Only a value the user chose is checked against the run's own.
                 resume_model=(
-                    eval_model if eval_model != DEFAULT_CLAUDE_MODEL else None
+                    args.model if args.model != DEFAULT_CLAUDE_MODEL else None
                 ),
                 resume_agent_type=(
                     args.agent_type if args.agent_type != DEFAULT_AGENT_TYPE else None
@@ -6848,6 +6824,7 @@ def _gaia_chat_relay(kwargs: dict) -> int:
             ("--watch", "watch"),
             ("--use-claude", "use_claude"),
             ("--list-tools", "list_tools"),
+            ("--device", "device"),
         )
         if kwargs.get(key)
     ]

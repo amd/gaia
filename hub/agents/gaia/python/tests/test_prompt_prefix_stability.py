@@ -27,9 +27,7 @@ from gaia_agent import stdio
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 from gaia_agent.chat_agent import ChatAgent
 
-from gaia.agents.base.history import SessionHistory
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.skill_synthesis import DistilledProcedure, load_synthesis_config
 from gaia.agents.base.tool_loader import THIN_DESCRIPTION_CHARS, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_metrics import count_tokens

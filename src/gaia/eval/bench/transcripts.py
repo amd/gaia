@@ -23,7 +23,6 @@ ARGS_CAP = 300
 
 #: Claude Code's tools that write a file.
 CC_EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
-CC_SHELL_TOOLS = frozenset({"Bash"})
 
 
 def clip(text: Any, cap: int) -> str:

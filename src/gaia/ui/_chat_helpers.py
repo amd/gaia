@@ -50,7 +50,6 @@ from gaia.security import (
 )
 from gaia.stream_timeout import (
     DEFAULT_STREAM_TIMEOUT_SECONDS,
-    MAX_STREAM_TIMEOUT_SECONDS,
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
@@ -273,7 +272,6 @@ _MAX_CACHED_AGENTS = 10
 # Shared with the messaging bridges (gaia.stream_timeout).
 _STREAM_TIMEOUT_ENV = STREAM_TIMEOUT_ENV
 _DEFAULT_STREAM_TIMEOUT_SECONDS = DEFAULT_STREAM_TIMEOUT_SECONDS
-_MAX_STREAM_TIMEOUT_SECONDS = MAX_STREAM_TIMEOUT_SECONDS
 _stream_timeout_from_env = stream_timeout_from_env
 # How often a waiting turn checks whether it has gone idle.
 _IDLE_POLL_SECONDS = 0.2

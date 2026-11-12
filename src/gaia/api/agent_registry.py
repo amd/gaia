@@ -170,7 +170,7 @@ class AgentRegistry:
             if model_id == "gaia":
                 hint = (
                     " The 'gaia' model is the flagship agent, which ships as the "
-                    "'gaia-agent-gaia' wheel. It is not published yet (#2240); "
+                    "'gaia-agent-gaia' wheel; "
                     f"install it from source: '{source_install_command('gaia-agent-gaia')}'."
                 )
             raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e

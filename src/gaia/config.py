@@ -176,10 +176,12 @@ class GaiaConfig:
             many minutes, so its memory goes back to the system. 0 keeps it
             running until ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
-        llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
-            or ``cpu``) GAIA asks Lemonade for when it loads a local chat
-            model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
-            Takes effect on the next load; the embedding model keeps its own.
+        llamacpp_backend: The llama.cpp backend GAIA asks Lemonade for when it
+            loads a local chat model. Only ``TESTED_LLAMACPP_BACKENDS``
+            (``vulkan``) can be set; a value saved before a backend was
+            withdrawn still loads. ``None`` (set it to ``auto``) leaves the
+            choice to Lemonade. Takes effect on the next load; the embedding
+            model keeps its own.
         context_sizes: Context window, in tokens, the user chose per local
             model in the Agent UI (model id -> tokens). Every load of that
             model uses it; a model not listed gets GAIA's automatic size.

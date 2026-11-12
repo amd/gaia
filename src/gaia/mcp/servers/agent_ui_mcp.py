@@ -118,24 +118,8 @@ INDEX_DOCUMENT_TIMEOUT_S = 900
 _EVAL_PROVIDER_ENV = "GAIA_EVAL_AGENT_PROVIDER"
 
 
-def _model_pin() -> Dict[str, Any]:
-    """The ``model`` entry for /api/chat/send, provider-aware.
-
-    Default (env unset): pin GAIA's canonical chat LLM so the UI backend can't
-    fall back to its installer-time ``default_model_name`` (currently
-    ``Qwen3.5-4B-GGUF``) and force Lemonade to swap models on every call.
-    Without this, an eval scenario that defaults the session ends up thrashing
-    Lemonade between Qwen↔Gemma for each turn, which routinely blew the
-    per-scenario 930s budget (rag_quality ``negation_handling`` was the
-    canary). Pin is harmless for users who haven't customised their default —
-    the agent layer was already going to dispatch to Gemma anyway.
-
-    ``GAIA_EVAL_AGENT_PROVIDER=claude``: NO Lemonade pin — the backend's
-    provider opt-in (``use_claude=True``) is authoritative, and pinning Gemma
-    here would force Lemonade model resolution on a run that must never touch
-    Lemonade. Any other value raises, mirroring the backend — never a silent
-    Lemonade fallback.
-    """
+def _check_eval_provider() -> None:
+    """Refuse an eval agent provider the backend would also refuse."""
     provider = os.environ.get(_EVAL_PROVIDER_ENV, "").strip().lower()
     if provider and provider != "claude":
         raise ValueError(
@@ -143,11 +127,6 @@ def _model_pin() -> Dict[str, Any]:
             "provider. Valid values: claude (or unset the variable for the "
             "default Lemonade backend). Refusing to guess a backend."
         )
-    if provider == "claude":
-        return {}
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-    return {"model": DEFAULT_MODEL_NAME}
 
 
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
@@ -157,8 +136,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         "session_id": session_id,
         "message": message,
         "stream": True,
-        **_model_pin(),
     }
+    _check_eval_provider()
 
     try:
         r = requests.post(

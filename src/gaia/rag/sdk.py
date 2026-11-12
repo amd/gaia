@@ -1818,9 +1818,7 @@ class RAGSDK:
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print(
-                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
-                    )
+                    print(f"     1. Open Lemonade Model Manager ({vlm.server_url})")
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:
@@ -2244,9 +2242,7 @@ class RAGSDK:
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print(
-                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
-                    )
+                    print(f"     1. Open Lemonade Model Manager ({vlm.server_url})")
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:

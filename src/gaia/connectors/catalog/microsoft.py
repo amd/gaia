@@ -65,15 +65,6 @@ _AVAILABLE_SCOPES = (
 # clients. The optional secret field exists solely for the rare confidential
 # web-app registration; it is not required and is stored encrypted in the OS
 # keyring.
-_CLIENT_ID_FIELD = ConfigField(
-    key="client_id",
-    label="Application (client) ID",
-    kind="text",
-    help_md=(
-        "From the Azure portal → App registrations → your app → Overview. "
-        "Looks like a GUID, e.g. 11112222-bbbb-3333-cccc-4444dddd5555."
-    ),
-)
 _CLIENT_SECRET_FIELD = ConfigField(
     key="client_secret",
     label="Client Secret (confidential apps only)",

@@ -1190,10 +1190,11 @@ class AgentSDK:
         """
         try:
             from gaia.rag.sdk import RAGSDK, RAGConfig
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
-                'RAG dependencies not installed. Install with: uv pip install -e ".[rag]"'
-            )
+                f"RAG could not be loaded ({e}). If its dependencies are missing, "
+                'install them with: uv pip install -e ".[rag]"'
+            ) from e
 
         # Create RAG config matching chat config
         rag_kwargs.setdefault("base_url", self.config.base_url)

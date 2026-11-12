@@ -65,7 +65,6 @@ WEBUI_DIST = SRC / "gaia" / "apps" / "webui" / "dist"
 PACKAGE_DATA = [
     (SRC / "gaia" / "version.py", "gaia"),
     (SRC / "gaia" / "img", "gaia/img"),
-    (SRC / "gaia" / "mcp" / "mcp.json", "gaia/mcp"),
     (SRC / "gaia" / "mcp" / "n8n.json", "gaia/mcp"),
     (WEBUI_DIST, "gaia/apps/webui/dist"),
 ]

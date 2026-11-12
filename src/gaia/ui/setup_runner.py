@@ -654,20 +654,6 @@ STAGE_LOG_SHOWN = 200
 _STAGE_LOG_KEPT = 4000
 
 
-#: Per-model states, in the order a model moves through them.
-MODEL_STATES = (
-    "queued",
-    "downloading",
-    "verifying",
-    "ready",
-    "failed",
-    "skipped",
-    "cancelled",
-    # Downloaded, but the run stopped before its load check: kept, never retried.
-    "unchecked",
-)
-
-
 #: A line that starts one model's download in ``gaia init``'s output.
 _DOWNLOADING_RE = re.compile(
     r"^\s*(?:\S+\s+)?(?:Downloading|Pulling)\b[:\s]+(\S+)", re.I
