@@ -599,19 +599,57 @@ def provider_of(model_id: str) -> str:
     return prefix if prefix in (FIREWORKS, AMD) else LOCAL
 
 
-def model_label(model_id: str) -> str:
+def cloud_provider_name(model_id: str) -> Optional[str]:
+    """Who answers cloud *model_id*, or None for a local one.
+
+    Also names a provider GAIA only learned from Lemonade's model list.
+    """
+    from .._chat_helpers import _ui_cloud_provider
+
     provider = provider_of(model_id)
-    name = (
-        model_id.split(".", 1)[1].rsplit("/", 1)[-1] if provider != LOCAL else model_id
+    if provider != LOCAL:
+        return _NAMES[provider]
+    return _ui_cloud_provider(model_id)
+
+
+def _learn_cloud_models(model_id: str) -> None:
+    """Read Lemonade's catalog when only it can say whether *model_id* is cloud.
+
+    Right after a restart nothing has taught the in-memory cloud check yet.
+    """
+    from gaia.llm.lemonade_client import (
+        find_model_requirement,
+        may_be_cloud_model,
+        record_cloud_models,
     )
-    return f"{name} · {'local' if provider == LOCAL else _NAMES[provider]}"
+
+    if (
+        cloud_provider_name(model_id) is not None
+        or not may_be_cloud_model(model_id)
+        or find_model_requirement(model_id) is not None
+    ):
+        return
+    try:
+        status, body = _lemonade("GET", "models?show_all=true")
+    except ProviderError as e:
+        logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
+        return
+    if status < 400:
+        record_cloud_models(body)
+
+
+def model_label(model_id: str) -> str:
+    cloud = cloud_provider_name(model_id)
+    if cloud is None:
+        return f"{model_id} · local"
+    return f"{model_id.split('.', 1)[1].rsplit('/', 1)[-1]} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
-    if provider_of(model_id) == LOCAL:
+    if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
 
@@ -633,16 +671,20 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "display_name": None,
             "label": None,
             "remote": False,
+            "provider_name": None,
             "is_default": True,
             "config_error": str(e),
         }
-    provider = provider_of(model)
+    _learn_cloud_models(model)
+    cloud = cloud_provider_name(model)
     return {
-        "provider": provider,
+        # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
+        "provider": provider_of(model),
         "model": model,
         "display_name": display_name(model),
         "label": model_label(model),
-        "remote": provider != LOCAL,
+        "remote": cloud is not None,
+        "provider_name": cloud,
         "is_default": not chosen,
         "config_error": None,
         **_new_chat_location(model, chosen or None),
