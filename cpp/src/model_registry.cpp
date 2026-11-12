@@ -7,11 +7,19 @@ namespace gaia {
 
 const std::vector<ModelCapability>& knownModels() {
     // Mirrors MODELS in src/gaia/llm/lemonade_client.py (see header note).
-    // gemma4-it-e2b-FLM is false because the FastFlowLM/NPU server 500s on an
-    // OpenAI ``tools`` payload; the embedders are false because they never chat.
+    // The embedders are false because they never chat.
     static const std::vector<ModelCapability> kModels = {
+        {"kokoro-v1",                  true},
         {"Gemma-4-E4B-it-GGUF",        true},
-        {"gemma4-it-e2b-FLM",          false},
+        {"user.Qwen3.8-Flash-Next-GGUF", true},
+        {"Qwen3.6-35B-A3B-GGUF",       true},
+        {"Muse-Glimmer-30B-GGUF",      true},
+        {"user.ggml-gpt-oss-20b-MXFP4-GGUF", true},
+        {"gpt-oss-20b-GGUF",           true},
+        {"gpt-oss-120b-mxfp-GGUF",     true},
+        {"gpt-oss-120b-GGUF",          true},
+        {"gemma4-it-e2b-FLM",          true},
+        {"gemma4-it-e4b-FLM",          true},
         {"Qwen3.5-35B-A3B-GGUF",       true},
         {"Qwen3-0.6B-GGUF",            true},
         {"Qwen3-VL-4B-Instruct-GGUF",  true},
@@ -22,12 +30,16 @@ const std::vector<ModelCapability>& knownModels() {
     return kModels;
 }
 
-bool isToolCallingModel(const std::string& modelId) {
-    if (modelId.empty()) return false;
+std::optional<bool> knownToolCalling(const std::string& modelId) {
     for (const auto& m : knownModels()) {
         if (m.modelId == modelId) return m.toolCalling;
     }
-    return false; // Unknown model — conservative. See header for the rationale.
+    return std::nullopt;
+}
+
+bool isToolCallingModel(const std::string& modelId) {
+    // Unknown model — conservative. See header for the rationale.
+    return knownToolCalling(modelId).value_or(false);
 }
 
 } // namespace gaia

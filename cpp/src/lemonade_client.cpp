@@ -208,6 +208,26 @@ bool LemonadeClient::ready() {
     }
 }
 
+namespace {
+// The entry for `model` in a /health body's all_models_loaded, or null.
+const json* loadedModel(const json& health, const std::string& model) {
+    if (model.empty() || !health.is_object()) return nullptr;
+    const auto loaded = health.find("all_models_loaded");
+    if (loaded == health.end() || !loaded->is_array()) return nullptr;
+    for (const auto& entry : *loaded) {
+        if (entry.is_object() && entry.value("model_name", "") == model) return &entry;
+    }
+    return nullptr;
+}
+
+int loadedContextSize(const json& entry) {
+    const auto options = entry.find("recipe_options");
+    if (options == entry.end() || !options->is_object()) return 0;
+    const auto ctx = options->find("ctx_size");
+    return ctx != options->end() && ctx->is_number_integer() ? ctx->get<int>() : 0;
+}
+}  // namespace
+
 LemonadeHealth LemonadeClient::healthCheck() {
     LemonadeHealth h;
     try {
@@ -218,13 +238,18 @@ LemonadeHealth LemonadeClient::healthCheck() {
         // Extract loaded model id and context size from health response.
         // Lemonade health format:
         //   {"all_models_loaded": [{"model_name": "...", "recipe_options": {"ctx_size": N}}]}
-        if (h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
+        // A server holds a speech, a transcription and an embedding model beside
+        // the chat model, in any order: report this client's model when it is
+        // loaded, else the server's current chat model.
+        const json* entry = loadedModel(h.raw, model_);
+        if (!entry) entry = loadedModel(h.raw, h.raw.value("model_loaded", ""));
+        if (!entry && h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
             !h.raw["all_models_loaded"].empty()) {
-            const auto& first = h.raw["all_models_loaded"][0];
-            h.modelId = first.value("model_name", "");
-            if (first.contains("recipe_options") && first["recipe_options"].is_object()) {
-                h.contextSize = first["recipe_options"].value("ctx_size", 0);
-            }
+            entry = &h.raw["all_models_loaded"][0];
+        }
+        if (entry && entry->is_object()) {
+            h.modelId = entry->value("model_name", "");
+            h.contextSize = loadedContextSize(*entry);
         }
     } catch (...) {
         h.running = false;
@@ -413,12 +438,14 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
 
     LemonadeHealth h = healthCheck();
 
-    if (h.running && h.modelId == effectiveModel) {
-        // Model already loaded — check context size if requested
-        if (effectiveCtx == 0 || h.contextSize == effectiveCtx) {
+    if (const json* entry = h.running ? loadedModel(h.raw, effectiveModel) : nullptr) {
+        // A cloud model has no local window to size, so its ctx_size never matches.
+        const bool cloud = entry->value("recipe", "") == "cloud";
+        const int loadedCtx = loadedContextSize(*entry);
+        if (cloud || effectiveCtx == 0 || loadedCtx == effectiveCtx) {
             if (debug_) {
                 std::cerr << "[Lemonade] Model already loaded: " << effectiveModel
-                          << " ctx=" << h.contextSize << std::endl;
+                          << " ctx=" << loadedCtx << std::endl;
             }
             return;
         }

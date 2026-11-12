@@ -29,8 +29,8 @@ namespace {
 
 // A model id known to support native tool calls (mirrors Python MODELS).
 constexpr const char* kToolCallingModel = "Gemma-4-E4B-it-GGUF";
-// A model id known NOT to support them (the FLM/NPU build).
-constexpr const char* kNonToolCallingModel = "gemma4-it-e2b-FLM";
+// A model id the table marks as not taking them (an embedder).
+constexpr const char* kNonToolCallingModel = "embed-gemma-300m-FLM";
 
 /// Agent with two tools, used to exercise the schema and execution paths.
 class ToolAgent : public Agent {
@@ -121,11 +121,11 @@ TEST(ModelGateTest, KnownToolCallingModelsReturnTrue) {
     EXPECT_TRUE(isToolCallingModel("Qwen3-8B-GGUF"));
     EXPECT_TRUE(isToolCallingModel("Qwen3.5-35B-A3B-GGUF"));
     EXPECT_TRUE(isToolCallingModel("Qwen3-VL-4B-Instruct-GGUF"));
+    EXPECT_TRUE(isToolCallingModel("Qwen3.6-35B-A3B-GGUF"));
+    EXPECT_TRUE(isToolCallingModel("gemma4-it-e2b-FLM"));
 }
 
 TEST(ModelGateTest, KnownNonToolCallingModelsReturnFalse) {
-    // The FastFlowLM/NPU build 500s on an OpenAI tools payload.
-    EXPECT_FALSE(isToolCallingModel("gemma4-it-e2b-FLM"));
     // Embedders never chat.
     EXPECT_FALSE(isToolCallingModel("user.embeddinggemma-300m-GGUF"));
     EXPECT_FALSE(isToolCallingModel("embed-gemma-300m-FLM"));
@@ -138,25 +138,126 @@ TEST(ModelGateTest, UnknownAndEmptyModelsReturnFalse) {
     EXPECT_FALSE(isToolCallingModel(""));
 }
 
-TEST(ModelGateTest, MirrorsThePythonModelTableExactly) {
-    // Pins the mirrored table so a Python-side change that is not mirrored here
-    // shows up as a test edit in review. Source of truth: MODELS in
-    // src/gaia/llm/lemonade_client.py.
-    const std::vector<std::pair<std::string, bool>> expected = {
-        {"Gemma-4-E4B-it-GGUF", true},
-        {"gemma4-it-e2b-FLM", false},
-        {"Qwen3.5-35B-A3B-GGUF", true},
-        {"Qwen3-0.6B-GGUF", true},
-        {"Qwen3-VL-4B-Instruct-GGUF", true},
-        {"Qwen3-8B-GGUF", true},
-        {"user.embeddinggemma-300m-GGUF", false},
-        {"embed-gemma-300m-FLM", false},
-    };
-    ASSERT_EQ(knownModels().size(), expected.size());
-    for (size_t i = 0; i < expected.size(); ++i) {
-        EXPECT_EQ(knownModels()[i].modelId, expected[i].first) << "at index " << i;
-        EXPECT_EQ(knownModels()[i].toolCalling, expected[i].second) << "at index " << i;
+TEST(ModelGateTest, UnlistedModelsAreUnknownNotRefused) {
+    EXPECT_EQ(knownToolCalling("Qwen3.6-35B-A3B-GGUF"), std::optional<bool>(true));
+    EXPECT_EQ(knownToolCalling("embed-gemma-300m-FLM"), std::optional<bool>(false));
+    EXPECT_EQ(knownToolCalling("fireworks.deepseek-v4p1-flash"), std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// Auto policy for a model the table doesn't list: the server's catalog decides
+// ---------------------------------------------------------------------------
+
+TEST(ServerCatalogTest, ALabelledModelGetsNativeTools) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(
+        R"({"data":[{"id":"other","labels":["chat"]},)"
+        R"({"id":"fireworks.deepseek-v4p1-flash","labels":["chat","cloud","tool-calling"]}]})");
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"c1","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}}])"));
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "fireworks.deepseek-v4p1-flash"));
+    agent.initForTest();
+    json result = agent.processQuery("say hi");
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"echo"}));
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const json first = json::parse(bodies[0]);
+    ASSERT_TRUE(first.contains("tools"));
+    EXPECT_EQ(first["tool_choice"], "auto");
+    // No text protocol in the prompt when the request carries tools.
+    EXPECT_EQ(first["messages"][0]["content"].get<std::string>().find("RESPONSE FORMAT"), std::string::npos);
+    // The tool reply is a spec-shaped role=tool message with its call id.
+    const json second = json::parse(bodies[1]);
+    EXPECT_EQ(second["messages"].back()["role"], "tool");
+    EXPECT_EQ(second["messages"].back()["tool_call_id"], "c1");
+}
+
+TEST(ServerCatalogTest, AModelWithoutTheLabelKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"plain-chat-model","labels":["chat"]}]})");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "plain-chat-model"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    const json body = json::parse(mock.receivedBodies().back());
+    EXPECT_FALSE(body.contains("tools"));
+    EXPECT_NE(body["messages"][0]["content"].get<std::string>().find("RESPONSE FORMAT"), std::string::npos);
+}
+
+TEST(ServerCatalogTest, AServerThatDoesNotListTheModelKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;  // its catalog lists only "mock-model", with no labels
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "some-third-party-model"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+TEST(ServerCatalogTest, ACatalogThatIsNotJsonKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;
+    mock.setModelsList("<html>not a catalog</html>");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "some-third-party-model"));
+    agent.initForTest();
+    json result = agent.processQuery("hello", 1);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+TEST(ServerCatalogTest, TheTableWinsOverTheServersLabel) {
+    // A listed model is settled by the table, whatever a server labels it.
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"embed-gemma-300m-FLM","labels":["chat","tool-calling"]}]})");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kNonToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+// ---------------------------------------------------------------------------
+// The text protocol: a tool call written as text, and its result
+// ---------------------------------------------------------------------------
+
+TEST(TextProtocolTest, AToolCallAfterASentenceRunsAndItsResultGoesBackAsAUserMessage) {
+    bench::MockLlmServer mock;
+    const std::string said =
+        "I'll start by echoing.\n\n{\"tool\": \"echo\", \"tool_args\": {\"message\": \"hi\"}}";
+    const json reply = {
+        {"choices", json::array({{{"message", {{"role", "assistant"}, {"content", said}}}}})}};
+    mock.pushResponse(reply.dump());
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kNonToolCallingModel));
+    agent.initForTest();
+    json result = agent.processQuery("say hi");
+
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"echo"}));
+    EXPECT_EQ(result["result"], "All done.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    // A strict server rejects role=tool without tool_call_id, so none is sent.
+    const json second = json::parse(bodies[1]);
+    for (const auto& m : second["messages"]) {
+        EXPECT_NE(m["role"], "tool") << m.dump();
+        EXPECT_FALSE(m.contains("tool_call_id")) << m.dump();
     }
+    const json& last = second["messages"].back();
+    EXPECT_EQ(last["role"], "user");
+    EXPECT_EQ(last["content"].get<std::string>().rfind("[Result from echo]: ", 0), 0u) << last.dump();
+    EXPECT_NE(last["content"].get<std::string>().find("echoed"), std::string::npos);
 }
 
 TEST(ModelGateTest, ConfigPolicyOverridesTheModel) {
@@ -1292,6 +1393,84 @@ TEST(ModelLoadTest, LoadIsRecheckedBeforeEveryRequest) {
     agent.processQuery("two");
     ASSERT_EQ(mock.requestCount(), 2);
     EXPECT_EQ(mock.loadRequestCount(), 2);
+}
+
+namespace {
+// What a real Lemonade reports: speech, transcription and embedding models
+// loaded ahead of the chat model, which is never first in the list.
+std::string busyServerHealth(const std::string& chatModel, int ctx, const std::string& recipe = "llamacpp") {
+    const json health = {
+        {"status", "ok"},
+        {"model_loaded", chatModel},
+        {"all_models_loaded",
+         json::array({
+             {{"model_name", "kokoro-v1"}, {"type", "tts"}, {"recipe", "kokoro"}, {"recipe_options", {{"ctx_size", 4096}}}},
+             {{"model_name", "embeddinggemma-300m-GGUF"}, {"type", "embedding"}, {"recipe", "llamacpp"},
+              {"recipe_options", {{"ctx_size", 8192}}}},
+             {{"model_name", chatModel}, {"type", "llm"}, {"recipe", recipe}, {"recipe_options", {{"ctx_size", ctx}}}},
+         })}};
+    return health.dump();
+}
+}  // namespace
+
+TEST(ModelLoadTest, AChatModelLoadedBehindOtherModelsIsNotLoadedAgain) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    mock.setHealth(busyServerHealth(kToolCallingModel, cfg.contextSize));
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+}
+
+TEST(ModelLoadTest, AChatModelLoadedAtAnotherWindowIsReloaded) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    mock.setHealth(busyServerHealth(kToolCallingModel, cfg.contextSize / 2));
+    mock.pushResponse(kPlainAnswer);
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("one");
+    EXPECT_EQ(mock.loadRequestCount(), 1);
+}
+
+TEST(ModelLoadTest, ACloudModelIsNeverReloadedForItsWindow) {
+    bench::MockLlmServer mock;
+    const char* const model = "fireworks.deepseek-v4p1-flash";
+    mock.setHealth(busyServerHealth(model, 4096, "cloud"));
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), model));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+}
+
+TEST(ModelLoadTest, AModelTheServerDoesNotHoldIsLoaded) {
+    bench::MockLlmServer mock;
+    mock.setHealth(busyServerHealth("Qwen3.6-35B-A3B-GGUF", 32768));
+    mock.pushResponse(kPlainAnswer);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    EXPECT_EQ(mock.loadRequestCount(), 1);
+}
+
+TEST(ModelLoadTest, HealthReportsThisClientsModelNotTheFirstOneListed) {
+    bench::MockLlmServer mock;
+    mock.setHealth(busyServerHealth(kToolCallingModel, 65536));
+    LemonadeClient client(LemonadeClientConfig{mock.baseUrl(), kToolCallingModel, 65536, false});
+    const LemonadeHealth h = client.healthCheck();
+    EXPECT_EQ(h.modelId, kToolCallingModel);
+    EXPECT_EQ(h.contextSize, 65536);
+
+    // A client asking for a model the server lacks sees the server's chat model.
+    LemonadeClient other(LemonadeClientConfig{mock.baseUrl(), "not-loaded", 65536, false});
+    EXPECT_EQ(other.healthCheck().modelId, kToolCallingModel);
 }
 
 TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {

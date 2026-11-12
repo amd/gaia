@@ -127,6 +127,18 @@ public:
     /// Number of POSTs to /api/v1/load seen so far.
     int loadRequestCount() const { return loadCount_.load(); }
 
+    /// Body GET /api/v1/health answers with from now on.
+    void setHealth(const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        health_ = body;
+    }
+
+    /// Body GET /api/v1/models answers with from now on (a Lemonade catalog).
+    void setModelsList(const std::string& body) {
+        std::lock_guard<std::mutex> lk(mu_);
+        modelsList_ = body;
+    }
+
     /// Status every later POST /api/v1/load answers with (200 by default).
     void setLoadStatus(int status) { loadStatus_ = status; }
 
@@ -151,7 +163,9 @@ private:
 
     void registerHandlers() {
         server_->Get("/api/v1/health", [this](const httplib::Request&, httplib::Response& res) {
-            res.set_content(reportModelLoaded_ ? kHealthOk : kHealthNoModel, "application/json");
+            std::lock_guard<std::mutex> lk(mu_);
+            const std::string& fixed = reportModelLoaded_ ? kHealthOk : kHealthNoModel;
+            res.set_content(health_.empty() ? fixed : health_, "application/json");
         });
 
         server_->Post("/api/v1/load", [this](const httplib::Request&, httplib::Response& res) {
@@ -160,8 +174,9 @@ private:
             res.set_content(res.status == 200 ? kLoadOk : R"({"error":"load refused"})", "application/json");
         });
 
-        server_->Get("/api/v1/models", [](const httplib::Request&, httplib::Response& res) {
-            res.set_content(kModelsList, "application/json");
+        server_->Get("/api/v1/models", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lk(mu_);
+            res.set_content(modelsList_, "application/json");
         });
 
         server_->Post("/api/v1/chat/completions",
@@ -325,6 +340,8 @@ private:
     int port_ = 0;
     bool reportModelLoaded_ = true;
     std::atomic<int> loadStatus_{200};
+    std::string modelsList_ = kModelsList;
+    std::string health_;
     mutable std::mutex mu_;
     std::deque<QueuedResponse> responseQueue_;
     std::deque<std::string> sseQueue_;

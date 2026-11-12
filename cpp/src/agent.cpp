@@ -3,6 +3,7 @@
 
 #include "gaia/agent.h"
 #include "gaia/http_client.h"
+#include "gaia/model_registry.h"
 #include "gaia/security.h"
 
 #include <algorithm>
@@ -1407,6 +1408,31 @@ void Agent::setHistory(std::vector<Message> history) {
     conversationHistory_ = std::move(history);
 }
 
+bool Agent::autoNativeToolCalls(const AgentConfig& cfg) {
+    if (auto known = knownToolCalling(cfg.modelId)) return *known;
+    const std::string key = cfg.baseUrl + "\n" + cfg.modelId;
+    if (auto it = serverToolCalling_.find(key); it != serverToolCalling_.end()) return it->second;
+    bool labelled = false;
+    try {
+        const json catalog = lemonade_.listModels(true);
+        if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) return false;
+        for (const auto& model : catalog["data"]) {
+            if (!model.is_object() || model.value("id", "") != cfg.modelId) continue;
+            const auto labels = model.find("labels");
+            labelled = labels != model.end() && labels->is_array() &&
+                       std::find(labels->begin(), labels->end(), "tool-calling") != labels->end();
+            break;
+        }
+    } catch (const std::exception& e) {
+        // A server with no catalog says nothing either way: keep the text
+        // protocol every server accepts, and ask again next turn.
+        if (cfg.debug) std::cerr << "[agent] no model catalog at " << cfg.baseUrl << ": " << e.what() << "\n";
+        return false;
+    }
+    serverToolCalling_[key] = labelled;
+    return labelled;
+}
+
 json Agent::processQueryInternal(const std::vector<Message>& userMessages, int maxSteps) {
     // Empty-input validation FIRST — no HTTP call, no /load.
     if (userMessages.empty()) {
@@ -1445,6 +1471,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     {
         std::lock_guard<std::mutex> lock(configMutex_);
         cfg = config_;
+    }
+
+    // Settled once so the prompt and every request of the turn agree.
+    if (cfg.nativeToolCalls == NativeToolCalls::Auto) {
+        cfg.nativeToolCalls = autoNativeToolCalls(cfg) ? NativeToolCalls::Always : NativeToolCalls::Never;
     }
 
     int stepsLimit = (maxSteps > 0) ? maxSteps : cfg.maxSteps;

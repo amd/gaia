@@ -217,3 +217,52 @@ TEST(JsonUtilsTest, NullToolArgs) {
     EXPECT_TRUE(parsed.toolArgs.value().is_object());
     EXPECT_TRUE(parsed.toolArgs.value().empty());
 }
+
+// ---- a tool call at the end of a prose reply ----
+
+TEST(JsonUtilsTest, ToolCallAfterASentenceIsACall) {
+    auto p = parseLlmResponse(
+        "I'll start by looking at the file.\n\n"
+        "{\"tool\": \"bash_execute\", \"tool_args\": {\"command\": \"ls -la && echo '{}'\"}}");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "bash_execute");
+    EXPECT_EQ((*p.toolArgs)["command"], "ls -la && echo '{}'");
+    EXPECT_EQ(p.thought, "I'll start by looking at the file.");
+    EXPECT_FALSE(p.answer.has_value());
+}
+
+TEST(JsonUtilsTest, ToolCallInACodeFenceAfterProseIsACall) {
+    auto p = parseLlmResponse("Checking.\n```json\n{\"tool\": \"echo\", \"tool_args\": {}}\n```");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "echo");
+    EXPECT_EQ(p.thought, "Checking.");
+}
+
+TEST(JsonUtilsTest, ToolCallWithoutArgsAfterProseGetsEmptyArgs) {
+    auto p = parseLlmResponse("Listing skills. {\"tool\": \"list_skills\"}");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_TRUE(p.toolArgs->is_object());
+    EXPECT_TRUE(p.toolArgs->empty());
+}
+
+TEST(JsonUtilsTest, AQuotedExampleInTheMiddleOfAnAnswerStaysAnAnswer) {
+    const std::string text =
+        "To call a tool you write {\"tool\": \"echo\", \"tool_args\": {}} on one line. That is all.";
+    auto p = parseLlmResponse(text);
+    EXPECT_FALSE(p.toolName.has_value());
+    EXPECT_EQ(p.answer.value_or(""), text);
+}
+
+TEST(JsonUtilsTest, TrailingJsonThatIsNotAToolCallStaysAnAnswer) {
+    for (const char* text : {
+             "The config is {\"retention_days\": 30}",
+             "Result: {\"tool\": 5}",
+             "Result: {\"tool\": \"echo\", \"tool_args\": \"oops\"}",
+             "Result: {\"tool\": \"echo\", \"rows\": 3}",
+             "Unbalanced {\"tool\": \"echo\"",
+         }) {
+        auto p = parseLlmResponse(text);
+        EXPECT_FALSE(p.toolName.has_value()) << text;
+        EXPECT_EQ(p.answer.value_or(""), text);
+    }
+}
