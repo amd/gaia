@@ -274,6 +274,64 @@ def test_single_quotes_do_not_smuggle_an_operator_past_the_split(command, notes)
     assert result["executed"] is False
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # rc18 la3: ran as "(python get_rates.py" and "get_rates.py)".
+        "cd sub && (python get_rates.py || python get_rates.py)",
+        "(ls || ls) && ls",
+        "ls && (ls; ls)",
+        "ls&&(ls||ls)",
+        "((ls || ls)) && ls",
+        "ls && ((ls) || ls)",
+        # A quoted or escaped paren must not cancel out a real one.
+        "echo ')' && (ls || ls)",
+        r"echo \) && (ls || ls)",
+        '(ls || echo "(") && ls',
+    ],
+)
+def test_grouping_a_chain_in_parentheses_is_refused_with_a_way_out(command, notes):
+    (notes / "sub").mkdir()
+
+    result = _run(command, notes, host=_Confined(notes))
+
+    assert result["status"] == "error", result
+    assert result["executed"] is False
+    assert "( )" in result["error"]
+    assert "||" in result["hint"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'python -c "print(1 or 2)" || ls',
+        "echo (hi) && ls",
+        'findstr "a (b || c)" notes.txt',
+        "grep -n 'def foo(' notes.txt && ls",
+        "git log --format='%h (%an' && ls",
+        r"grep \( notes.txt && ls",
+        r"grep -c \) notes.txt || ls",
+        r"find . \( -name a -o -name b \) && ls",
+    ],
+)
+def test_parentheses_inside_one_step_are_left_alone(command, notes):
+    host = _Host()
+    error, _steps = host._line_verdict(command, str(notes))
+
+    assert error is None or "( )" not in error.get("error", ""), error
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo (hi) && ls", "grep -n 'def foo(' notes.txt && ls"],
+)
+def test_a_line_with_only_quoted_or_balanced_parentheses_clears(command, notes):
+    host = _Host()
+    error, _steps = host._line_verdict(command, str(notes))
+
+    assert error is None, error
+
+
 @pytest.mark.parametrize("command", ["ls &&", "&& ls", "ls ; ; ls"])
 def test_a_missing_operand_is_refused_not_guessed(command, notes):
     result = _run(command, notes)

@@ -34,7 +34,7 @@ from gaia.agents.base.tools import (
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_metrics import turn_log_path
-from gaia.agents.base.verification import split_verification_scope
+from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
@@ -625,7 +625,8 @@ class SSEOutputHandler(OutputHandler):
         # may have unloaded or reloaded it meanwhile. Raises when it can't.
         self.on_model_regained = None
         # Autonomous loop support
-        # background_mode=True: skip blocking user confirmation; immediately deny.
+        # background_mode=True: nobody can confirm. In process a gated tool is
+        # denied; on the sidecar relay the run ends at that step.
         self.background_mode: bool = background_mode
         # False on a transport with no route back for an answer (the stdio
         # agent): a question there would hang the turn, so none is asked.
@@ -920,6 +921,9 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A refusal must not read as a site contacted, relayed or not.
+        if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
+            event[EXECUTED_KEY] = False
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.

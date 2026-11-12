@@ -611,6 +611,12 @@ Open **Settings → Model** (or the model chip in the message box):
   Keychain dialog. Until you answer it, the model list says macOS is asking for
   keychain access instead of offering to add a key. Click **Always Allow** and
   the list fills in on its own.
+- If you close the OS key store's unlock or "new keyring" prompt without
+  unlocking it, GAIA doesn't ask again for five minutes. The model list and
+  **Settings → Model** say the key store is locked and offer **Try again**,
+  which asks the OS once more.
+  Connecting a provider, picking a cloud model, or connecting or testing a
+  connector also asks again.
 - The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
   when its host can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
@@ -999,15 +1005,15 @@ published price says "price unknown". **Settings → Model** also shows what
 this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,
-or use a model on this PC. The total is an estimate at list price: it leaves
-out cache discounts, and turns that fail or are stopped before a reply, so
-your provider's bill is the final word.
+or use a model on this PC. The total is an estimate at list price, with cached
+input at its cached rate; it leaves out turns that fail or are stopped before a
+reply, so your provider's bill is the final word.
 
 While a chat runs on a priced cloud model, the composer shows what it has cost
 so far and what all your chats have cost today, such as "$0.04 · today $0.31".
 Click it for each answer's cost, newest first, and a link to this month's total
-and limit. The amounts add up the cost each answer's details show, cache
-discounts included, so they can sit a little below the monthly total. "Today"
+and limit. The amounts add up the cost each answer's details show, priced the
+same way as the monthly total. "Today"
 is your own calendar day and counts the chats you still have. A stopped answer
 sends no token count, so its cost is unknown: it shows "Not reported", the
 total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
@@ -1185,9 +1191,10 @@ Chats, documents and schedules are saved on disk as you go. What happens to work
 |---------------|-----------------------|--------------------------|
 | You switch chats, open Memory or Scheduled tasks, or close the browser tab | Keeps going; reopen the chat to watch it finish | Keeps going |
 | You close the desktop window | Keeps going: the window hides to the tray (or, on a desktop with no tray, minimizes to the dock) and GAIA keeps running. With that turned off, closing quits (next row) | Keeps going |
+| The desktop window stops working (its page crashed, or the PC ran out of memory) | Keeps going: GAIA says its window stopped working and offers **Reload window**, which brings the window back on the running GAIA, or **Quit GAIA** | Keeps going |
 | You quit GAIA, it crashes, or the PC shuts down | Stops. On the next start the reply shows what it had written so far, which tools it had started, then "This answer was interrupted when GAIA closed. Send again to retry." A scheduled run cut short shows the same in its chat. | Stops. On the next start it shows as **Failed** with **Retry**, and "Indexing was interrupted when GAIA closed" under the document |
 
-GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry.
+GAIA never re-runs an interrupted reply by itself: it may already have run tools, and running them twice is not safe. Send the message again to retry, or press **Try again** under the reply. While GAIA is still starting, Try again leaves the question and the reply as they are and says to try again in a moment.
 
 ---
 
@@ -1229,7 +1236,7 @@ Each schedule runs in its own chat session, so the full history of runs (prompt 
 Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
-- Nobody is there to approve a tool call during a scheduled run, so tools that need approval (shell commands, file writes) are refused.
+- Nobody is there to approve a tool call during a scheduled run, so a run that reaches a step needing approval (a shell command, a file write) stops there and fails, naming the step. Do that work in a chat, where you can approve it.
 - A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.

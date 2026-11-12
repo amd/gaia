@@ -434,6 +434,23 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['ar', 'en']) {
+    for (const width of [1440, 390]) {
+        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, '', locale);
+            const chips = page.locator('.try-chip');
+            await expect(chips).toHaveCount(7);
+            await expect(chips.first()).toBeVisible();
+            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
+            await shot(page, `try-chips-${locale}-${width}`);
+            // The closed sidebar drawer waits off screen at phone width; judge the chips.
+            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+            expect(problems).toEqual([]);
+        });
+    }
+}
+
 test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
@@ -1198,6 +1215,17 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a closed key store prompt reads as locked, with Try again', async ({ page }) => {
+            const message = 'The OS credential store is locked: its unlock prompt was closed (Prompt dismissed).';
+            await openModelPage(page, locale, { fireworks: { key_source: null, key_hint: null, models_discovered: false, key_state: 'store_locked', key_message: message } });
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.getByRole('button', { name: locale === 'ar' ? 'حاول مرة أخرى' : 'Try again' })).toBeVisible();
+            await expect(page.getByText(message)).toBeHidden();
+            await shot(page, `model-${locale}-cloud-key-store-locked`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-hint[role="status"]')).toEqual([]);
+        });
+
         test('dark theme', async ({ page }) => {
             await openModelPage(page, locale, { theme: 'dark' });
             await shot(page, `model-${locale}-dark`);
@@ -1526,6 +1554,36 @@ for (const locale of ['ar', 'en']) {
             if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
         });
     }
+}
+
+const OPENCODE = 'opencode.big-model';
+
+for (const locale of ['ar', 'en']) {
+    test(`a cloud model learned from Lemonade's list reads as cloud (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            // No chats yet, so the chip goes by the picked model alone.
+            await p.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions: [], total: 0 } }));
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'local', model: OPENCODE, display_name: 'big-model', label: 'big-model · opencode', remote: true,
+                    provider_name: 'opencode', downloaded: null, inference_remote: true, inference_description: null,
+                    is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await expect(page.getByText('big-model · opencode')).toBeVisible();
+        await shot(page, `chip-${locale}-cloud-from-lemonade-list`);
+        const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.locator('.model-in-use-name')).toBeVisible();
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await shot(page, `model-${locale}-cloud-from-lemonade-list`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const FLASH = 'fireworks.deepseek-v4p1-flash';
@@ -2989,6 +3047,12 @@ for (const locale of ['ar', 'en']) {
             await item.locator('.mem-about-btn').first().click();
             await expect(item.locator('textarea')).toBeVisible();
             await checkMemory(page, locale, 'about-editing');
+        });
+
+        test('about you, more than one page', async ({ page }) => {
+            await openMemory(page, locale, { more: true });
+            await expect(page.locator('.mem-about-more .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-more');
         });
 
         test('about you, empty', async ({ page }) => {

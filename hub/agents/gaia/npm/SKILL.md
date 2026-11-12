@@ -10,8 +10,11 @@ frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
-a local model server — nothing you type or index leaves it.
+runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
+runs on the local machine against a local model server, and nothing you type or index
+leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
+in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
+that provider.
 
 Two ways in:
 
@@ -287,7 +290,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
-| `max_steps` | no | ≥ 1. Defaults to **150** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
+| `max_steps` | no | ≥ 1. Defaults to **1000** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
 
 ```ts
 import { randomUUID } from "node:crypto";

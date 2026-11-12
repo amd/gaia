@@ -597,6 +597,64 @@ def test_a_keychain_prompt_is_reported_as_waiting_not_as_no_key(
     assert credential_wait.in_flight_count() == 0
 
 
+_REAL_RECALL_KEY = cloud_keys.recall_key
+
+
+@pytest.fixture
+def dismissed_keyring(monkeypatch):
+    """The real store over a keyring whose unlock prompt the user cancels."""
+    from gaia.connectors import store
+
+    state = {"reads": 0}
+
+    def get_password(service, username):
+        state["reads"] += 1
+        raise store.keyring.errors.InitError(
+            "Failed to create the collection: Prompt dismissed.."
+        )
+
+    monkeypatch.setattr(store.keyring, "get_password", get_password)
+    monkeypatch.setattr(store, "verify_keyring_backend", lambda: None)
+    store.retry_keyring()
+    yield state
+    store.retry_keyring()
+    credential_wait._in_flight.clear()
+
+
+def test_a_dismissed_keyring_prompt_is_not_reopened_by_polling(
+    client, lemonade, dismissed_keyring
+):
+    """#7227: Cancel brought the prompt straight back, about once a second."""
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    for _ in range(10):
+        body = client.get("/api/providers")
+        assert body.status_code == 200, body.text
+    asked = dismissed_keyring["reads"]
+    assert asked == 1
+    for view in body.json()["providers"][1:]:
+        assert view["key_state"] == "store_locked"
+        assert view["key_source"] is None
+        assert "won't ask again for 5 minutes" in view["key_message"]
+
+    assert client.post("/api/providers/key-store/retry").json() == {"retrying": True}
+    client.get("/api/providers")
+    assert dismissed_keyring["reads"] == asked + 1
+
+
+def test_connecting_with_a_locked_store_is_not_answered_as_a_wait(
+    client, lemonade, keys, dismissed_keyring, monkeypatch
+):
+    """A 409 makes the screen ask again every two seconds, reopening the prompt."""
+    monkeypatch.setattr(cloud_keys, "recall_key", _REAL_RECALL_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    client.get("/api/providers")
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 423, resp.text
+    assert "won't ask again for 5 minutes" in resp.json()["detail"]
+    # Connect is the user's action: it asked the store once more.
+    assert dismissed_keyring["reads"] == 2
+
+
 def test_restore_waits_for_a_keychain_prompt_then_restores(
     client, lemonade, keys, db, keychain_prompt
 ):
@@ -678,6 +736,70 @@ def test_active_with_nothing_saved(client, lemonade, keys, db):
         ("GET", "models?show_all=true")
     ]
     assert body["downloaded"] is False
+
+
+def test_active_names_a_cloud_model_only_lemonade_lists_as_cloud(
+    client, lemonade, keys, db, monkeypatch
+):
+    """#7216: the chip warned this cloud model "isn't downloaded yet"."""
+    model = "opencode.big-model"
+    entry = {"id": model, "recipe": "cloud", "cloud_provider": "opencode"}
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", lemonade_client._CLOUD_MODELS)
+    monkeypatch.setattr(
+        lemonade_client, "_CLOUD_PROVIDERS", lemonade_client._CLOUD_PROVIDERS
+    )
+    lemonade_client.record_cloud_models({"data": [entry]})
+    lemonade.models = [entry]
+    db.set_setting("custom_model", model)
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] == model
+    assert body["remote"] is True
+    assert body["inference_remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "opencode"
+    assert body["label"] == "big-model · opencode"
+    assert body["display_name"] == "big-model"
+
+
+def test_active_reads_the_catalog_to_name_a_cloud_model_on_a_cold_start(
+    client, lemonade, keys, db, monkeypatch
+):
+    """Right after a restart nothing has read Lemonade's list yet."""
+    model = "opencode.big-model"
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", {})
+    lemonade.models = [{"id": model, "recipe": "cloud", "cloud_provider": "opencode"}]
+    db.set_setting("custom_model", model)
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "opencode"
+
+
+def test_active_makes_no_claim_when_the_catalog_is_unreadable(
+    client, lemonade, keys, db, monkeypatch
+):
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", {})
+    lemonade.down = True
+    db.set_setting("custom_model", "opencode.big-model")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["downloaded"] is None
+
+
+def test_active_names_the_provider_of_a_known_cloud_model(client, lemonade, keys, db):
+    db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
+    body = client.get("/api/providers/active").json()
+    assert body["remote"] is True
+    assert body["provider_name"] == "AMD LLM Gateway"
+    db.set_setting("custom_model", None)
+    assert client.get("/api/providers/active").json()["provider_name"] is None
 
 
 def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db):
@@ -2389,3 +2511,54 @@ def test_only_fireworks_falls_back_to_known_models(client, lemonade, keys, model
     assert model_list["keys_checked"] == []
     assert model_list["restarts"] == []
     assert KEY not in resp.text
+
+
+# ── A cloud model from a provider GAIA has no tab for ──────────────────────
+
+_OTHER_CLOUD = "othercloud.big-model"
+_OTHER_CLOUD_LISTED = {
+    "id": _OTHER_CLOUD,
+    "recipe": "cloud",
+    "cloud_provider": "othercloud",
+    "labels": ["tool-calling"],
+}
+
+
+@pytest.fixture
+def forget_cloud_models():
+    yield
+    lemonade_client.record_cloud_models({"data": []})
+
+
+def test_restore_accepts_a_cloud_model_only_the_model_server_lists(
+    client, lemonade, keys, db, forget_cloud_models
+):
+    """Saved as Custom model ID with last_provider ``local``: no tab, still listed."""
+    db.set_setting("custom_model", _OTHER_CLOUD)
+    _write_config({"last_model": _OTHER_CLOUD, "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "restored", "message": None}
+    assert db.get_setting("custom_model") == _OTHER_CLOUD
+    assert keys["ensure"] == []  # no key of GAIA's own to replay for it
+
+
+def test_restore_still_fails_for_an_unlisted_dotted_id(
+    client, lemonade, keys, db, forget_cloud_models
+):
+    _write_config({"last_model": "othercloud.gone-model", "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    restore = client.get("/api/providers/active").json()["restore"]
+    assert restore["status"] == "failed"
+    assert "no longer listed" in restore["message"]
+
+
+def test_restore_keeps_a_listed_cloud_model_off_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    _write_config({"last_model": _OTHER_CLOUD, "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    restore = client.get("/api/providers/active").json()["restore"]
+    assert restore["status"] == "failed", restore
+    assert "Local only is on" in restore["message"]
+    assert db.get_setting("custom_model") is None
