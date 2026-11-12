@@ -71,3 +71,26 @@ def test_a_bare_name_is_read_from_the_start_folder_without_asking(started_in):
     result = agent._execute_tool("read_file", {"file_path": "note.txt"})
 
     assert "cobalt-finch-73" in str(result)
+
+
+@pytest.mark.parametrize("escape", ["../outside.txt", "sub/../../outside.txt"])
+def test_a_relative_name_cannot_climb_out_of_the_start_folder_unasked(
+    started_in, escape
+):
+    start, agent = started_in
+    (start.parent / "outside.txt").write_text("violet-otter-19", encoding="utf-8")
+    asked = []
+
+    def decline(*args, **_kwargs):
+        asked.append(args)
+        return False
+
+    agent.path_validator._prompt_user_for_access = decline
+
+    assert not agent.path_validator.is_path_allowed(
+        str(start.parent / "outside.txt"), prompt_user=False
+    )
+    result = agent._execute_tool("read_file", {"file_path": escape})
+
+    assert "violet-otter-19" not in str(result)
+    assert asked, "a read outside the start folder did not ask first"
