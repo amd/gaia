@@ -21,6 +21,12 @@ const GROUPS: Array<{ source: SkillSource; title: MessageKey; note: MessageKey; 
     { source: 'claude-import', title: 'settings.skills.import', note: 'settings.skills.importNote' },
 ];
 
+function skipReason(why: string): MessageKey {
+    if (/description is \d+ characters/.test(why)) return 'settings.skills.skipped.tooLong';
+    if (/'description' is missing/.test(why)) return 'settings.skills.skipped.noDescription';
+    return 'settings.skills.skipped.other';
+}
+
 /** The skills GAIA can load, with a way to start a chat that uses one. */
 export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => void }) {
     const t = useT();
@@ -63,7 +69,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                     onClick={() => onUseSkill(s.name)}
                     aria-label={t('settings.skills.useAria', { name: s.name })}
                 >
-                    {t('settings.model.use')}
+                    {t('settings.skills.try')}
                 </button>
             )}
         </li>
@@ -93,10 +99,9 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
             {skills && skills.length === 0 && <p className="settings-hint">{t('settings.skills.none')}</p>}
             {grouped ? GROUPS.map((g) => {
                 const rows = shown.filter((s) => s.source === g.source);
-                const total = (skills ?? []).filter((s) => s.source === g.source).length;
                 if (rows.length === 0 && (q || !g.empty)) return null;
                 return (
-                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
+                    <SettingsDisclosure key={g.source} title={t(g.title)} count={rows.length} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
                         <section aria-label={t(g.title)}>
                             {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, g.params)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
                         </section>
@@ -108,7 +113,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                     <span className="settings-label">{t('settings.skills.skipped')}</span>
                     <ul className="grant-list">
                         {Object.entries(invalid).map(([path, why]) => (
-                            <li key={path}><bdi dir="ltr"><code>{path}</code></bdi> — <bdi>{why}</bdi></li>
+                            <li key={path}>{t(skipReason(why), { name: path.split(/[\\/]/).filter(Boolean).pop() ?? path })}</li>
                         ))}
                     </ul>
                 </div>

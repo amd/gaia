@@ -2,7 +2,7 @@
 name: source-watch
 description: Check a web page or feed for something worth telling the user about, remembering what was already reported so nothing repeats. Use when the user asks to watch, monitor, or check a URL for changes, new items, or a condition being met.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
@@ -46,7 +46,9 @@ The user supplies these; ask for any that are missing before the first run.
 4. **Apply the match**, then drop every item whose identifier already appeared in
    step 1.
 5. **Report or stay quiet.** If nothing new matched, say "no new matches" in one
-   line. Do not pad a quiet run into a paragraph.
+   line. Do not pad a quiet run into a paragraph. When something did match,
+   give each item as a link to its page (`[title](url)`), falling back to the
+   source URL when the item has no page of its own.
 6. **Record what you reported.**
    `remember(fact="<memory key>: <identifier> — <one-line summary>", category="fact")`
    for each new item, so the next run suppresses it.
