@@ -137,6 +137,20 @@ def test_a_relayed_sidecar_is_not_sent_recordings_to_index(home, name):
     assert _relayed_documents([], attached) == [str(home / "abc.pdf")]
 
 
+@pytest.mark.parametrize("name", ["talk.wav.pdf", "wav", "notes.wavx", "mp4.txt"])
+def test_a_document_named_like_a_recording_is_still_indexed(home, name):
+    attached = [str(home / name)]
+    assert _relayed_documents([], attached) == [str(home / name)]
+
+
+def test_a_recording_left_out_of_indexing_is_still_granted(home):
+    attached = [str(home / "talk.wav"), str(home / "clip.MP4"), str(home / "abc.pdf")]
+    assert _relayed_documents([], attached) == [str(home / "abc.pdf")]
+    granted = _with_attachments([], attached)
+    assert str(home / "talk.wav") in granted
+    assert str(home / "clip.MP4") in granted
+
+
 # --- the chat turn itself grants it (cached agent, both transports) ----------
 
 
