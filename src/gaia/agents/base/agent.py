@@ -11919,7 +11919,10 @@ Do NOT wrap conversational replies in JSON.
                         self.console.stop_progress()
                         if self.debug:
                             print(f"[DEBUG] Error calling LLM: {e}")
-                        logger.error(f"Unexpected error calling LLM: {e}")
+                        if stopped_by_user(e):
+                            logger.info("LLM call stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error calling LLM: {e}")
 
                         # Did we hit a context-overflow mid-loop? Classify by
                         # structure-then-text since typed exceptions get

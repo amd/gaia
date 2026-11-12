@@ -77,6 +77,45 @@ def test_the_sdk_logs_a_stop_without_an_error():
     chat.log.error.assert_not_called()
 
 
+def test_the_sdk_logs_a_non_streaming_stop_without_an_error():
+    """A Stop during the busy-server wait reaches non-streaming calls too."""
+    stop = _wrapped_stop()
+
+    class _Provider:
+        def chat(self, **_kwargs):
+            raise stop
+
+    chat = _sdk(_Provider())
+
+    with pytest.raises(LemonadeClientError):
+        chat.send_messages([{"role": "user", "content": "x"}])
+
+    chat.log.error.assert_not_called()
+
+
+def test_the_agent_loop_logs_a_non_streaming_stop_without_an_error(
+    clean_registry, caplog
+):
+    agent = _base._make_agent(streaming=False)
+    stopped = threading.Event()
+    agent.console.cancelled = stopped
+
+    def _send(*_a, **_k):
+        stopped.set()
+        raise _wrapped_stop()
+
+    agent.chat = Mock()
+    agent.chat.get_stats = Mock(return_value={})
+    agent.chat.send_messages = Mock(side_effect=_send)
+
+    with caplog.at_level(logging.INFO, logger="gaia.agents.base.agent"):
+        agent.process_query("Check the ledger", max_steps=3)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == []
+    assert any("stopped" in r.getMessage().lower() for r in caplog.records)
+
+
 def test_the_agent_loop_logs_a_stop_without_an_error(clean_registry, caplog):
     agent = _base._make_agent(streaming=True)
     stopped = threading.Event()

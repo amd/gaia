@@ -594,7 +594,10 @@ class AgentSDK:
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
         except Exception as e:
-            self.log.error(f"Error in send_messages: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages: {e}")
             raise
 
     def _send_messages_cancellable(
