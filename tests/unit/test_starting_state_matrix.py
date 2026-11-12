@@ -7,9 +7,10 @@ that is already set up. rc18: a cloud-only user had a 5 GB local model
 downloaded and loaded behind their back by the start-up warm-up, by Memory >
 Run Inference and by a scheduled run, and no test had ever started there.
 
-Each state below is a config plus a model server's catalog; each entry point is
-real GAIA code talking to that server over HTTP. The server writes down every
-request, so a cell asserts what reached it, not which method was called. A new
+Each state below is a config plus what is downloaded; each entry point is real
+GAIA code talking over HTTP to the installer journeys' stand-in Lemonade. That
+server writes down every request, so a cell asserts what reached it, not which
+method was called. A new
 state or entry point is one more row; every combination is then covered.
 """
 
@@ -17,19 +18,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
 from gaia import config as config_mod
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
-from tests.fixtures.fake_lemonade import FakeLemonade, cloud, local
+from tests.fixtures.fake_lemonade import FakeLemonade
 
 # The recording server is a socket on this machine; nothing leaves it.
 pytestmark = pytest.mark.allow_network
 
 CLOUD = "fireworks.deepseek-v4p1-flash"
-EMBEDDER = "nomic-embed-text-v2-moe-GGUF"
+EMBEDDER = "user.embeddinggemma-300m-GGUF"
 
 #: Models a "cloud-only" user never chose and must never be given.
 LOCAL_CHAT_MODELS = (DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME)
@@ -37,25 +38,17 @@ LOCAL_CHAT_MODELS = (DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME)
 
 @dataclass
 class State:
-    """One starting state: what is saved, and what the server has."""
+    """One starting state: what is saved, and what is on disk."""
 
     config: dict
-    #: Local chat models already on disk.
+    #: Local chat models already downloaded.
     downloaded: tuple = ()
     #: Set through the Agent UI's settings endpoint before the entry point runs.
     custom_model: str | None = None
-    extra_models: list = field(default_factory=list)
 
-    def models(self) -> list:
-        return [
-            cloud(CLOUD),
-            local(EMBEDDER, size_gb=0.5, labels=["embeddings"]),
-            *[
-                local(name, downloaded=name in self.downloaded)
-                for name in LOCAL_CHAT_MODELS
-            ],
-            *self.extra_models,
-        ]
+    def on_the_server(self) -> tuple:
+        """What the server starts with: the cloud model is always reachable."""
+        return (CLOUD, EMBEDDER, *self.downloaded)
 
 
 STATES = {
@@ -209,7 +202,7 @@ def start(tmp_path, monkeypatch):
             "scan_installed_apps",
             lambda *_a, **_k: [{"content": "Installed app: Example Editor"}],
         )
-        server = FakeLemonade(models=state.models())
+        server = FakeLemonade(downloaded=state.on_the_server())
         server.__enter__()
         monkeypatch.setenv("LEMONADE_BASE_URL", server.base_url)
         if state.custom_model:
