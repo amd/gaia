@@ -11,8 +11,9 @@ import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { requestErrorParam } from '../utils/requestErrors';
-import { formatSize } from '../utils/format';
+import { formatSize, middleTruncate } from '../utils/format';
 import { examplePath } from '../utils/platform';
+import { cleanPastedPath } from '../utils/pastedPath';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
@@ -138,6 +139,7 @@ export function DocumentLibrary() {
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     useFocusTrap(dialogRef, true);
     useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -458,6 +460,14 @@ export function DocumentLibrary() {
         }
     }, [uploadFileBlob]);
 
+    const handlePickedFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        e.target.value = '';
+        for (const file of files) {
+            await uploadFileBlob(file);
+        }
+    }, [uploadFileBlob]);
+
     const commitRemoval = useCallback(async ({ id, name }: PendingRemoval) => {
         log.doc.info(`Deleting document: ${name}`);
         try {
@@ -586,8 +596,8 @@ export function DocumentLibrary() {
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!folderPath.trim()) return;
-        const typed = folderPath.trim();
+        const typed = cleanPastedPath(folderPath);
+        if (!typed) return;
         log.doc.info(`Indexing from path input: ${typed}`);
         const added = await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
         if (added) setFolderPath('');
@@ -729,7 +739,18 @@ export function DocumentLibrary() {
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
+                        role="button"
+                        tabIndex={isUploading ? -1 : 0}
+                        aria-label={t('docs.drop')}
+                        onClick={() => { if (!isUploading) fileInputRef.current?.click(); }}
+                        onKeyDown={(e) => {
+                            if (!isUploading && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
+                        <input ref={fileInputRef} type="file" multiple hidden onClick={(e) => e.stopPropagation()} onChange={handlePickedFiles} />
                         {isUploading ? (
                             <>
                                 <div className="upload-spinner" />
@@ -745,6 +766,7 @@ export function DocumentLibrary() {
                     </div>
 
                     {/* Path input for folder/file */}
+                    <p className="drop-hint path-hint">{t('docs.pathHint')}</p>
                     <form className="path-input-form" onSubmit={handleFolderSubmit}>
                         <FolderOpen size={16} className="path-icon" />
                         <input
@@ -752,7 +774,7 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder={t('docs.pathPlaceholder', { example: examplePath() })}
+                            placeholder={examplePath()}
                             aria-label={t('docs.pathAria')}
                             dir="auto"
                         />
@@ -857,7 +879,7 @@ export function DocumentLibrary() {
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="auto">{doc.filename}</span>
+                                    <span className="doc-name" dir="auto" title={doc.filename}>{middleTruncate(doc.filename, 48)}</span>
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">

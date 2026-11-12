@@ -1,9 +1,10 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { RenderCard } from '../render/RenderCard';
+import { useChatStore } from '../../stores/chatStore';
 import {
     formatCalculatorText,
     formatValue,
@@ -135,5 +136,24 @@ describe('CalculatorCard', () => {
     it('shows the unsupported card for a payload that breaks the shape', () => {
         render(<RenderCard render="calculator" data={{ ...tip, inputs: { bill: 'lots' } }} />);
         expect(screen.getByText('Invalid calculator payload')).toBeInTheDocument();
+    });
+});
+
+describe('CalculatorCard in Arabic', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('labels the fields and results in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<RenderCard render="calculator" data={tip} />);
+        expect(screen.getByRole('spinbutton', { name: /الفاتورة/ })).toBeInTheDocument();
+        expect(screen.getByRole('spinbutton', { name: /عدد الأشخاص/ })).toBeInTheDocument();
+        expect(screen.getByText(/لكل شخص/)).toBeInTheDocument();
+        expect(screen.queryByText('Per person')).toBeNull();
+    });
+
+    it('titles an untitled loan card in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<RenderCard render="calculator" data={loan} />);
+        expect(screen.getByRole('heading', { name: /حاسبة القرض/ })).toBeInTheDocument();
     });
 });

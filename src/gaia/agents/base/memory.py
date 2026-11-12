@@ -309,7 +309,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -614,8 +618,14 @@ def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """
     parts = ["Saved."]
     if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
         parts.append(
-            f"Filed as a fact: '{ignored['category']}' is not a category "
+            f"Filed as a fact: {why} "
             f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
         )
     if "due_at" in ignored:
@@ -4851,11 +4861,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         from gaia.agents.base.project_map import resolve_project_root
         from gaia.agents.tools.search_scope import path_validator_of
+        from gaia.agents.tools.workspace_paths import _workspace_default
 
-        # Same explicit config ProjectMapMixin passes, so lessons and the
-        # project map can never describe two different trees.
+        # Same explicit config and start folder ProjectMapMixin passes, so
+        # lessons and the project map can never describe two different trees.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
-        root = resolve_project_root(explicit)
+        root = resolve_project_root(explicit, start=_workspace_default(self))
         if root:
             return root
         validator = path_validator_of(self)
@@ -5774,16 +5785,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # A bad label must not lose the fact: save without it and say so.
             ignored: Dict[str, str] = {}
-            if category in VALID_CATEGORIES - EXTRACTABLE_CATEGORIES:
-                # Not a slip: these rows lead every prompt, so a chat can't write one.
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Not saved: a chat can't write the '{category}' "
-                        "category. Call remember again with one of "
-                        f"{sorted(EXTRACTABLE_CATEGORIES)}."
-                    ),
-                }
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
             if category not in EXTRACTABLE_CATEGORIES:
                 ignored["category"] = category
                 category = "fact"
@@ -5914,7 +5917,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -6050,6 +6054,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -6060,7 +6066,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000

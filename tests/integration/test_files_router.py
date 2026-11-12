@@ -814,6 +814,39 @@ class TestFilePreview:
         assert len(data["preview_lines"]) == 200  # Clamped to max
         assert data["total_lines"] == 300
 
+    @pytest.mark.parametrize(
+        "name,content",
+        [
+            ("report.pdf", b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"),
+            ("budget.docx", b"PK\x03\x04\x00\x00\x08\x00[Content_Types].xml"),
+            ("logo.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+        ],
+    )
+    def test_preview_binary_file_is_not_shown_as_text(
+        self, client, home_tmp_dir, name, content
+    ):
+        """PDF, DOCX and PNG files give no preview text instead of raw bytes."""
+        f = home_tmp_dir / name
+        f.write_bytes(content)
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
+
+    def test_preview_text_without_known_extension(self, client, home_tmp_dir):
+        """A small text file with an unlisted extension still previews."""
+        f = home_tmp_dir / "notes.dat"
+        f.write_text("first line\nsecond line\n", encoding="utf-8")
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+
+        data = resp.json()
+        assert data["is_text"] is True
+        assert data["preview_lines"] == ["first line", "second line"]
+
     def test_preview_nonexistent_file(self, client, home_tmp_dir):
         """Preview of nonexistent file should return 404."""
         fake_path = home_tmp_dir / "nonexistent.txt"

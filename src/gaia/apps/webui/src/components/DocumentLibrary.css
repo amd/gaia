@@ -80,6 +80,8 @@
     gap: 8px;
     margin-bottom: 16px;
 }
+/* The hint sits close above the form it describes. */
+.path-hint { margin: 0 0 6px; }
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
 .path-input {
     flex: 1 1 200px;
