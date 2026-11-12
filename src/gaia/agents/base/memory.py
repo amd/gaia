@@ -2364,6 +2364,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
+                    # Raw vector bytes are not JSON-serializable and useless to callers.
+                    item.pop("embedding", None)
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search

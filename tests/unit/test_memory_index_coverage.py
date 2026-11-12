@@ -11,6 +11,7 @@ at 200. A memory outside either cap was reachable only by keyword.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Dict
 from unittest.mock import patch
 
@@ -100,6 +101,21 @@ def test_semantic_recall_reaches_a_memory_past_the_first_hundred(store, count):
     results = host._hybrid_search(query, top_k=3)
 
     assert results and results[0]["id"] == first_id
+
+
+def test_vector_recall_results_carry_no_embedding_bytes(store):
+    """A large recall is JSON-encoded for condensing; raw vector bytes broke it."""
+    vectors, _first_id = _fill(store, 120)
+    query = "cousin number 7"
+    vectors[query] = _axis(7)
+    host = _Host(store, vectors)
+    host._rebuild_faiss_index()
+
+    results = host._hybrid_search(query, top_k=100)
+
+    assert results
+    assert all("embedding" not in item for item in results)
+    json.dumps(results)
 
 
 def test_index_stream_honours_filters_and_skips_superseded(store):
