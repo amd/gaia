@@ -45,6 +45,10 @@ NEEDS_PERSON_ARG = "_needs_person"
 #: such as a whole email. Every front-end shows it in full, never shortened.
 EXACT_TEXT_ARG = "_exact_text"
 
+#: Display-only prompt argument carrying the content of the script a call runs,
+#: read when the prompt is built: ``{"text", "hidden_lines"}`` or ``{"unreadable"}``.
+SCRIPT_ARG = "_script"
+
 SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
@@ -353,6 +357,7 @@ __all__ = [
     "NEEDS_PERSON_ARG",
     "READ",
     "RISK_NOTE_ARG",
+    "SCRIPT_ARG",
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",

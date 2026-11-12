@@ -72,6 +72,7 @@ from gaia.agents.base.project_map import PROJECT_ROOT_ENV, resolve_project_root
 # dynamic_tools_env_override is re-exported so callers importing it from
 # this module keep working; its canonical home is the core tool_loader
 # so the UI settings router shares it without depending on this wheel (#1102).
+from gaia.agents.base.script_preview import changed_script_refusal
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import (
     ToolLoader,
@@ -2484,13 +2485,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     p.resolve(), shlex.split(args) if args.strip() else []
                 )
                 try:
-                    source = p.read_text(encoding="utf-8", errors="replace")
+                    data = p.read_bytes()
                 except OSError as e:
                     return {
                         "status": "error",
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
+                changed = changed_script_refusal(self, file_path, data)
+                if changed is not None:
+                    return changed
+                # Line endings as read_text would give them.
+                source = "\n".join(data.decode("utf-8", errors="replace").splitlines())
                 start = time.monotonic()
                 run_dir = p.resolve().parent
                 try:

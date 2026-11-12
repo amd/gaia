@@ -236,6 +236,7 @@ def test_the_wire_args_are_only_what_the_model_sent(folders):
     assert wire["prompt_context"] == {
         "working_directory": str(project),
         "risk_note": risk_note,
+        "script": {"unreadable": "missing"},
     }
 
 

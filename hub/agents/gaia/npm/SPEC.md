@@ -459,7 +459,13 @@ its own prompt is in `prompt_context`: `working_directory` (where a shell call
 runs, when the model's arguments don't say it), `risk_note` (why the
 agent's checks don't cover the call, which is then approved once) and
 `file_path` (the absolute path a write lands at, when the model gave a relative
-one). A prompt
+one) and `script` (for `execute_python_file`, the file's content as read when
+the prompt was built: `{ text, hidden_lines }` with up to 400 lines or 48,000
+characters and a count of the lines left out, or `{ unreadable }`, one of
+`missing`, `not_text`, `too_large`, `unreadable`). Show `script` to the user:
+the path alone does not say what will run. A file that changes after the
+prompt was built is not run; the call returns an error and the agent asks
+again. A prompt
 the agent raises on its own, such as `allow_path_access`, has the path it asks
 about in `args`.
 

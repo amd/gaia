@@ -62,6 +62,38 @@ export function splitCommandSummary(summary: string): { command: string; folder:
     };
 }
 
+/** The tool whose prompt carries the file it runs (`SCRIPT_TOOL` in script_preview.py). */
+const SCRIPT_TOOL = 'execute_python_file';
+
+/** Why a script is not on its card (`unreadable` in script_preview.py), as message keys. */
+const SCRIPT_UNREADABLE = {
+    missing: 'prompt.scriptUnreadable.missing',
+    not_text: 'prompt.scriptUnreadable.not_text',
+    too_large: 'prompt.scriptUnreadable.too_large',
+    unreadable: 'prompt.scriptUnreadable.unreadable',
+} as const;
+
+/**
+ * The script a file-running call runs, as GAIA read it when it built the prompt
+ * (`SCRIPT_ARG` in call_risk.py): its text and the lines past the cap, or why there is none.
+ */
+export function shownScript(tool: string | undefined, args: Record<string, unknown>): {
+    text: string | null;
+    hiddenLines: number;
+    unreadable: keyof typeof SCRIPT_UNREADABLE | null;
+} | null {
+    const script = args._script;
+    if (tool !== SCRIPT_TOOL || typeof script !== 'object' || script === null) return null;
+    const { text, hidden_lines: hidden, unreadable } = script as Record<string, unknown>;
+    if (typeof text === 'string') {
+        return { text, hiddenLines: typeof hidden === 'number' && hidden > 0 ? hidden : 0, unreadable: null };
+    }
+    const reason = typeof unreadable === 'string' && unreadable in SCRIPT_UNREADABLE
+        ? unreadable as keyof typeof SCRIPT_UNREADABLE
+        : 'unreadable';
+    return { text: null, hiddenLines: 0, unreadable: reason };
+}
+
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
 
@@ -141,7 +173,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const riskNote = typeof args._risk_note === 'string' ? args._risk_note : '';
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
-    const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
+    // A file is approved on its content too: the path alone does not say what runs.
+    const script = shownScript(notification.tool, args);
+    const code = typeof args.code === 'string' && args.code.trim() ? args.code : script?.text?.trim() ? script.text : '';
+    // The script is on the card already; the raw arguments don't repeat it.
+    const detailArgs = script ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== '_script')) : args;
     // An email is approved as it will be sent, so all of it shows, uncollapsed.
     // Over the sidecar relay it arrives as the summary.
     const exactText = typeof args._exact_text === 'string'
@@ -221,6 +257,19 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={visibleText(code, true)} />}
+                    {script?.text != null && !script.text.trim() && (
+                        <p className="perm-card-detail" data-testid="perm-script-empty">{t('prompt.scriptEmpty')}</p>
+                    )}
+                    {!!script?.hiddenLines && (
+                        <p className="perm-card-risk" role="note" data-testid="perm-script-more">
+                            <bdi>{t.plural('prompt.scriptMoreLines', script.hiddenLines, { n: script.hiddenLines })}</bdi>
+                        </p>
+                    )}
+                    {script?.unreadable && (
+                        <p className="perm-card-risk" role="note" data-testid="perm-script-unreadable">
+                            <bdi>{t(SCRIPT_UNREADABLE[script.unreadable])}</bdi>
+                        </p>
+                    )}
                     {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
                     {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{visibleText(relayed.command, true)}</pre>}
                     {decoded && <p className="perm-card-detail">{t('prompt.decodedCommand')}</p>}
@@ -251,7 +300,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         {t('prompt.details')}
                     </button>
-                    {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(detailArgs, null, 2)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (

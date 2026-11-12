@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.call_risk import RISK_NOTE_ARG, SCRIPT_ARG
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tool_grants import SCRATCH_ARG
 from gaia.llm.inference_location import InferenceLocation
@@ -943,3 +943,21 @@ def test_a_failed_relayed_write_is_not_listed(tmp_path):
         {"status": "error", "error": "Permission denied", "file_path": str(target)},
     )
     assert _relayed_files(events) == []
+
+
+def test_a_script_gaia_read_is_context_and_reaches_the_ui_prompt():
+    script = {"text": "import os\nos.remove('a')", "hidden_lines": 0}
+    event = _permission(
+        "execute_python_file",
+        {"file_path": "C:\\w\\job.py", SCRIPT_ARG: script},
+        confirm_id="c-7",
+    )
+    assert event["args"] == {"file_path": "C:\\w\\job.py"}
+    assert event["prompt_context"] == {"script": script}
+    assert "os.remove('a')" in event["summary"]
+
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    relay._dispatch_one(handler, event, GAIA_PROFILE, answers_confirmations=True)
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "C:\\w\\job.py", SCRIPT_ARG: script}

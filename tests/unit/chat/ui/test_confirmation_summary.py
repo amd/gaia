@@ -10,7 +10,12 @@ tests/`.
 
 import os
 
-from gaia.ui.sse_translation import CanonicalTranslator, render_command_summary
+from gaia.agents.base.call_risk import SCRIPT_ARG
+from gaia.ui.sse_translation import (
+    SUMMARY_CODE_LINES,
+    CanonicalTranslator,
+    render_command_summary,
+)
 
 WS = os.path.join(os.path.expanduser("~"), "work", "proj")
 FAR = os.path.join(
@@ -177,3 +182,72 @@ def test_a_command_run_in_the_home_folder_keeps_its_paths_home_rooted():
         workspace=home,
     )
     assert summary == "ls -d ~/*/src/app; ls -d ~/src/app"
+
+
+def _file_summary(script):
+    path = os.path.join(WS, "build_recon.py")
+    return render_command_summary(
+        "execute_python_file", {"file_path": path, SCRIPT_ARG: script}, workspace=WS
+    )
+
+
+def test_a_python_file_prompt_shows_the_script_under_its_path():
+    summary = _file_summary(
+        {"text": "import os\nprint(os.getcwd())", "hidden_lines": 0}
+    )
+
+    assert summary.splitlines() == [
+        "." + os.sep + "build_recon.py",
+        "import os",
+        "print(os.getcwd())",
+    ]
+
+
+def test_a_long_script_keeps_its_first_and_last_lines_like_code():
+    code = "\n".join(f"print({i})" for i in range(30))
+    lines = _file_summary({"text": code, "hidden_lines": 0}).splitlines()
+
+    assert lines[1] == "print(0)" and lines[-1] == "print(29)"
+    assert f"…[{30 - SUMMARY_CODE_LINES} more lines]…" in lines
+
+
+def test_a_capped_script_counts_every_line_it_does_not_show():
+    code = "\n".join(f"print({i})" for i in range(400))
+    lines = _file_summary({"text": code, "hidden_lines": 250}).splitlines()
+
+    assert lines[1] == "print(0)"
+    assert lines[-1] == f"…[{650 - SUMMARY_CODE_LINES} more lines not shown]"
+    assert len(lines) == SUMMARY_CODE_LINES + 2
+
+
+def test_an_unreadable_script_says_why_instead_of_showing_nothing():
+    said = {
+        reason: _file_summary({"unreadable": reason}).splitlines()
+        for reason in ("missing", "not_text", "too_large", "unreadable")
+    }
+
+    assert (
+        said["missing"][1] == "This file does not exist, so there is no code to show."
+    )
+    assert said["not_text"][1] == "This file is not text, so its code can't be shown."
+    assert said["too_large"][1] == "This file is too large to show here."
+    assert (
+        said["unreadable"][1]
+        == "GAIA could not read this file, so its code isn't shown."
+    )
+    assert all(len(lines) == 2 for lines in said.values())
+
+
+def test_an_empty_script_says_it_is_empty():
+    assert _file_summary({"text": "", "hidden_lines": 0}).splitlines()[1:] == [
+        "This file is empty."
+    ]
+
+
+def test_a_python_file_prompt_with_no_script_still_names_the_file():
+    path = os.path.join(WS, "build_recon.py")
+    summary = render_command_summary(
+        "execute_python_file", {"file_path": path}, workspace=WS
+    )
+
+    assert summary == "." + os.sep + "build_recon.py"

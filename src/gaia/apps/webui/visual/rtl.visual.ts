@@ -2601,6 +2601,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const SCRIPT_PATH = 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608\\build_recon.py';
+const SCRIPT_PROMPTS = {
+    capped: { text: Array.from({ length: 40 }, (_, i) => `rows.append(build_row(${i}))`).join('\n'), hidden_lines: 260 },
+    missing: { unreadable: 'missing' },
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, script] of Object.entries(SCRIPT_PROMPTS)) {
+        test(`a prompt to run a Python file shows the script or says why not (${state}, ${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [{
+                type: 'permission_request', tool: 'execute_python_file', tool_label: 'running python file', confirm_id: 'c-script',
+                args: { file_path: SCRIPT_PATH, _script: script, _scratch_dir: 'C:\\Users\\you\\AppData\\Local\\Temp\\gaia-scratch-e521a62e2608' },
+            }]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('build the reconciliation workbook');
+            await page.keyboard.press('Enter');
+            const note = page.getByTestId(state === 'capped' ? 'perm-script-more' : 'perm-script-unreadable');
+            await expect(note).toBeVisible();
+            if (state === 'capped') {
+                await expect(page.getByTestId('perm-code')).toContainText('rows.append(build_row(0))');
+                await expect(note).toContainText('260');
+            } else {
+                await expect(page.getByTestId('perm-code')).toHaveCount(0);
+            }
+            await expect(page.locator('.perm-card-actions')).toBeInViewport();
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
+            await shot(page, `permission-script-${state}-${locale}`);
+        });
+    }
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },

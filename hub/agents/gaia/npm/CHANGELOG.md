@@ -54,6 +54,17 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **The prompt to run a Python file shows the file.** `execute_python_file`
+  asked with only a path, so a script the agent had just written to its
+  scratch folder was approved unread. `needs_confirmation` now carries
+  `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
+  characters) of the file as it was when the prompt was built, or
+  `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
+  is nothing to show. `summary` shows the first lines under the path. If the
+  file changes after the prompt was built, the run is refused and the agent
+  asks again with the new content. `args` still holds exactly the model's
+  arguments.
+
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
