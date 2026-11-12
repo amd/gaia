@@ -73,6 +73,14 @@ export function PrivacySettings() {
         }
     }, [localOnly, savingPolicy, t]);
 
+    const openDataFolder = useCallback(async (path: string) => {
+        try {
+            await api.openFileOrFolder(path, false);
+        } catch (err) {
+            setResult({ ok: false, text: t('settings.privacy.openFolderFailed', { reason: err instanceof Error ? err.message : String(err) }) });
+        }
+    }, [t]);
+
     const clearAll = useCallback(async () => {
         if (!confirm) {
             setConfirm(true);
@@ -116,7 +124,8 @@ export function PrivacySettings() {
                     </button>
                 </div>
             </section>
-            <section className="settings-card" aria-label={t('settings.privacy.whereTitle')}>
+            <section className="settings-card" aria-labelledby="privacy-where-title">
+                <h3 className="settings-label" id="privacy-where-title">{t('settings.privacy.whereTitle')}</h3>
                 <p className="settings-note">{t('settings.privacy.stays')}</p>
                 <p className={place?.remote ? 'settings-note' : 'settings-hint'}>
                     {place?.remote
@@ -126,11 +135,17 @@ export function PrivacySettings() {
                 {dataDir && (
                     <div className="setting-row setting-row-path">
                         <span>{t('settings.privacy.dataFolder')}</span>
-                        <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
+                        <span className="setting-path-actions">
+                            <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
+                            <button type="button" className="link-btn" onClick={() => void openDataFolder(dataDir)}>
+                                {t('settings.privacy.openFolder')}
+                            </button>
+                        </span>
                     </div>
                 )}
             </section>
-            <section className="settings-card" aria-label={t('settings.privacy.reportTitle')}>
+            <section className="settings-card" aria-labelledby="privacy-report-title">
+                <h3 className="settings-label" id="privacy-report-title">{t('settings.privacy.reportTitle')}</h3>
                 <p className="settings-note">{t('settings.privacy.reportNote')}</p>
                 <TroubleshootingReport classes={REPORT_CLASSES} />
             </section>

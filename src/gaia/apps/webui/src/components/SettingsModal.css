@@ -88,6 +88,13 @@
     text-align: end;
     overflow-wrap: anywhere;
 }
+.setting-path-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 10px;
+}
 .setting-path {
     font-family: var(--font-mono);
     font-size: 12px;
@@ -241,9 +248,6 @@
     font-family: var(--font-sans);
 }
 
-.about-info { }
-.about-info p { font-size: 14px; font-weight: 500; font-family: var(--font-sans); }
-.about-sub { font-size: 13px; color: var(--text-secondary); margin-top: 6px; line-height: 1.6; font-weight: 400; font-family: var(--font-sans); }
 
 /* ── Model action rows (download / load prompts) ───────────────────────────── */
 .model-action-row {

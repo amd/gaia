@@ -31,4 +31,22 @@ describe('SettingsDialog nav', () => {
         expect(general).not.toHaveAttribute('aria-current');
         expect(screen.getByText('model pane')).toBeInTheDocument();
     });
+
+    it('is one Tab stop, and the arrow keys move through it', () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const general = screen.getByRole('button', { name: 'General' });
+        const setup = screen.getByRole('button', { name: 'Setup' });
+        expect(general).toHaveAttribute('tabindex', '0');
+        expect(setup).toHaveAttribute('tabindex', '-1');
+
+        fireEvent.keyDown(general, { key: 'ArrowDown' });
+        expect(setup).toHaveFocus();
+        expect(setup).toHaveAttribute('aria-current', 'page');
+        expect(setup).toHaveAttribute('tabindex', '0');
+
+        fireEvent.keyDown(setup, { key: 'End' });
+        expect(screen.getByRole('button', { name: 'About' })).toHaveFocus();
+        fireEvent.keyDown(screen.getByRole('button', { name: 'About' }), { key: 'ArrowDown' });
+        expect(general).toHaveFocus();
+    });
 });

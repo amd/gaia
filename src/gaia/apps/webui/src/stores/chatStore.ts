@@ -23,7 +23,8 @@ export type SettingsSection =
     | 'privacy'
     | 'notifications'
     | 'voice'
-    | 'advanced';
+    | 'advanced'
+    | 'about';
 
 /**
  * Read a UI preference, saying so when the store is unreadable.

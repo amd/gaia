@@ -99,6 +99,22 @@
     color: var(--text-primary);
 }
 
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
+}
+
 /* ── Shared pane building blocks ───────────────────────────────── */
 
 .settings-pane {
@@ -488,6 +504,11 @@
 .model-chips .settings-more[open] {
     flex-basis: 100%;
     margin-inline-start: 0;
+}
+
+/* One fact per line, so two never run into each other. */
+.model-row-facts > .model-row-meta {
+    display: block;
 }
 
 /* The card that answers "what am I using?". */

@@ -25,6 +25,10 @@ interface Props {
     onNpuRecheck?: () => void;
 }
 
+// "1M" reads at a glance; "1,048,576" has to be counted.
+const compactCount = (n: number): string =>
+    new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 0 }).format(n);
+
 /** One model: its name and chips, with the long facts one click away. */
 export function ModelRow({ model: m, label, current, remote, busy, confirmingRemove, onUse, onDownload, onAskRemove, onKeep, onRemove, onNpuRecheck }: Props) {
     const t = useT();
@@ -34,7 +38,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
         placement && (m.placement?.source === 'expected' ? say('settings.model.expected', { label: placement }) : placement),
         m.size_gb ? say(m.downloaded ? 'settings.model.sizeOnDisk' : 'settings.model.sizeDownload', { size: `${m.size_gb} GB` }) : null,
         m.tokens_per_second ? say('settings.model.speed', { speed: `${Math.round(m.tokens_per_second)} tok/s` }) : null,
-        !m.placement && m.context_length ? say('settings.model.contextTokens', { size: m.context_length.toLocaleString() }) : null,
+        !m.placement && m.context_length ? say('settings.model.contextTokens', { size: compactCount(m.context_length) }) : null,
     ].filter(Boolean).join(' · '));
     const hasDetails = !!(m.display_name || facts || m.evidence || (m.custom && m.source_url));
 
@@ -50,7 +54,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                     {m.custom && <span className="model-badge is-custom">{t('settings.model.custom')}</span>}
                     {!!m.size_gb && <bdi dir="ltr" className="model-badge is-size">{m.size_gb} GB</bdi>}
                     {hasDetails && (
-                        <details className="settings-more">
+                        <details className="settings-more model-row-facts">
                             <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.details')}</summary>
                             {m.display_name && <span className="model-row-meta"><bdi>{m.id}</bdi></span>}
                             {facts && <span className="model-row-meta">{facts}</span>}

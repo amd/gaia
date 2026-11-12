@@ -1270,7 +1270,7 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1637,7 +1637,7 @@ test('no spending chip on a model on this PC', async ({ page }) => {
     await expect(page.locator('.spend-meter')).toHaveCount(0);
 });
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();

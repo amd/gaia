@@ -31,6 +31,5 @@
   "components/render/UnsupportedCard.tsx": 3,
   "components/session-panel/ChangesSection.tsx": 23,
   "components/settings/AddCustomModel.tsx": 1,
-  "components/settings/AdvancedSettings.tsx": 1,
   "components/settings/LemonadeServerSection.tsx": 1
 }
