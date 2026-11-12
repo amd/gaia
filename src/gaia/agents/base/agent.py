@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import functools
 import hashlib
 import inspect
 import json
@@ -1977,16 +1978,102 @@ _NON_FILE_SUFFIXES = frozenset(
 )
 
 
-def _names_a_file(sentence: str) -> bool:
-    """True when the sentence names somewhere on disk."""
-    if _FILE_TARGET_PATTERN.search(sentence):
-        return True
+_NEGATED_OUTPUT = (
+    r"(?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?"
+    r"|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)"
+    r"|backups?|documents?|reports?))"
+)
+# "No file was written": the write verb's subject says nothing was saved.
+_NEGATED_SUBJECT_PATTERN = re.compile(
+    rf"(?:^|[^\w'-]){_NEGATED_OUTPUT}\s+$", re.IGNORECASE
+)
+# "No files besides notes.md": the exception is a save it claims.
+_SAVE_EXCEPTION = (
+    r"(?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for)"
+)
+_SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
+# "I wrote no file", "I saved nothing": so does its object.
+_NEGATED_OBJECT_PATTERN = re.compile(
+    rf"\s+{_NEGATED_OUTPUT}\b(?!\s+(?:but|{_SAVE_EXCEPTION})\b)", re.IGNORECASE
+)
+
+
+# "... stored as your bookshelf slot", "saved to memory": what was kept is a
+# remembered fact. "it" between verb and "as" is a file ("saved it as your …").
+_REMEMBERED_AFTER_PATTERN = re.compile(
+    r"\s+(?:earlier\s+|previously\s+)?(?:as\s+your\b"
+    r"|(?:in|to|into)\s+(?:my\s+|your\s+)?(?:long-term\s+)?memor(?:y|ies)\b(?!\.\w))",
+    re.IGNORECASE,
+)
+# "the `granite-1812` I have stored": the thing kept is a value, not a path.
+_VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
+_CLAUSE_END_PATTERN = re.compile(r"[,;:—–]|\s-\s")
+
+
+def _has_file_extension(text: str) -> bool:
+    """A dotted token whose suffix is a file extension."""
     # A suffix with no letter is a version or a clock time, not an extension.
     return any(
         any(char.isalpha() for char in suffix)
         and suffix.lower() not in _NON_FILE_SUFFIXES
-        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(text)
     )
+
+
+def _names_a_path(text: str) -> bool:
+    """A slash or a file name with an extension: somewhere on disk."""
+    if re.search(r"[\\/]", text):
+        return True
+    return _has_file_extension(text)
+
+
+def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
+    """Whether this write verb tells of a fact kept in memory, not of a file."""
+    after = _REMEMBERED_AFTER_PATTERN.match(sentence, match.end())
+    if after and "memor" in after.group().lower():
+        return True
+    # "the `summary` I saved, at out/s.md": a path anywhere makes it a save.
+    if _names_a_path(sentence):
+        return False
+    # "saved to `notes`": so does a destination in the verb's own clause.
+    clause = _CLAUSE_END_PATTERN.split(sentence[match.end() :], maxsplit=1)[0]
+    if _names_a_file(clause):
+        return False
+    if after:
+        return True
+    head = _VALUE_BEFORE_PATTERN.search(sentence[: match.start()])
+    if head is None:
+        return False
+    token = head.group(1)
+    return not (re.search(r"[\\/~]", token) or _names_a_file(token))
+
+
+def _is_write_claim(sentence: str, denials: bool) -> bool:
+    """A write verb in *sentence*; with *denials* false, not one negated.
+
+    *denials* (a turn that asked for a save) reads every write verb as a
+    claim, a remembered value included: the save is owed either way.
+    """
+    return any(
+        denials
+        or (
+            not _describes_a_remembered_value(sentence, match)
+            and not (
+                _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
+            )
+            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        )
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+        for match in pattern.finditer(sentence)
+    )
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    return _has_file_extension(sentence)
 
 
 def _is_plan_narration(sentence: str) -> bool:
@@ -2002,13 +2089,15 @@ def _is_plan_narration(sentence: str) -> bool:
     )
 
 
-def _claims_file_write(answer: str) -> bool:
+def _claims_file_write(answer: str, denials: bool = False) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
     A sentence must carry both a completed write verb and a file/path target,
     so "I saved the routine to notes/routine.md" fires while "I created a
     summary of the meeting" does not. Fenced code is ignored — a sample
     command is not a claim — and so is a sentence in a planning frame.
+    "No file was written" is not a claim unless *denials* is set, which a
+    turn that asked for a save uses: it still names the save that is owed.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
@@ -2017,9 +2106,19 @@ def _claims_file_write(answer: str) -> bool:
             continue
         if not _names_a_file(sentence):
             continue
-        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+        if _is_write_claim(sentence, denials):
             return True
     return False
+
+
+def _write_claims_for(evidence: CompletionEvidence) -> Callable[[str], bool]:
+    """The save-claim test for this turn's completion check.
+
+    Asked to save, "nothing was written" still names the save that is owed.
+    """
+    if evidence.instructed:
+        return functools.partial(_claims_file_write, denials=True)
+    return _claims_file_write
 
 
 _PLACEHOLDER_TOKEN = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
@@ -10502,7 +10601,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(
-            answer or "", _claims_file_write, readback=not model_failed
+            answer or "",
+            _write_claims_for(self._completion_evidence),
+            readback=not model_failed,
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
@@ -11068,7 +11169,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded = []
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
-            user_input,
+            self._request_text(user_input),
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
@@ -13584,7 +13685,9 @@ Do NOT wrap conversational replies in JSON.
                     if (
                         restored is not None
                         and not self._completion_evidence.gaps(
-                            restored, _claims_file_write, soft=restored_soft
+                            restored,
+                            _write_claims_for(self._completion_evidence),
+                            soft=restored_soft,
                         )
                         and not restored_soft
                     ):
@@ -13595,7 +13698,9 @@ Do NOT wrap conversational replies in JSON.
                 self._check_extraction_sources()
                 soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate, _claims_file_write, soft=soft_gaps
+                    answer_candidate,
+                    _write_claims_for(self._completion_evidence),
+                    soft=soft_gaps,
                 )
                 extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
