@@ -129,6 +129,17 @@ jobs:
       - name: Test
         run: ctest --test-dir cpp/build -C Release --output-on-failure
 
+      # The real binary against a model server that misbehaves on purpose
+      # (errors, dropped connections, garbage bodies, malformed tool calls): it
+      # must never hang, crash, or report success without an answer.
+      - name: Chaos test gaiacpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          python cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 200 --jobs 4
+
   # Verify cmake --install + find_package round-trip works
   install-test:
     name: C++ Install Test (${{ matrix.os }})

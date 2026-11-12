@@ -609,8 +609,8 @@ TEST(NativeToolCallsTest, NonObjectArgumentsThrow) {
 TEST(NativeToolCallsTest, MalformedToolCallsSurfaceAsAnErrorNotAProseAnswer) {
     bench::MockLlmServer mock;
     // Both the first attempt and the one retry return the same malformed body.
-    mock.pushResponse(toolCallsResponse(R"([{"type":"function","function":{"name":"echo"}}])"));
-    mock.pushResponse(toolCallsResponse(R"([{"type":"function","function":{"name":"echo"}}])"));
+    mock.pushResponse(toolCallsResponse(R"([{"id":"call_1","type":"function","function":{"arguments":"{}"}}])"));
+    mock.pushResponse(toolCallsResponse(R"([{"id":"call_1","type":"function","function":{"arguments":"{}"}}])"));
 
     ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
     agent.initForTest();

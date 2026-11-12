@@ -179,6 +179,14 @@ jobs:
           "${bin}" --mcp < init.json | head -n 1 | tee mcp.json
           grep -q '"serverInfo"' mcp.json
 
+      # The same bytes, against a model server that misbehaves on purpose.
+      - name: Chaos test gaiacpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          python cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 100 --jobs 4
+
       - name: Package agents for ${{ matrix.platform }}
         run: >-
           python cpp/packaging/package_agents.py
