@@ -387,6 +387,47 @@ class TestConsentDenied:
         with pytest.raises(ConsentDeniedError):
             await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
 
+    @respx.mock
+    async def test_a_cancel_nobody_waits_on_reaches_the_app(
+        self, google_provider, monkeypatch, caplog
+    ):
+        """The apps start a flow and never await it: the cancel must reach them
+        as an event, and the next Connect must not log an unread exception."""
+        import gc
+        import logging
+
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        _mock_token_endpoint()
+        info = await start_authorization("google", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(
+                f"{params['redirect_uri'][0]}?error=access_denied"
+                f"&state={params['state'][0]}"
+            )
+        assert resp.status_code == 400
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "cancelled",
+                    "error": "Sign-in was cancelled.",
+                },
+            )
+        ]
+
+        with caplog.at_level(logging.ERROR, logger="asyncio"):
+            await start_authorization("google", scopes=["openid"])
+            gc.collect()
+            await asyncio.sleep(0)
+        assert "never retrieved" not in caplog.text
+
 
 class TestTimeout:
     async def test_flow_timeout(self, google_provider, monkeypatch):

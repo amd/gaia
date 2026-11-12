@@ -329,6 +329,8 @@ const messages: Messages = {
     'connectCard.reconnect': 'إعادة ربط {name}',
     'connectCard.connected': 'تم ربط {name}',
     'connectCard.settings': 'فتح «الموصلات» في الإعدادات',
+    'connectCard.cancelled': 'أُلغي تسجيل الدخول. اضغط «ربط» للمحاولة مرة أخرى.',
+    'connectCard.failed': 'لم يكتمل تسجيل الدخول. اضغط «ربط» للمحاولة مرة أخرى.',
     'msg.continue': 'متابعة',
     'msg.continuePrompt': 'تابع إجابتك من حيث توقفت.',
     'msg.reportNote': 'حفظ GAIA ما رآه عند حدوث هذا الخطأ. يضيف التقرير سجلات GAIA وتفاصيل هذا الكمبيوتر لإرفاقه ببلاغ عن خطأ، ولا يُرسَل شيء ما لم تشاركه بنفسك.',

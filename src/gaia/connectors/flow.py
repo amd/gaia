@@ -298,6 +298,8 @@ async def start_authorization(
 
     loop = asyncio.get_event_loop()
     future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
+    # The apps never await it; each failure also goes out as an event.
+    future.add_done_callback(lambda f: f.cancelled() or f.exception())
 
     app = web.Application()
 
@@ -583,6 +585,19 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
             flow.future.set_exception(
                 ConsentDeniedError(f"OAuth flow rejected by user: {error}")
             )
+        # The apps never await the flow, so they learn of the cancel this way.
+        await emit(
+            "connector.oauth.error",
+            {
+                "connector_id": flow.provider_id,
+                "reason": "cancelled" if error == "access_denied" else "rejected",
+                "error": (
+                    "Sign-in was cancelled."
+                    if error == "access_denied"
+                    else f"The provider refused the sign-in ({error})."
+                ),
+            },
+        )
         return web.Response(text=_ERROR_HTML, content_type="text/html", status=400)
 
     if code is None:
@@ -595,6 +610,10 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     except Exception as e:
         if not flow.future.done():
             flow.future.set_exception(e)
+        await emit(
+            "connector.oauth.error",
+            {"connector_id": flow.provider_id, "reason": "failed", "error": str(e)},
+        )
         return web.Response(text=_ERROR_HTML, content_type="text/html", status=502)
 
     if not flow.future.done():

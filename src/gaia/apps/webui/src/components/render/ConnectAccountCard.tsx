@@ -6,6 +6,7 @@ import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
+import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
 import type { ConnectorListEntry, Message } from '../../types';
 import { UnsupportedCard } from './UnsupportedCard';
@@ -180,6 +181,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
     const openSettings = useChatStore((s) => s.openSettings);
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [opened, setOpened] = useState(false);
+    const [ended, setEnded] = useState<'cancelled' | 'failed' | null>(null);
     const valid = isConnectAccountPayload(data);
 
     const refresh = useCallback(() => {
@@ -203,6 +205,20 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => clearInterval(timer);
     }, [opened, refresh]);
 
+    // A sign-in this card opened that ended without connecting.
+    const providers = valid ? data.providers : [];
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (!opened || event.reason !== 'oauth_error') return;
+                if (!event.connectorId || !providers.includes(event.connectorId)) return;
+                setOpened(false);
+                setEnded(event.payload.reason === 'cancelled' ? 'cancelled' : 'failed');
+            },
+            [opened, providers.join(' ')], // eslint-disable-line react-hooks/exhaustive-deps
+        ),
+    );
+
     if (!isConnectAccountPayload(data)) {
         return <UnsupportedCard variant="invalid" render={CONNECT_ACCOUNT_RENDER} data={data} />;
     }
@@ -217,13 +233,14 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     let prompt = t('connectCard.prompt');
     if (anyConnected) prompt = t('connectCard.askAgain');
+    else if (ended) prompt = t(ended === 'cancelled' ? 'connectCard.cancelled' : 'connectCard.failed');
     else if (opened) prompt = t('connectCard.opened');
 
     return (
         <div className="render-connect" role="group" aria-label={t('connectCard.label')}>
             <div className="render-connect__text">
                 <Link2 size={14} className="render-connect__icon" aria-hidden="true" />
-                <span>{prompt}</span>
+                <span role={ended ? 'alert' : undefined}>{prompt}</span>
             </div>
             <div className="render-connect__providers">
                 {data.providers.map((id) => (
@@ -233,7 +250,10 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         name={displayName(id)}
                         connected={isConnected(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
-                        onOpened={() => setOpened(true)}
+                        onOpened={() => {
+                            setEnded(null);
+                            setOpened(true);
+                        }}
                     />
                 ))}
             </div>

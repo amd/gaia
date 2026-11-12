@@ -646,7 +646,11 @@ function OAuthConfigureBody({
             (event) => {
                 if (event.connectorId !== connector.id) return;
                 if (event.reason === 'oauth_error') {
-                    setErr(String(event.payload.error ?? t('settings.connectors.deviceFailed')));
+                    setErr(
+                        event.payload.reason === 'cancelled'
+                            ? t('connectCard.cancelled')
+                            : String(event.payload.error ?? t('settings.connectors.deviceFailed')),
+                    );
                     setDeviceInfo(null);
                 } else if (event.reason === 'oauth_completed') {
                     setDeviceInfo(null);
