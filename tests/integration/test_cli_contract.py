@@ -3,8 +3,9 @@
 """What every `gaia` command owes the person who runs it.
 
 The commands are read from the CLI's own parser, so one added tomorrow is
-covered without a new case. Run by .github/workflows/test_cli_contract.yml. Each is run for real, as a subprocess, against a
-model server that records its requests, and then with no model server at all:
+covered without a new case. Run by .github/workflows/test_cli_contract.yml.
+Each is run for real, as a subprocess, against a model server that records
+its requests, and then with no model server at all:
 
 - It never ends in a traceback.
 - With the model server down, a command that needs it exits non-zero and says
@@ -220,9 +221,8 @@ def _env(home: Path, base_url: str) -> dict:
         NO_PROXY="127.0.0.1,localhost",
         NO_COLOR="1",
     )
-    # A daemon a command starts must die with this test run.
-    if os.environ.get("GAIA_DAEMON_EXIT_WITH_PID"):
-        env["GAIA_DAEMON_EXIT_WITH_PID"] = os.environ["GAIA_DAEMON_EXIT_WITH_PID"]
+    # A daemon a command starts dies with this test process at the latest.
+    env["GAIA_DAEMON_EXIT_WITH_PID"] = str(os.getpid())
     return env
 
 
@@ -231,10 +231,15 @@ def _end_tree(pid: int) -> None:
 
     try:
         parent = psutil.Process(pid)
-        for proc in [*parent.children(recursive=True), parent]:
-            proc.kill()
-    except psutil.Error:
+        tree = [*parent.children(recursive=True), parent]
+    except psutil.NoSuchProcess:
         return
+    for proc in tree:
+        # One that already exited must not spare the rest of the tree.
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            continue
 
 
 def _run(args: list, home: Path, base_url: str) -> Run:
