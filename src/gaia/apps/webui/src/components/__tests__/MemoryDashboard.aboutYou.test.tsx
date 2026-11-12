@@ -267,6 +267,33 @@ describe('What GAIA knows about you', () => {
 
         expect(screen.getAllByText('Memory number 199')).toHaveLength(1);
     });
+
+    it('keeps the extra rows in view when an add reloads the list', async () => {
+        const all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        fireEvent.change(screen.getByRole('textbox', { name: /Something GAIA should know/ }), {
+            target: { value: 'I prefer short answers' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalled());
+        const pageReads = () => mockedApi.getKnowledge.mock.calls
+            .map(([p]) => p)
+            .filter((p) => p?.about_user && p?.offset === 200);
+        // Show more read the second page once; the reload after the add reads it again.
+        await waitFor(() => expect(pageReads()).toHaveLength(2));
+
+        expect(screen.getByText('Memory number 249')).toBeInTheDocument();
+        expect(screen.queryByText(/^Showing \d+ of/)).not.toBeInTheDocument();
+    });
 });
 
 describe('Profile saves refresh the other views (#4814)', () => {
