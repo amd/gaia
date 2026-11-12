@@ -21,4 +21,22 @@ describe('middleTruncate', () => {
     it('keeps a long extension whole', () => {
         expect(middleTruncate(`${'x'.repeat(60)}.markdown`, 20).endsWith('x.markdown')).toBe(true);
     });
+
+    it('never splits an emoji into half a character', () => {
+        const cut = middleTruncate(`${'\u{1F600}'.repeat(30)}.png`);
+        expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+        expect(Array.from(cut)).toHaveLength(32);
+        expect(cut.endsWith('.png')).toBe(true);
+    });
+
+    it('stays within a small limit, even with a long extension', () => {
+        const cut = middleTruncate(`${'x'.repeat(40)}.markdown`, 12);
+        expect(cut).toHaveLength(12);
+        expect(cut.startsWith('x')).toBe(true);
+        expect(cut).toContain('…');
+    });
+
+    it('leaves a name exactly at the limit alone', () => {
+        expect(middleTruncate('a'.repeat(32))).toBe('a'.repeat(32));
+    });
 });
