@@ -107,7 +107,8 @@ test('the cloud path greys the gateway with its reason, and offers it once the h
     await journey.startBackend({ GAIA_GATEWAY_BASE_URL: `http://127.0.0.1:${gatewayPort}/Unified/v1` });
     await open();
     await pastChecks(page, say);
-    await page.getByRole('button', { name: say('setup.plan.cloud') }).click();
+    await page.getByRole('radio', { name: say('setup.plan.cloud') }).check();
+    await page.getByRole('button', { name: say('setup.continue') }).click();
     await expect(stepTitle(page)).toHaveText(say('setup.key.title'));
 
     const gateway = page.getByRole('radio', { name: /AMD LLM Gateway/ });
