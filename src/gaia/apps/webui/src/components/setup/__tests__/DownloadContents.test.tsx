@@ -12,8 +12,8 @@ const row = (name: string) => screen.getByText(name).closest('li') as HTMLElemen
 describe('Everything coming to this PC', () => {
     it('lists each component with its size and where it comes from', () => {
         render(<DownloadContents plan={P()} />);
-        expect(row("AI engine")).toHaveTextContent('From github.com/lemonade-sdk/lemonade/releases');
-        expect(row("AI engine")).toHaveTextContent('7 MB');
+        expect(row("Model server")).toHaveTextContent('From github.com/lemonade-sdk/lemonade/releases');
+        expect(row("Model server")).toHaveTextContent('7 MB');
         expect(row('Graphics support')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
         expect(row('Graphics support')).toHaveTextContent('141 MB');
         expect(row('GAIA assistant')).toHaveTextContent('From hub.amd-gaia.ai');
@@ -31,14 +31,14 @@ describe('Everything coming to this PC', () => {
         render(<DownloadContents plan={P()} />);
         expect(row('GAIA assistant')).toHaveTextContent('Already here');
         expect(row('GAIA assistant')).toHaveClass('is-done');
-        expect(row("AI engine")).toHaveTextContent('Waiting');
-        expect(row("AI engine")).toHaveClass('is-waiting');
+        expect(row("Model server")).toHaveTextContent('Waiting');
+        expect(row("Model server")).toHaveClass('is-waiting');
     });
 
     it('during a run shows each state from the run', () => {
         const run = runStatus([], { components: { server: 'done', backend: 'active', agent: 'failed' } });
         render(<DownloadContents plan={P()} run={run} />);
-        expect(row("AI engine")).toHaveTextContent('Ready');
+        expect(row("Model server")).toHaveTextContent('Ready');
         expect(row('Graphics support')).toHaveTextContent('In progress');
         expect(row('GAIA assistant')).toHaveTextContent('Failed');
         expect(row('GAIA assistant')).toHaveClass('is-failed');
@@ -47,7 +47,7 @@ describe('Everything coming to this PC', () => {
     it('a run that ended mid-step leaves that step unfinished, not still working', () => {
         const run = runStatus([], { state: 'failed', components: { server: 'done', agent: 'active' } });
         render(<DownloadContents plan={P()} run={run} />);
-        expect(row("AI engine")).toHaveTextContent('Ready');
+        expect(row("Model server")).toHaveTextContent('Ready');
         expect(row('GAIA assistant')).not.toHaveTextContent('In progress');
         expect(row('GAIA assistant').querySelector('.spin')).toBeNull();
     });
@@ -61,7 +61,7 @@ describe('Everything coming to this PC', () => {
         expect(within(agent).getByText('Read timed out. (read timeout=10)').closest('details')).toBeInTheDocument();
         fireEvent.click(within(agent).getByRole('button', { name: 'Retry GAIA assistant' }));
         expect(onRetry).toHaveBeenCalledTimes(1);
-        expect(within(row('AI engine')).queryByRole('button')).not.toBeInTheDocument();
+        expect(within(row("Model server")).queryByRole('button')).not.toBeInTheDocument();
     });
 
     it('a failure that is not the network still says which piece and how to see why', () => {

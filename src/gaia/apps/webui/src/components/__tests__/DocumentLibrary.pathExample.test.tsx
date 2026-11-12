@@ -15,7 +15,7 @@ it('gives a Mac user a Mac path example, not a Windows one', async () => {
     vi.mocked(api.listDocuments).mockResolvedValue({ documents: [], total: 0 } as never);
     render(<DocumentLibrary />);
 
-    const box = await screen.findByLabelText('File path to index');
+    const box = await screen.findByLabelText('File path to add');
     expect(box.getAttribute('placeholder')).toContain('/Users/you/Documents/manual.pdf');
     expect(box.getAttribute('placeholder')).not.toContain('C:\\');
 });

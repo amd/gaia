@@ -125,6 +125,8 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    /** The document the notice is about, so removing it takes the notice with it. */
+    const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -272,10 +274,10 @@ export function DocumentLibrary() {
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
     const unreadableCount = documents.filter((d) => d.indexing_status === 'failed').length;
-    const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
             setNotice(t('docs.willAttach', { name: filename }));
@@ -454,6 +456,7 @@ export function DocumentLibrary() {
         }
         indexingStartTimes.current.delete(id);
         removeDraftDocument(id);
+        if (noticeDocId.current === id) setNotice('');
         // The list now, not when the click happened: a poll may have refreshed it meanwhile.
         setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
         log.doc.info(`Deleted document: ${name}`);
@@ -633,7 +636,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi>
                         {indexedTime && (
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
@@ -771,8 +774,6 @@ export function DocumentLibrary() {
                             {unreadableCount > 0 && (
                                 <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
                             )}
-                            <span>&middot;</span>
-                            <span>{t.plural('docs.chunks', totalChunks)}</span>
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
