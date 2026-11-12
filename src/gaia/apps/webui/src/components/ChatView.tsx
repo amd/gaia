@@ -24,6 +24,8 @@ import { log } from '../utils/logger';
 import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
+import { isAuthRequiredMessage } from './email/EmailConnectCta';
+import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
 
 import './ChatView.css';
@@ -1427,6 +1429,17 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [queue, isStreaming, sessionId, setQueue]);
 
 
+    // Retry the last question after a connector was connected (#2119). Resends
+    // the last user message, which also drops the stale connector-error reply.
+    const handleRetryLast = useCallback(() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                handleResendMessage(messages[i]);
+                return;
+            }
+        }
+    }, [messages, handleResendMessage]);
+
     // Try again on a failed reply: resend the question it answers.
     const handleTryAgain = useCallback((reply: Message) => {
         const at = messages.indexOf(reply);
@@ -1503,6 +1516,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
+
+    // Stale connector-reply cue (#2119): when the newest reply was a connector
+    // auth-required error, offer to re-run once the account is connected.
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
+    const lastIsConnectorError = !isStreaming
+        && !isLoadingMessages
+        && lastMessage?.role === 'assistant'
+        && isAuthRequiredMessage(lastMessage.content);
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1737,6 +1758,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 <div className="input-column">
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
                     <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
+                    {lastIsConnectorError && lastMessage && (
+                        <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
+                    )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />

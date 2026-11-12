@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
 import { AgentActivity } from './AgentActivity';
+import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -734,6 +735,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     )}
                     {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
                         <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
+                    )}
+                    {message.role === 'assistant'
+                        && !isStreaming
+                        && isAuthRequiredMessage(cleanedContent) && (
+                        <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label={t('msg.about')}>
