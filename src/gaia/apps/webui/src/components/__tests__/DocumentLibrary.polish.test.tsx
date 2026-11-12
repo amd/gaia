@@ -38,6 +38,28 @@ describe('long document names', () => {
         expect(name.textContent).toBe(LONG);
     });
 
+    it('never cut an emoji in half', async () => {
+        // The emoji sits right where a cut by UTF-16 units would split its surrogate pair.
+        const name = `${'a'.repeat(40)}\u{1F4C4}${'b'.repeat(NAME_TAIL_CHARS - 1)}`;
+        mockedApi.listDocuments.mockResolvedValue({ documents: [doc(name)], total: 1, total_size_bytes: 2048, total_chunks: 3 });
+        render(<DocumentLibrary />);
+
+        const tail = (await screen.findByTitle(name)).querySelector('.doc-name-tail')!;
+        expect(tail.textContent).toBe(`\u{1F4C4}${'b'.repeat(NAME_TAIL_CHARS - 1)}`);
+    });
+
+    it('follow the first letter for direction, whatever its script', async () => {
+        const cyrillicFirst = `Отчёт за квартал итоговый вариант ${'تقرير'} final.pdf`;
+        const arabicFirst = 'ﻣﺮﺍﺟﻌﺔ الأعمال الفصلية لفريق المبيعات الإقليمي.docx';
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [doc(cyrillicFirst), doc(arabicFirst)], total: 2, total_size_bytes: 4096, total_chunks: 6,
+        });
+        render(<DocumentLibrary />);
+
+        expect((await screen.findByTitle(cyrillicFirst)).classList.contains('is-rtl-text')).toBe(false);
+        expect((await screen.findByTitle(arabicFirst)).classList.contains('is-rtl-text')).toBe(true);
+    });
+
     it('a short name stays one piece of text', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [doc('notes.txt')], total: 1, total_size_bytes: 2048, total_chunks: 3 });
         render(<DocumentLibrary />);

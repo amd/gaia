@@ -127,16 +127,18 @@ export const NAME_TAIL_CHARS = 14;
 
 /** A file name that, when it doesn't fit, is cut in the middle rather than at the end. */
 function DocName({ name }: { name: string }) {
-    if (name.length <= NAME_TAIL_CHARS * 2) {
+    // Code points, so an emoji at the cut isn't split into two broken halves.
+    const chars = Array.from(name);
+    if (chars.length <= NAME_TAIL_CHARS * 2) {
         return <span className="doc-name" dir="auto">{name}</span>;
     }
     // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
-    const firstStrong = name.match(/[A-Za-zÀ-ɏ֐-ࣿ]/)?.[0] ?? '';
-    const rtlText = /[֐-ࣿ]/.test(firstStrong);
+    const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
+    const rtlText = /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(firstStrong);
     return (
         <span className={`doc-name doc-name-split${rtlText ? ' is-rtl-text' : ''}`} dir="auto" title={name}>
-            <span className="doc-name-head">{name.slice(0, -NAME_TAIL_CHARS)}</span>
-            <span className="doc-name-tail">{name.slice(-NAME_TAIL_CHARS)}</span>
+            <span className="doc-name-head">{chars.slice(0, -NAME_TAIL_CHARS).join('')}</span>
+            <span className="doc-name-tail">{chars.slice(-NAME_TAIL_CHARS).join('')}</span>
         </span>
     );
 }
