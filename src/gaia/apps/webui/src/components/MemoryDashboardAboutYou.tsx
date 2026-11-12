@@ -366,7 +366,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     onChange={e => setDraft(e.target.value)}
                                                     onKeyDown={e => {
                                                         if (e.key === 'Escape') { e.stopPropagation(); setEditingId(null); }
-                                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(item); }
+                                                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); saveEdit(item); }
                                                     }}
                                                 />
                                                 {item.category === 'reminder' && (
