@@ -318,6 +318,7 @@
 
 .schedule-result-error {
     color: var(--accent);
+    max-height: none;
 }
 
 .schedule-results-empty {
