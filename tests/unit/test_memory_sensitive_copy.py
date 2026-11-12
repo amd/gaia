@@ -410,3 +410,63 @@ def test_forgetting_either_copy_of_an_rc18_pair_erases_both(
         recalled = tools["recall"](query=said)
     assert "mango" not in str(recalled).lower()
     assert "negative" not in str(recalled).lower()
+
+
+def test_folding_keeps_the_fuller_wording_of_a_dropped_copy(store):
+    """A sensitive save must not erase detail an older copy had."""
+    store.store(category="fact", content="User is allergic to mango")
+    store.store(
+        category="note",
+        content="User is allergic to mango since childhood, carries an EpiPen",
+    )
+    store.store(category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool")
+
+    rows = _rows(store)
+    assert len(rows) == 1, rows
+    assert "EpiPen" in rows[0][1] and rows[0][2] == 1
+
+
+def test_forgetting_a_sensitive_fact_keeps_its_negation(store):
+    """ "Is not allergic" is the user's correction, not a copy to forget."""
+    sensitive = store.store(
+        category="fact", content=MANGO_PAIR[0], sensitive=True, source="tool"
+    )
+    store.store(category="fact", content="User is not allergic to mango.")
+
+    erased = store.forget_with_copies(sensitive)
+
+    assert erased == [sensitive]
+    assert [r[1] for r in _rows(store)] == ["User is not allergic to mango."]
+
+
+@pytest.mark.parametrize(
+    "said, unrelated",
+    [
+        ("I have diabetes", "User is writing a work report on diabetes research"),
+        ("I take insulin", "User reads about the history of insulin at work"),
+    ],
+)
+@pytest.mark.parametrize("sensitive_first", [True, False])
+def test_one_shared_word_does_not_flag_an_unrelated_memory(
+    store, said, unrelated, sensitive_first
+):
+    if sensitive_first:
+        store.store(category="fact", content=said, sensitive=True, source="tool")
+        store.store(category="note", content=unrelated)
+    else:
+        store.store(category="note", content=unrelated)
+        store.store(category="fact", content=said, sensitive=True, source="tool")
+
+    flags = {content: flag for _, content, flag, _ in _rows(store)}
+    assert flags[unrelated] == 0, flags
+    assert flags[said] == 1
+
+
+@pytest.mark.parametrize(
+    "reworded", ["User has diabetes (health)", "User has diabetes, diagnosed 2019"]
+)
+def test_a_one_word_sensitive_fact_still_flags_its_rewording(store, reworded):
+    store.store(category="fact", content="I have diabetes", sensitive=True)
+    store.store(category="note", content=reworded, context="work")
+
+    assert [r[2] for r in _rows(store)] == [1, 1]

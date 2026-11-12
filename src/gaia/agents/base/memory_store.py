@@ -383,6 +383,33 @@ def _mentions(text: set, memory: set) -> bool:
     )
 
 
+#: Content words a short restatement of a one-word memory may add ("diagnosed 2019").
+_SHORT_RESTATEMENT = 3
+
+
+def _rewords(text: set, memory: set) -> bool:
+    """Whether *text* restates *memory*.
+
+    One shared word is enough only for a one-word memory in a short text:
+    "User has diabetes, diagnosed 2019" restates "I have diabetes", a report
+    on diabetes research funding does not.
+    """
+    shared = text & memory
+    if len(memory) == 1:
+        return bool(shared) and len(text) <= _SHORT_RESTATEMENT
+    return _same_memory(text, memory) or (len(shared) >= 2 and _mentions(text, memory))
+
+
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|none|neither|nor|without)\b|n['’]t\b", re.IGNORECASE
+)
+
+
+def _negated(text: str) -> bool:
+    """Whether *text* says something is not so ("is not", "isn't", "never")."""
+    return bool(_NEGATION_RE.search(text))
+
+
 def is_about_user(item: Dict) -> bool:
     """Whether a knowledge row is about the user, not the agent's own records.
 
@@ -1758,11 +1785,11 @@ class MemoryStore:
         stems = content_stems(content)
         if sensitive:
             for kid, other, _, flagged in rows:
-                if not flagged and _mentions(content_stems(other), stems):
+                if not flagged and _rewords(content_stems(other), stems):
                     self._conn.execute(
                         "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
                     )
-        elif any(_mentions(stems, content_stems(r[1])) for r in rows):
+        elif any(_rewords(stems, content_stems(r[1])) for r in rows):
             sensitive = True
         if not copies:
             return match, sensitive
@@ -1770,8 +1797,12 @@ class MemoryStore:
         if match is None and here:
             first = here[0]
             match = (first[0], cast(str, _same_fact(content, first[1])))
-        for kid, _, _, _ in here:
+        for kid, other, _, _ in here:
             if match is not None and kid != match[0]:
+                # A dropped copy may be the fuller one: keep its detail.
+                fuller = _same_fact(match[1], other)
+                if fuller is not None:
+                    match = (match[0], fuller)
                 self._conn.execute(
                     "DELETE FROM knowledge_fts WHERE rowid = "
                     "(SELECT rowid FROM knowledge WHERE id = ?)",
@@ -2447,7 +2478,10 @@ class MemoryStore:
             for kid, other, other_flagged in rows
             if (words and _plain_fact_words(other) == words)
             or (
-                (flagged or other_flagged) and _same_memory(stems, content_stems(other))
+                (flagged or other_flagged)
+                # "Is not allergic" is the user's correction, not a copy.
+                and _negated(content) == _negated(other)
+                and _same_memory(stems, content_stems(other))
             )
         ]
 
