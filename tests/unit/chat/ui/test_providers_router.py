@@ -744,6 +744,78 @@ def test_active_names_the_provider_of_a_known_cloud_model(client, lemonade, keys
     assert client.get("/api/providers/active").json()["provider_name"] is None
 
 
+_OPENCODE = "opencode.big-model"
+
+
+@pytest.fixture
+def opencode_cold(lemonade, monkeypatch):
+    """A cloud model only Lemonade's list names, with nothing read from it yet."""
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", frozenset())
+    lemonade.models = [
+        {"id": _OPENCODE, "recipe": "cloud", "cloud_provider": "opencode"}
+    ]
+    return _OPENCODE
+
+
+def test_selecting_a_lemonade_listed_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, opencode_cold
+):
+    """#7327: Local only let this cloud model through as if it were local."""
+    resp = client.post("/api/providers/select", json={"model": opencode_cold})
+    assert resp.status_code == 409
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_picking_a_lemonade_listed_cloud_model_loads_nothing_here(
+    client, lemonade, keys, db, monkeypatch, opencode_cold
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+    )
+    resp = client.post("/api/providers/select", json={"model": opencode_cold})
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == opencode_cold
+    assert asked == []
+    assert keys["ensure"] == []
+
+
+@pytest.mark.parametrize("method", ["GET", "PUT"])
+def test_a_lemonade_listed_cloud_model_has_no_context_to_choose(
+    client, lemonade, opencode_cold, method
+):
+    if method == "GET":
+        resp = client.get(
+            "/api/providers/local/context", params={"model": opencode_cold}
+        )
+    else:
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": opencode_cold, "ctx_size": 32768},
+        )
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == providers._CLOUD_CONTEXT_DETAIL
+    assert "system-info" not in lemonade.paths("GET")
+
+
+def test_restart_does_not_reload_a_lemonade_listed_cloud_model(
+    client, lemonade, db, monkeypatch, opencode_cold
+):
+    started = []
+    monkeypatch.setattr(
+        providers, "_start_reload", lambda *a: started.append(a) or True
+    )
+    db.set_setting("custom_model", opencode_cold)
+    resp = client.post("/api/providers/local/restart", json={"confirm": True})
+    assert resp.status_code == 422, resp.text
+    assert "runs in the cloud" in resp.json()["detail"]
+    assert started == []
+
+
 def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db):
     model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
     _write_config({"last_model": model})
