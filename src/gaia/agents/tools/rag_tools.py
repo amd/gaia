@@ -98,6 +98,10 @@ _INDEX_JOBS: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
 _INDEX_FAILURES: "weakref.WeakKeyDictionary[Any, Dict[str, Tuple[str, str]]]" = (
     weakref.WeakKeyDictionary()
 )
+#: RAGSDK -> {realpath: _IndexJob} for the last job of each file to leave _INDEX_JOBS.
+_INDEX_ENDED: "weakref.WeakKeyDictionary[Any, Dict[str, Any]]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class _IndexJob:
@@ -117,6 +121,8 @@ class _IndexJob:
         self.finished = threading.Event()
         #: Finished and recorded on the agent: the result is final.
         self.done = threading.Event()
+        #: When the job left the running map (``time.perf_counter()``).
+        self.ended: Optional[float] = None
         #: Set once a caller returned "in progress": nobody is waiting on it.
         self.backgrounded = False
 
@@ -173,12 +179,17 @@ def _index_within_budget(
     path: str,
     budget: Optional[float] = None,
     on_indexed: Optional[Callable[[Dict[str, Any]], None]] = None,
+    since: Optional[float] = None,
 ) -> Tuple[Optional[Dict[str, Any]], _IndexJob]:
     """Index *path*, waiting at most *budget* seconds for it.
 
     Returns ``(result, job)``: ``result`` is ``rag.index_document``'s dict when
     it finished in time, else ``None`` while the job keeps running. A second
     call for the same file waits on the running job instead of starting another.
+
+    *since* is when the caller last saw the file unindexed (``time.perf_counter()``).
+    A job for it that succeeded after that is reused, so a caller that just
+    missed the job finishing does not index the file again.
 
     *on_indexed* is the bookkeeping a caller runs on success. When the job
     finishes after every caller got ``None`` back, it runs on the indexing
@@ -189,6 +200,20 @@ def _index_within_budget(
     with _INDEX_JOBS_LOCK:
         jobs = _INDEX_JOBS.setdefault(rag, {})
         job = jobs.get(key)
+        last = (_INDEX_ENDED.get(rag) or {}).get(key)
+        if (
+            job is None
+            and since is not None
+            and last is not None
+            and last.ended > since
+            and last.failure() is None
+        ):
+            # Attaching it may have failed unattended; the caller attaches it now.
+            _INDEX_FAILURES.get(rag, {}).pop(key, None)
+            return last.result, last
+        if job is None and last is not None and since is not None:
+            # Ended before this ask: no later ask can reuse it either.
+            _INDEX_ENDED.get(rag, {}).pop(key, None)
         if job is None:
             job = _IndexJob(path)
             jobs[key] = job
@@ -217,10 +242,12 @@ def _index_within_budget(
                     finally:
                         # Only once recorded, or a caller in between re-indexes it.
                         with _INDEX_JOBS_LOCK:
-                            job.done.set()
                             # Finished jobs leave the map: a later call indexes afresh.
                             if jobs.get(key) is job:
                                 del jobs[key]
+                                job.ended = time.perf_counter()
+                                _INDEX_ENDED.setdefault(rag, {})[key] = job
+                            job.done.set()
 
             ctx = contextvars.copy_context()
             threading.Thread(
@@ -1435,18 +1462,20 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
+                            # Recorded as index_document records it, so the
+                            # session never lists one file under two spellings.
                             idx_result, job = _index_within_budget(
                                 rag,
                                 resolved,
                                 on_indexed=functools.partial(
-                                    self._attach_indexed_document, file_path
+                                    self._attach_indexed_document, disk_path
                                 ),
                             )
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
                                 save_warning = self._attach_indexed_document(
-                                    file_path, idx_result
+                                    disk_path, idx_result
                                 )
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
@@ -2084,6 +2113,8 @@ class RAGToolsMixin:
 
                 # Resolve to real path for consistent validation
                 real_file_path = os.path.realpath(file_path)
+                # Before the guard: a background index can finish right after it.
+                asked_at = time.perf_counter()
 
                 # Guard: skip re-indexing if already tracked in this session.
                 # self.indexed_files is populated at agent startup (session-attached
@@ -2121,6 +2152,7 @@ class RAGToolsMixin:
                     on_indexed=functools.partial(
                         self._attach_indexed_document, file_path
                     ),
+                    since=asked_at,
                 )
                 if result is None:
                     return _indexing_in_progress(job)
@@ -2179,6 +2211,17 @@ class RAGToolsMixin:
                         }
                     if result.get("error_type") in _CACHE_LOCK_HINTS:
                         return _index_cache_error(result, file_path)
+                    if result.get("error_type") == "vision_model_failed":
+                        return {
+                            "status": "error",
+                            "error": result.get("error"),
+                            "error_type": "vision_model_failed",
+                            "file_name": result.get("file_name", Path(file_path).name),
+                            "hint": (
+                                "The vision model failed, not the file. Tell the user "
+                                "the error: it names the model and how to fix it."
+                            ),
+                        }
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."

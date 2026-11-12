@@ -179,7 +179,7 @@ describe('a new chat', () => {
         await sendFirstMessage('hello there');
 
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
-        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New Task', agent_type: 'gaia' });
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New chat', agent_type: 'gaia' });
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
         expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
     });
@@ -543,10 +543,10 @@ describe('first-run setup', () => {
     }
 
     it('a first task picked at the end of setup starts the first chat', async () => {
-        await finishSetupWith({ skill: 'check-in', title: 'Check in', note: '', prompt: 'Good morning. Let us check in.', needs_input: false });
+        await finishSetupWith({ skill: 'coding', title: 'Work on code', note: '', prompt: 'Look around w and tell me what this project does.', needs_input: false });
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
-        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Good morning. Let us check in.');
+        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Look around w and tell me what this project does.');
     });
 
     it('a first task that needs a subject opens a new chat with it typed in', async () => {
@@ -579,7 +579,7 @@ describe('first-run setup', () => {
 
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. No models download yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
@@ -651,5 +651,42 @@ describe('sidebar destinations', () => {
 
         expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
         expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
+    });
+});
+
+describe('New chat right after sending a first message', () => {
+    // v0.26.0-rc18: New chat clicked ~20 ms after Enter dropped the prompt.
+    // The chat existed but had not sent it yet, so it was cleaned up as an
+    // empty draft with the prompt inside, and nothing said so.
+    it('keeps the unsent message in the new chat box', async () => {
+        mocked.getMessages.mockImplementation(() => new Promise(() => { /* history still loading */ }));
+        mocked.deleteSession.mockResolvedValue({ deleted: true } as never);
+        // Earlier tests leave queued sends behind, which would keep the draft.
+        useChatStore.setState({ messageQueues: {} });
+        render(<App />);
+        await sendFirstMessage('Reply with exactly: RACE-LOST-1');
+        await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
+
+        // The untitled chat is called "New chat" too, in its row and header.
+        const buttons = await screen.findAllByRole('button', { name: 'New chat' });
+        await userEvent.click(buttons.find((b) => b.classList.contains('sb-nav-item'))!);
+
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+        expect(await screen.findByLabelText('Message')).toHaveValue('Reply with exactly: RACE-LOST-1');
+        expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The chat it came from is now an empty draft, and is cleaned up as one.
+        await waitFor(() => expect(mocked.deleteSession).toHaveBeenCalledWith('sess-new-0001'));
+    });
+
+    it("leaves another chat's unsent message where it is", async () => {
+        render(<App />);
+        await screen.findByRole('button', { name: 'New chat' });
+        useChatStore.getState().setPendingPrompt({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+
+        await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().pendingPrompt).toEqual({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+        expect(await screen.findByLabelText('Message')).toHaveValue('');
     });
 });

@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey, Params } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { AddSkillsFromLink } from './AddSkillsFromLink';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import type { SkillInfo, SkillSource } from '../../types';
 
@@ -28,13 +29,16 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const [error, setError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
 
+    const [reloads, setReloads] = useState(0);
+    const reload = useCallback(() => setReloads((n) => n + 1), []);
+
     useEffect(() => {
         let cancelled = false;
         api.listSkills()
-            .then((r) => { if (!cancelled) { setSkills(r.skills); setInvalid(r.invalid); } })
+            .then((r) => { if (!cancelled) { setSkills(r.skills); setInvalid(r.invalid); setError(null); } })
             .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
         return () => { cancelled = true; };
-    }, []);
+    }, [reloads]);
 
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
@@ -73,6 +77,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
                 <p className="settings-hint">{t('settings.skills.how', SKILLS_DIR)}</p>
             </details>
+            <AddSkillsFromLink onAdded={reload} />
             {error && <p className="settings-error" role="alert">{error}</p>}
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
             {skills && skills.length > 6 && (

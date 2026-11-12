@@ -202,23 +202,3 @@ def keyword_index(rag: Any) -> KeywordIndex:
         if slot.index is None or not slot.index.holds(chunks):
             slot.index = KeywordIndex(chunks, reuse=slot.index)
         return slot.index
-
-
-def rank_keyword_chunks(
-    query: str, chunks: Iterable[Tuple[int, str]], limit: int = 5
-) -> List[Tuple[int, float, List[str]]]:
-    """:meth:`KeywordIndex.rank` over (index, text) pairs, read once for this call.
-
-    For chunks searched more than once, use :func:`keyword_index` instead.
-    """
-    items = list(chunks)
-    text_of = dict(items)
-    keys = list(text_of)
-    position_of = {key: position for position, key in enumerate(keys)}
-    index = KeywordIndex([text_of[key] for key in keys])
-    return [
-        (keys[position], score, words)
-        for position, score, words in index.rank(
-            query, [position_of[key] for key, _text in items], limit
-        )
-    ]

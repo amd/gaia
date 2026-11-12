@@ -1,0 +1,8 @@
+
+  Sessions
+  Chats only. Press a to include eval and scheduled runs.
+
+  No sessions yet. Each conversation you have is kept here to reopen.
+
+  ↑/↓ choose · enter reopen · a all kinds · r refresh · esc close
+

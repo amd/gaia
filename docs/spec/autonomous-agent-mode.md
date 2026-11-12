@@ -239,9 +239,8 @@ This mirrors the OpenClaw heartbeat economics: routing routine classification
 to local small models makes always-on operation sustainable. The 35B model
 only loads when there is real work to execute.
 
-Model selection is configured via `GAIA_AUTO_OBSERVE_MODEL` (default:
-`Qwen3-4B-GGUF`) and falls back to the agent's primary model if the
-lightweight model is unavailable.
+This split is not built yet: every tick runs on the session's own model, and
+nothing reads `GAIA_AUTO_OBSERVE_MODEL` (planned, default `Qwen3-4B-GGUF`).
 
 ### 5.2 `set_loop_state` Tool (replaces "respond with IDLE")
 
@@ -287,7 +286,7 @@ def request_user_input(
     self,
     message: str,
     choices: Optional[List[str]] = None,      # show buttons instead of text field
-    default_if_no_response: Optional[str] = None,  # returned on timeout
+    default_if_no_response: Optional[str] = None,  # named on timeout, never returned
     timeout_seconds: int = 300,
     continue_if_no_response: bool = True,
 ) -> str:
@@ -296,34 +295,34 @@ def request_user_input(
     Args:
         message: The question to present to the user.
         choices: Optional list of choices (renders as buttons in the UI).
-        default_if_no_response: Value to use if no response received before
-            timeout. If not set and continue_if_no_response=True, returns
-            the sentinel string "__NO_RESPONSE__". Callers must check for
-            this value and handle it explicitly — never proceed blindly.
+        default_if_no_response: The choice the agent would pick if nobody
+            answers. It is never returned as the user's answer: on a timeout
+            the result starts with "__NO_RESPONSE__" and names this default.
         timeout_seconds: How long to wait (10 to 600, default 300).
         continue_if_no_response: If True, continue working after timeout.
             If False, the loop pauses until user re-engages.
 
     Returns:
-        User's response string, chosen option, or "__NO_RESPONSE__" if
-        timed out and no default was provided. ALWAYS check the return value.
+        User's response string or chosen option, or text starting with
+        "__NO_RESPONSE__" when they did not answer. ALWAYS check the return value.
     """
 ```
 
 **Return value contract:**
 - User responded: returns their text or chosen option
-- Timeout + `default_if_no_response` set: returns the default
-- Timeout + no default + `continue_if_no_response=True`: returns `"__NO_RESPONSE__"`
+- Timeout, with or without `default_if_no_response`: returns text starting with `"__NO_RESPONSE__"` that says the user did not answer and names the default, if one was set. Silence is never returned as an answer.
+- After an unanswered question, every approval-gated call that is not a known read needs a person's approval for the rest of the turn, even with Full access on. A later real answer lifts the hold.
 - Never returns empty string `""` — this prevents silent blind-proceed bugs
 
 **Callers must handle `"__NO_RESPONSE__"` explicitly:**
 ```python
 response = self.request_user_input("Which folder?", default_if_no_response="~/Documents")
-# response is always a real value here — default used on timeout
+if response.startswith("__NO_RESPONSE__"):
+    ...  # the default is an assumption to state, not the user's choice
 ```
 ```python
 response = self.request_user_input("Confirm deletion?", continue_if_no_response=True)
-if response == "__NO_RESPONSE__":
+if response.startswith("__NO_RESPONSE__"):
     self.set_loop_state("idle", reason="Awaiting user confirmation before delete")
     return  # do NOT proceed
 ```
@@ -603,15 +602,15 @@ in history, preventing context window saturation from repeated ticks.
 
 | Limit | Default | Config key |
 |-------|---------|------------|
-| Max steps per autonomous tick | 20 | `GAIA_AUTO_MAX_STEPS` |
-| Max autonomous ticks per hour | 30 | `GAIA_AUTO_MAX_TICKS_PER_HOUR` |
-| Max agent-created goals per day | 10 | `GAIA_AUTO_MAX_GOALS_PER_DAY` |
+| Seconds between idle ticks | 60 | `GAIA_AGENT_TICK_INTERVAL` |
+| Max autonomous ticks per hour | 30 | `GAIA_AGENT_HOURLY_LIMIT` |
+| Max seconds a single tick may run | 300 | `GAIA_AGENT_TICK_TIMEOUT` |
 | Min schedule interval | 30s | hardcoded |
 | Max schedule lookahead | 86400s | hardcoded |
 
-When `max_steps` is reached mid-tick, the agent is forced to `IDLE` and a
-warning is added to the activity log: "Tick exceeded step budget — partially
-completed work may need review."
+A tick that runs past `GAIA_AGENT_TICK_TIMEOUT` is cancelled and the loop goes
+idle. A per-tick step budget and a daily cap on agent-created goals are not
+implemented.
 
 When the hourly rate limit is hit, all further ticks are suppressed and a
 notification is shown in the UI: "Autonomous loop rate-limited — check
@@ -831,13 +830,13 @@ acting on its own initiative.
 │   ── or ──                                         │
 │  [___________________________]  [ Send ]            │
 │                                                     │
-│  ⏱ 4:32 remaining · will use default if no reply  │
+│  ⏱ 4:32 remaining                                  │
 └─────────────────────────────────────────────────────┘
 ```
 
 - `choices` renders as buttons (fast selection, no typing needed)
 - Timer countdown from `timeout_seconds`
-- "will use default if no reply" only shown when `default_if_no_response` set
+- No "will use default" note: an unanswered question is reported to the agent as unanswered, not answered with the default
 - Multiple cards stack if agent asks several questions in sequence
 - Each resolves independently; resolved cards collapse with the user's answer
 

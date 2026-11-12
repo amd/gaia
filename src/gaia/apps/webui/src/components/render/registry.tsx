@@ -19,6 +19,7 @@ import { AudioCard } from './AudioCard';
 import { DiffCard } from './DiffCard';
 import { ConfirmationCard } from './ConfirmationCard';
 import { NeedsInputCard } from './NeedsInputCard';
+import { ConnectAccountCard } from './ConnectAccountCard';
 import { GuideCard } from './guide/GuideCard';
 import { CalculatorCard } from './calculator/CalculatorCard';
 
@@ -62,6 +63,7 @@ export const CARD_REGISTRY: Record<string, CardComponent> = {
     diff: DiffCard,
     needs_confirmation: ConfirmationCard,
     needs_input: NeedsInputCard,
+    connect_account: ConnectAccountCard,
     guide: GuideCard,
     calculator: CalculatorCard,
 };

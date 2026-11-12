@@ -2183,6 +2183,72 @@ class TestDiagnoseLaunchpadOutage(unittest.TestCase):
         "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
     )
 
+    # Trimmed from CI on 2026-11-11: add-apt.log, then apt-update.log.
+    ADD_APT_API_TIMEOUT = (
+        "Traceback (most recent call last):\n"
+        '  File "/usr/bin/add-apt-repository", line 452, in <module>\n'
+        "    sys.exit(0 if addaptrepo.main() else 1)\n"
+        '  File "/usr/lib/python3/dist-packages/softwareproperties/ppa.py", '
+        "line 111, in lp\n"
+        '  File "/usr/lib/python3/dist-packages/launchpadlib/launchpad.py", '
+        "line 494, in login_anonymously\n"
+        '  File "/usr/lib/python3/dist-packages/httplib2/__init__.py", '
+        "line 1139, in connect\n"
+        "    sock.connect((self.host, self.port))\n"
+        "TimeoutError: [Errno 110] Connection timed out\n"
+    )
+    APT_UPDATE_ONLINE = (
+        "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+        "Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+        "Hit:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease\n"
+        "Reading package lists...\n"
+    )
+
+    def test_launchpad_api_timeout_is_named_as_an_outage(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        message = diagnose_launchpad_outage(
+            self.ADD_APT_API_TIMEOUT + self.APT_UPDATE_ONLINE
+        )
+        self.assertIn("could not reach Launchpad", message)
+        self.assertIn("TimeoutError: [Errno 110] Connection timed out", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_dropped_connection_names_the_last_error(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        dropped_then_timed_out = (
+            "http.client.RemoteDisconnected: Remote end closed connection "
+            "without response\n"
+            "During handling of the above exception, another exception occurred:\n"
+            + self.ADD_APT_API_TIMEOUT
+            + self.APT_UPDATE_ONLINE
+        )
+        message = diagnose_launchpad_outage(dropped_then_timed_out)
+        self.assertIn("Connection timed out", message)
+        self.assertNotIn("RemoteDisconnected", message)
+
+    def test_timeout_on_an_offline_machine_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        offline = (
+            "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+            "Err:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+            "  Temporary failure resolving 'azure.archive.ubuntu.com'\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(self.ADD_APT_API_TIMEOUT + offline))
+
+    def test_timeout_outside_launchpadlib_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        elsewhere = (
+            "Traceback (most recent call last):\n"
+            '  File "/usr/lib/python3/dist-packages/urllib3/connection.py", '
+            "line 199, in _new_conn\n"
+            "TimeoutError: [Errno 110] Connection timed out\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(elsewhere + self.APT_UPDATE_ONLINE))
+
     def test_index_outage_blames_launchpad_not_apt(self):
         from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 

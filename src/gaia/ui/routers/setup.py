@@ -35,6 +35,7 @@ from ..setup_runner import (
     SetupError,
     agent_ui_chat_model,
     check,
+    is_initialized,
     runner,
     step_labels,
     users_lemonade_url,
@@ -96,6 +97,8 @@ def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, 
     # cloud_steps lets the UI show a cloud choice's smaller download before it starts.
     return {
         **status,
+        # Seen ready before: a server that isn't answering now is not a first run.
+        "initialized": is_initialized(),
         "steps": step_labels(skip_chat_model, users_server),
         "cloud_steps": step_labels(True, users_server),
     }
