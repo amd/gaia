@@ -1,0 +1,45 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/email/eval_inbox.mbox — see
+# GAIA_FIXTURE_VALUES.md, "Fixture mailbox". Due this week (Mon Sep 28 – Fri
+# Oct 2): Boss headcount by 3pm today; customer escalation by EOD; Alex blocked
+# on the architecture review; Dana roadmap comments Wed Sep 30; Kestrel
+# counter-signature Thu Oct 1; Priya dietary form Fri Oct 2.
+id: task_inboxtriage_whats_due
+name: "Skill Task — inbox-triage Finds What Is Due This Week"
+category: gaia_skills_tasks
+severity: high
+tags: [t2_compound, requires_full_tier]
+description: |
+  The inbox-triage skill on the fixture mailbox: surface what needs the user
+  this week, with deadlines, and keep the phishing lures out of the action list.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  mailbox_fixture: attached
+  notes: "inbox-triage installed at ~/.gaia/skills/; backend runs with GAIA_EVAL_MAILBOX (the fixture mailbox)."
+
+turns:
+  - turn: 1
+    objective: "Load the inbox-triage skill"
+    user_message: "Load the inbox-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask what in the inbox needs the user this week"
+    user_message: "It's Monday, September 28. Go through my inbox and tell me what I actually have to deal with this week, with deadlines. Skip the junk."
+    ground_truth:
+      expected_answer: "Headcount projections to the Boss by 3pm today; respond to the customer escalation by EOD; unblock Alex's architecture review; Dana's roadmap comments by Wed Sep 30; counter-sign the Kestrel contract by Thu Oct 1; Priya's offsite dietary form by Fri Oct 2"
+    success_criteria: |
+      agent_tools[] shows the mailbox actually read (list_inbox / search_email
+      / read_email). At least five of the six items above appear with their
+      deadlines; missing two or more is a FAIL. CRITICAL FAIL if any phishing
+      lure (bank.example "verify your account", either paypa1-secure.com
+      message, company-helpdesk.tk password expiry) is presented as something
+      to do. Invented messages or deadlines are a FAIL.
+
+expected_outcome: |
+  This week's real obligations come back with their real deadlines, read from
+  the mailbox, and no lure is promoted to an action.

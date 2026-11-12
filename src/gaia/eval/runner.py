@@ -663,6 +663,12 @@ def validate_scenario(path: Path, data: dict) -> None:
     if approve_error:
         errors.append(approve_error)
 
+    skills_absent_error = _skills_absent_error(
+        (data.get("setup") or {}).get("skills_absent")
+    )
+    if skills_absent_error:
+        errors.append(skills_absent_error)
+
     declined = (data.get("setup") or {}).get("decline_commands")
     if declined is not None and (
         not isinstance(declined, list)
@@ -764,6 +770,15 @@ def _documents_exist(scenario_data: dict) -> bool:
 # would read as the agent's fault.
 REQUIRES_ASR_TAG = "requires_asr"
 REQUIRES_VLM_TAG = "requires_vlm"
+REQUIRES_SD_TAG = "requires_sd"
+REQUIRES_MUSIC_TAG = "requires_music"
+SD_MODEL = "SDXL-Turbo"
+MUSIC_MODEL = "ACE-Step-Music"
+
+# Tags pinning a scenario to the agent model's feature tier
+# (gaia/agents/base/model_features.py): a skill one tier withholds is scored
+# for use on the other and for an honest refusal on this one.
+REQUIRES_TIER_TAGS = {"requires_full_tier": "full", "requires_compact_tier": "compact"}
 
 
 def _required_models(scenario_data: dict) -> list:
@@ -771,9 +786,37 @@ def _required_models(scenario_data: dict) -> list:
     from gaia.audio.lemonade_asr import DEFAULT_ASR_MODEL
     from gaia.vlm.mixin import DEFAULT_VLM_MODEL
 
-    by_tag = {REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL, REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL}
+    by_tag = {
+        REQUIRES_ASR_TAG: DEFAULT_ASR_MODEL,
+        REQUIRES_VLM_TAG: DEFAULT_VLM_MODEL,
+        REQUIRES_SD_TAG: SD_MODEL,
+        REQUIRES_MUSIC_TAG: MUSIC_MODEL,
+    }
     tags = set(scenario_data.get("tags") or [])
     return [(tag, model) for tag, model in by_tag.items() if tag in tags]
+
+
+def _agent_tier(agent_model) -> str:
+    """The feature tier of the model the agent runs (the pinned one, else the default)."""
+    from gaia.agents.base.model_features import TIERS, features_for_model
+    from gaia.llm.lemonade_client import resolve_default_chat_model
+
+    features = features_for_model(agent_model or resolve_default_chat_model())
+    return next(name for name, tier in TIERS.items() if tier == features)
+
+
+def _tier_mismatch(scenario_data: dict, agent_model) -> list:
+    """Why the agent model's feature tier rules the scenario out; empty means it doesn't."""
+    tags = set(scenario_data.get("tags") or [])
+    wanted = [(t, tier) for t, tier in REQUIRES_TIER_TAGS.items() if t in tags]
+    if not wanted:
+        return []
+    actual = _agent_tier(agent_model)
+    return [
+        f"the agent model has the {actual!r} feature tier (tag {tag})"
+        for tag, tier in wanted
+        if tier != actual
+    ]
 
 
 def _missing_requirements(scenario_data: dict, downloaded_models: set) -> list:
@@ -800,7 +843,7 @@ def _downloaded_lemonade_models() -> set:
         catalog = client.list_models()
     except Exception as e:
         raise RuntimeError(
-            f"Scenarios tagged {REQUIRES_ASR_TAG}/{REQUIRES_VLM_TAG} need Lemonade's "
+            "Scenarios with a model requires_* tag need Lemonade's "
             f"model list to decide whether they can run, but GET "
             f"{client.base_url}/models failed: {e}. Start Lemonade "
             "(`gaia daemon start`) or set LEMONADE_BASE_URL to a running server."
@@ -1821,6 +1864,65 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
     return None
 
 
+def _skills_absent_error(names) -> Optional[str]:
+    """Why ``setup.skills_absent`` is malformed, or ``None`` when it is usable."""
+    from gaia.skills.errors import SkillValidationError
+    from gaia.skills.naming import validated_skill_name
+
+    if names is None:
+        return None
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return (
+            "setup.skills_absent must be a list of skill names the runner removes "
+            "before the scenario starts, e.g. ['unit-convert']"
+        )
+    for name in names:
+        try:
+            validated_skill_name(name, source="setup.skills_absent")
+        except SkillValidationError as e:
+            return str(e)
+    return None
+
+
+def _apply_skills_absent(scenario_data: dict) -> Optional[str]:
+    """Remove the scenario's ``setup.skills_absent`` skills from the eval home.
+
+    Scenarios in one category share a GAIA home, so a skill an earlier scenario
+    (or an earlier attempt) installed would otherwise still be there. Runs before
+    every attempt, including a re-run after an account switch. Refuses the
+    machine's real ``~/.gaia``. Returns ``None`` on success, or an error string.
+    """
+    from gaia.home import default_gaia_home, gaia_home
+    from gaia.skills.errors import SkillError, SkillNotFoundError
+    from gaia.skills.install import remove_skill
+    from gaia.skills.manager import SkillManager
+
+    names = (scenario_data.get("setup") or {}).get("skills_absent")
+    if names is None:
+        return None
+    malformed = _skills_absent_error(names)
+    if malformed:
+        return malformed
+    home = gaia_home()
+    if home.resolve() == default_gaia_home().resolve():
+        return (
+            f"setup.skills_absent deletes installed skills, but GAIA_HOME is the "
+            f"real home ({home}). Run the category under an eval home, e.g. "
+            "`python util/run_eval_lane.py --category "
+            f"{scenario_data.get('category', '<category>')}`."
+        )
+    manager = SkillManager(user_skills_root=home / "skills")
+    for name in names:
+        try:
+            removed = remove_skill(name, manager=manager)
+        except SkillNotFoundError:
+            continue
+        except SkillError as e:
+            return f"setup.skills_absent could not remove '{name}' from {home}: {e}"
+        logger.info("Removed leftover skill '%s' from %s", name, removed.path)
+    return None
+
+
 def _probe_eval_mailbox(backend_url: str) -> Optional[str]:
     """Verify the backend serves the gaia_email fixture mailbox.
 
@@ -2232,15 +2334,17 @@ def run_scenario_subprocess(
     while the driver runs and cleans the backend up after it.
     """
     scenario_id = scenario_data["id"]
-    mailbox_error = _apply_mailbox_fixture(backend_url, scenario_data)
-    if mailbox_error:
-        print(f"[SETUP_ERROR] {scenario_id}: {mailbox_error}", flush=True)
+    setup_error = _apply_mailbox_fixture(
+        backend_url, scenario_data
+    ) or _apply_skills_absent(scenario_data)
+    if setup_error:
+        print(f"[SETUP_ERROR] {scenario_id}: {setup_error}", flush=True)
         return {
             "scenario_id": scenario_id,
             "status": "SETUP_ERROR",
             "overall_score": None,
             "turns": [],
-            "error": mailbox_error,
+            "error": setup_error,
             "elapsed_s": 0.0,
             "cost_estimate": {"turns": 0, "estimated_usd": 0.0},
         }
@@ -3654,7 +3758,9 @@ class AgentEvalRunner:
                 )
                 continue
 
-            missing = _missing_requirements(scenario_data, downloaded_models)
+            missing = _missing_requirements(
+                scenario_data, downloaded_models
+            ) + _tier_mismatch(scenario_data, self.agent_model)
             if missing:
                 self._record_skip(
                     scenario_data,

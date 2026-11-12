@@ -300,6 +300,12 @@ class SkillLibraryToolsMixin:
                     "or point to can still be added with capture_skill. "
                     f"See {_DOCS_URL}"
                 )
+            elif not hub_offered:
+                payload["hint"] = (
+                    "Searching and installing skills from the hub needs a larger "
+                    "model. If the user wants a skill not listed here, tell them "
+                    "so; they can switch to a larger model in the model list."
+                )
             return payload
 
         @tool(atomic=True)

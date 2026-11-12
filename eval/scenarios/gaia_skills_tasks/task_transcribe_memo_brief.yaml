@@ -1,0 +1,39 @@
+# FIXTURE-SYNC: ~/gaia-eval/media/facilities_update.wav — fire drill moved to
+# Thursday, October 9, 2:15 PM; gather in the north parking lot by the blue bike
+# racks; one speaker, Priya from facilities. See GAIA_FIXTURE_VALUES.md.
+id: task_transcribe_memo_brief
+name: "Skill Task — transcribe-meeting Briefs a Voice Memo"
+category: gaia_skills_tasks
+severity: high
+tags: [t1_basic, requires_asr]
+description: |
+  The transcribe-meeting skill on a short recording: a real transcription, then
+  a brief whose decision and action come from what was said.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "transcribe-meeting installed at ~/.gaia/skills/; clip staged at ~/gaia-eval/media/facilities_update.wav."
+
+turns:
+  - turn: 1
+    objective: "Load the transcribe-meeting skill"
+    user_message: "Load the transcribe-meeting skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a transcript and short brief of ~/gaia-eval/media/facilities_update.wav"
+    user_message: "Transcribe ~/gaia-eval/media/facilities_update.wav and give me a short brief: what changed and what do I need to do?"
+    ground_truth:
+      expected_answer: "The fire drill moved to Thursday, October 9 at 2:15 PM; gather in the north parking lot next to the blue bike racks. Speaker: Priya from facilities."
+    success_criteria: |
+      agent_tools[] shows transcribe_media on the staged .wav. The brief gives
+      the new drill time (Thursday, October 9, 2:15 PM) and the meeting point
+      (north parking lot, blue bike racks). FAIL if transcribe_media was never
+      called, or if the day, time or place differs from the recording.
+
+expected_outcome: |
+  A brief built from a real transcript of the committed clip.

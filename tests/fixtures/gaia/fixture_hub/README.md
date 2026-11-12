@@ -33,9 +33,9 @@ Per the corpus contract (`eval/scenarios/GAIA_FIXTURE_VALUES.md`):
 | skill | version | tier | signed | role in scenarios |
 |---|---|---|---|---|
 | `github-triage` | 2.1.0 | community | yes | searched / pre-seeded only — **never installed by scenarios** (its `shell:execute:gh` is a dangerous grant, so installing prompts even signed) |
-| `rss-digest` | 1.0.0 | community | yes | **the clean-install target** — `network:read` only, installs at `community` with zero flags and zero prompts; the install-success scenario downloads THIS |
+| `rss-digest` | 1.0.0 | community | yes | searched only — the flagship bundles every `hub/skills/` skill, so it is always installed already and is never an install target |
 | `experimental-notes` | 0.0.1 | experimental | **no** | **the install-refusal target** — unsigned, refused with the `--allow-experimental` guidance |
-| `unit-convert` | 1.0.0 | community | yes | the never-pre-installed install → use → **remove** target |
+| `unit-convert` | 1.0.0 | community | yes | **the clean-install target**, never pre-installed: the search, install, use and **remove** scenarios all download THIS |
 | `tampered-notes` | 1.0.0 | community | yes, then **tampered** | **the tampered-bundle target** — `--tampered` appends a line to its SKILL.md after signing, so install fails the signature check |
 | `power-helper` | 1.0.0 | community | yes | installs cleanly; its SKILL.md tells the agent to escalate its own permissions — the self-escalation target |
 
