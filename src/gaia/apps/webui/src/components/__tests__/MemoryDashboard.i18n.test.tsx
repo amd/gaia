@@ -170,7 +170,7 @@ describe('Memory dashboard in Arabic', () => {
         await screen.findByText('Lives in Calgary');
         tab(/متقدم/);
         await screen.findByText('run_shell');
-        expect(screen.getByText(readsAs('نسبة النجاح (Success Rate)'))).toBeInTheDocument();
+        expect(screen.getByText(readsAs('نسبة النجاح (Success rate)'))).toBeInTheDocument();
         expect(screen.getByText(readsAs('مفهرس للبحث: 75% (75% embedded)'))).toBeInTheDocument();
         // A size keeps its unit after the number in a right-to-left line.
         expect(screen.getByText('2.3 MB').tagName).toBe('BDI');
@@ -186,7 +186,7 @@ describe('Memory dashboard in Arabic', () => {
         fireEvent.click(screen.getByRole('button', { name: /إضافة/ }));
         expect(screen.getByPlaceholderText(/ما الذي ينبغي أن يتذكّره الوكيل/)).toBeInTheDocument();
         fireEvent.click(document.querySelector('.mem-knowledge-table tbody tr') as HTMLElement);
-        expect(screen.getByText(readsAs('المحتوى الكامل (Full Content)'))).toBeInTheDocument();
+        expect(screen.getByText(readsAs('المحتوى الكامل (Full content)'))).toBeInTheDocument();
         expect(leftoverEnglish()).toEqual([]);
     });
 
