@@ -78,13 +78,23 @@ def turn_cost(
     return price(model_id, input_tokens, cached_tokens, output_tokens)
 
 
-def record_turn(db, model_id: Optional[str], stats: Optional[Dict[str, Any]]) -> None:
-    """Add a finished cloud turn to this month's spending."""
+def record_turn(
+    db,
+    model_id: Optional[str],
+    stats: Optional[Dict[str, Any]],
+    failed: bool = False,
+) -> None:
+    """Add a finished cloud turn to this month's spending.
+
+    A *failed* turn that reported no tokens never got a reply, so it is left out.
+    """
     provider = cloud_provider(model_id)
     if provider is None:
         return
     stats = stats or {}
     inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    if failed and not (isinstance(inp, int) and isinstance(out, int) and inp + out):
+        return
     usd = None
     if isinstance(inp, int) and isinstance(out, int):
         cached = stats.get("cached_tokens")

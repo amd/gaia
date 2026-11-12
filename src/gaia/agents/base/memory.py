@@ -605,6 +605,12 @@ SAVE_WHEN_ASKED_PROMPT = (
     "was saved. Call `remember` now with what they asked you to keep, then give "
     "your answer."
 )
+#: Ends a remember error caused by an argument: extraction can still keep the fact.
+SAVE_FAILED_ON_ARGUMENT = (
+    " This call stored nothing. Call remember again with a valid value; if you "
+    "don't, tell the user the save failed, not that it won't be remembered: "
+    "GAIA may still learn the fact from this chat."
+)
 
 
 def _own_words(text: str) -> List[str]:
@@ -5755,7 +5761,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {
                     "status": "error",
                     "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
+                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}."
+                        + SAVE_FAILED_ON_ARGUMENT
                     ),
                 }
 
@@ -5819,7 +5826,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 except ValueError:
                     return {
                         "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format.",
+                        "message": "Invalid due_at. Use ISO 8601 format."
+                        + SAVE_FAILED_ON_ARGUMENT,
                     }
 
             # The agent owns scoping. A label the model picks can file a

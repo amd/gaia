@@ -79,6 +79,33 @@
 
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* An answer's actions sit in a row under its text, at the start edge. */
+.msg-assistant .msg-inner {
+    display: flex;
+    flex-direction: column;
+}
+.msg-assistant .msg-header {
+    order: 1;
+    justify-content: flex-start;
+}
+.msg-assistant .msg-actions {
+    position: static;
+    margin-block-start: 4px;
+    margin-inline-start: -6px;
+}
+/* The latest answer's stay in view; older ones show on hover or focus. */
+.msg-latest .msg-actions { opacity: 1; }
+.msg-actions .msg-action-btn,
+.msg-actions .msg-copy {
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 6px;
+}
+.msg-actions svg { width: 16px; height: 16px; }
+/* Delete stands apart from the everyday actions. */
+.msg-actions .msg-delete { margin-inline-start: 10px; }
 .msg-copy.copied { color: var(--accent-green); }
 
 /* A reply being read stays stoppable without hovering it. */
@@ -110,6 +137,31 @@
     background: var(--danger-dim);
     opacity: 1;
 }
+
+/* A sent message opened for editing takes the column's width. */
+.msg-user:has(.msg-edit) .msg-inner { width: min(80%, 620px); }
+.msg-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.msg-edit-input {
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    resize: none;
+    line-height: inherit;
+    font-size: inherit;
+}
+.msg-edit-input:focus-visible { outline: none; }
+.msg-user:has(.msg-edit-input:focus-visible) .msg-inner { box-shadow: 0 0 0 2px var(--accent); }
+.msg-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.msg-edit-btn { height: 28px; }
 
 .msg-body {
     min-width: 0;
@@ -159,6 +211,13 @@
 .msg-stopped.is-unconfirmed {
     color: var(--accent-yellow);
 }
+/* Continue and Try again sit beside the chip, centred on it. */
+.msg-stopped:has(+ .msg-try-again),
+.msg-stopped ~ .msg-try-again {
+    margin-top: 8px;
+    vertical-align: middle;
+}
+.msg-stopped + .msg-try-again { margin-inline-start: 8px; }
 
 .msg-cut-off {
     margin: 8px 0 0;
@@ -607,15 +666,10 @@
 
 /* Thinking indicator — inline next to GAIA name in header */
 .thinking-indicator {
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
-}
-
-.thinking-indicator .cursor {
-    width: 6px;
-    height: 12px;
 }
 
 .thinking-indicator-hint {

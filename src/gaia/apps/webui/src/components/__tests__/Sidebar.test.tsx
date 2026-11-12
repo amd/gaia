@@ -64,6 +64,12 @@ describe('Sidebar', () => {
         expect(screen.queryByText('Fix the build')).not.toBeInTheDocument();
     });
 
+    it('Connectors opens the connectors settings pane', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Connectors' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
+    });
+
     it('puts search above New chat, expanded and collapsed', () => {
         const above = (a: HTMLElement, b: HTMLElement) =>
             !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -87,6 +93,12 @@ describe('Sidebar', () => {
         render(<Sidebar onNewChat={onNewChat} />);
         fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
         expect(onNewChat).toHaveBeenCalledOnce();
+    });
+
+    it('Skills opens the skills settings, beside Memory and Scheduled tasks', () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        fireEvent.click(screen.getByRole('button', { name: /Skills/ }));
+        expect(useChatStore.getState().settingsSection).toBe('skills');
     });
 
     it('opens a chat', () => {

@@ -263,3 +263,40 @@ def test_agents_are_never_built_at_the_same_time(monkeypatch):
 
     assert len(peak) == len(builders)
     assert max(peak) == 1
+
+
+def test_stop_ends_the_loading_of_attached_documents(built, docs, monkeypatch):
+    """A chat with hundreds of attached documents went on loading them all
+    after Stop, and the next message waited behind it."""
+    client, agents = built
+    folder, _, _ = docs
+    paths = []
+    for n in range(5):
+        path = folder / f"doc{n}.txt"
+        path.write_text(f"document {n}", encoding="utf-8")
+        paths.append(str(path))
+    load = _Rag.index_document
+
+    def load_then_stop_after_two(self, path):
+        result = load(self, path)
+        if len(self.indexed) == 2:
+            agents[0]._cancel_event.set()
+        return result
+
+    monkeypatch.setattr(_Rag, "index_document", load_then_stop_after_two)
+
+    r = _query(client, session_id="s1", documents=paths)
+
+    agent = agents[0]
+    assert agent.rag.indexed == paths[:2]
+    step = _index_step(r)
+    assert step["success"] is False
+    assert step["status"] == "stopped"
+    assert "3 documents were not loaded" in step["message"]
+
+    # The rest load with the next message; the two already loaded are not redone.
+    r = _query(client, session_id="s1", documents=paths)
+
+    assert agent.rag.indexed == paths
+    assert sorted(agent.indexed_files) == sorted(paths)
+    assert _index_step(r)["success"] is True
