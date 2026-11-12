@@ -211,6 +211,30 @@ describe('ModelSettings provider keys', () => {
         expect(await within(card).findByText('Not connected', {}, { timeout: 4000 })).toBeInTheDocument();
     });
 
+    it('says the key store is locked and asks the OS again only on Try again', async () => {
+        const locked = {
+            providers: [LOCAL, fireworks({
+                key_state: 'store_locked' as const,
+                key_message: 'The OS credential store is locked: its unlock prompt was closed.',
+            })],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        };
+        mockedApi.listProviders.mockResolvedValue(locked);
+        mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
+        const card = await openFireworks();
+        expect(within(card).getByText(/key store is locked/)).toBeInTheDocument();
+        expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
+        const reads = mockedApi.listProviders.mock.calls.length;
+        // A locked store is not polled: polling would reopen the prompt the user closed.
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(mockedApi.listProviders.mock.calls.length).toBe(reads);
+
+        fireEvent.click(within(card).getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.retryKeyStore).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
+    });
+
     it('connects with the typed key and clears the field', async () => {
         mockedApi.connectProviderWaitingForOs.mockResolvedValue({ ...fireworks(), remembered: true, remember_error: null });
         const card = await openFireworks();

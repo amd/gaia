@@ -182,11 +182,10 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
-#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
-#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: The flagship's step limit when nothing overrides it: a backstop for a runaway
+#: turn, high enough that real work never reaches it. ``GAIA_AGENT_MAX_STEPS``
 #: and an explicit ``max_steps`` still win.
-FLAGSHIP_MAX_STEPS = 150
+FLAGSHIP_MAX_STEPS = 1000
 
 
 def flagship_max_steps() -> int:

@@ -1379,7 +1379,7 @@ def build_parser():
         type=int,
         default=None,
         help="Maximum conversation steps. Defaults to the agent's step limit "
-        "(150 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
+        "(1000 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     agent_loop_parser.add_argument(
         "--list-tools",
@@ -7126,7 +7126,7 @@ def handle_api_command(args):
                 base_url=getattr(args, "base_url", None),
             )
             if not success:
-                return
+                sys.exit(1)
 
         try:
             import uvicorn
@@ -7975,6 +7975,8 @@ def handle_gateway_command(args):
                     model=model,
                     messages=[{"role": "user", "content": args.prompt}],
                     max_tokens=256,
+                    # Reasoning would spend these 256 tokens before any answer.
+                    reasoning_effort=None,
                 )
             except CloudModelUnavailableError:
                 _report_unavailable_gateway_model(manager, model)

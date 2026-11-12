@@ -514,6 +514,22 @@ def _probe_ok(probe: str) -> None:
     _last_probe_warning.pop(probe, None)
 
 
+def _catalog_entries(body: Any) -> List[Dict[str, Any]]:
+    """The model entries of a Lemonade ``/models`` answer.
+
+    Raises:
+        ValueError: The answer is not a list of model objects.
+    """
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list) or not all(isinstance(m, dict) for m in data):
+        raise ValueError(
+            "Lemonade's model list came back in an unexpected shape (it answers, "
+            "but not with a list of models). Check that the model server URL in "
+            "Settings > Advanced > Model server points at Lemonade."
+        )
+    return data
+
+
 def _loaded_chat_entry(
     health: Dict[str, Any],
     loaded: List[Dict[str, Any]],
@@ -636,14 +652,29 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
                 # Catalog for size and labels; its ctx_size is the saved option,
                 # not the loaded window.
-                models_resp = await client.get(f"{base_url}/models", headers=_auth)
-                if models_resp.status_code == 200:
-                    for m in models_resp.json().get("data", []):
-                        if m.get("id") == status.model_loaded:
-                            status.model_size_gb = m.get("size")
-                            status.model_labels = m.get("labels")
-                        if "embed" in m.get("id", "").lower():
-                            status.embedding_model_loaded = True
+                model_list_malformed = False
+                try:
+                    models_resp = await client.get(f"{base_url}/models", headers=_auth)
+                    if models_resp.status_code == 200:
+                        for m in _catalog_entries(models_resp.json()):
+                            if m.get("id") == status.model_loaded:
+                                status.model_size_gb = m.get("size")
+                                status.model_labels = m.get("labels")
+                            if "embed" in (m.get("id") or "").lower():
+                                status.embedding_model_loaded = True
+                        _probe_ok("models")
+                    else:
+                        _probe_failed(
+                            status,
+                            "models",
+                            "Could not read Lemonade's model list: it returned "
+                            f"HTTP {models_resp.status_code}.",
+                        )
+                except probe_errors as exc:
+                    model_list_malformed = isinstance(exc, ValueError)
+                    _probe_failed(
+                        status, "models", f"Could not read Lemonade's model list: {exc}"
+                    )
 
                 # Validate that the loaded model matches what GAIA Chat (or any
                 # registered agent) expects. A custom_model override wins over
@@ -675,7 +706,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
-                # yet pulled to disk.
+                # yet pulled to disk. A list already named malformed above
+                # would only warn twice.
                 expected_missing = (
                     not status.model_loaded or not status.expected_model_loaded
                 )
@@ -683,6 +715,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     expected_missing
                     and status.default_model_name
                     and not status.default_model_is_cloud
+                    and not model_list_malformed
                 ):
                     _target = status.default_model_name
                     try:
@@ -702,8 +735,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             )
                         else:
                             default_lower = _norm_model_id(_target)
-                            for m in catalog_resp.json().get("data", []):
-                                if _norm_model_id(m.get("id", "")) == default_lower:
+                            for m in _catalog_entries(catalog_resp.json()):
+                                if _norm_model_id(m.get("id") or "") == default_lower:
                                     status.model_downloaded = m.get("downloaded", False)
                                     # Capture the catalog size so the
                                     # "not downloaded" banner can show an
@@ -987,13 +1020,17 @@ async def get_warm_up():
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:
-    """Check if a model is found, downloaded, and loaded on Lemonade server."""
+    """Check if a model is found, downloaded, and loaded on Lemonade server.
+
+    ``checked`` stays False when the model list couldn't be read, so "not
+    found" is never claimed for a server that didn't answer.
+    """
     status = ModelStatus()
     if not model_name:
         return status
-    try:
-        import httpx
+    import httpx
 
+    try:
         base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1003,41 +1040,55 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                 params={"show_all": "true"},
                 headers=_auth,
             )
+            listed: Optional[List[Dict[str, Any]]] = None
             if models_resp.status_code == 200:
+                try:
+                    listed = _catalog_entries(models_resp.json())
+                except ValueError as e:
+                    logger.info("Model list for %s unreadable: %s", model_name, e)
+            if listed is not None:
+                status.checked = True
                 model_name_lower = model_name.lower()
-                for m in models_resp.json().get("data", []):
-                    mid = m.get("id", "").lower()
-                    mname = m.get("name", "").lower()
-                    if model_name_lower in (mid, mname):
+                for m in listed:
+                    mid = str(m.get("id") or "")
+                    mname = str(m.get("name") or "").lower()
+                    if _model_ids_match(mid, model_name) or model_name_lower == mname:
                         status.found = True
-                        status.downloaded = m.get("downloaded", False)
+                        status.downloaded = bool(m.get("downloaded", False))
                         break
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            if health_resp.status_code == 200:
-                health_data = health_resp.json()
-                loaded_model = health_data.get("model_loaded", "")
-                if loaded_model and loaded_model.lower() == model_name.lower():
+            health_data = health_resp.json() if health_resp.status_code == 200 else None
+            if isinstance(health_data, dict):
+                loaded_model = health_data.get("model_loaded")
+                if isinstance(loaded_model, str) and _model_ids_match(
+                    loaded_model, model_name
+                ):
                     status.found = True
                     status.downloaded = True
                     status.loaded = True
                 # Also check all_models_loaded list
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("model_name", "").lower() == model_name.lower():
+                loaded_list = health_data.get("all_models_loaded")
+                for m in loaded_list if isinstance(loaded_list, list) else []:
+                    if isinstance(m, dict) and _model_ids_match(
+                        str(m.get("model_name") or ""), model_name
+                    ):
                         status.found = True
                         status.downloaded = True
                         status.loaded = True
                         break
-    except Exception as e:
-        logger.debug("Model status check failed for %s: %s", model_name, e)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+        # Unchecked, which Settings says in words; InvalidURL isn't an HTTPError.
+        logger.info("Could not check model %s on the model server: %s", model_name, e)
 
     logger.debug(
-        "Model status for %s: found=%s, downloaded=%s, loaded=%s",
+        "Model status for %s: found=%s, downloaded=%s, loaded=%s, checked=%s",
         model_name,
         status.found,
         status.downloaded,
         status.loaded,
+        status.checked,
     )
     return status
 
@@ -1120,12 +1171,35 @@ async def update_settings(
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        from .providers import (
+            clear_restore_notice,
+            provider_of,
+            refuse_blocked_cloud_model,
+        )
+
         if value:
+            refuse_blocked_cloud_model(value)
             logger.info("Custom model override set: %s", value)
         else:
             logger.info("Custom model override cleared")
             value = None
+        # last_model is what the flagship sidecar warms and the next start restores.
+        try:
+            GaiaConfig.save_keys(
+                {
+                    "last_model": value,
+                    "last_provider": provider_of(value) if value else None,
+                }
+            )
+        except GaiaConfigError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"The custom model was not saved: {e} Then save it again.",
+            ) from e
         db.set_setting("custom_model", value)
+        clear_restore_notice()
 
     # Only touch context_size when the field was explicitly included in the request.
     if "context_size" in request.model_fields_set:

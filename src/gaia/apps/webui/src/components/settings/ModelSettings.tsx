@@ -80,6 +80,17 @@ export function ModelSettings() {
         }
     }, []);
 
+    // The user closed the OS unlock prompt; GAIA asks again only on this click.
+    const retryKeyStore = useCallback(async () => {
+        try {
+            await api.retryKeyStore();
+        } catch (err) {
+            setLoadError(err instanceof Error ? err.message : String(err));
+            return;
+        }
+        await loadProviders();
+    }, [loadProviders]);
+
     const loadModels = useCallback(async (id: ProviderId, quiet = false) => {
         if (!quiet) {
             setModels(null);
@@ -289,7 +300,7 @@ export function ModelSettings() {
 
             <ModelInUse
                 row={listedInUse ?? (sameModelId(inUseRow?.id, active?.model) ? inUseRow : null)}
-                providerName={providers?.find((p) => p.id === active?.provider)?.name ?? null}
+                providerName={active?.provider_name ?? null}
                 choices={connected ? switchChoices : []}
                 labels={labels}
                 disabled={busy !== null}
@@ -366,7 +377,15 @@ export function ModelSettings() {
                                     </span>
                                 )}
                             </div>
-                            {!provider.key_source && (
+                            {!provider.key_source && provider.key_state === 'store_locked' && (
+                                <span className="settings-hint" role="status">
+                                    {t('settings.key.storeLocked')}{' '}
+                                    <button type="button" className="link-btn" onClick={() => void retryKeyStore()}>
+                                        {t('settings.key.unlockAgain')}
+                                    </button>
+                                </span>
+                            )}
+                            {!provider.key_source && provider.key_state !== 'store_locked' && (
                                 <span className="settings-hint">
                                     {provider.key_state === 'waiting_for_os_permission'
                                         ? provider.key_message ?? t('settings.key.waitingOs')

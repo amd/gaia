@@ -127,6 +127,8 @@ class AgentLoop:
             str, tuple[threading.Event, Any, threading.Event]
         ] = {}
         self._active_goal_ticks_lock = threading.Lock()
+        # Why the last tick could not read the goal store; None once it opens.
+        self.goal_store_error: Optional[str] = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -413,13 +415,16 @@ class AgentLoop:
         from gaia.config import gaia_home
 
         try:
-            return GoalStore().get_actionable_goals()[:5]
+            goals = GoalStore().get_actionable_goals()[:5]
         except (sqlite3.Error, OSError) as exc:
-            raise RuntimeError(
+            self.goal_store_error = (
                 f"Could not read approved goals from {gaia_home() / 'goals.db'}: "
                 f"{exc}. Approved goals will not run until it opens; close other "
                 "GAIA windows using it and restart GAIA."
-            ) from exc
+            )
+            raise RuntimeError(self.goal_store_error) from exc
+        self.goal_store_error = None
+        return goals
 
     # ── Tick execution ────────────────────────────────────────────────────────
 

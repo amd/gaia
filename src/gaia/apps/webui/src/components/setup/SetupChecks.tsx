@@ -125,8 +125,13 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
     return (
         <section className="setup-card" aria-label={t('setup.check.title')}>
             <div className="setup-bar-head">
-                <span>{t('setup.checks.count', { done: String(finished), total: String(rows.length) })}</span>
-                <bdi dir="ltr">{percent}%</bdi>
+                {/* A count that stops moving reads like a hang; say who it waits on. */}
+                {awaitingChoice
+                    ? <span>{t('setup.checks.waitingChoice')}</span>
+                    : <>
+                        <span>{t('setup.checks.count', { done: String(finished), total: String(rows.length) })}</span>
+                        <bdi dir="ltr">{percent}%</bdi>
+                    </>}
             </div>
             <progress className="setup-progress" max={100} value={percent} aria-label={t('setup.check.title')} />
             {list}

@@ -1937,6 +1937,15 @@
     color: var(--text-muted);
     font-size: 13px;
 }
+.mem-about-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
 @media (max-width: 600px) {
     .mem-about-add { flex-wrap: wrap; }
     .mem-about-add .mem-input { flex-basis: 100%; }

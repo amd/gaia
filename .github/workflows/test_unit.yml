@@ -76,6 +76,7 @@ on:
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
       - 'docs/connectors/slack.mdx'
+      - 'docs/sdk/infrastructure/connectors.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -149,6 +150,7 @@ on:
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
       - 'docs/connectors/slack.mdx'
+      - 'docs/sdk/infrastructure/connectors.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -473,6 +475,15 @@ jobs:
           echo "acceptable. Skips itself when the runner has no network."
           echo ""
           pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
+
+      - name: Run MCP catalog launch test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Launching every catalog MCP server at its pinned version ==="
+          echo "A pin test only proves the version is named; this proves it starts and lists tools"
+          echo ""
+          pytest tests/integration/test_mcp_catalog_launch.py -v --tb=short --timeout=900
 
       - name: Run Lemonade checksum pinning test
         env:

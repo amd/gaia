@@ -10,6 +10,7 @@ import pytest
 
 from gaia.agents.base import history
 from gaia.agents.base.history import (
+    HIDDEN_TURNS_NOTE,
     CutReporter,
     TurnMessages,
     select_history,
@@ -31,6 +32,15 @@ def _turn(index):
         {"role": "user", "content": f"question-{index}"},
         {"role": "assistant", "content": f"answer-{index}"},
     ]
+
+
+def _noted(messages):
+    """*messages* as the model gets them once older turns were left out."""
+    first = {
+        **messages[0],
+        "content": f"{HIDDEN_TURNS_NOTE}\n\n{messages[0]['content']}",
+    }
+    return [first, *messages[1:]]
 
 
 def _tool_turn(index):
@@ -67,8 +77,8 @@ def test_block_eviction_keeps_prefix_stable_until_budget_crossed():
     turns = [_turn(i) for i in range(12)]
     with patch("gaia.agents.base.history.count_tokens", return_value=10):
         assert select_history(turns[:10], 100) == sum(turns[:10], [])
-        assert select_history(turns[:11], 100) == sum(turns[6:11], [])
-        assert select_history(turns[:12], 100) == sum(turns[6:12], [])
+        assert select_history(turns[:11], 100) == _noted(sum(turns[6:11], []))
+        assert select_history(turns[:12], 100) == _noted(sum(turns[6:12], []))
 
 
 def test_a_cut_is_reported_once_with_its_size():
@@ -230,7 +240,7 @@ def test_a_turn_that_cannot_be_shortened_enough_is_dropped_alone(caplog):
     )
     turns = [_turn(0), huge, _turn(2)]
 
-    assert select_history(turns, 1000) == _turn(0) + _turn(2)
+    assert select_history(turns, 1000) == _noted(_turn(0) + _turn(2))
     assert "dropped 1 that still did not fit" in caplog.text
 
 
@@ -469,7 +479,8 @@ def test_history_admitted_before_the_memory_context_is_refit(monkeypatch):
     refit = history.fit_history_to_turn(agent, messages, _with_memory_context(2000))
 
     assert plain is messages
-    assert refit[-2:] == turns[-1]
+    assert refit == _noted(messages[-len(refit) :])
+    assert refit[-1] == turns[-1][-1]
     assert "question-0" not in json.dumps(refit)
     assert len(refit) < len(messages)
 

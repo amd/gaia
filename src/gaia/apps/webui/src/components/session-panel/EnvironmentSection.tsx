@@ -47,7 +47,9 @@ function baseName(path: string): string {
 
 export function EnvironmentSection({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const t = useT();
-    const { env } = useSessionEnvironment(sessionId);
+    const { env, refresh } = useSessionEnvironment(sessionId);
+    // A turn can add a document or folder to what the chat reaches.
+    useTurnEnd(busy, () => { void refresh(); });
     const summary = env && !env.internet ? t('env.offline') : null;
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
@@ -171,7 +173,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
+                <span className="sp-item-name" dir="auto" title={entry.path}>{entry.name || baseName(entry.path)}</span>
                 <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (

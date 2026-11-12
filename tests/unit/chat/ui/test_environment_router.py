@@ -73,6 +73,81 @@ def test_default_is_internet_on_and_the_computed_scope(client, session_id):
     assert "gaia_documents" in sources
 
 
+def test_a_library_copy_is_listed_under_the_documents_own_name(
+    client, session_id, tmp_path
+):
+    # #7224: the copy's file name carries an internal id prefix.
+    copy = tmp_path / "6bebd6da81b2_outside.md"
+    copy.write_text("gate code", encoding="utf-8")
+    db = client.app.state.db
+    doc = db.add_document(
+        filename="outside.md",
+        filepath=str(copy),
+        file_hash="h-outside",
+        file_size=9,
+        chunk_count=1,
+        file_mtime=copy.stat().st_mtime,
+    )
+    db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    entry = next(f for f in body["folders"] if f["path"] == str(copy))
+    assert entry["source"] == "document"
+    assert entry["name"] == "outside.md"
+    others = [f for f in body["folders"] if f["path"] != str(copy)]
+    assert others and all(f["name"] is None for f in others)
+
+
+def test_files_are_listed_in_the_order_of_the_names_shown(client, session_id, tmp_path):
+    db = client.app.state.db
+    for prefix, name in (("0aaa", "zebra.md"), ("ffff", "apple.md")):
+        copy = tmp_path / f"{prefix}_{name}"
+        copy.write_text(name, encoding="utf-8")
+        doc = db.add_document(
+            filename=name,
+            filepath=str(copy),
+            file_hash=f"h-{name}",
+            file_size=len(name),
+            chunk_count=1,
+            file_mtime=copy.stat().st_mtime,
+        )
+        db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    names = [f["name"] for f in body["folders"] if f["name"]]
+    assert names == ["apple.md", "zebra.md"]
+
+
+def test_a_document_name_survives_another_path_spelling_and_a_blank_name_is_null(
+    client, session_id, tmp_path
+):
+    (tmp_path / "sub").mkdir()
+    named = tmp_path / "1111_report.md"
+    blank = tmp_path / "2222_blank.md"
+    for path, name, stored in (
+        (named, "report.md", str(tmp_path / "sub" / ".." / named.name)),
+        (blank, "", str(blank)),
+    ):
+        path.write_text(name or "x", encoding="utf-8")
+        doc = client.app.state.db.add_document(
+            filename=name,
+            filepath=stored,
+            file_hash=f"h-{path.name}",
+            file_size=1,
+            chunk_count=1,
+            file_mtime=path.stat().st_mtime,
+        )
+        client.app.state.db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    by_base = {Path(f["path"]).name: f for f in body["folders"]}
+    assert by_base[named.name]["name"] == "report.md"
+    assert by_base[blank.name]["name"] is None
+
+
 def test_add_then_remove_folder_persists(client, session_id, folder):
     added = client.post(
         f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
