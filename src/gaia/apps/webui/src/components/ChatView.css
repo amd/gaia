@@ -382,9 +382,16 @@
 /* ── Input Area -- refined prompt input ──────────────────────────── */
 
 .input-area {
+    position: relative;
     padding: 0 0 16px;
     flex-shrink: 0;
     background: var(--bg-primary);
+}
+
+/* Scrolled up, the last lines fade into the composer instead of running into its edge. */
+.messages-scroll.is-scrolled-up {
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to bottom, black calc(100% - 24px), transparent);
 }
 
 @media (max-width: 768px) {
@@ -393,10 +400,10 @@
     .input-column { padding: 0 12px; }
 }
 
-/* Scroll to bottom FAB */
+/* Scroll to bottom: floats 12px above the composer stack, however tall it grows. */
 .scroll-bottom-btn {
     position: absolute;
-    bottom: 100px;
+    bottom: calc(100% + 12px);
     left: 50%;
     transform: translateX(-50%);
     width: 34px;

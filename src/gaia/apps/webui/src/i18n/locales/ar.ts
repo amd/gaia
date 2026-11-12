@@ -992,6 +992,7 @@ const messages: Messages = {
     'chat.dropAttachFailed': '{name} موجود في مستنداتك لكنه غير مرفق بهذه المحادثة: {error}',
     'chat.detachFailed': 'تعذّرت إزالة {name} من هذه المحادثة: {error}',
     'chat.dismissError': 'إغلاق الخطأ',
+    'chat.scrollToBottom': 'الانتقال إلى الأسفل',
     'chat.dismissExportError': 'إغلاق خطأ التصدير',
     'settings.close': 'إغلاق الإعدادات',
     'settings.loading': 'جارٍ التحميل…',

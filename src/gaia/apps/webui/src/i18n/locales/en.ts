@@ -993,6 +993,7 @@ export const enMessages = {
     'chat.dropAttachFailed': '{name} is in your documents but isn\'t attached to this chat: {error}',
     'chat.detachFailed': 'Couldn\'t remove {name} from this chat: {error}',
     'chat.dismissError': 'Dismiss error',
+    'chat.scrollToBottom': 'Scroll to bottom',
     'chat.dismissExportError': 'Dismiss export error',
     'settings.loading': 'Loading…',
     'settings.section.general': 'General',

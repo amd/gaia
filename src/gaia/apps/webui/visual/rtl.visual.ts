@@ -499,6 +499,31 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongChat(page: Page): Promise<void> {
+    const messages = Array.from({ length: 24 }, (_, i) => ({
+        id: i + 1, session_id: ANSWER_SESSION, role: i % 2 ? 'assistant' : 'user', created_at: NOW.toISOString(), rag_sources: null,
+        content: i % 2 ? `Answer ${i}: ${'The canal carried water to the fields long before it carried boats. '.repeat(6)}` : `Question ${i}`,
+    }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({ json: { messages, total: messages.length } }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`jump to bottom floats above the composer, clear of it (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
+        await expect(page.getByText('Question 22')).toBeVisible();
+        await page.locator('.messages-scroll').hover();
+        await page.mouse.wheel(0, -20_000);
+        const button = page.locator('.scroll-bottom-btn');
+        await expect(button).toBeVisible();
+        await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+        const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
+        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`jump-to-bottom-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
