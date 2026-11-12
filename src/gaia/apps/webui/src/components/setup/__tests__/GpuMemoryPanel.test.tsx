@@ -124,7 +124,7 @@ describe('GPU memory: what a bigger share unlocks', () => {
     });
 
     it('offers no Keep when the current share is unknown', () => {
-        render(<Harness initial={gpuStatus({ gpu_gb: null, recommended_setting_gb: null })} />);
+        render(<Harness initial={gpuStatus({ gpu_gb: undefined, recommended_setting_gb: null })} />);
         expect(screen.queryByRole('radio', { name: /Keep/ })).toBeNull();
         expect(screen.getAllByRole('radio')[0]).toHaveAttribute('aria-checked', 'true');
     });
