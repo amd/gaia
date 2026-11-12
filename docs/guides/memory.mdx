@@ -520,7 +520,7 @@ These thresholds live in `~/.gaia/memory_settings.json` under a `skill_synthesis
 
 Synthesized skills follow the same lineage rules as facts: a better recipe **supersedes** an older one rather than overwriting it, and nothing is deleted automatically.
 
-A learned procedure keeps a track record after it is first used. When GAIA recalls one and asks you to approve one of its steps, your answer counts: declining counts against the procedure, approving counts for it. Prompts for tools the procedure doesn't use don't count, and neither do steps that ran without asking you (Accept edits, an earlier Always allow, or full access). After a procedure has three answers of its own, GAIA stops recalling it once it falls below the 80% success rate it was learned at, and a new run of the same task can learn a replacement.
+A learned procedure keeps a track record after it is first used. When GAIA recalls one and asks you to approve one of its steps, your answer counts: declining counts against the procedure, approving counts for it. Prompts for tools the procedure doesn't use don't count, and neither do steps that ran without asking you (Accept edits, an earlier Always allow, or full access). After a procedure has three answers of its own, GAIA stops recalling it once it falls below the 80% success rate it was learned at, counted in runs: a procedure learned from three runs is retired by three declines. A run where you declined a step is never used to learn or relearn a procedure, and a new run of the same task done in full can learn a replacement.
 
 **Off switches:**
 

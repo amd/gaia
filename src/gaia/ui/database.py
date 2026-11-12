@@ -1620,6 +1620,40 @@ class ChatDatabase:
                 doc["chunk_count"] = new_chunk_count
                 return self._enrich_document(doc)
 
+            # The same file with new content: its row moves to the new content.
+            same_file = self._conn.execute(
+                "SELECT id FROM documents WHERE filepath = ? ORDER BY indexed_at DESC",
+                (filepath,),
+            ).fetchone()
+            if same_file:
+                self._conn.execute(
+                    """UPDATE documents
+                       SET filename = ?, file_hash = ?, file_size = ?,
+                           chunk_count = ?, file_mtime = ?, indexed_at = ?,
+                           last_accessed_at = ?, indexing_status = 'complete',
+                           last_error = NULL, error_kind = NULL
+                       WHERE id = ?""",
+                    (
+                        filename,
+                        file_hash,
+                        file_size,
+                        chunk_count,
+                        file_mtime,
+                        now,
+                        now,
+                        same_file["id"],
+                    ),
+                )
+                self._conn.commit()
+                doc_id = same_file["id"]
+                return self._enrich_document(
+                    dict(
+                        self._conn.execute(
+                            "SELECT * FROM documents WHERE id = ?", (doc_id,)
+                        ).fetchone()
+                    )
+                )
+
             # Insert new document (still under lock)
             try:
                 self._conn.execute(
