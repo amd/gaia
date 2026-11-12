@@ -589,6 +589,47 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
     });
 }
 
+/** A multi-step turn that reasons before every call, then keeps thinking. */
+function holdOnThoughtfulSteps(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const files = ['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt'];
+        const events = files.flatMap((f) => [
+            { type: 'thinking', content: `I need to read ${f} next.` },
+            { type: 'tool_start', tool: 'read_file', detail: `file_path: ${f}`, narration: `Reading file: ${f}` },
+            { type: 'tool_end', success: true, result: 'Read 2 KB' },
+        ]).concat([{ type: 'thinking', content: 'Now add up the months.' }]);
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a running turn lists its steps, not a thought between each (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnThoughtfulSteps);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Read the four files');
+        await box.press('Enter');
+        const live = page.locator('.flow-steps.live');
+        await expect(live.locator('.flow-tool')).toHaveCount(4);
+        await expect(live.locator('.flow-tool-thought-mark')).toHaveCount(4);
+        await expect(live.locator('.flow-reasoning')).toHaveCount(1);
+        await expect(live.locator('.flow-thought-hacker')).toHaveCount(0);
+        await shot(page, `thoughtful-steps-${locale}`);
+        await live.locator('.flow-tool-header').first().click();
+        await expect(live.locator('.flow-tool-thought')).toContainText('expenses_oct.csv');
+        await shot(page, `thoughtful-steps-open-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** Every tile and the close button sit beside the docked session panel, not under it. */
 async function expectClearOfPanel(page: Page): Promise<void> {
     const panel = (await page.locator('.session-panel.is-docked').boundingBox())!;

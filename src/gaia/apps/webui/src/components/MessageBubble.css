@@ -607,15 +607,10 @@
 
 /* Thinking indicator — inline next to GAIA name in header */
 .thinking-indicator {
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
-}
-
-.thinking-indicator .cursor {
-    width: 6px;
-    height: 12px;
 }
 
 .thinking-indicator-hint {

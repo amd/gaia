@@ -18,7 +18,6 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -68,68 +67,27 @@ interface MessageBubbleProps {
 /**
  * Live status next to GAIA's name: the model's current phase ("Reading your request",
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
- * Types out on first show, swaps text in place after that, erases when done.
+ * One calm line in the UI font; the whole label shows at once.
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
-    const [reduceMotion] = useState(prefersReducedMotion);
-    const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
-    const wasActiveRef = useRef(active);
-    const textLengthRef = useRef(text.length);
-    textLengthRef.current = text.length;
-
-    // Type out characters
-    useEffect(() => {
-        if (phase !== 'typing') return;
-        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
-        const timer = setTimeout(() => setChars(c => c + 1), 30);
-        return () => clearTimeout(timer);
-    }, [phase, chars, text.length, reduceMotion]);
-
-    // Detect active → false: start erasing
-    useEffect(() => {
-        if (wasActiveRef.current && !active) {
-            setChars(textLengthRef.current);
-            setPhase(reduceMotion ? 'done' : 'erasing');
-        }
-        wasActiveRef.current = active;
-    }, [active, reduceMotion]);
-
-    // Erase characters
-    useEffect(() => {
-        if (phase !== 'erasing') return;
-        if (chars <= 0) { setPhase('done'); return; }
-        const timer = setTimeout(() => setChars(c => c - 1), 20);
-        return () => clearTimeout(timer);
-    }, [phase, chars]);
-
-    // Reset on new active cycle
-    useEffect(() => {
-        if (active && phase === 'done') {
-            setChars(0);
-            setPhase('typing');
-        }
-    }, [active, phase]);
-
     const elapsed = useElapsedSeconds(active, text);
     // One clock for the whole silent wait: a repeated or retried phase must not restart it.
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
 
-    if (phase === 'done') return null;
+    if (!active) return null;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
-            <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
-            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+        <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
+            <span className="thinking-indicator-text">{text}</span>
+            {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
-            {active && <span className="cursor" />}
             {showModelWaitHint && (
                 <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}

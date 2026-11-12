@@ -410,6 +410,8 @@ export const enMessages = {
     'activity.thinking': 'Thinking',
     'activity.thought': 'Thought',
     'activity.thoughtFor': 'Thought for {time}',
+    'activity.thinkingFor': 'Thinking · {time}',
+    'activity.thoughtFirst': 'Thought first; open the step to read it',
     'activity.waiting': 'Waiting for you',
     'activity.usedSkill': 'Used {name} skill',
     'activity.usingSkill': 'Using skill: {name}',
