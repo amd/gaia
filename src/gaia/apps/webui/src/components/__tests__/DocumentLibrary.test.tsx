@@ -100,6 +100,23 @@ describe('DocumentLibrary with no chat open', () => {
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 
+    it('keeps a typed path in the box when adding it fails, and clears it on success', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockRejectedValueOnce(new Error('File not found'));
+        mockedApi.uploadDocumentByPath.mockResolvedValueOnce(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+        const box = screen.getByLabelText('File path to add') as HTMLInputElement;
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/reprot.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(screen.getByText(/File not found/)).toBeInTheDocument());
+        expect(box.value).toBe('/tmp/q3/reprot.pdf');
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/report.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(box.value).toBe(''));
+    });
+
     it('offers an existing document for the next chat, once', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);

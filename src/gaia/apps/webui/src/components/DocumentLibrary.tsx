@@ -328,9 +328,9 @@ export function DocumentLibrary() {
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
-        onFolder?: () => Promise<void>,
-    ) => {
-        if (!(await ensureModel('embedding'))) return;
+        onFolder?: () => Promise<boolean>,
+    ): Promise<boolean> => {
+        if (!(await ensureModel('embedding'))) return false;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         const unsupportedMessage = ext && !isExtensionSupported(ext)
             ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
@@ -339,7 +339,7 @@ export function DocumentLibrary() {
         if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
             setUploadError({ filename, error: unsupportedMessage });
-            return;
+            return false;
         }
 
         log.doc.info(`Indexing document: ${filename}`);
@@ -368,12 +368,12 @@ export function DocumentLibrary() {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
+            return true;
         } catch (err) {
             // ApiError's fields, read by shape: the class itself is mocked in tests.
             const { httpStatus, reason } = (err ?? {}) as { httpStatus?: number; reason?: string | null };
             if (reason === 'is_folder' && onFolder) {
-                await onFolder();
-                return;
+                return await onFolder();
             }
             log.doc.error(`Failed to index "${filename}"`, err);
             const errMsg = httpStatus === 400 && unsupportedMessage
@@ -381,13 +381,14 @@ export function DocumentLibrary() {
                 : err instanceof Error ? err.message : 'Upload failed';
             setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
+            return false;
         } finally {
             setIsUploading(false);
         }
     }, [attachToTarget, targetChatName, setDocuments, t]);
 
     /** Index the documents directly inside a folder typed into the path box. */
-    const indexFolderPath = useCallback(async (folder: string, folderName: string) => {
+    const indexFolderPath = useCallback(async (folder: string, folderName: string): Promise<boolean> => {
         log.doc.info(`"${folder}" is a folder; indexing its documents`);
         setUploadStatus(t('docs.indexingFolder', { name: folderName }));
         try {
@@ -397,11 +398,13 @@ export function DocumentLibrary() {
             setFolderNotice(describeFolderResult(folderName, result));
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
+            return true;
         } catch (err) {
             log.doc.error(`Failed to index folder "${folder}"`, err);
             const errMsg = err instanceof Error ? err.message : 'Folder indexing failed';
             const { httpStatus } = (err ?? {}) as { httpStatus?: number };
             setUploadError({ filename: folderName, error: errMsg, status: httpStatus });
+            return false;
         } finally {
             setUploadStatus('');
         }
@@ -409,7 +412,7 @@ export function DocumentLibrary() {
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
-        await runUpload(
+        return runUpload(
             filename,
             () => api.uploadDocumentByPath(filepath),
             () => indexFolderPath(filepath, filename),
@@ -538,8 +541,8 @@ export function DocumentLibrary() {
         if (!folderPath.trim()) return;
         const typed = folderPath.trim();
         log.doc.info(`Indexing from path input: ${typed}`);
-        await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
-        setFolderPath('');
+        const added = await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
+        if (added) setFolderPath('');
     }, [folderPath, uploadFile]);
 
     const renderDocStatus = (doc: Document) => {
