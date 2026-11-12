@@ -407,7 +407,8 @@ remembered local model is checked against what Lemonade has downloaded and then
 used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+(`GAIA_CONFIG_DIR` relocates it). The Agent UI's model menu and **Settings >
+Advanced > Custom model ID** save there too. A one-shot `gaia-tui run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 
