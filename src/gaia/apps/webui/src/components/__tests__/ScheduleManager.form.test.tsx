@@ -76,7 +76,8 @@ describe('New schedule form', () => {
         expect(await screen.findByText("25:00 isn't a time — use 0:00–23:59.")).toBeInTheDocument();
         expect(field).toHaveAttribute('aria-invalid', 'true');
         expect(field).toHaveAccessibleDescription(
-            "GAIA didn't understand that schedule. 25:00 isn't a time — use 0:00–23:59.",
+            "GAIA didn't understand that schedule. 25:00 isn't a time — use 0:00–23:59. "
+            + 'Write it in English, like "every 30m", "daily at 9pm" or "every hour from 8am to 6pm on weekdays".',
         );
     });
 });
