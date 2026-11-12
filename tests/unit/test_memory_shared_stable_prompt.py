@@ -199,3 +199,149 @@ def test_an_unreadable_update_stamp_renders_fresh(store, stamp):
     )
     store._conn.commit()
     assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+def _thirty_facts(store):
+    for n in range(30):
+        store.store(
+            "fact",
+            f"The {_WORDS[n % 26]} {n} project uses {_WORDS[(n * 7) % 26]} widgets.",
+            source="user",
+        )
+
+
+def _pushed_out_by_next_store(store):
+    """The content of the shown fact the next store pushes out of the section."""
+    before = _Host(store)
+    before._build_stable_memory_prompt()
+    shown = set(before._stable_memory_ids)
+    store.store("fact", "The zebra crossing project uses granite slabs.", source="user")
+    after = _Host(store)
+    after._build_stable_memory_prompt()
+    dropped = shown - after._stable_memory_ids
+    assert dropped
+    return store.get_item(sorted(dropped)[0])["content"]
+
+
+def test_an_edit_hidden_behind_a_concurrent_cap_drop_still_shows(tmp_path):
+    """Verifier's reproducer: a dropped fact's text inside the edited memory's old line."""
+    probe = MemoryStore(tmp_path / "probe.db")
+    probe.store("fact", "The user's team ships GPU drivers.", source="user")
+    _thirty_facts(probe)
+    probe.store("fact", "Door code 4417. placeholder", source="user")
+    dropped = _pushed_out_by_next_store(probe)
+    probe.close()
+
+    store = MemoryStore(tmp_path / "memory.db")
+    store.store("fact", "The user's team ships GPU drivers.", source="user")
+    _thirty_facts(store)
+    secret = store.store("fact", f"Door code 4417. {dropped}", source="user")
+    first = _new_chat(store).get_memory_system_prompt()
+    assert "4417" in first and dropped in first
+    store.store("fact", "The zebra crossing project uses granite slabs.", source="user")
+    store.update(secret, content="Door code is private.")
+    try:
+        assert "4417" not in _new_chat(store).get_memory_system_prompt()
+    finally:
+        store.close()
+
+
+def _render_then_cap_drop(store, shown_fact=None):
+    """Render a chat, then store a fact that pushes one shown fact out.
+
+    *shown_fact* is stored last before the render, so it stays shown. Returns
+    the first chat's section, the pushed-out fact's id and *shown_fact*'s id.
+    """
+    _thirty_facts(store)
+    shown_id = shown_fact and store.store("fact", shown_fact, source="user")
+    chat = _new_chat(store)
+    first = chat.get_memory_system_prompt()
+    shown = set(chat._stable_memory_ids)
+    store.store("fact", "The zebra crossing project uses granite slabs.", source="user")
+    fresh = _Host(store)
+    fresh._build_stable_memory_prompt()
+    dropped = sorted(shown - fresh._stable_memory_ids)
+    assert dropped
+    if shown_id:
+        assert shown_id in fresh._stable_memory_ids and shown_fact in first
+    return first, dropped[0], shown_id
+
+
+def test_a_cap_drop_alone_still_reuses_the_shared_copy(store):
+    first, _, _ = _render_then_cap_drop(store)
+    assert _new_chat(store).get_memory_system_prompt() == first
+
+
+def test_a_shown_memory_edited_during_a_cap_drop_re_renders(store):
+    _, _, shown = _render_then_cap_drop(store, "The user's office is in building 7.")
+    store.update(shown, content="The user's office is in building 9.")
+    later = _new_chat(store).get_memory_system_prompt()
+    assert "building 9" in later and "building 7" not in later
+
+
+def test_a_pushed_out_memory_edited_since_is_not_shown(store):
+    first, dropped, _ = _render_then_cap_drop(store)
+    old = store.get_item(dropped)["content"]
+    assert old in first
+    store.update(dropped, content="The project list is private now.")
+    assert old not in _new_chat(store).get_memory_system_prompt()
+
+
+@pytest.mark.parametrize("how", ["forget", "sensitive"])
+def test_a_pushed_out_memory_forgotten_or_hidden_is_not_shown(store, how):
+    """Privacy: the shared copy still holds the pushed-out line; it must not leak."""
+    first, dropped, _ = _render_then_cap_drop(store)
+    old = store.get_item(dropped)["content"]
+    assert old in first
+    if how == "forget":
+        store.forget(dropped)
+    else:
+        store.update(dropped, sensitive=True)
+    assert old not in _new_chat(store).get_memory_system_prompt()
+
+
+@pytest.mark.parametrize("how", ["forget", "sensitive"])
+def test_a_shown_memory_forgotten_or_hidden_during_a_cap_drop_is_not_shown(store, how):
+    _, _, secret = _render_then_cap_drop(store, "The user's door code is 4417.")
+    if how == "forget":
+        store.forget(secret)
+    else:
+        store.update(secret, sensitive=True)
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+def test_an_untracked_profile_line_hiding_behind_a_cap_drop_re_renders(tmp_path):
+    """Profile rows carry no id in the copy; their old line must not pass either."""
+    probe = MemoryStore(tmp_path / "probe.db")
+    probe.store("fact", "The user's team ships GPU drivers.", source="user")
+    probe.store(
+        "profile",
+        "Lives at 12 Elm Street. placeholder",
+        source="user",
+        allow_privileged=True,
+    )
+    _thirty_facts(probe)
+    dropped = _pushed_out_by_next_store(probe)
+    probe.close()
+
+    store = MemoryStore(tmp_path / "memory.db")
+    try:
+        store.store("fact", "The user's team ships GPU drivers.", source="user")
+        profile = store.store(
+            "profile",
+            f"Lives at 12 Elm Street. {dropped}",
+            source="user",
+            allow_privileged=True,
+        )
+        _thirty_facts(store)
+        first = _new_chat(store).get_memory_system_prompt()
+        assert "Elm Street" in first and dropped in first
+        store.store(
+            "fact", "The zebra crossing project uses granite slabs.", source="user"
+        )
+        store.update(
+            profile, content="Moved; address not shared.", allow_privileged=True
+        )
+        assert "Elm Street" not in _new_chat(store).get_memory_system_prompt()
+    finally:
+        store.close()

@@ -552,9 +552,9 @@ EXTRACTION_IDLE_S = 3.0
 
 #: The stable memory section, shared by every session of this process that
 #: reads the same store, context and model: (monotonic render time, prompt,
-#: memory ids, lesson ids, wall-clock render start). A new chat would otherwise
-#: re-render it, and on Gemma-4 any change there makes the server re-read the
-#: whole ~19K-token prompt (~45 s).
+#: memory ids, lesson ids, {id: (row version, rendered line)}). A new chat
+#: would otherwise re-render it, and on Gemma-4 any change there makes the
+#: server re-read the whole ~19K-token prompt (~45 s).
 #: Reused only while every line of it is still current.
 _SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
 _OMITTED_COUNT_LINE = re.compile(r"^\(\d+ more stored .+ not listed here;")
@@ -563,16 +563,25 @@ _SHARED_STABLE_GUARD = threading.Lock()
 SHARED_STABLE_TTL_S = 3600.0
 
 
-def _edited_before(updated_at, rendered_at: datetime) -> bool:
-    """Whether a row's ``updated_at`` is provably no later than *rendered_at*.
-
-    An unreadable or offset-less stamp can't be ordered, so it counts as newer.
-    """
-    try:
-        stamp = datetime.fromisoformat(str(updated_at))
-    except ValueError:
-        return False
-    return stamp.tzinfo is not None and stamp <= rendered_at
+def _row_version(item: Dict, *, lesson: bool = False) -> tuple:
+    """Every field that decides whether and how a memory row is rendered."""
+    version = tuple(
+        item.get(field)
+        for field in (
+            "content",
+            "category",
+            "context",
+            "sensitive",
+            "superseded_by",
+            "due_at",
+            "source",
+            "created_at",
+            "updated_at",
+            "metadata",
+        )
+    )
+    # A lesson's line shows its confidence; a personal memory's doesn't.
+    return version + (item.get("confidence"),) if lesson else version
 
 
 #: How often a running extraction checks whether a user turn wants the model.
@@ -3684,8 +3693,6 @@ class MemoryMixin(ProceduralMemoryMixin):
             or getattr(self, "_stable_memory_model", None) != model
         ):
             key = self._shared_stable_key()
-            # Taken before the render, so an edit landing during it counts as newer.
-            rendered_at = datetime.now().astimezone()
             fresh = self._build_stable_memory_prompt()
             with _SHARED_STABLE_GUARD:
                 shared = _SHARED_STABLE_PROMPTS.get(key)
@@ -3706,7 +3713,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         fresh,
                         frozenset(getattr(self, "_stable_memory_ids", set())),
                         frozenset(getattr(self, "_stable_lesson_ids", set())),
-                        rendered_at,
+                        dict(getattr(self, "_stable_rows", {})),
                     )
             self._stable_memory_model = model
         return self._stable_memory_prompt
@@ -3714,10 +3721,20 @@ class MemoryMixin(ProceduralMemoryMixin):
     def _shared_section_still_true(self, shared: tuple, fresh: str) -> bool:
         """Whether a new chat may show *shared* instead of *fresh*.
 
-        A line missing from the fresh render is fine only when its memory was
-        pushed out by a section's size cap and still exists unchanged; a
-        removed, forgotten or edited memory must never reach a new chat.
+        Every memory in the shared copy must still exist exactly as it was
+        rendered, and a line missing from the fresh render must be the exact
+        line of one that was only pushed out by a section's size cap. So a
+        removed, forgotten, hidden or edited memory never reaches a new chat.
         """
+        rows = shared[4]
+        for knowledge_id, (version, _line) in rows.items():
+            item = self._memory_store.get_item(knowledge_id)
+            if item is None:
+                return False
+            # Rendered rows were redacted on the way out; compare like with like.
+            item = self._redact_credentials([item])[0]
+            if _row_version(item, lesson=knowledge_id in shared[3]) != version:
+                return False
         missing = {
             line
             for line in set(shared[1].splitlines()) - set(fresh.splitlines())
@@ -3729,20 +3746,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         shown_now = getattr(self, "_stable_memory_ids", set()) | getattr(
             self, "_stable_lesson_ids", set()
         )
-        kept = []
-        for knowledge_id in (shared[2] | shared[3]) - shown_now:
-            item = self._memory_store.get_item(knowledge_id)
-            if (
-                item is None
-                or item.get("superseded_by")
-                or item.get("sensitive")
-                or item.get("context") not in ("global", self._memory_context)
-                # Any edit since (a category, a due date) may be why it dropped.
-                or not _edited_before(item.get("updated_at"), shared[4])
-            ):
-                return False
-            kept.append(item["content"])
-        return all(any(content in line for content in kept) for line in missing)
+        pushed_out = {
+            text
+            for knowledge_id in rows.keys() - shown_now
+            for text in rows[knowledge_id][1].splitlines()
+        }
+        return missing <= pushed_out
 
     def _shared_stable_key(self) -> tuple:
         store = self._memory_store
@@ -3857,6 +3866,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         #     never show up in another project.
         lessons = self._workspace_lessons(limit=LESSONS_IN_PROMPT)
         self._stable_lesson_ids = {item["id"] for item in lessons}
+        self._stable_rows = {
+            item["id"]: (_row_version(item, lesson=True), self._lesson_lines([item]))
+            for item in lessons
+        }
         advice = [i for i in lessons if (i.get("metadata") or {}).get("advice")]
         observed = [i for i in lessons if i not in advice]
         if advice:
@@ -3997,6 +4010,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 used += cost
                 chosen[category].append(line)
                 ids.add(item["id"])
+                self._stable_rows[item["id"]] = (_row_version(item), line)
             position += 1
 
         blocks = [
