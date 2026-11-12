@@ -2458,6 +2458,34 @@ def _pipeline_segments(text: str, bypass_gates: bool) -> tuple:
     return [segment for piece in pieces for segment in piece], None
 
 
+def _unbalanced_parentheses(text: str) -> bool:
+    """Whether *text* opens or closes a ``(`` group it does not finish itself."""
+    if text.count('"') % 2 == 0:
+        text = re.sub(r'"[^"]*"', "", text)
+    return text.count("(") != text.count(")")
+
+
+#: Each step of a chain runs on its own, so "(a || b)" would reach them as
+#: "(a" and "b)".
+_GROUPING_REFUSAL = {
+    "status": "error",
+    "error": (
+        "Grouping steps with ( ) is not supported: each step of a chain runs on "
+        "its own, so the parentheses would become part of the commands."
+    ),
+    "has_errors": True,
+    "hint": (
+        "Write the chain without parentheses: 'a || b || c', or "
+        "'cd <dir> && a || b'. To retry a command, chain it with '||'."
+    ),
+}
+
+
+def _groups_steps(steps: list) -> bool:
+    """Whether a ( ) group spans the steps of a chain the runner splits."""
+    return len(steps) > 1 and any(_unbalanced_parentheses(s.text) for s in steps)
+
+
 def _parse_line(command: str, bypass_gates: bool = False) -> tuple:
     """*command* as steps, or the refusal its text alone earns.
 
@@ -3169,6 +3197,9 @@ class ShellToolsMixin:
                 key: value for key, value in error.items() if key != "shell_operators"
             }
             once_note = NOTE_UNINSPECTABLE
+        elif _groups_steps(steps):
+            # Only a line approved once goes to the shell whole; this one won't.
+            return {"tier": TIER_REFUSE, **_GROUPING_REFUSAL}, []
 
         granted = skill_granted_binaries(self)
 
