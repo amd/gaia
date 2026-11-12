@@ -7149,7 +7149,7 @@ def handle_api_command(args):
                 base_url=getattr(args, "base_url", None),
             )
             if not success:
-                return
+                sys.exit(1)
 
         try:
             import uvicorn

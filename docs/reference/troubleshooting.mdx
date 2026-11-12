@@ -876,6 +876,19 @@ error. To run the chat model in the cloud instead, see
     Builds before this check stop without a message in the same situation.
   </Accordion>
 
+  <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
+    **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
+    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
+    package Fedora 44 first shipped leaves that file out, so every cloud model
+    and every model download fails. GAIA says so in setup's cloud step and in
+    a failed download, and `~/.gaia/lemonade/lemond.log` shows
+    `Problem with the SSL CA cert`. Your key is not the problem.
+
+    **Fix:** install your system's updates (GNOME Software, or
+    `sudo dnf upgrade ca-certificates`); the updated package adds the file.
+    Then restart GAIA.
+  </Accordion>
+
   <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">
     Starting with **GAIA 0.17.5**, the Linux AppImage is packaged with
     `--no-sandbox` by default. This works around Ubuntu 24.04.1's

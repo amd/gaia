@@ -53,6 +53,8 @@ interface MessageBubbleProps {
     extraActions?: React.ReactNode;
     /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** The chat's latest answer, whose actions stay in view. */
+    latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -507,7 +509,7 @@ export function turnEnding(content: string, stopState: Message['stopState'], fai
     return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -611,7 +613,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     return (
         <div
-            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}${latest ? ' msg-latest' : ''}`}
             title={hoverTimestamp}
         >
             <div className="msg-inner">
