@@ -10818,6 +10818,21 @@ Do NOT wrap conversational replies in JSON.
             key for key, item in self._completion_evidence.files.items() if item.written
         }
 
+    def _record_file_edit(self, tool_result: Any) -> None:
+        """Note a successful ``edit_file`` result in ``_turn_file_edits``."""
+        if (
+            isinstance(tool_result, dict)
+            and tool_result.get("status") == "success"
+            and tool_result.get("operation") == "edit_file"
+            and tool_result.get("file_path")
+        ):
+            self._turn_file_edits.append(
+                {
+                    "file_path": tool_result["file_path"],
+                    "backup_path": tool_result.get("backup_path"),
+                }
+            )
+
     def _files_written_this_turn(self) -> List[str]:
         """Text files a file-editing tool wrote this turn, from the evidence ledger.
 
@@ -11810,18 +11825,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Store full result for parameter substitution in subsequent plan steps
                     step_results.append(tool_result)
-                    if (
-                        isinstance(tool_result, dict)
-                        and tool_result.get("status") == "success"
-                        and tool_result.get("operation") == "edit_file"
-                        and tool_result.get("file_path")
-                    ):
-                        self._turn_file_edits.append(
-                            {
-                                "file_path": tool_result["file_path"],
-                                "backup_path": tool_result.get("backup_path"),
-                            }
-                        )
+                    self._record_file_edit(tool_result)
 
                     # Share tool output with subsequent LLM calls
                     messages.append(
@@ -12180,7 +12184,10 @@ Do NOT wrap conversational replies in JSON.
                                 steps_taken,
                                 steps_limit,
                             )
+                            model_call_failed = True
+                            self._turn_model_retries["failed"] = True
                             final_answer = e.user_message
+                            loop_break_answer_unprinted = True
                             break
                         logger.warning(
                             "[WORKFLOW] Reply stream ended before the model "
@@ -12568,6 +12575,7 @@ Do NOT wrap conversational replies in JSON.
                     )
                     self._turn_model_retries["failed"] = True
                     final_answer = _CUT_OFF_FAILURE_ANSWER
+                    loop_break_answer_unprinted = True
                     break
                 cut_off_continuations += 1
                 logger.info(
@@ -13146,6 +13154,7 @@ Do NOT wrap conversational replies in JSON.
                             "result": truncated_result,
                         }
                     )
+                    self._record_file_edit(tool_result)
 
                     # Append the tool result message with the *real*
                     # tool_call_id from the originating call so the next
@@ -13345,18 +13354,7 @@ Do NOT wrap conversational replies in JSON.
                 # canonical ``image_path`` — without this append, the
                 # legacy single-tool path leaves them empty-handed.
                 step_results.append(tool_result)
-                if (
-                    isinstance(tool_result, dict)
-                    and tool_result.get("status") == "success"
-                    and tool_result.get("operation") == "edit_file"
-                    and tool_result.get("file_path")
-                ):
-                    self._turn_file_edits.append(
-                        {
-                            "file_path": tool_result["file_path"],
-                            "backup_path": tool_result.get("backup_path"),
-                        }
-                    )
+                self._record_file_edit(tool_result)
 
                 # Result-based dedup: if this tool (query family) returns the same result
                 # it returned in a prior call, inject a correction so the agent stops looping.
