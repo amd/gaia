@@ -258,6 +258,33 @@ class TestKnowledgeCRUD:
         resp = client.delete("/api/memory/knowledge/no-such-id")
         assert resp.status_code == 404
 
+    def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
+        """A copy saved under another context must not keep the fact alive."""
+        kid = test_store.store(
+            category="fact",
+            content="User is allergic to mango",
+            sensitive=True,
+            entity="user",
+        )
+        copy = test_store.store(
+            category="fact", content="Allergic to mango.", context="personal"
+        )
+        apps = test_store.store(
+            category="fact", content="Allergic to mango", entity="app:slack"
+        )
+        other = test_store.store(
+            category="fact", content="User is allergic to green mango"
+        )
+
+        resp = client.delete(f"/api/memory/knowledge/{kid}")
+
+        assert resp.status_code == 200
+        assert set(resp.json()["knowledge_ids"]) == {kid, copy}
+        assert test_store.get_item(kid) is None
+        assert test_store.get_item(copy) is None
+        assert test_store.get_item(apps) is not None
+        assert test_store.get_item(other) is not None
+
 
 # ===========================================================================
 # Entities & Contexts
