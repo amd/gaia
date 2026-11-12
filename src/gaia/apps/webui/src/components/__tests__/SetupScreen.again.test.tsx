@@ -137,6 +137,15 @@ describe('SetupScreen', () => {
         expect(await pastChecks()).toBeInTheDocument();
     });
 
+    it('setup run again on a cloud model with no provider tab does not jump to a key screen', async () => {
+        // A model learned from Lemonade's list (e.g. opencode) is remote but has no GAIA tab.
+        useModelStore.setState({
+            active: { provider: 'local', model: 'opencode.big-model', label: 'big-model · opencode', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        expect(await pastChecks()).toBeInTheDocument();
+    });
+
     it('a failed setup-again run (download step) still offers a way back', async () => {
         // Run again, start, run fails before any model: no Not now anywhere.
         mockedApi.startSetup.mockResolvedValue({ ...runStatus([], { state: 'failed', error: 'boom' }) });
