@@ -1196,6 +1196,7 @@ class AgentSDK:
             )
 
         # Create RAG config matching chat config
+        rag_kwargs.setdefault("base_url", self.config.base_url)
         rag_config = RAGConfig(
             model=self.config.model,
             show_stats=self.config.show_stats,
