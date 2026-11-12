@@ -1271,8 +1271,7 @@ def _downloaded_on_this_pc(model_id: str) -> bool:
     # list_models raises on anything but {"data": [{...}, ...]}.
     catalog = LemonadeClient(verbose=False).list_models(show_all=True)
     return any(
-        _model_ids_match(entry.get("id"), model_id)
-        and entry.get("downloaded") is True
+        _model_ids_match(entry.get("id"), model_id) and entry.get("downloaded") is True
         for entry in catalog["data"]
     )
 
