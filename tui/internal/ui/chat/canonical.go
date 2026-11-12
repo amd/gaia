@@ -68,7 +68,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if m.awaitingModelSwitch {
 				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
 				// A refused switch sends no ping, so a match is the confirmation.
-				if e.ModelID == m.switchTarget {
+				if sameModelID(e.ModelID, m.switchTarget) {
 					if r, ok := m.client.(modelSwitchRecorder); ok {
 						r.RecordModelSwitch(e.ModelID, e.ModelBackend == "claude")
 					}
@@ -281,9 +281,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		content = StripVerificationScope(content)
 		m.buffer = ""
 		m.confirmRelayedSwitch()
-		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+		if m.awaitingModelSwitch && m.switchTarget != "" && sameModelID(m.switchedTo.model, m.switchTarget) {
 			m.rememberModel(m.switchedTo)
-			if m.startup.inFlight && m.switchTarget == m.startup.model {
+			if m.startup.inFlight && sameModelID(m.switchTarget, m.startup.model) {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {

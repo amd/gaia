@@ -9,6 +9,7 @@ import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useModelStore } from '../stores/modelStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
@@ -241,6 +242,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     streamingRef.current = isStreaming;
     // Set briefly after a queued send found the chat still busy, so it waits before trying again.
     const queueHold = useChatStore((s) => !!s.queueHolds[sessionId]);
+    // A model picked during the reply is applied first, so the queued message runs on it.
+    const modelSwitching = useModelStore((s) => !!s.queued);
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -1400,11 +1403,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
+        if (queue.length === 0 || queueHold || modelSwitching || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, modelSwitching, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);

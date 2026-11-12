@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
+
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
   guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose

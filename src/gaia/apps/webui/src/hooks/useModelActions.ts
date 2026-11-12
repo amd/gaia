@@ -4,6 +4,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { sameModelId } from '../stores/modelStore';
 import {
     DEFAULT_MODEL_NAME,
     LOAD_SPINNER_TIMEOUT_MS,
@@ -47,14 +48,14 @@ export function useModelActions(defaultModelName?: string, contextSize?: number)
                 const s = await api.getSystemStatus();
                 if (operation === 'load') {
                     // Load succeeded if the expected model is now active
-                    if (s.model_loaded?.toLowerCase() === modelName.toLowerCase()) {
+                    if (sameModelId(s.model_loaded, modelName)) {
                         setIsLoadingModel(false);
                         if (loadTimerRef.current) { clearTimeout(loadTimerRef.current); loadTimerRef.current = null; }
                         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
                     }
                 } else {
                     // Download succeeded if model_downloaded becomes true or model is loaded
-                    if (s.model_downloaded === true || s.model_loaded?.toLowerCase() === modelName.toLowerCase()) {
+                    if (s.model_downloaded === true || sameModelId(s.model_loaded, modelName)) {
                         setIsDownloadingModel(false);
                         if (downloadTimerRef.current) { clearTimeout(downloadTimerRef.current); downloadTimerRef.current = null; }
                         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }

@@ -642,6 +642,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
 
+            # The TUI may have picked another model since this app last ran.
+            from gaia.ui.routers.providers import restore_last_model
+
+            try:
+                restore_last_model(db, load=False)
+            except Exception as exc:  # noqa: BLE001 - the model list reports it
+                # /api/providers/active runs the restore again and shows why.
+                logger.warning(
+                    "Could not restore the last model before the preload: %s", exc
+                )
+
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
             # FAILED (not DONE) — the frontend will show "degraded" state.

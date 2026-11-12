@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { syncModelAfterSettingChange } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
 import { isolate } from '../../i18n/registry';
@@ -101,6 +102,9 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            // The chip, the picker and this pane's own status still name the old model.
+            void syncModelAfterSettingChange();
+            api.getSystemStatus().then(setStatus).catch((err) => log.system.error('Failed to get system status', err));
             const checked = updated.model_status;
             if (nextValue && checked && !checked.found) {
                 setSaveNote({ kind: checked.checked ? 'unlisted' : 'unchecked', id: nextValue });

@@ -1400,6 +1400,7 @@ def stream_inference(include_browser: bool = Query(False)):
             from gaia.llm import create_client
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                resolve_chat_model,
                 resolve_default_chat_model,
             )
             from gaia.ui._chat_helpers import _runs_on_this_pc
@@ -1540,10 +1541,13 @@ def stream_inference(include_browser: bool = Query(False)):
             prompt_sections = "\n\n".join(sections)
             prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
-            # The machine's default chat model, so no second model loads. Never
-            # the UI's custom_model: that may be cloud, and this data stays local.
+            # The local model chat runs, so no second model loads; the machine's
+            # default when that pick is a cloud one, since this data stays local.
             model = resolve_default_chat_model()
             try:
+                picked = resolve_chat_model()
+                if picked != model and _runs_on_this_pc(picked):
+                    model = picked
                 local = _runs_on_this_pc(model)
                 # Lemonade downloads a missing model on first use, unasked.
                 downloaded = local and _downloaded_on_this_pc(model)
@@ -1568,7 +1572,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model '{model}' isn't one this PC runs. "
+                            f"the chat model '{model}' isn't one this PC runs. "
                             "Open Settings > Setup, press Run setup again and "
                             "choose a local chat model, then try again."
                         ),

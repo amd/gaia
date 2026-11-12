@@ -3462,20 +3462,17 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer, got {value!r}.")
         # Env wins over the arguments; malformed values fail here, not mid-turn.
-        mode = context_eviction_from_env() or context_eviction
-        self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=model_is_cloud
-        )
-        evictor = ContextEvictor(
-            threshold_tokens=evict_threshold_from_env()
+        self._context_eviction_mode = context_eviction_from_env() or context_eviction
+        self._context_eviction_settings = {
+            "threshold_tokens": evict_threshold_from_env()
             or context_eviction_threshold_tokens,
-            keep_steps=evict_keep_from_env() or context_eviction_keep_steps,
-            min_batch_tokens=evict_min_batch_from_env()
+            "keep_steps": evict_keep_from_env() or context_eviction_keep_steps,
+            "min_batch_tokens": evict_min_batch_from_env()
             or context_eviction_min_batch_tokens,
-        )
-        self._context_evictor: Optional[ContextEvictor] = (
-            evictor if self.context_eviction_enabled else None
-        )
+        }
+        self.context_eviction_enabled = False
+        self._context_evictor: Optional[ContextEvictor] = None
+        self.apply_context_eviction(model_id, cloud=model_is_cloud)
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
         # What the last overflow shrink put away.
@@ -4413,6 +4410,17 @@ Do NOT wrap conversational replies in JSON.
         self._instance_tools = dict(_TOOL_REGISTRY)
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
+
+    def apply_context_eviction(self, model_id: Optional[str], cloud: bool) -> None:
+        """Turn context eviction on or off for *model_id*, as a new agent on it would."""
+        enabled = resolve_context_eviction(
+            self._context_eviction_mode, model_id, cloud=cloud
+        )
+        if enabled and self._context_evictor is None:
+            self._context_evictor = ContextEvictor(**self._context_eviction_settings)
+        elif not enabled:
+            self._context_evictor = None
+        self.context_eviction_enabled = enabled
 
     def apply_model_features(self, model_id: Optional[str]) -> None:
         """Offer exactly the features *model_id* gets, both ways.

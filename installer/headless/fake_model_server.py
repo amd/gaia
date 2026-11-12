@@ -32,6 +32,12 @@ labelled vision accepts an image. Environment:
     FAKE_LEMONADE_LOAD_SECONDS     how long each /load takes (default 0)
     FAKE_LEMONADE_GPU              discrete (default) | igpu, what /system-info reports
     FAKE_LEMONADE_DISK_FREE_GB     free space in the model store (default 500)
+    FAKE_LEMONADE_MAX_LLM          chat models kept loaded; a load past it unloads
+                                   the oldest, as Lemonade's one chat slot does
+                                   (default: no limit)
+    FAKE_LEMONADE_NPU              1: /system-info reports a ready NPU
+
+A model whose id ends in -FLM is a FastFlowLM one: recipe flm, on the NPU.
 
 A discrete GPU keeps a run the same on every runner: GAIA reads no free memory
 for one, and it would otherwise refuse a load on a small hosted machine.
@@ -146,6 +152,13 @@ def _listed_id(model_id: Optional[str]) -> str:
     return (model_id or "").removeprefix("user.")
 
 
+def _recipe(model_id: str) -> str:
+    known = _catalog.get(_listed_id(model_id), {})
+    return known.get("recipe") or (
+        "flm" if model_id.lower().endswith("-flm") else "llamacpp"
+    )
+
+
 def _model_entry(model_id: str) -> Dict[str, Any]:
     embed = "embed" in model_id.lower()
     known = _catalog.get(_listed_id(model_id), {})
@@ -155,7 +168,7 @@ def _model_entry(model_id: str) -> Dict[str, Any]:
         "created": 1700000000,
         "owned_by": "lemonade",
         "checkpoint": known.get("checkpoint", f"fake/{model_id}"),
-        "recipe": known.get("recipe", "llamacpp"),
+        "recipe": _recipe(model_id),
         "downloaded": _is_downloaded(model_id),
         "suggested": True,
         "labels": known.get(
@@ -251,6 +264,7 @@ def _system_info() -> Dict[str, Any]:
         }
 
     free = int(_env_float("FAKE_LEMONADE_DISK_FREE_GB", 500) * 1e9)
+    npu = os.environ.get("FAKE_LEMONADE_NPU") == "1"
     return {
         "OS Version": "fake",
         "Processor": "fake CPU",
@@ -258,6 +272,7 @@ def _system_info() -> Dict[str, Any]:
         "devices": {
             "cpu": {"name": "fake CPU", "available": True},
             **_gpu_devices(),
+            **({"amd_npu": {"name": "fake NPU", "available": True}} if npu else {}),
         },
         "model_storage": {
             "path": str(Path(tempfile.gettempdir()) / "fake-lemonade-store"),
@@ -270,6 +285,22 @@ def _system_info() -> Dict[str, Any]:
             "whispercpp": recipe("whispercpp", "cpu"),
             "kokoro": recipe("kokoro", "cpu"),
             "sd-cpp": recipe("sd-cpp", "cpu"),
+            **(
+                {
+                    "flm": {
+                        "default_backend": "npu",
+                        "backends": {
+                            "npu": {
+                                "devices": ["amd_npu"],
+                                "state": "installed",
+                                "tier": "core",
+                            }
+                        },
+                    }
+                }
+                if npu
+                else {}
+            ),
         },
     }
 
@@ -313,10 +344,19 @@ def _multipart_fields(raw: bytes) -> Dict[str, Any]:
     return fields
 
 
+def _is_chat_model(model_id: str) -> bool:
+    return "embed" not in model_id.lower() and _recipe(model_id) in ("llamacpp", "flm")
+
+
 def _remember(model_id: Optional[str], ctx: Optional[int] = None) -> None:
     if not model_id:
         return
+    cap = int(os.environ.get("FAKE_LEMONADE_MAX_LLM") or 0)
     with _lock:
+        if model_id not in _loaded and cap and _is_chat_model(model_id):
+            chat = [m for m in _loaded if _is_chat_model(m)]
+            for oldest in chat[: max(0, len(chat) - cap + 1)]:
+                del _loaded[oldest]
         _loaded[model_id] = int(ctx or _loaded.get(model_id) or DEFAULT_CTX)
 
 
@@ -447,8 +487,8 @@ class Handler(BaseHTTPRequestHandler):
                         "model_name": m,
                         "checkpoint": f"fake/{m}",
                         "type": "embedding" if "embed" in m.lower() else "llm",
-                        "device": "gpu",
-                        "recipe": "llamacpp",
+                        "device": "npu" if _recipe(m) == "flm" else "gpu",
+                        "recipe": _recipe(m),
                         "recipe_options": {"ctx_size": _loaded[m]},
                         "backend_url": "http://127.0.0.1:0",
                     }

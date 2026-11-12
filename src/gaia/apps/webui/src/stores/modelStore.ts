@@ -234,6 +234,23 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 }));
 
+/**
+ * A setting changed the model outside the picker (a custom model id, Local only):
+ * re-read it everywhere a pick would, and follow the load the backend started.
+ */
+export async function syncModelAfterSettingChange(): Promise<void> {
+    forgetModelChecks();
+    await useModelStore.getState().refresh();
+    const active = useModelStore.getState().active;
+    if (active?.model && !active.remote) watchPickLoad(active.model, useModelStore.setState);
+    try {
+        const sessions = (await api.listSessions()).sessions;
+        if (sessions.length) useChatStore.getState().setSessions(sessions);
+    } catch (err) {
+        log.system.error('Could not refresh chats after a model setting change; the next poll will', err);
+    }
+}
+
 // A pick made during a reply keeps that reply on its model, then applies.
 useChatStore.subscribe((state, prev) => {
     if (prev.isStreaming && !state.isStreaming && useModelStore.getState().queued) {

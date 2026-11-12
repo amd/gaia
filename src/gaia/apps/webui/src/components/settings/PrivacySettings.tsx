@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
-import { useInferencePlace } from '../../stores/modelStore';
+import { syncModelAfterSettingChange, useInferencePlace } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
 import { TroubleshootingReport, type ReportClasses } from '../TroubleshootingReport';
 import { SettingsDisclosure } from './SettingsDisclosure';
@@ -48,6 +48,8 @@ export function PrivacySettings() {
         try {
             const settings = await api.updateSettings({ network_policy: next ? 'local_ai_only' : 'cloud_allowed' });
             setLocalOnly(settings.network_policy === 'local_ai_only');
+            // Turning Local only on drops a cloud model for the local default.
+            void syncModelAfterSettingChange();
             const notices = settings.policy_notices ?? [];
             const hasWarning = notices.some((notice) => notice.severity === 'warning');
             const text = notices.length

@@ -1249,9 +1249,9 @@ def _default_model_for(provider: str) -> str:
         from gaia_agent.agent import GaiaAgentConfig
 
         return GaiaAgentConfig.claude_model
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
-    return DEFAULT_MODEL_NAME
+    return resolve_default_chat_model()
 
 
 def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:

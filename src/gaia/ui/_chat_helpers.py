@@ -94,7 +94,7 @@ from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
 from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
-from .warmup import wait_for_warm_up
+from .warmup import turn_ended, wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -4352,6 +4352,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if slot is not None:
                     slot.close()
                 _stopping_sessions[session_id] = producer
+        # After the join: the thread may still have been reading from the model.
+        turn_ended()
 
     try:
         # Create SSE handler for streaming events

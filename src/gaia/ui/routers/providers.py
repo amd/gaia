@@ -847,11 +847,12 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
 
 
-def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
+def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
     """Apply ``last_model`` from config.json once per backend run.
 
     Never runs a different model quietly: when the saved one cannot run, the
-    result says why and the UI asks the user to pick.
+    result says why and the UI asks the user to pick. A restore that changes
+    the model loads it, unless *load* is False (start-up loads it itself).
     """
     global _restore_result
     with _restore_lock:
@@ -885,11 +886,19 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
             }
             return _restore_result
         if reason is None:
-            from gaia.llm.lemonade_client import resolve_default_chat_model
+            from gaia.llm.lemonade_client import (
+                _model_ids_match,
+                resolve_default_chat_model,
+            )
 
             current = (db.get_setting("custom_model") or "").strip()
-            unchanged = last == (current or resolve_default_chat_model())
+            unchanged = _model_ids_match(last, current or resolve_default_chat_model())
             db.set_setting("custom_model", last)
+            if load and not unchanged and provider_of(last) == LOCAL:
+                from gaia.ui import warmup
+
+                # Start-up may have loaded the model this replaces.
+                warmup.request_warm_up("restored model", fresh=True, model=last)
             _restore_result = {
                 "status": "restored",
                 # Nothing to announce when the model was going to run anyway.
@@ -1551,7 +1560,7 @@ def select_model(
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.
-        warmup.request_warm_up("model pick", fresh=True)
+        warmup.request_warm_up("model pick", fresh=True, model=model_id)
     clear_restore_notice()
     return _active_view(db)
 
@@ -1722,7 +1731,7 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
     reload = None
     if view["loaded_ctx"]:
         try:
-            entry = _chat_entry(_read_health())
+            entry = _chat_entry(_read_health(), model_id)
         except ProviderError as e:
             _raise(e)
         busy_reason = _busy_reason(entry, _warming_up())
@@ -1852,7 +1861,11 @@ def remove_custom_model(
 # ── Live status of the local model (sidebar popover) ──────────────────────
 
 
-def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _chat_entry(
+    health: Dict[str, Any], expected: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """The loaded local chat model: *expected* when it is loaded, else the root's."""
+    from gaia.llm.lemonade_client import _model_ids_match
     from gaia.llm.model_server_info import is_chat_model_entry
 
     loaded = [
@@ -1860,6 +1873,9 @@ def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for m in health.get("all_models_loaded") or []
         if is_chat_model_entry(m) and m.get("recipe") != "cloud"
     ]
+    for m in loaded:
+        if expected and _model_ids_match(m.get("model_name"), expected):
+            return m
     root = str(health.get("model_loaded") or "").lower()
     for m in loaded:
         if root and str(m.get("model_name") or "").lower() == root:
@@ -1989,7 +2005,7 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         )
         view["error_detail"] = str(e)
         return view
-    entry = _chat_entry(health)
+    entry = _chat_entry(health, active["model"])
     warming = warmup.warm_up_status().get("state") == warmup.WARMING
     if entry is None:
         view["state"] = "warming" if warming else "idle"

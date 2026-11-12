@@ -87,6 +87,8 @@ class PrefixWarmer:
         self._turn_models: List[str] = []
         #: A fresh request that came while one ran; it runs once that ends.
         self._again: Optional[str] = None
+        #: A fresh request that came while a chat turn ran; it runs once no turn does.
+        self._pending: Optional[str] = None
         #: Set when a turn starts on another model; the job stops at it.
         self.cancel = threading.Event()
 
@@ -94,16 +96,24 @@ class PrefixWarmer:
         """Install the "is a chat turn running?" probe."""
         self._busy = busy
 
-    def request(self, reason: str, fresh: bool = False) -> bool:
+    def request(
+        self, reason: str, fresh: bool = False, model: Optional[str] = None
+    ) -> bool:
         """Start a warm-up in the background. Returns whether one was started.
 
-        A *fresh* request (the model changed) skips the debounce, and one made
-        while a warm-up runs starts as soon as that one ends.
+        A *fresh* request (the model changed) skips the debounce. One made
+        while a warm-up runs starts as soon as that one ends, and stops it
+        when it is loading a model other than *model*, the one now picked.
+        One made while a chat turn runs starts once no turn does
+        (:meth:`turn_ended`).
         """
         with self._lock:
             if self._state == WARMING:
                 if fresh:
                     self._again = reason
+                    if model:
+                        self._turn_models.append(model)
+                        self._stop_for_another_model()
                 return False
             recent = (
                 not fresh
@@ -115,7 +125,10 @@ class PrefixWarmer:
                 return False
             if self._busy():
                 logger.info("Warm-up (%s) not started: a chat turn is running", reason)
+                if fresh:
+                    self._pending = reason
                 return False
+            self._pending = None
             self._state = WARMING
             self._started = time.monotonic()
             self._finished = None
@@ -138,6 +151,14 @@ class PrefixWarmer:
         if again is not None:
             self.request(again, fresh=True)
 
+    def turn_ended(self) -> bool:
+        """Run the fresh request a chat turn held back. Returns whether it started."""
+        with self._lock:
+            reason = self._pending
+        if reason is None:
+            return False
+        return self.request(reason, fresh=True)
+
     def _run_job(self, reason: str) -> None:
         try:
             result = self._job()
@@ -154,13 +175,21 @@ class PrefixWarmer:
         if result is None:
             self._finish(SKIPPED, {}, None)
             return
-        logger.info(
-            "Warm-up (%s) done in %ss: %s of %s prompt tokens were already cached",
-            reason,
-            result.get("seconds"),
-            result.get("cached_tokens", "?"),
-            result.get("prompt_tokens", "?"),
-        )
+        if result.get("primed") is False:
+            logger.info(
+                "Warm-up (%s) done in %ss: the model is loaded; the agent's "
+                "sidecar reads its own prompt",
+                reason,
+                result.get("seconds"),
+            )
+        else:
+            logger.info(
+                "Warm-up (%s) done in %ss: %s of %s prompt tokens were already cached",
+                reason,
+                result.get("seconds"),
+                result.get("cached_tokens", "?"),
+                result.get("prompt_tokens", "?"),
+            )
         self._finish(READY, result, None)
 
     def set_target(self, model: str, device: Optional[str]) -> None:
@@ -301,9 +330,10 @@ def _warm_new_chat_prefix(
 
     Returns None when there is nothing to warm locally: a cloud model, a model
     not downloaded yet (loading it would start a download nobody asked for),
-    no flagship registered, a flagship that runs in its daemon sidecar, or a
-    PC small enough to load on demand. Also None once *cancel* is set: a turn
-    on another model started, and loading this one would evict it.
+    no flagship registered, or a PC small enough to load on demand. Also None
+    once *cancel* is set: a turn on another model started, and loading this
+    one would evict it. A flagship that runs in its daemon sidecar gets its
+    model loaded and nothing primed (:func:`_load_for_relayed_chat`).
     """
     from gaia.chat.sdk import LLMCallCancelled
     from gaia.llm.lemonade_client import LemonadeClient
@@ -320,13 +350,7 @@ def _warm_new_chat_prefix(
     if registry is None or registry.get(NEW_CHAT_AGENT) is None:
         logger.info("Warm-up skipped: the %s agent is not registered", NEW_CHAT_AGENT)
         return None
-    if chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry):
-        # Chat relays to the sidecar, which cannot be built here and warms its
-        # own prompt when the daemon starts it.
-        logger.info(
-            "Warm-up skipped: the %s agent runs in its daemon sidecar", NEW_CHAT_AGENT
-        )
-        return None
+    relayed = chat._should_relay_to_sidecar(NEW_CHAT_AGENT, registry)
     client = LemonadeClient(verbose=False)
 
     def skip_reason(model: Optional[str]) -> Optional[str]:
@@ -346,6 +370,8 @@ def _warm_new_chat_prefix(
     if reason:
         logger.info("Warm-up skipped: %s %s", model_id, reason)
         return None
+    if relayed:
+        return _load_for_relayed_chat(client, model_id, note_target, cancel)
 
     _set_phase("building")
     with chat.writing_tool_registry():
@@ -402,6 +428,45 @@ def _warm_new_chat_prefix(
             close()
 
 
+def _load_for_relayed_chat(
+    client,
+    model_id: Optional[str],
+    note_target: Optional[Callable[[str, Optional[str]], None]],
+    cancel: Optional[threading.Event],
+) -> Optional[Dict[str, Any]]:
+    """Load the model a new chat runs when the flagship runs in its daemon sidecar.
+
+    The sidecar can't be built here, so its prompt is not primed: its first
+    turn reads it. The load still has to happen, or a model picked in the app
+    stays unloaded, and the last one resident, until the next message. A model
+    already loaded is left alone at whatever window it has: that is the
+    sidecar's to choose, and reloading it here would cut its turn off.
+    """
+    from gaia.ui import _chat_helpers as chat
+
+    if not model_id:
+        logger.info("Warm-up skipped: the %s agent has no model", NEW_CHAT_AGENT)
+        return None
+    if note_target is not None:
+        note_target(model_id, _device_for(client, model_id))
+    _set_phase("loading")
+    if cancel is not None and cancel.is_set():
+        logger.info("Warm-up of %s stopped for a turn on another model", model_id)
+        return None
+    started = time.monotonic()
+    loads: List[Dict[str, Any]] = []
+    status = client.get_status(include_catalog=False)
+    # pylint: disable=protected-access
+    resident = status.running and client._find_loaded_entry(status, model_id)
+    if not resident:
+        chat._maybe_load_expected_model(model_id, cancel_event=cancel, loads=loads)
+    return {
+        "seconds": round(time.monotonic() - started, 1),
+        "loaded": bool(loads),
+        "primed": False,
+    }
+
+
 _warmer: Optional[PrefixWarmer] = None
 
 
@@ -417,10 +482,12 @@ def configure(db) -> PrefixWarmer:
     return _warmer
 
 
-def request_warm_up(reason: str, fresh: bool = False) -> bool:
+def request_warm_up(
+    reason: str, fresh: bool = False, model: Optional[str] = None
+) -> bool:
     """Ask for a warm-up; a no-op before :func:`configure`, while one runs, or
     before first-run setup has finished (it would load a model setup didn't pick).
-    See :meth:`PrefixWarmer.request` for *fresh*.
+    See :meth:`PrefixWarmer.request` for *fresh* and *model*.
     """
     from gaia.ui.setup_runner import is_initialized
 
@@ -431,7 +498,13 @@ def request_warm_up(reason: str, fresh: bool = False) -> bool:
             "Warm-up (%s) not started: first-run setup has not finished", reason
         )
         return False
-    return _warmer.request(reason, fresh=fresh)
+    return _warmer.request(reason, fresh=fresh, model=model)
+
+
+def turn_ended() -> None:
+    """A chat turn finished: load a model picked while it ran."""
+    if _warmer is not None:
+        _warmer.turn_ended()
 
 
 def _set_phase(phase: str) -> None:

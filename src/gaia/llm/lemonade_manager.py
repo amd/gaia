@@ -773,6 +773,8 @@ class LemonadeManager:
         elif min_context_size is None:
             min_context_size = resolve_ctx_size(device=device)
             if not is_cloud:
+                # Never resize the model this one is about to replace.
+                own_window_of = chat_model
                 # The window the chat model's own load gets when memory is short.
                 min_context_size = fit_ctx_to_free_memory(
                     chat_model, min_context_size, base_url

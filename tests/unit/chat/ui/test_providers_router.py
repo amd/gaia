@@ -1776,7 +1776,9 @@ def test_picking_a_local_model_starts_loading_it(
 
     asked = []
     monkeypatch.setattr(
-        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+        warmup,
+        "request_warm_up",
+        lambda reason, fresh=False, model=None: asked.append((fresh, model)),
     )
     lemonade.models = _CATALOG
     assert (
@@ -1785,7 +1787,7 @@ def test_picking_a_local_model_starts_loading_it(
         ).status_code
         == 200
     )
-    assert asked == [True]
+    assert asked == [(True, "Qwen3-4B-GGUF")]
 
 
 def test_picking_a_cloud_model_loads_nothing_here(
@@ -1795,7 +1797,9 @@ def test_picking_a_cloud_model_loads_nothing_here(
 
     asked = []
     monkeypatch.setattr(
-        warmup, "request_warm_up", lambda reason, fresh=False: asked.append(fresh)
+        warmup,
+        "request_warm_up",
+        lambda reason, fresh=False, model=None: asked.append(fresh),
     )
     lemonade.models = _CATALOG
     resp = client.post("/api/providers/select", json={"model": "fireworks.aa-model"})

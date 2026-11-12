@@ -81,7 +81,11 @@ class FakeLemonade:
         return f"http://127.0.0.1:{self.port}/api/v1"
 
     def __enter__(self) -> "FakeLemonade":
-        self._dir = tempfile.TemporaryDirectory(prefix="fake-lemonade-")
+        # A venv's python.exe on Windows is a launcher: the server it starts can
+        # outlive the kill by a moment and still hold its log open.
+        self._dir = tempfile.TemporaryDirectory(
+            prefix="fake-lemonade-", ignore_cleanup_errors=True
+        )
         folder = Path(self._dir.name)
         port_file, self._log = folder / "port.txt", folder / "requests.jsonl"
         command = [sys.executable, str(SERVER), "--catalog"]
@@ -111,6 +115,13 @@ class FakeLemonade:
 
     def __exit__(self, *_exc) -> None:
         if self._proc is not None:
+            if sys.platform == "win32":
+                # Ends the launcher's child too; kill() alone leaves it serving.
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
+                    capture_output=True,
+                    check=False,
+                )
             self._proc.kill()
             self._proc.wait(timeout=30)
         if self._stderr is not None:
