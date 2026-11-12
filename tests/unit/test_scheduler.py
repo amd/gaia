@@ -502,11 +502,39 @@ class TestRunNow:
             await asyncio.sleep(0)
             task = sched._tasks["slow"]
             await sched._execute_task(task)
-            assert task.run_count == 1
 
             release.set()
             await asyncio.gather(*sched._manual_runs)
+            assert task.run_count == 1
             assert sched.get_task("slow")["running"] is False
+        finally:
+            await sched.shutdown()
+
+    async def test_run_is_not_counted_until_it_ends(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            raise RuntimeError("boom")
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            await asyncio.sleep(0)
+
+            running = sched.get_task("slow")
+            assert running["running"] is True
+            assert running["run_count"] == 0
+            assert running["last_run_at"] is None
+
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            done = sched.get_task("slow")
+            assert done["run_count"] == 1
+            assert done["last_run_at"] is not None
+            assert done["error_count"] == 1
         finally:
             await sched.shutdown()
 

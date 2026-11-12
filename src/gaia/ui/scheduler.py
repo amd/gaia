@@ -1548,12 +1548,9 @@ class Scheduler:
         and see the full history of scheduled runs.
         """
         now = datetime.now(timezone.utc)
-        task.last_run_at = now.isoformat()
-        task.run_count += 1
+        run_number = task.run_count + 1
 
-        logger.info(
-            "Executing scheduled task '%s' (run #%d)", task.name, task.run_count
-        )
+        logger.info("Executing scheduled task '%s' (run #%d)", task.name, run_number)
 
         # ── Create / reuse chat session for this schedule ────────────
         has_sessions = hasattr(self._db, "create_session")
@@ -1599,7 +1596,7 @@ class Scheduler:
                 self._db.add_message(
                     task.session_id,
                     "system",
-                    f"[schedule-run] Run #{task.run_count} \u00b7 {ts}",
+                    f"[schedule-run] Run #{run_number} \u00b7 {ts}",
                 )
                 # Marked as an unfinished turn until its reply is saved, so a
                 # restart mid-run says the run was interrupted.
@@ -1624,7 +1621,7 @@ class Scheduler:
             logger.error(
                 "Scheduled task '%s' failed (run #%d): %s",
                 task.name,
-                task.run_count,
+                run_number,
                 e,
                 exc_info=True,
             )
@@ -1657,6 +1654,8 @@ class Scheduler:
                     seconds=task.interval_seconds
                 )
             task.next_run_at = next_run.isoformat()
+        task.last_run_at = now.isoformat()
+        task.run_count = run_number
         task.last_result = error if error else (result or "completed")
         task.last_error = error
 
