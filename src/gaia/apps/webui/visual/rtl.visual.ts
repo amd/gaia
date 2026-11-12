@@ -437,6 +437,31 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
