@@ -932,6 +932,21 @@ test('session panel with Arabic names', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel leads with files and folders, details last (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-group-title')).toBeVisible();
+        const titles = await panel.locator('.sp-section-title, .sp-group-title').allInnerTexts();
+        const details = titles.findIndex((t) => t.includes(locale === 'ar' ? 'التفاصيل' : 'Details'));
+        const context = titles.findIndex((t) => t.includes(locale === 'ar' ? 'السياق' : 'Context'));
+        expect(details).toBeGreaterThan(0);
+        expect(context).toBeGreaterThan(details);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `session-panel-${locale}`);
+    });
+}
+
 test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {

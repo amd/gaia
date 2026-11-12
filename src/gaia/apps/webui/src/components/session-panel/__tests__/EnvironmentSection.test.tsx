@@ -174,7 +174,7 @@ describe('Can read and write', () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
-        expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
+        expect(await screen.findByText(/Start a new chat to use a different folder/)).toBeInTheDocument();
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
         expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
@@ -198,7 +198,7 @@ describe('Can read and write', () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
-        expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
+        expect(screen.getAllByText(/Start a new chat to use a different folder/)).toHaveLength(1);
     });
 
     it("doesn't claim another agent's scope", async () => {

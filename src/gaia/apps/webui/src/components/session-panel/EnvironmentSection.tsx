@@ -51,11 +51,11 @@ export function EnvironmentSection({ sessionId, busy }: { sessionId: string; bus
     const summary = env && !env.internet ? t('env.offline') : null;
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
-            <RunsOn sessionId={sessionId} busy={busy} />
             <Folders sessionId={sessionId} />
+            <Permission sessionId={sessionId} />
             <Internet sessionId={sessionId} />
             <PhoneAccess />
-            <Permission sessionId={sessionId} />
+            <RunsOn sessionId={sessionId} busy={busy} />
         </PanelSection>
     );
 }
