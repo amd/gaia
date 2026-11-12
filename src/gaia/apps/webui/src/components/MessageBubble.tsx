@@ -53,6 +53,8 @@ interface MessageBubbleProps {
     extraActions?: React.ReactNode;
     /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** The chat's latest answer, whose actions stay in view. */
+    latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -501,12 +503,13 @@ export function splitCutOff(content: string): CutOff | null {
 }
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
-export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+export function turnEnding(content: string, stopState: Message['stopState'], failed = false): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    return splitCutOff(content) ? 'interrupted' : undefined;
+    if (splitCutOff(content)) return 'interrupted';
+    return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -610,7 +613,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     return (
         <div
-            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}${latest ? ' msg-latest' : ''}`}
             title={hoverTimestamp}
         >
             <div className="msg-inner">
@@ -755,7 +758,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (

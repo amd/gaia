@@ -1144,6 +1144,9 @@ def model_list(monkeypatch):
         "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
         lambda *a: state.get("own", True),
     )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: state.get("ca_problem")
+    )
     return state
 
 
@@ -1215,6 +1218,70 @@ def test_reconnect_outage_replays_a_saved_key_and_keeps_it(
     assert keys["remembered"] == [("fireworks", KEY)]
     assert keys["stored"]["fireworks"] == KEY
     assert ENV_KEY not in resp.text
+
+
+def test_a_key_fireworks_accepts_is_not_blamed_when_discovery_fails(
+    client, lemonade, keys, model_list
+):
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = ModelListCheck(ModelListState.OK)
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "accepted that key" in detail
+    assert "did not accept" not in detail
+
+
+@pytest.mark.parametrize("own_server", [True, False])
+def test_a_key_accepted_without_models_names_the_log_to_read(
+    client, lemonade, keys, model_list, monkeypatch, tmp_path, own_server
+):
+    from gaia.llm import lemonade_client
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    log = tmp_path / "lemonade" / "lemond.log"
+    monkeypatch.setattr(
+        lemonade_client,
+        "embedded_lemonade_log_path",
+        lambda base_url=None: log if own_server else None,
+    )
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = ModelListCheck(ModelListState.OK)
+
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "paste the key again" in detail
+    if own_server:
+        assert str(log) in detail
+    else:
+        assert "model server's log" in detail
+
+
+def test_a_missing_ca_file_is_named_instead_of_the_key(
+    client, lemonade, keys, model_list
+):
+    problem = "This PC's certificate store has no /etc/ssl/certs/ca-certificates.crt"
+    model_list["ca_problem"] = problem
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == problem
+    assert model_list["keys_checked"] == []
+
+
+def test_a_missing_ca_file_on_the_users_own_server_is_not_claimed(
+    client, lemonade, keys, model_list
+):
+    model_list["own"] = False
+    model_list["ca_problem"] = "should not be shown"
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 401
+    assert "did not accept that key" in resp.json()["detail"]
 
 
 def test_connect_drops_a_key_that_discovers_no_models(
@@ -1918,6 +1985,22 @@ def test_restore_waits_when_lemonade_answers_system_info_with_a_5xx(
     )
 
 
+def test_restore_waits_when_lemonade_answers_the_model_list_with_a_5xx(
+    client, lemonade, keys, db
+):
+    """A proxy in front of a stopped server answers 502; that isn't a verdict either."""
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    lemonade.answers[("GET", "models?show_all=true")] = (502, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+    del lemonade.answers[("GET", "models?show_all=true")]
+    assert client.get("/api/providers/active").json()["restore"]["status"] == (
+        "restored"
+    )
+
+
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):
     _write_config({"last_model": "fireworks.gone-model"})
     lemonade.models = _CATALOG
@@ -2416,7 +2499,9 @@ def test_selecting_a_cloud_model_is_refused_under_local_only(
     )
     assert resp.status_code == 409
     assert "Local only is on" in resp.json()["detail"]
-    assert "network_policy cloud_allowed" in resp.json()["detail"]
+    # The app names its own setting, never a command to run.
+    assert "Settings > Privacy" in resp.json()["detail"]
+    assert "gaia config" not in resp.json()["detail"]
     assert lemonade.calls == []
     assert db.get_setting("custom_model") is None
 
@@ -2561,4 +2646,93 @@ def test_restore_keeps_a_listed_cloud_model_off_under_local_only(
     restore = client.get("/api/providers/active").json()["restore"]
     assert restore["status"] == "failed", restore
     assert "Local only is on" in restore["message"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_a_listed_cloud_model_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "Can't switch to big-model · othercloud: Local only is on." in detail
+    assert "Settings > Privacy" in detail and "gaia config" not in detail
+    assert lemonade.paths() == ["models?show_all=true"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_refuses_an_id_it_cannot_classify_while_the_server_is_down(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.down = True
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 503
+    assert "couldn't check that it isn't a cloud model" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_key_refusal_names_the_app_setting(
+    client, lemonade, keys, local_only_on
+):
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert "Settings > Privacy" in resp.json()["detail"]
+    assert "gaia config" not in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "OtherCloud.big-model",
+        "OTHERCLOUD.BIG-MODEL",
+        "user.othercloud.big-model",
+        "USER.OtherCloud.Big-Model",
+    ],
+)
+def test_local_only_refuses_a_listed_cloud_model_typed_another_way(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    # The model server matches names ignoring case and a user. prefix, so each
+    # of these reaches the cloud model.
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+@pytest.mark.parametrize("typed", ["AMD.big-model", "Fireworks.big-model"])
+def test_local_only_refuses_a_known_gateway_typed_in_another_case(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    listed = typed.lower()
+    lemonade.models = [{"id": listed, "recipe": "cloud", "labels": []}]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_still_saves_a_local_model_whose_name_differs_only_in_case(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.models = [
+        _OTHER_CLOUD_LISTED,
+        {"id": "my.local-model-GGUF", "recipe": "llamacpp", "downloaded": True},
+    ]
+    resp = client.post("/api/providers/select", json={"model": "My.Local-Model-GGUF"})
+    assert "Local only" not in str(resp.json().get("detail", ""))
+
+
+def test_local_only_names_a_next_step_when_the_model_list_errors(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, monkeypatch
+):
+    from gaia.ui.routers import providers
+
+    monkeypatch.setattr(providers, "_lemonade", lambda *a, **k: (500, {}))
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail
+    assert "close GAIA and open it again" in detail
     assert db.get_setting("custom_model") is None
