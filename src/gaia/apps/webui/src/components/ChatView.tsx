@@ -1485,7 +1485,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [messages, handleResendMessage]);
 
-
+    // Continue a stopped reply: the partial answer stays in the chat history the model reads.
+    const handleContinue = useCallback(() => {
+        void sendMessageRef.current(t('msg.continuePrompt'));
+    }, [t]);
 
     // Title editing
     const startEditTitle = () => {
@@ -1668,7 +1671,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
                         const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
-                        const canTryAgain = (msg.failed === true || cutOff) && !busy && !retiredAgent && !streamEnding
+                        const stopped = msg.role === 'assistant' && msg.stopState === 'stopped' && !msg.stopError;
+                        const canTryAgain = (msg.failed === true || cutOff || stopped) && !busy && !retiredAgent && !streamEnding
                             && idx === messages.length - 1;
                         const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
@@ -1697,6 +1701,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                         />
                                     ) : undefined}
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
+                                    onContinue={canTryAgain && stopped ? handleContinue : undefined}
+                                    latest={msg.role === 'assistant' && idx === messages.length - 1}
                                     latencyMs={latency}
                                 />
                                 {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (

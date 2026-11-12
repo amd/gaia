@@ -1435,7 +1435,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to add');
     });
 
     it('should have aria-label on close button', () => {

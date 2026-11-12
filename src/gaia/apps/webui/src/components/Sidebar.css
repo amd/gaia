@@ -205,6 +205,7 @@
 }
 
 .sb-row {
+    --sb-row-bg: var(--bg-sidebar);
     position: relative;
     display: flex;
     align-items: center;
@@ -214,11 +215,51 @@
 .sb-row:hover,
 .sb-row:focus-within,
 .sb-row.is-active {
-    background: var(--bg-hover);
+    --sb-row-bg: var(--bg-hover);
+    background: var(--sb-row-bg);
 }
 
 .sb-row.is-active {
-    background: var(--bg-active);
+    --sb-row-bg: var(--bg-active);
+}
+
+/* Rename, pin and delete float over the end of the row on hover or focus, so a
+   title uses the whole row the rest of the time; the fade keeps it readable under them. */
+.sb-row-actions {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    display: flex;
+    align-items: center;
+    padding-inline-start: 20px;
+    border-start-end-radius: var(--radius-md);
+    border-end-end-radius: var(--radius-md);
+    background: var(--sb-row-bg);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 20px);
+    mask-image: linear-gradient(to right, transparent, black 20px);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sb-row-actions:dir(rtl) {
+    -webkit-mask-image: linear-gradient(to left, transparent, black 20px);
+    mask-image: linear-gradient(to left, transparent, black 20px);
+}
+
+.sb-row:hover .sb-row-actions,
+.sb-row:focus-within .sb-row-actions,
+.sb-row-actions:has(.is-confirm) {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* While renaming they stay beside the name box, so they never cover what is typed. */
+.sb-row-actions.is-editing {
+    position: static;
+    padding-inline-start: 0;
+    background: none;
+    -webkit-mask-image: none;
+    mask-image: none;
 }
 
 .sb-row-main {

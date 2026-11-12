@@ -377,6 +377,23 @@ button.setup-rail-step:hover {
     color: var(--accent-green);
 }
 
+.setup-key-label {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.setup-key-row {
+    flex-wrap: nowrap;
+}
+
+.setup-key-accepted {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+}
+
 .setup-content-name {
     display: block;
 }
@@ -526,10 +543,42 @@ button.setup-rail-step:hover {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 14px 16px;
     border: 1px solid var(--accent-light);
     border-radius: var(--radius-lg);
-    background: var(--accent-dim);
+}
+
+.setup-lemonade fieldset {
+    min-inline-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.setup-lemonade legend {
+    margin-block-end: 8px;
+    padding: 0;
+}
+
+label.setup-choice {
+    cursor: pointer;
+}
+
+.setup-choice input[type="radio"] {
+    flex-shrink: 0;
+    margin-block-start: 3px;
+    accent-color: var(--accent);
+}
+
+.setup-choice-tag {
+    margin-inline-start: 8px;
+    padding: 0 8px;
+    border: 1px solid var(--accent-light);
+    border-radius: var(--radius-full);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: 1px;
 }
 
 .setup-hint {
@@ -583,6 +632,12 @@ button.setup-rail-step:hover {
 .setup-progress::-moz-progress-bar {
     border-radius: var(--radius-full);
     background: var(--accent);
+}
+
+.setup-activity {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .setup-log {
