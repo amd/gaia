@@ -35,7 +35,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
 
 1. **Model Management**
    - Load VLM model (Gemma-4-E4B-it-GGUF)
-   - Missing-model guidance via Settings → Model or `gaia download --agent vlm`
+   - Missing-model guidance: Settings → Model in the Agent UI, or `/setup` in the TUI
    - Model availability checking
    - Every request re-checks the model is loaded at its required context size
 
@@ -136,7 +136,7 @@ class VLMClient:
                 downloaded; an unlisted or unreachable catalog does not block.
 
         Note:
-            - A catalog-known missing model is reported with Settings and CLI download guidance
+            - A catalog-known missing model is reported with Agent UI / TUI download guidance
             - base_url defaults to LEMONADE_BASE_URL, else GAIA's own Lemonade
 
         Environment Variables:
@@ -295,7 +295,9 @@ class VLMClient:
 Before the first request, `extract_from_image()` reads Lemonade's catalog. When
 the catalog lists the model with `downloaded: false`, it raises
 `VLMExtractionError` naming the model and how to download it, instead of starting a
-multi-GB download inside an image tool. An unlisted model, a missing `downloaded`
+multi-GB download inside an image tool. Before raising, it switches `vlm_model` to
+an already-downloaded tested vision model (a loaded one first) when there is one;
+`check_availability()` does the same and then returns `True`. An unlisted model, a missing `downloaded`
 field, a cloud model or an unreachable catalog doesn't block; any check that doesn't
 block is cached on the client.
 
@@ -352,6 +354,8 @@ Output format: Clean markdown with the ACTUAL text from the image."""
     ]
 
     try:
+        self._refuse_missing_vlm(page_num, image_num)
+
         import time
         start_time = time.time()
 
@@ -388,7 +392,8 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             logger.error(error_msg)
             raise VLMExtractionError(error_msg, page_num, image_num)
 
-    except VLMExtractionError:
+    except (VLMExtractionError, LeaseWaitCancelled):
+        # A cancelled wait for the model is a stop, not a failed page.
         raise
     except Exception as e:
         logger.error(
@@ -471,9 +476,12 @@ def test_initialize_with_base_url():
     with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient(base_url="http://remote:9000/api/v1")
         assert vlm.base_url == "http://remote:9000/api/v1"
-        assert vlm.server_url == "http://remote:9000"
-        # Verify LemonadeClient was initialized with correct host/port
-        mock_client.assert_called_once()
+        # The URL is handed to LemonadeClient whole
+        mock_client.assert_called_once_with(
+            model="Gemma-4-E4B-it-GGUF",
+            base_url="http://remote:9000/api/v1",
+            api_key=None,
+        )
 
 def test_check_availability_success():
     """Test model availability check - model found."""
@@ -638,11 +646,10 @@ def test_integration_vlm_extraction():
 
 ### Required Packages
 
-```toml
-# pyproject.toml
-[project]
-dependencies = [
-    "python-dotenv>=1.0.0",
+```python
+# setup.py
+install_requires = [
+    "python-dotenv",
 ]
 
 # VLMClient requires LemonadeClient from same package

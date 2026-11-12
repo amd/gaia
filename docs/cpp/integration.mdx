@@ -310,7 +310,7 @@ The agent uses a single HTTP endpoint: `POST {baseUrl}/chat/completions`. It sen
 }
 ```
 
-The agent also probes Lemonade's `/health` and `/load` once before the first query; on a non-Lemonade server that prints a "Could not ensure model loaded" warning and continues. With native tool calling the request also carries `tools` and `tool_choice`. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format and accepts unauthenticated requests works — local or remote, open-source or commercial.
+When `baseUrl` ends in `/api/v1` (a Lemonade server), the agent also calls Lemonade's `/health` and, if the model or context size differs, `/load` before a query, until that succeeds once; a failure prints a "Could not ensure model loaded" warning and the query continues. For any other base URL this step is skipped. With native tool calling the request also carries `tools` and `tool_choice`. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format and accepts unauthenticated requests works — local or remote, open-source or commercial.
 
 ### Local Inference Servers
 

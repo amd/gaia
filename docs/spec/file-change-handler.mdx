@@ -11,6 +11,7 @@ title: "FileChangeHandler"
 **Module:** `gaia.utils.file_watcher`
 **Import:** `from gaia.utils import FileChangeHandler`
 </Note>
+
 ---
 
 ## Overview
@@ -278,6 +279,8 @@ class FormIntakeAgent(Agent):
 ### Example 2: Document Indexing Agent
 
 ```python
+from pathlib import Path
+
 from gaia import Agent, FileChangeHandler
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from watchdog.observers import Observer

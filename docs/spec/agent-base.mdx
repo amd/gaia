@@ -154,7 +154,9 @@ def __init__(
             user requests back to it. Within one request, each step's reasoning is always
             sent back on its assistant message as `reasoning_content` (default: False)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
-            32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+            32768 for a cloud model such as fireworks.*; for a local Lemonade model a
+            quarter of the loaded context window, at least 8192 (half the window when
+            it is under 16K) and at most 32768; 8192 on other backends)
         context_eviction: "off" (default), "on" or "auto". Evicts tool results older
             than context_eviction_keep_steps from the context sent to the model once the
             prompt passes context_eviction_threshold_tokens (60000) and the evictable
@@ -224,7 +226,9 @@ def process_query(
 
     Returns:
         dict: {
-            "status": str,           # "success" | "failed" | "incomplete"
+            "status": str,           # "success" | "failed" | "incomplete" | "cancelled"
+                                     # (a cancelled run returns a reduced dict)
+            # "turn_metrics": dict   # present when a turn record was kept
             "result": str,           # Final answer from the agent
             "system_prompt": str,    # System prompt used for this query
             "conversation": list,    # Full step-by-step conversation trace
@@ -317,7 +321,7 @@ def validate_json_response(self, response_text: str) -> Dict[str, Any]:
     """
     pass
 
-def _format_tools_for_prompt(self) -> str:
+def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
     """
     Format registered tools for system prompt.
 
@@ -737,7 +741,6 @@ import abc
 import datetime
 import inspect
 import json
-import logging
 import os
 import re
 import subprocess
@@ -749,6 +752,7 @@ from gaia.agents.base.console import AgentConsole, SilentConsole
 from gaia.agents.base.errors import format_execution_trace
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.logger import get_logger
 ```
 
 ### External Dependencies

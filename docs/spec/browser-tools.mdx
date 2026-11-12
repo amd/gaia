@@ -76,7 +76,7 @@ Fetch a web page and extract its readable content.
 @tool(atomic=True)
 def fetch_page(
     url: str,
-    extract: str = "text",
+    extract: Literal["text", "html", "links", "tables"] = "text",
     max_length: int = 5000,
     offset: int = 0,
     find: Optional[str] = None,
@@ -92,7 +92,7 @@ def fetch_page(
     Args:
         url: The full URL to fetch (must start with http:// or https://)
         extract: What to extract - 'text' (readable content), 'html' (raw HTML),
-                 'links' (all links on page), 'tables' (HTML tables as text)
+                 'links' (all links on page), 'tables' (HTML tables as JSON)
         max_length: Maximum characters to return (default: 5000, max: 20000)
         offset: Text mode: character offset to start from, to continue a long page
         find: Text mode: return only the passages containing this word or phrase
@@ -118,7 +118,7 @@ flagged rather than returned as if it were the content.
 ```
 Page: Example Documentation - My Library
 URL: https://example.com/docs/api
-Length: 4,521 chars | Fetched: 2026-03-10 14:30
+Length: 4,521 chars
 
 API Reference
 =============
@@ -326,8 +326,8 @@ class WebClient:
     def extract_text(self, soup: BeautifulSoup, max_length: int = 5000) -> str:
         """Extract readable text from parsed HTML."""
 
-    def extract_tables(self, soup: BeautifulSoup) -> list[list[dict]]:
-        """Extract HTML tables as list of list-of-dicts."""
+    def extract_tables(self, soup: BeautifulSoup) -> list[dict]:
+        """Extract HTML tables as [{"table_name": str, "data": [row dicts]}]."""
 
     def extract_links(self, soup: BeautifulSoup, base_url: str) -> list[dict]:
         """Extract all links with text and resolved URLs."""
@@ -577,7 +577,7 @@ def _sanitize_filename(raw_name: str) -> str:
     return name or "download"
 ```
 
-Downloaded files must pass two checks:
+Downloaded files must pass three checks:
 1. Filename sanitized via `_sanitize_filename()` (prevents path traversal from Content-Disposition)
 2. Final resolved path validated through `PathValidator.is_path_allowed()`
 3. Verify resolved path is still within `save_to` directory after path resolution
@@ -693,7 +693,7 @@ REMOVE_TAGS = [
 
 ```python
 def extract_tables(self, soup: BeautifulSoup) -> list:
-    """Extract tables as list of dicts.
+    """Extract tables as [{"table_name": str, "data": [row dicts]}].
 
     For each <table>:
     1. Use first <tr> or <thead> as column headers

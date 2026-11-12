@@ -126,14 +126,17 @@ short code at a URL, so no browser redirect or local callback is needed.
 import gaia.connectors as conn
 
 MAIL_READ = "https://graph.microsoft.com/Mail.Read"
+# Explicit scopes replace the defaults, so keep offline_access (refresh token)
+# and User.Read (account email).
+SCOPES = ["offline_access", "https://graph.microsoft.com/User.Read", MAIL_READ]
 
-info = await conn.start_device_flow("microsoft", scopes=[MAIL_READ])
+info = await conn.start_device_flow("microsoft", scopes=SCOPES)
 print(info["message"])  # shows info["user_code"] and info["verification_uri"]
 
 state = await conn.poll_device_flow(
     "microsoft",
     info["device_code"],
-    scopes=[MAIL_READ],
+    scopes=SCOPES,
     interval=info["interval"],
     expires_in=info["expires_in"],
     grant_agents={"installed:gaia": [MAIL_READ]},  # optional: grant in the same step
@@ -142,7 +145,8 @@ state = await conn.poll_device_flow(
 
 `poll_device_flow` waits through `authorization_pending`, widens its interval
 on `slow_down`, saves the connection on approval, and raises
-`FlowTimeoutError` or `ConsentDeniedError` otherwise. A provider with no
+`FlowTimeoutError` (code expired or timed out), `ConsentDeniedError`
+(declined), or `OAuthProviderError` (any other provider rejection). A provider with no
 device-code endpoint raises `ConnectorsError` from `start_device_flow`. The CLI
 equivalent is `gaia connectors connect <id> --device`.
 
@@ -545,7 +549,9 @@ the previous user's tool-visibility decisions.
 
 ## API reference
 
-Names below import from `gaia.connectors` unless noted.
+Names below import from `gaia.connectors`, except `get_access_token_with_expiry`,
+`get_access_token_with_expiry_sync`, `connected_mailbox_providers` and
+`resolve_declared_scopes`, which import from `gaia.connectors.api`.
 
 | Area | Names |
 |---|---|
@@ -562,7 +568,9 @@ The handler layer (`gaia.connectors.handler`) dispatches by connector type:
 `register_handler(connector_type, handler)` for a new type. A handler
 implements the `ConnectorHandler` protocol.
 
-Errors, all subclasses of `ConnectorsError`:
+Errors, all subclasses of `ConnectorsError`. `ConnectionRevokedError`,
+`FlowTimeoutError`, `ConsentDeniedError` and `FlowInProgressError` import from
+`gaia.connectors`; the rest import from `gaia.connectors.errors`:
 
 | Error | Raised when |
 |---|---|

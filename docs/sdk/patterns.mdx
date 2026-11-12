@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
 @dataclass
@@ -66,6 +66,8 @@ class HelloAgent(Agent):
         return "You are a friendly greeter. Use the `now` tool to tell the user the current time."
 
     def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+
         @tool
         def now() -> str:
             """Return the current local time as ISO-8601."""
@@ -76,7 +78,8 @@ class HelloAgent(Agent):
 ```
 
 **Why every line is there:**
-- `self._snapshot_tools()` last — freezes this agent's tool set so other agents in the process don't change it
+- `_TOOL_REGISTRY.clear()` first — the registry is shared by every agent in the process, so this keeps tools another agent registered out of this one
+- `self._snapshot_tools()` last — freezes this agent's tool set, so the next agent's `clear()` can't wipe it
 - `@tool` inside `_register_tools` — scopes the tool to this agent and lets it close over `self`
 - `base_url=config.base_url` — `None` lets `Agent` resolve the URL from `LEMONADE_BASE_URL`, else GAIA's own server; a hard-coded URL cannot see GAIA's embedded server
 - Config dataclass separate from `__init__` — eval harness and CLI use `dataclasses.fields` to filter kwargs
@@ -91,7 +94,7 @@ class HelloAgent(Agent):
 from pathlib import Path
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.tools import tool
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 from gaia.mcp.mixin import MCPClientMixin
@@ -112,11 +115,14 @@ class WeatherAgent(Agent, MCPClientMixin):
         return "You are a weather assistant. Use the MCP tools to answer."
 
     def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
+
         @tool
         def convert_units(value_f: float) -> float:
             """Convert Fahrenheit to Celsius."""
             return round((value_f - 32) * 5 / 9, 1)
 
+        # After the clear(), or the MCP tools would be wiped with everything else.
         self.load_mcp_servers_from_config()
         self._snapshot_tools()  # last, so the MCP tools are included
 ```
@@ -142,6 +148,7 @@ Pull in reusable capabilities instead of duplicating them. A simple convention: 
 
 ```python
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 
@@ -156,6 +163,7 @@ class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):
         return "Search docs with RAG, then edit with file_io tools."
 
     def _register_tools(self) -> None:
+        _TOOL_REGISTRY.clear()
         self.register_rag_tools()
         self.register_file_io_tools()
         self._snapshot_tools()
@@ -272,7 +280,7 @@ python -m pytest tests/test_hello_agent.py -xvs
 
 | Don't | Why |
 |-------|-----|
-| Call `_TOOL_REGISTRY.clear()` | It wipes the tools of every other live agent still reading the global registry. Register, then call `self._snapshot_tools()` last. |
+| Skip `_TOOL_REGISTRY.clear()` or `self._snapshot_tools()` | Without the clear, tools another agent registered are copied into this one; without the snapshot, the next agent's `clear()` wipes this agent's tools. Clear first, snapshot last. |
 | Register `@tool` at module scope for a one-agent tool | It registers globally at import and is visible to every agent that reads the global registry, and it cannot use `self`. |
 | Hard-code `http://localhost:13305` | Misses GAIA's embedded server and breaks Docker/CI where Lemonade runs elsewhere. Pass `base_url=None`. |
 | Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |

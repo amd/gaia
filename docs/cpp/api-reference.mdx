@@ -198,7 +198,7 @@ Only tools registered via `registerTool()` or discovered from a connected MCP se
 
 ### Tool Callback Responsibility
 
-When a tool declares `ToolParameter`s and sets no custom `validateArgs`, `executeTool()` checks the arguments against that schema first (required parameters present, types match, no unknown parameters) and returns an error without calling your callback. The framework does not check ranges, formats or paths. Each tool is responsible for:
+When a tool declares `ToolParameter`s and sets no custom `validateArgs`, `executeTool()` checks the arguments against that schema first (arguments are a JSON object, required parameters present, types match) and returns an error without calling your callback. The framework does not reject unknown parameters, and does not check ranges, formats or paths. Each tool is responsible for:
 
 - Validating its input parameters (ranges, formats)
 - Sanitizing paths and shell arguments
@@ -1079,6 +1079,8 @@ These headers ship with `gaia_core` (`cpp/include/gaia/`) and are not covered in
 | `chunking.h` | `splitTextIntoChunks`, `extractFile`, `chunkFile`, `registerExtractor` — text extraction and chunking |
 | `json_utils.h` | `extractJsonFromResponse`, `parseLlmResponse` — recover JSON from LLM replies |
 | `model_registry.h` | `knownModels`, `isToolCallingModel` — models the build knows |
+| `clean_console.h` | `CleanConsole` — polished console output handler with colors and word-wrap |
+| `security.h` | `validatePath`, `isSafeShellArg`, `makeStdinConfirmCallback`, `AllowedToolsStore` — see [Security](/cpp/security) |
 | `tui_app.h`, `tui_markdown.h`, `tui_transcript.h` | `TuiApp`, `TuiConfirmBroker`, `renderMarkdown`, `TuiTranscript` — the FTXUI console (`GAIA_BUILD_TUI`) |
 
 ---

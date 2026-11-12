@@ -1772,7 +1772,7 @@ gaia connectors <subcommand> [OPTIONS]
 
 **Grants and activations.** An agent sees an MCP server's tools only when it has
 both a grant (credential access) and an activation (tool visibility) for the
-connector. Agent ids are namespaced, e.g. `builtin:chat` or `custom:abc:inbox`.
+connector. Agent ids are namespaced, e.g. `installed:gaia` or `custom:abc:inbox`.
 Activations apply to `mcp_server` connectors only; an OAuth connector is rejected
 with exit code `3` (use `grants` for those).
 
@@ -1821,7 +1821,7 @@ registration or loopback redirect URI). Which authority a Microsoft connector
 signs in against is fixed by the connector itself (`microsoft` → `consumers`,
 `microsoft_work` → `organizations`) — to restrict `microsoft_work` to one
 Entra tenant, set its optional Directory (tenant) ID setup field instead of an
-environment variable; see [the Microsoft connector guide](/connectors/microsoft#migrating-from-gaia-microsoft-tenant).
+environment variable; see [the Microsoft connector guide](/connectors/microsoft).
 
 [→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
 

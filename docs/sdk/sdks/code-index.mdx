@@ -227,7 +227,6 @@ class MyResearchAgent(CodeIndexToolsMixin, Agent):
         self._init_code_index_state(repo_path=repo_path)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_code_index_tools()
 ```
 

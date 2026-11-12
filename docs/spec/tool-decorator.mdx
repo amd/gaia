@@ -154,7 +154,7 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {}
                 "required": bool, # True if no default value
                 "description": str,  # From the Args: entry (key absent when there is none)
                 "items": dict,    # Arrays only, e.g. {"type": "string"}
-                "enum": list,     # Literal[...] only
+                "enum": list,     # Literal[...] only; "type" follows the first value
             }
         },
         "function": Callable,     # Original function
@@ -180,7 +180,7 @@ dict → "object"
 Optional[X], X | None → the type of X
 List[str] → {"type": "array", "items": {"type": "string"}}
 Dict[...] → "object"
-Literal["a", "b"] → "string" with "enum": ["a", "b"]
+Literal["a", "b"] → "string" with "enum": ["a", "b"] (the type follows the first value: Literal[1, 2] → "integer")
 (no annotation, or a union of two real types) → "unknown"
 ```
 
@@ -341,7 +341,7 @@ def batch_process(
         "name": "batch_process",
         "description": "Process multiple items...",
         "parameters": {
-            "items": {"type": "array", "required": True,
+            "items": {"type": "array", "required": True, "items": {},
                       "description": "List of items to process"},
             "config": {"type": "object", "required": True,
                        "description": "Configuration dictionary"},
@@ -379,6 +379,7 @@ class MyAgent(Agent):
             # Can access self.db_path here
             import sqlite3
             conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
             cursor = conn.execute(sql)
             results = [dict(row) for row in cursor.fetchall()]
             conn.close()
@@ -428,7 +429,8 @@ def another_tool(param: str) -> dict:
 Each parameter's type comes from `_ANNOTATION_TYPES` and `_infer_param_type`
 (`src/gaia/agents/base/tools.py`), which unwrap `Optional[X]` / `X | None`, map
 `list`, `tuple`, `set` and `frozenset` to `array` (with `items` for `List[str]`),
-and turn `Literal[...]` into a `string` with an `enum`. `required` is `True` when
+and turn `Literal[...]` into an `enum` typed after its first value (`string` for
+`Literal["a", "b"]`). `required` is `True` when
 the parameter has no default.
 
 ### Docstring Parsing
@@ -574,14 +576,18 @@ def test_tool_no_docstring():
 ### Required Packages
 
 ```python
+import contextvars
 import inspect
-import logging
-from typing import Callable, Dict
+import re
+import types
+import typing
+
+from gaia.logger import get_logger
 ```
 
-### No External Dependencies
+### No Third-Party Dependencies
 
-The tool decorator uses only Python standard library.
+The tool decorator uses the Python standard library plus GAIA's own logger and tool-cancellation helpers.
 
 ---
 

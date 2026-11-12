@@ -26,7 +26,7 @@ is populated at server startup by `AgentRegistry.discover()`, which:
    the module via `importlib`, finds the `Agent` subclass with `AGENT_ID` and
    `AGENT_NAME` class attributes, and registers it.
 2. Discovers **installed agent wheels** (e.g. `gaia`) through the
-   `gaia.agent` entry-point group, then **native agents** from
+   `gaia.agent` / `gaia.agents` entry-point groups, then **native agents** from
    `agent-manifest.json`.
 
 The result is a keyed dict of `AgentRegistration` objects that the UI router
@@ -44,8 +44,8 @@ how to wire new agents into the OpenAI surface.
 **Removed in v0.17.5 (#912):** YAML manifest agents (a directory containing
 only `agent.yaml`, no `agent.py`) are no longer loaded. The registry emits a
 `DeprecationWarning` per such directory and skips it. See the
-[Custom Agents guide](/guides/custom-agent#migrating-from-a-yaml-manifest) for
-the migration recipe.
+[Custom Agents guide](/guides/custom-agent) for how to write the `agent.py`
+that replaces it.
 </Warning>
 
 ---
@@ -100,8 +100,9 @@ class AgentRegistration:
 
 ## Public API
 
-`AgentRegistry` is typically instantiated once per process and shared via
-`src/gaia/ui/dependencies.py`:
+`AgentRegistry` is instantiated once at server startup (`src/gaia/ui/server.py`),
+stored on `app.state.agent_registry` and passed to `set_agent_registry()` in
+`src/gaia/ui/_chat_helpers.py`:
 
 ```python
 from gaia.agents.registry import AgentRegistry
@@ -138,8 +139,7 @@ filters to valid config fields per agent, typically with `dataclasses.fields(...
     README.md              # optional
 ```
 
-See the [Custom Agents guide](/guides/custom-agent) for the full minimal example, the tool-mixin table, and the YAML-manifest
-migration recipe.
+See the [Custom Agents guide](/guides/custom-agent) for the full minimal example and the tool-mixin table.
 
 ---
 
@@ -149,5 +149,4 @@ migration recipe.
   registry to resolve chat sessions.
 - [API Server](/sdk/infrastructure/api-server) — the separate OpenAI-style
   model registry used by `gaia api start`.
-- [Custom Agents guide](/guides/custom-agent) — Python agent recipes and
-  the manifest → `agent.py` migration.
+- [Custom Agents guide](/guides/custom-agent) — Python agent recipes.

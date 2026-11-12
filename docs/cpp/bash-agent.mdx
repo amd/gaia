@@ -481,7 +481,7 @@ Linting (`script_lint`), BATS test generation (`script_test`) and the `/lint`, `
 | Variable | Default | Description |
 |---|---|---|
 | `LEMONADE_BASE_URL` | `http://localhost:13305/api/v1` | Lemonade Server URL |
-| `GAIA_MODEL_ID` | `Gemma-4-E4B-it-GGUF` | Model to load (same as `--model`) |
+| `GAIA_MODEL_ID` | `Gemma-4-E4B-it-GGUF` | Model to load; takes precedence over `--model` when both are set |
 | `GAIA_CONTEXT_SIZE` | `32768` | Context window size (tokens) |
 | `GAIA_STREAMING` | `0` | Enable streaming (`1` = on) |
 

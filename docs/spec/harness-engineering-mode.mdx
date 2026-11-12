@@ -129,7 +129,7 @@ Source organization: `src/gaia/engineering/` contains `cli.py`, `handoff.py`, `i
 
 The skill ships at `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`; the host loads it only in developer mode.
 
-- Resolve explicit developer mode before the first interactive turn. The flag is `--developer-mode` (`gaia mcp engineering`, the TUI, and `GaiaAgentConfig.developer_mode`); existing `--dev`/`--debug` retain logging semantics.
+- Resolve explicit developer mode before the first interactive turn. The flag is `--developer-mode` (`gaia mcp engineering`, the TUI, and `GaiaAgentConfig.developer_mode`), and `GAIA_DEVELOPER_MODE=1` enables it when no explicit value is passed; existing `--dev`/`--debug` retain logging semantics.
 - Load the skill exactly once and keep it resident in that enabled session despite semantic skill filtering. Do not add it to unconditional `skills:` or the global default skill set.
 - Normal mode excludes its body, discovery, manual loading, skill-set overrides and restored activation. Host code enforces capability checks; a user skill or model assertion cannot enable the mode.
 - Record the bundled skill digest. Missing/invalid instructions make engineering visibly unavailable, while ordinary chat remains available. Learned overlays must not change consent or publication rules.

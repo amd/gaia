@@ -92,7 +92,8 @@ class ChatAgentConfig:
     skip_lemonade, device, min_context_size, max_output_tokens, context_eviction*,
     resend_reasoning_across_requests, output_handler, working_directory,
     enable_filesystem, enable_scratchpad, filesystem_*, scratchpad_db_path,
-    enable_browser, browser_*, surface, enable_audio_generation_tools and
+    enable_browser, browser_*, surface, enable_audio_generation_tools,
+    enable_3d_tools, prompt_profile, dynamic_tools, namespaced_agent_id and
     mcp_tool_limit; see gaia_agent/chat_agent.py)."""
 
     # LLM settings
@@ -286,7 +287,8 @@ Each watched directory gets a `FileChangeHandler` from `gaia.utils.file_watcher`
 default extensions: `.pdf`, `.txt`, `.md`, `.markdown`, `.rst`, `.log`, `.csv`,
 `.json`, `.xml`, `.yaml`, `.yml`, `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`,
 `.html` and `.css` (see [default extensions](/sdk/utils/file-watcher#default-extensions)).
-Word, PowerPoint and Excel files are not watched.
+It also watches `.docx`, `.pptx` and `.xlsx`, skipping Office `~$` owner files
+(`ChatAgent._should_watch_file`).
 
 - A created or modified file is reindexed once it has gone a full window
   (`debounce_seconds`, 2 s by default) with no change in size or modification

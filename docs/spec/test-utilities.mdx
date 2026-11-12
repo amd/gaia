@@ -11,6 +11,7 @@ title: "Test Utilities"
 **Module:** `gaia.testing`
 **Import:** `from gaia.testing import MockLLMProvider, MockVLMClient, create_test_agent, temp_db`
 </Note>
+
 ---
 
 ## Overview
@@ -41,7 +42,7 @@ Test Utilities provide fixtures, mocks, and helper functions for testing GAIA ag
    - Track calls for testing
 
 3. **Temporary Database**
-   - In-memory SQLite for testing
+   - Temporary on-disk SQLite file for testing
    - Automatic cleanup
    - Isolation between tests
 
@@ -223,6 +224,8 @@ def temp_db(schema: Optional[str] = None):
 **File:** `tests/unit/test_testing_utilities.py`
 
 ```python
+from pathlib import Path
+
 import pytest
 from gaia.testing import (
     MockLLMProvider,
@@ -255,7 +258,7 @@ def test_mock_llm_tracks_calls():
 
     assert len(mock.call_history) == 2
     assert mock.call_history[0]["prompt"] == "prompt 1"
-    assert mock.call_history[1]["kwargs"]["max_tokens"] == 100
+    assert mock.call_history[1]["max_tokens"] == 100
 
 def test_mock_vlm_can_be_imported():
     """Verify MockVLMClient can be imported."""
@@ -347,10 +350,9 @@ def test_agent_processes_query():
         ]
     )
 
-    result = agent.process_query("Find test data")
-
-    assert "result" in result
-    # LLM mock was used instead of real API
+    # The mock stands in for the real LLM client
+    assert agent._mock_llm is not None
+    assert agent.chat is agent._mock_llm
 ```
 
 <Note>
@@ -458,7 +460,7 @@ def test_agent_processes_new_files():
 
 ### Fixture Exports
 
-**File:** `tests/conftest.py` (for GAIA framework tests)
+GAIA's own `conftest.py` does not define these; a test suite can add them like this:
 
 ```python
 import pytest
@@ -488,13 +490,9 @@ def tmp_dir():
 
 ## Dependencies
 
-```toml
-# pyproject.toml
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-asyncio",
-]
+```python
+# setup.py extras_require["dev"] (test-related entries, unpinned)
+"pytest", "pytest-cov", "pytest-mock", "pytest-asyncio", "pytest-xdist"
 ```
 
 ---

@@ -21,7 +21,7 @@ icon: "puzzle-piece"
 
 **Purpose:** Reusable tool sets that can be mixed into your agents.
 
-**Available Mixins:** For complete API specifications of all 17 mixins, see [Specifications → Tool Mixins](/spec/file-tools-mixin)
+**Available Mixins:** The registry exposes 21 mixins (table below). Detailed specs exist for some of them; see [Specifications → Tool Mixins](/spec/file-tools-mixin)
 
 ## Composable mixins (registry)
 
@@ -290,7 +290,7 @@ extraction? Register your own `@tool` that calls `self.vlm_client` directly; see
 
 ## 9.7 Other registry mixins
 
-Tool lists for the remaining `KNOWN_TOOLS` mixins, read from `src/gaia/agents/tools/`. Call the mixin's register method from `_register_tools()`; tools run through `agent._execute_tool(name, args)`. The `email` mixin is not covered here.
+Tool lists for more of the `KNOWN_TOOLS` mixins, read from `src/gaia/agents/tools/`. Call the mixin's register method from `_register_tools()`; tools run through `agent._execute_tool(name, args)`. The `email`, `code_index` and `browser` mixins are not covered here; `file_io` has its own spec (linked above).
 
 ### `cli_setup` — `CliSetupToolsMixin`
 
