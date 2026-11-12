@@ -921,6 +921,9 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A "denied" call nobody answered is not one the user declined.
+        if isinstance(data, dict) and data.get("timed_out") is True:
+            event["timed_out"] = True
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False

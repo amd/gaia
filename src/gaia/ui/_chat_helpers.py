@@ -2976,6 +2976,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _declined_call(event: dict) -> bool:
+    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    status = event.get("status", data.get("status"))
+    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
+    return status == "denied" and not timed_out
+
+
 def _insert_skill_step(steps: list, step: dict) -> None:
     """Put a skill step before the running tool call that brought the skill in."""
     for i in range(len(steps) - 1, -1, -1):
@@ -4999,6 +5007,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        if _declined_call(event):
+                            tool_step["declined"] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]

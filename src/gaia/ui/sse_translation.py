@@ -118,6 +118,8 @@ SUMMARY_VIEW_KEYS = (
     "success",
     # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
     "status",
+    # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
+    "timed_out",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
     "executed",
     "summary_truncated",
