@@ -271,7 +271,6 @@ export function DocumentLibrary() {
     }, [setDocuments]);
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
@@ -628,7 +627,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi>
                         {indexedTime && (
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
@@ -763,8 +762,6 @@ export function DocumentLibrary() {
                     {documents.length > 0 && (
                         <div className="doc-stats">
                             <span>{t.plural('docs.count', documents.length)}</span>
-                            <span>&middot;</span>
-                            <span>{t.plural('docs.chunks', totalChunks)}</span>
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>

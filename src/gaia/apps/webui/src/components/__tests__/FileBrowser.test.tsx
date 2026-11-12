@@ -88,8 +88,8 @@ describe('FileBrowser row selection', () => {
         const row = fileName.closest('.fb-entry') as HTMLElement;
         expect(row).toBeTruthy();
 
-        const indexBtn = screen.getByRole('button', { name: /Index Selected/i });
-        const askBtn = screen.getByRole('button', { name: /Ask Agent/i });
+        const indexBtn = screen.getByRole('button', { name: /Add to library/i });
+        const askBtn = screen.getByRole('button', { name: /Ask GAIA about these/i });
 
         // Both buttons disabled before selection
         expect(indexBtn).toBeDisabled();
@@ -116,8 +116,8 @@ describe('FileBrowser row selection', () => {
         const row = fileName.closest('.fb-entry') as HTMLElement;
         expect(row).toBeTruthy();
 
-        const indexBtn = screen.getByRole('button', { name: /Index Selected/i });
-        const askBtn = screen.getByRole('button', { name: /Ask Agent/i });
+        const indexBtn = screen.getByRole('button', { name: /Add to library/i });
+        const askBtn = screen.getByRole('button', { name: /Ask GAIA about these/i });
 
         // Click the preview button inside the row
         const previewBtn = within(row).getByRole('button', { name: /Preview/i });
@@ -144,8 +144,8 @@ describe('FileBrowser row selection', () => {
         const row = fileName.closest('.fb-entry') as HTMLElement;
         expect(row).toBeTruthy();
 
-        const indexBtn = screen.getByRole('button', { name: /Index Selected/i });
-        const askBtn = screen.getByRole('button', { name: /Ask Agent/i });
+        const indexBtn = screen.getByRole('button', { name: /Add to library/i });
+        const askBtn = screen.getByRole('button', { name: /Ask GAIA about these/i });
 
         const checkbox = within(row).getByRole('checkbox');
 
@@ -225,7 +225,7 @@ describe('FileBrowser Index Selected', () => {
         render(<FileBrowser onStartChat={vi.fn()} />);
         const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
         fireEvent.click(within(row).getByRole('checkbox'));
-        fireEvent.click(screen.getByRole('button', { name: /Index Selected/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Add to library/i }));
         await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalled());
     }
 
@@ -264,7 +264,7 @@ describe('FileBrowser Ask Agent', () => {
         render(<FileBrowser onStartChat={onStartChat} />);
         const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
         fireEvent.click(within(row).getByRole('checkbox'));
-        fireEvent.click(screen.getByRole('button', { name: /Ask Agent/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Ask GAIA about these/i }));
         await waitFor(() => expect(useChatStore.getState().showFileBrowser).toBe(false));
         return onStartChat;
     }
@@ -319,11 +319,11 @@ describe('FileBrowser hidden entries', () => {
         const toggle = screen.getByRole('checkbox', { name: 'Show hidden' });
         fireEvent.click(toggle);
         fireEvent.click(screen.getByRole('checkbox', { name: 'Select .env' }));
-        expect(screen.getByRole('button', { name: /Index Selected/i })).toBeEnabled();
+        expect(screen.getByRole('button', { name: /Add to library/i })).toBeEnabled();
 
         fireEvent.click(toggle);
 
-        expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled();
+        expect(screen.getByRole('button', { name: /Add to library/i })).toBeDisabled();
     });
 
     it('explains a folder that holds only hidden items', async () => {
@@ -370,19 +370,19 @@ describe('FileBrowser hidden selections from search', () => {
 
     it('keeps a hidden file ticked while its search results are on screen', async () => {
         await searchAndTick(['.env']);
-        expect(screen.getByText('1 item(s) selected')).toBeInTheDocument();
+        expect(screen.getByText('1 item selected')).toBeInTheDocument();
     });
 
     it('drops a hidden file ticked in search on Back to browsing', async () => {
         await searchAndTick(['.env', 'notes.txt']);
         fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
-        expect(await screen.findByText('1 item(s) selected')).toBeInTheDocument();
+        expect(await screen.findByText('1 item selected')).toBeInTheDocument();
     });
 
     it('drops a hidden file ticked in search when the search is cleared', async () => {
         await searchAndTick(['.env']);
         fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
-        await waitFor(() => expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled());
+        await waitFor(() => expect(screen.getByRole('button', { name: /Add to library/i })).toBeDisabled());
     });
 
     it('drops a hidden file with a Windows path on Back to browsing', async () => {
@@ -400,13 +400,13 @@ describe('FileBrowser hidden selections from search', () => {
         await screen.findByText(/Found 1 result/);
         fireEvent.click(screen.getByRole('checkbox', { name: 'Select .env' }));
         fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
-        await waitFor(() => expect(screen.getByRole('button', { name: /Index Selected/i })).toBeDisabled());
+        await waitFor(() => expect(screen.getByRole('button', { name: /Add to library/i })).toBeDisabled());
     });
 
     it('keeps a hidden file ticked in search when Show hidden is on', async () => {
         await searchAndTick(['.env'], true);
         fireEvent.click(screen.getByRole('button', { name: 'Back to browsing' }));
-        expect(await screen.findByText('1 item(s) selected')).toBeInTheDocument();
+        expect(await screen.findByText('1 item selected')).toBeInTheDocument();
     });
 });
 

@@ -712,8 +712,8 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     <div className="fb-actions">
                         <div className="fb-selection-info">
                             {selectedFiles.size > 0
-                                ? `${selectedFiles.size} item(s) selected`
-                                : 'Select files to index or analyze'}
+                                ? t.plural('fileBrowser.selected', selectedFiles.size)
+                                : t('fileBrowser.selectHint')}
                         </div>
                         {indexStatus && <span className="fb-index-status">{indexStatus}</span>}
                         <div className="fb-action-btns">
@@ -721,19 +721,19 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                 className="fb-action-btn secondary"
                                 onClick={handleIndexSelected}
                                 disabled={selectedFiles.size === 0 || indexingFiles.size > 0}
-                                title="Index selected files for RAG search"
+                                title={t('fileBrowser.addToLibraryTitle')}
                             >
                                 <Upload size={14} />
-                                Index Selected
+                                {t('fileBrowser.addToLibrary')}
                             </button>
                             <button
                                 className="fb-action-btn primary"
                                 onClick={handleAskAgent}
                                 disabled={selectedFiles.size === 0 || indexingFiles.size > 0}
-                                title="Index and send selected files to the chat agent for analysis"
+                                title={t('fileBrowser.askGaiaTitle')}
                             >
                                 <Brain size={14} />
-                                Ask Agent
+                                {t('fileBrowser.askGaia')}
                             </button>
                         </div>
                     </div>
