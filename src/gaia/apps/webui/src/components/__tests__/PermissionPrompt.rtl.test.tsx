@@ -42,7 +42,7 @@ describe('permission prompt in Arabic', () => {
     });
 
     it('asks in Arabic, the tool kept left to right', () => {
-        prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: CODE } });
+        prompt({ tool: 'some_new_tool', toolLabel: 'running python', toolArgs: { code: CODE } });
         const title = screen.getByRole('heading');
         expect(title.textContent).toMatch(/^⁧?هل تسمح بـ/);
         expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);

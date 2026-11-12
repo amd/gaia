@@ -148,7 +148,7 @@ describe('switching to another chat and back while the turn still runs', () => {
 
         await waitFor(() => expect(attaches).toHaveLength(2));
         act(() => attaches[1].onAgentEvent({
-            type: 'permission_request', tool: 'run_shell_command', tool_label: 'Run shell',
+            type: 'permission_request', tool: 'some_new_tool', tool_label: 'Run shell',
             confirm_id: 'perm-1', args: { command: 'ls' },
         } as unknown as StreamEvent));
         expect(await screen.findByRole('heading', { name: 'Allow Run shell?' })).toBeInTheDocument();
