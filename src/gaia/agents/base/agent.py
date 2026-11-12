@@ -51,6 +51,8 @@ from gaia.agents.base.call_risk import (
     SHELL_TOOLS,
 )
 from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
+    WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
@@ -672,6 +674,29 @@ def budget_notices_enabled() -> bool:
     raise ValueError(
         f"GAIA_AGENT_BUDGET_NOTICES must be a boolean (1/0, true/false, "
         f"on/off), got {raw!r}. Unset it to keep the notices on."
+    )
+
+
+def verify_edits_enabled() -> bool:
+    """Whether a turn reads its own edits back before it answers.
+
+    On by default. The check is read-only and in-process — it opens the files
+    this turn wrote and nothing else — so it cannot run a build, start a
+    process, or reach anything the turn had not already touched.
+    ``GAIA_AGENT_VERIFY_EDITS=0`` turns it off. Read at call time, like the
+    other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_VERIFY_EDITS")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
     )
 
 
@@ -2025,6 +2050,49 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
 #: Written files whose figures are checked, and input files read as evidence.
 _MAX_CHECKED_DELIVERABLES = 8
+# Post-edit read-back. Repair steps are granted on top of max_steps, so a model
+# under budget pressure has no reason to skip fixing what it broke.
+_VERIFY_REPAIR_STEPS = 2
+# Rounds per turn; past that the turn is looping and the gaps go into the answer.
+_MAX_EDIT_VERIFICATIONS = 2
+# Past this size a file is checked for presence only.
+_VERIFY_MAX_BYTES = 2 * 1024 * 1024
+# JSON files that conventionally allow comments and trailing commas.
+_JSONC_NAMES = frozenset(
+    {"devcontainer.json", ".devcontainer.json", ".eslintrc.json", ".babelrc.json"}
+)
+
+
+def _is_jsonc(path: Path) -> bool:
+    """Whether a .json file is JSONC by convention, so strict parsing misjudges it."""
+    name = path.name.lower()
+    if name in _JSONC_NAMES or name.startswith(("tsconfig", "jsconfig")):
+        return True
+    return any(part.lower() == ".vscode" for part in path.parts[:-1])
+
+
+def _parse_problem(path: Path, text: str) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+    suffix = path.suffix.lower()
+    if suffix in (".py", ".pyi"):
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError) as e:
+            return f"`{path}` no longer parses as Python: {e}"
+    elif suffix == ".json" and not _is_jsonc(path):
+        try:
+            json.loads(text)
+        except ValueError as e:
+            return f"`{path}` is no longer valid JSON: {e}"
+    return None
+
+
+_EDIT_VERIFICATION_PROMPT = (
+    "[check:edits] The files you changed this turn were read back off disk "
+    "and these did not come out right:\n{problems}\n\nFix them now, then "
+    "answer. You have {steps} extra steps for this and they are not charged "
+    "against your step budget."
+)
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -3163,6 +3231,12 @@ Do NOT wrap conversational replies in JSON.
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
+        # Post-edit verification bookkeeping; reset per turn below.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings: List[str] = []
+        # Whether each file parsed before this turn's first write to it.
+        self._edit_parse_baseline: Dict[str, bool] = {}
+        self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -7774,6 +7848,8 @@ Do NOT wrap conversational replies in JSON.
                 logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
                 return refused
         evidence = getattr(self, "_completion_evidence", None)
+        if outermost:
+            self._note_edit_parse_baseline(tool_name, tool_args)
         before = (
             evidence.snapshot(
                 tool_name,
@@ -10741,6 +10817,159 @@ Do NOT wrap conversational replies in JSON.
             key for key, item in self._completion_evidence.files.items() if item.written
         }
 
+    def _files_written_this_turn(self) -> List[str]:
+        """Text files a file-editing tool wrote this turn, from the evidence ledger.
+
+        Not ``_turn_file_edits`` alone: no shipped file tool sets the
+        ``operation`` field that feeds it. Generated outputs, executor-written
+        files and mtime-inferred entries are left out.
+        """
+        paths: List[str] = []
+        evidence = getattr(self, "_completion_evidence", None)
+        files = getattr(evidence, "files", None) or {}
+        removed = getattr(evidence, "removed", None) or set()
+        for item in files.values():
+            if item.written and item.edited and not item.inferred:
+                paths.append(item.path)
+        for edit in getattr(self, "_turn_file_edits", None) or []:
+            raw = (edit or {}).get("file_path")
+            if not raw:
+                continue
+            if evidence is not None:
+                try:
+                    key = evidence.key(str(raw))
+                except (OSError, ValueError):
+                    key = None
+                item = files.get(key)
+                # Deleted on purpose, or rewritten since by something that is
+                # not a file-editing tool: no longer this edit's result.
+                if key in removed or (item is not None and not item.edited):
+                    continue
+            paths.append(str(raw))
+        return paths
+
+    def _verify_turn_edits(self) -> List[str]:
+        """Count a read-back round and keep its findings as the latest ones."""
+        problems = self._edit_problems()
+        self._edit_verification_rounds = (
+            getattr(self, "_edit_verification_rounds", 0) + 1
+        )
+        self._edit_verification_findings = problems
+        logger.debug(
+            "Post-edit verification round %d: %d problem(s)",
+            self._edit_verification_rounds,
+            len(problems),
+        )
+        return problems
+
+    def _edit_problems(self) -> List[str]:
+        """Read this turn's edits back: still there, not empty, still parses.
+
+        Read-only and in-process, through the read boundary without prompting.
+        Binary files are skipped; files over ``_VERIFY_MAX_BYTES`` are checked
+        for presence only.
+        """
+        problems: List[str] = []
+        seen: set = set()
+        validator = self._read_validator()
+        for raw in self._files_written_this_turn():
+            path = Path(str(raw))
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            if validator is not None:
+                try:
+                    allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                except (OSError, ValueError):
+                    allowed = False
+                if not allowed:
+                    continue
+            try:
+                if not path.is_file():
+                    problems.append(
+                        f"`{path}` was edited this turn but is not on disk now."
+                    )
+                    continue
+                size = path.stat().st_size
+                if size > _VERIFY_MAX_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError as e:
+                problems.append(f"`{path}` could not be read back after its edit: {e}")
+                continue
+            if b"\x00" in data:
+                continue
+            text = data.decode("utf-8-sig", errors="replace")
+            if not text.strip():
+                # Same exemptions the write-time stand-in check grants.
+                if not (
+                    _empty_by_design(str(path))
+                    or _requested_empty(
+                        str(path), getattr(self, "_current_query", None)
+                    )
+                ):
+                    problems.append(f"`{path}` is empty after this turn's edit.")
+                continue
+            problem = _parse_problem(path, text)
+            # A file that already failed to parse before the turn touched it
+            # is not this turn's breakage to repair.
+            if problem and self._parsed_before(path) is not False:
+                problems.append(problem)
+        return problems
+
+    def _baseline_key(self, path: str, root: Optional[str] = None) -> Optional[str]:
+        evidence = getattr(self, "_completion_evidence", None)
+        try:
+            key = evidence.key(path, root) if evidence is not None else path
+        except (OSError, ValueError):
+            return None
+        return os.path.normcase(str(key))
+
+    def _parsed_before(self, path: Path) -> Optional[bool]:
+        key = self._baseline_key(str(path))
+        baseline = getattr(self, "_edit_parse_baseline", None) or {}
+        return baseline.get(key) if key is not None else None
+
+    def _note_edit_parse_baseline(self, tool_name: str, tool_args: Any) -> None:
+        """Before a turn's first write to a file, note whether that file parsed."""
+        if tool_name not in WRITE_TOOLS or not isinstance(tool_args, dict):
+            return
+        if not getattr(self, "_verify_edits_on", False):
+            return
+        raw = tool_args.get("file_path") or tool_args.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw:
+            return
+        key = self._baseline_key(raw, tool_args.get("project_dir"))
+        baseline = getattr(self, "_edit_parse_baseline", None)
+        if key is None or baseline is None or key in baseline:
+            return
+        path = Path(key)
+        if path.suffix.lower() not in (".py", ".pyi", ".json"):
+            return
+        validator = self._read_validator()
+        try:
+            if validator is not None:
+                allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                if not allowed:
+                    return
+            if not path.is_file():
+                baseline[key] = True  # a new file
+                return
+            if path.stat().st_size > _VERIFY_MAX_BYTES:
+                return
+            data = path.read_bytes()
+        except (OSError, ValueError) as e:
+            logger.debug("No pre-edit parse baseline for %s: %s", path, e)
+            return
+        if b"\x00" in data:
+            return
+        text = data.decode("utf-8-sig", errors="replace")
+        # An empty file parses: emptiness is judged separately after the edit.
+        baseline[key] = not text.strip() or _parse_problem(path, text) is None
+
     def _gate_unsealed_answer(
         self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
@@ -11349,6 +11578,13 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        # Per-turn too: a previous turn's edits are not this turn's to repair.
+        # The env knob is read here, not at import, so it can be changed
+        # between turns.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings = []
+        self._edit_parse_baseline = {}
+        self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -13844,6 +14080,39 @@ Do NOT wrap conversational replies in JSON.
                     and self._drain_followups(messages, conversation)
                 ):
                     continue
+
+                # Last chance to catch an edit that reported success but left a
+                # missing, empty or unparsable file.
+                if self._verify_edits_on and self._files_written_this_turn():
+                    if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
+                        edit_problems = self._verify_turn_edits()
+                        if edit_problems:
+                            steps_limit += _VERIFY_REPAIR_STEPS
+                            repair = {
+                                "role": "user",
+                                "content": _EDIT_VERIFICATION_PROMPT.format(
+                                    problems="\n".join(f"- {p}" for p in edit_problems),
+                                    steps=_VERIFY_REPAIR_STEPS,
+                                ),
+                            }
+                            messages.append(repair)
+                            conversation.append(dict(repair))
+                            logger.info(
+                                "Post-edit verification found %d problem(s); "
+                                "granted %d repair step(s) (limit now %d)",
+                                len(edit_problems),
+                                _VERIFY_REPAIR_STEPS,
+                                steps_limit,
+                            )
+                            continue
+                    else:
+                        # Out of repair rounds: still-broken files go into the answer.
+                        self._edit_verification_findings = self._edit_problems()
+                        completion_gaps.extend(
+                            p
+                            for p in self._edit_verification_findings
+                            if p not in completion_gaps
+                        )
 
                 unfinalized_answer = _without_tool_markup(answer_candidate)
                 if answer_before_completion_check is not None:
