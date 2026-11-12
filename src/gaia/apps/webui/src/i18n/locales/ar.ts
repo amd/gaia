@@ -2700,6 +2700,7 @@ const messages: Messages = {
     'schedules.dayName.4': 'الجمعة',
     'schedules.dayName.5': 'السبت',
     'schedules.dayName.6': 'الأحد',
+    'schedules.notify.finished': 'انتهت المهمة المجدولة "{name}"',
 
     // Memory dashboard
     'mem.title': 'الذاكرة',

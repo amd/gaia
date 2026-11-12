@@ -2699,6 +2699,7 @@ export const enMessages = {
     'schedules.dayName.4': 'Friday',
     'schedules.dayName.5': 'Saturday',
     'schedules.dayName.6': 'Sunday',
+    'schedules.notify.finished': 'Scheduled task "{name}" finished',
 
     // Memory dashboard
     'mem.title': 'Memory',

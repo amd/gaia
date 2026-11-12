@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import type { Schedule, ScheduleResult } from '../types';
 import * as api from '../services/api';
+import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import { useNotificationStore } from './notificationStore';
 
@@ -45,6 +46,34 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
     }
 }
 
+/** Runs that ended without an error; a run in flight is already counted in run_count. */
+function cleanRuns(s: Schedule): number {
+    return s.run_count - s.error_count - (s.running ? 1 : 0);
+}
+
+/** Raise an info notification for each schedule that finished a run cleanly since *seen* was taken. */
+function notifyNewSuccesses(seen: Record<string, number>, list: Schedule[]): void {
+    const { addNotification } = useNotificationStore.getState();
+    const t = getT();
+    for (const s of list) {
+        if (s.running || s.last_error || cleanRuns(s) <= (seen[s.id] ?? 0)) continue;
+        const result = (s.last_result ?? '').trim();
+        addNotification({
+            id: `schedule-done-${s.id}-${s.run_count}`,
+            type: 'info',
+            agentId: 'scheduler',
+            agentName: 'GAIA',
+            title: t('schedules.notify.finished', { name: s.name }),
+            message: result.length > 200 ? `${result.slice(0, 200)}…` : result,
+            timestamp: Date.now(),
+            read: false,
+            dismissed: false,
+            priority: 'medium',
+            ...(s.session_id ? { sessionId: s.session_id } : {}),
+        });
+    }
+}
+
 interface ScheduleState {
     schedules: Schedule[];
     loading: boolean;
@@ -59,6 +88,8 @@ interface ScheduleState {
     resultsLoading: boolean;
     /** error_count per schedule id at the last load; null before the first. */
     errorCounts: Record<string, number> | null;
+    /** Runs finished without an error per schedule id at the last load; a run in flight keeps the old count. */
+    cleanRunCounts: Record<string, number>;
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
@@ -79,6 +110,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     results: [],
     resultsLoading: false,
     errorCounts: null,
+    cleanRunCounts: {},
 
     loadSchedules: async () => {
         // Only show loading spinner on initial load, not poll refreshes
@@ -89,12 +121,19 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             const data = await api.listSchedules();
             const schedules: Schedule[] = data.schedules || [];
             const seen = get().errorCounts;
+            const clean = get().cleanRunCounts;
             // The first load is the state at launch, not news.
-            if (seen) notifyNewFailures(seen, schedules);
+            if (seen) {
+                notifyNewFailures(seen, schedules);
+                notifyNewSuccesses(clean, schedules);
+            }
             set({
                 schedules,
                 loading: false,
                 errorCounts: Object.fromEntries(schedules.map((s) => [s.id, s.error_count])),
+                cleanRunCounts: Object.fromEntries(
+                    schedules.map((s) => [s.id, s.running ? (clean[s.id] ?? cleanRuns(s)) : cleanRuns(s)]),
+                ),
             });
         } catch (err) {
             log.api.error('Failed to load schedules', err);
