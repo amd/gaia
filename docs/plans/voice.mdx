@@ -93,7 +93,7 @@ WebSocket), #2985 (untested voice-stack paths), #3494 (the mic hearing GAIA's ow
 - **`gaia talk` detects speech by loudness** (`audio_recorder.py`), cuts after ~1.3 s of quiet,
   and mutes the mic while speaking. Only Enter interrupts.
 - **Speech output** is `POST /audio/speech` with `kokoro-v1`, 24 kHz 16-bit PCM
-  (`lemonade_tts.py`). Read-aloud adds:
+  (`lemonade_tts.py`). Read-aloud (#6489) added:
   - `POST /api/speech` (whole WAV, ≤1000 characters)
   - `GET/PUT /api/speech/settings`
   - the `read_aloud_voice` / `read_aloud_speed` / `read_aloud_auto` config keys
@@ -447,8 +447,8 @@ runs on the phone.
 
 ## Settings
 
-A **Settings › Voice** section replaces read-aloud's **Read aloud** section, which hasn't merged
-yet. Coordinate with that branch so the keys and section id land once.
+A **Settings › Voice** section replaces the existing **Read aloud** section from read-aloud
+(#6489), keeping its config keys.
 
 | Group | Setting | Config key | Default |
 |-------|---------|-----------|---------|
@@ -559,7 +559,7 @@ The apps recover by themselves wherever they can. Users are never told to run a 
 | PR | Scope | Depends on |
 |----|-------|-----------|
 | 1 | **Voice session core**: `gaia.voice` (listener, state machine, speech streamer and status lines, earcon, warm-up and pinning, timing), `WS /api/voice/session` and `/api/voice/status`, config keys, latency benchmark and recognizer choice, unit and integration tests, this plan | — |
-| 2 | **Agent UI dictation**: mic button, capture worklet, Electron permissions and macOS entitlement, Settings › Voice Listening group, failure cards, en/ar strings, RTL checks, docs | 1, read-aloud merged |
+| 2 | **Agent UI dictation**: mic button, capture worklet, Electron permissions and macOS entitlement, Settings › Voice Listening group, failure cards, en/ar strings, RTL checks, docs | 1 |
 | 3 | **Spoken-reply contract**: `reply_style` on both request models, flagship fragment and reasoning-down, `<spoken>` parsing, `gaia_voice_mode` scenarios with harness support | — (parallel to 1–2) |
 | 4 | **Agent UI voice screen**: animations, playback worklet, barge-in, earcon and status lines, captions, voice turns in the chat history, timing overlay, Arabic notice, phone layout and phone rules, benchmark numbers for the release notes | 1, 3 |
 | 5 | **Daemon host and TUI dictation**: sounddevice mic and speaker in the daemon, `WS /v1/voice/session`, `/v1/voice/devices`, PortAudio on all three OSes, `Ctrl+R` / `/dictate`, optional preflight row | 1 |
@@ -584,5 +584,5 @@ Each PR updates the docs it touches:
 - **Open:**
   - Should `gaia talk` (CLI) move onto `gaia.voice`, or retire in favor of the TUI's `/talk`,
     after PR 6?
-  - PR #6204 (open, outside contributor) exposes Kokoro as a flagship `text_to_speech` tool. Both
-    touch `lemonade_tts.py`; land one before the other.
+  - The flagship's `text_to_speech` tool (#6204, merged) also calls `lemonade_tts.py`. Should
+    voice mode's streaming speech share that client, or keep its own?
