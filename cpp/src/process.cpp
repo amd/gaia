@@ -169,7 +169,7 @@ void restoreEnvVars(const std::map<std::string, std::string>& previous,
 // Simple (no-timeout) execution via popen
 // ---------------------------------------------------------------------------
 
-ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
+[[maybe_unused]] ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
     ProcessResult result;
 
     // Build command that captures stderr to a temp file so we can read it
@@ -193,7 +193,8 @@ ProcessResult runSimple(const std::string& command, size_t maxOutputBytes) {
         close(fd);
         stderrFile = tmpTemplate;
     }
-    fullCmd = command + " 2>\"" + stderrFile + "\"";
+    // Never this process's stdin: it may be a host's control pipe.
+    fullCmd = "exec </dev/null; " + command + " 2>\"" + stderrFile + "\"";
 #endif
 
     struct PipeCloser {
@@ -289,7 +290,18 @@ ProcessResult runWithTimeout(const std::string& command,
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = stdoutWriteH;
     si.hStdError = stderrWriteH;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    // Never this process's stdin: it may be a host's control pipe, and a child
+    // that reads it would swallow lines meant for us.
+    HANDLE nulIn = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (nulIn == INVALID_HANDLE_VALUE) {
+        CloseHandle(stdoutReadH); CloseHandle(stdoutWriteH);
+        CloseHandle(stderrReadH); CloseHandle(stderrWriteH);
+        result.exitCode = -1;
+        result.stderr_output = "Failed to open NUL as the command's stdin";
+        return result;
+    }
+    si.hStdInput = nulIn;
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
@@ -316,6 +328,7 @@ ProcessResult runWithTimeout(const std::string& command,
     // Close the write ends of the pipes — the child owns them now
     CloseHandle(stdoutWriteH);
     CloseHandle(stderrWriteH);
+    CloseHandle(nulIn);
 
     if (!created) {
         CloseHandle(stdoutReadH);
@@ -425,6 +438,12 @@ ProcessResult runWithTimeout(const std::string& command,
 
         close(stdoutPipe[1]);
         close(stderrPipe[1]);
+
+        // Never this process's stdin: it may be a host's control pipe.
+        const int devNull = open("/dev/null", O_RDONLY);
+        if (devNull < 0) _exit(126);
+        dup2(devNull, STDIN_FILENO);
+        if (devNull != STDIN_FILENO) close(devNull);
 
         execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
         _exit(127);  // exec failed
@@ -571,7 +590,12 @@ ProcessResult ProcessRunner::run(
     if (timeoutMs > 0) {
         result = runWithTimeout(command, timeoutMs, maxOutputBytes);
     } else {
+#ifdef _WIN32
+        // _popen would hand the command this process's stdin; -1 waits without a limit.
+        result = runWithTimeout(command, -1, maxOutputBytes);
+#else
         result = runSimple(command, maxOutputBytes);
+#endif
     }
 
     // Restore environment variables

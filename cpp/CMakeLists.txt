@@ -423,6 +423,7 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaia/main.cpp
         agents/gaia/gaia_agent.cpp
         agents/gaia/sidecar.cpp
+        agents/gaia/stdio_server.cpp
         agents/bash/bash_tools.cpp
     )
     # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
@@ -556,9 +557,11 @@ if(GAIA_BUILD_TESTS)
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
-    # Runs the built gaiacpp program end to end against the mock model server.
+    # Runs the built gaiacpp program end to end against the mock model server:
+    # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
     if(GAIA_BUILD_GAIA_AGENT)
-        target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaia/stdio_server.cpp)
         target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
         add_dependencies(tests_mock gaiacpp)
     endif()

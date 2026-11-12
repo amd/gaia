@@ -51,7 +51,7 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 `gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
 
 1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 8192 output tokens and temperature 0.2
-2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
+2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
 3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`
 4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`
 
@@ -220,6 +220,61 @@ A few things answer the way an older flagship would, and the UI copes with each:
 "Always allow" answers are kept per chat in memory. A shell command that only reads runs without asking: `ls`, `cat`, `grep`, or `find` without `-exec` or `-delete`, chained or piped, with output thrown away by `2>/dev/null`. Under cmd.exe only the built-ins `dir`, `type`, `cd` and `echo` qualify, because cmd runs a `find.bat` in the current folder before the real `find`. `git` always asks, because a repository's own config can make `git status` run a program. With the internet off, the chat refuses `web_fetch` to other hosts, every MCP tool, and shell commands that go online, before any approval card. On Windows the shell is Git Bash when Git for Windows is installed, found next to `git.exe` if it isn't on `PATH`, and `cmd.exe` otherwise; the WSL launcher (`System32\bash.exe`) is never used, because it can't see `C:\` paths. The system prompt names the shell in use.
 
 To try it, put the binary in `~/.gaia/agents/gaia/` with an `.installed` file naming it (`"artifact_kind": "binary"`, `"executable"` set to the file's name, `"artifact_sha256"` set to its SHA-256, and `"version"` set to `0.1.0` or later, since the daemon refuses to start a binary whose version it can't read). A local build names the file `gaiacpp.exe` (`gaiacpp` on Linux and macOS); the hub package from `cpp/packaging/package_agents.py` names it `gaia-win-x64.exe`, `gaia-linux-x64` or `gaia-darwin-arm64`. The Agent UI then relays to it whenever the Python `gaia_agent` package isn't importable in its environment.
+
+## Running as the agent of the GAIA terminal UI
+
+`gaiacpp --stdio` speaks the protocol the terminal UI uses with its agent child process: one line per message on stdin, one JSON event per line on stdout, and logs on stderr. The process stays up for the whole session, so the conversation, "always" answers and a switched model carry from one turn to the next. The wire names are pinned by `tests/fixtures/stdio/gaia_stdio_wire.json`, which the Python flagship and the terminal UI are tested against too.
+
+```bash
+printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Qwen3.6-35B-A3B-GGUF
+```
+
+```json
+{"type":"status","message":"","model_id":"Qwen3.6-35B-A3B-GGUF","model_display":"Qwen3.6-35B-A3B-GGUF","model_backend":"lemonade","model_remote":false,"lemonade_reachable":true,"lemonade_version":"…","lemonade_base_url":"http://localhost:13305/api/v1","agent_version":"…","gaia_version":"…"}
+{"type":"status","message":"Thinking"}
+{"type":"tool_call","tool":"bash_execute","args":{"command":"ls"},"narration":"Running ls"}
+{"type":"tool_result","tool":"bash_execute","data":{"…":"…"},"preview":"…"}
+{"type":"final","answer":"…","usage":{"steps":2,"input_tokens":2100,"cached_tokens":900,"tokens":60}}
+```
+
+**What it reads.** A line is a query: either `{"gaia_query": "text"}`, which keeps a multi-line question as one question, or any other text, taken as written. A JSON object with a `gaia_control` key is a control message instead. Controls are read on their own thread, so they take effect while a turn is running, and they never write anything to stdout.
+
+| Control | Fields | Effect |
+|---|---|---|
+| `tool_decision` | `decision` (`allow`, `deny`, `always`, `timeout`), `confirm_id` | Answers the open approval. An answer for another `confirm_id`, or with nothing waiting, is dropped and the tool does not run. Without a `confirm_id` it answers the open approval |
+| `full_access` | `enabled` | Approval prompts off or on, from the next tool call |
+| `accept_edits` | `enabled` | File edits inside the working directory run without asking |
+| `cancel` | | Stops the running turn, which still ends with its one terminal event. A query that was read but hasn't started ends at once with an empty `final`. `/model` and the sentinel queries run to completion once started. The process and the conversation stay |
+| `clear_history` | | Forgets the conversation after the running turn |
+
+A control with a field of the wrong type is rejected with a line on stderr and changes nothing, except that an unreadable `tool_decision` denies the approval it was meant for.
+
+**What it writes.** Only these event types: `status`, `token`, `tool_call`, `tool_result`, `needs_confirmation`, `final` and `error`. Every query ends with exactly one `final` or `error`, and nothing follows it until the next query.
+
+- The first line, and the line before the `final` of a successful `/model <id>`, is a `status` naming the model: `model_id`, `model_display`, `model_backend` (`lemonade`, or `fireworks` / `amd` for a cloud model), `model_remote`, `lemonade_reachable`, `lemonade_base_url`, `lemonade_version` when the server reports one, `agent_version` and `gaia_version`. It is sent even when no model server answers, after waiting a few seconds at most.
+- `token` events carry the answer as it streams, when the model calls tools natively. Otherwise the answer arrives whole in `final`. Reasoning inside `<think>` tags is left out.
+- `needs_confirmation` carries `run_id`, `action` (the tool), `summary`, `confirm_id`, `risk` (`read`, `write` or `execute`) and, for a shell command only, `always_scope` (what an `always` answer would cover). Without `always_scope`, "always" isn't on offer, and an `always` answer allows that one call.
+- A turn the model server could not answer ends in `error`. A cancelled turn ends in a `final` with an empty answer.
+
+**Queries it answers itself.** `/model` lists the models the server can run now, and `/model <id>` switches to one, or ends in `error` and keeps the current model. The `model_id` it reports is the server's own spelling, so `Foo` becomes `user.Foo` when that is how the server lists it. Three sentinel queries never reach the model:
+
+| Query | `final` answer |
+|---|---|
+| `"\u0000gaia:clear_conversation\u0000"` | `conversation_cleared`, with the history forgotten |
+| `"\u0000gaia:memory_dump\u0000"` | The stored memories as a JSON string: `available`, `stats`, `contexts`, `shown`, `total`, `items`. With `--no-memory`, `available` is false and `reason` says why |
+| `"\u0000gaia:warm_up\u0000"` | `warmed_up` once a local model is loaded, `warm_up_skipped` for a cloud model. A model that can't be loaded ends in `error` |
+
+**Approvals.** A shell command that changes something, a file write or edit, a web fetch and an MCP tool that isn't known to be read-only ask first. `always` is offered for shell commands only and remembered until the process exits: the program for single-purpose commands (`mkdir`), program and subcommand for tools such as `git` and `npm`, and the exact command otherwise. Every other tool asks each time, so approving one file write never approves the next. With "accept edits" on, `file_write` and `file_edit` run without asking when the file is inside the working directory. They still ask for anything under `.git`, a dotfile or dot-folder, a folder on `PATH`, and on Windows a file `cmd.exe` would run in place of a program on `PATH`; a home folder or a drive root never counts as the working directory. 
+
+**When the host goes away.** Once stdin closes, queries already read still run while something reads stdout, so `echo '{"gaia_query": "hi"}' | gaiacpp --stdio` prints its answer, and an approval nobody can answer is denied. When stdout has no reader either, or a write to it fails, the process exits at once with code 0, without waiting for a model call or a tool in flight. Commands the agent runs never get its stdin: they read end of input.
+
+**Flags.** Besides the model and run options above, `--stdio` takes the flags the terminal UI passes: `-m/--model`, `--full-access`, `--accept-edits` and `--dev` (step-by-step `status` events, debug lines on stderr). `--accept-edits` and `--dev` are refused without `--stdio`. The endpoint comes from `LEMONADE_BASE_URL`, as in every other mode.
+
+- With `--stdio`, `--full-access` means approval prompts are off. The tools stay inside the working directory; add folders with `--allow-dir`.
+- `--use-claude` and `--claude-model` stop the program with exit code 2, because `gaiacpp` has no Claude provider.
+- `GAIA_LEMONADE_EMBEDDED=1` is not acted on: `gaiacpp` keeps the `LEMONADE_BASE_URL` it started with, so if GAIA's own model server restarts on another port, turns end in `error` until the terminal UI restarts the agent.
+
+The terminal UI does not start `gaiacpp` by itself yet: it looks for a program named `gaia-agent` and does not pass `--stdio`.
 
 ## Lemonade integration
 
