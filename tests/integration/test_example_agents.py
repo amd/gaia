@@ -22,7 +22,7 @@ sys.path.insert(0, str(examples_dir))
 
 # Compact model used across every LLM-backed integration test so the stx
 # runner only needs to pull/load one ~4B model.  Matches the model our CI
-# workflow loads via installer/scripts/start-lemonade.ps1.
+# workflow loads via installer/scripts/ensure-lemonade-running.ps1 -JobScoped.
 TEST_MODEL_ID = os.environ.get("GAIA_TEST_MODEL", "Qwen3-4B-Instruct-2507-GGUF")
 
 

@@ -141,17 +141,23 @@ button.setup-rail-step:hover {
     }
 }
 
+/* Scrolls the full width, with room kept for the bar so nothing shifts when it appears. */
+.setup-scroll {
+    flex: 1;
+    min-block-size: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
 .setup-inner {
     --setup-pad-block: 48px;
     display: flex;
-    flex: 1;
     flex-direction: column;
     gap: 14px;
     min-inline-size: 0;
     max-inline-size: 720px;
     margin-inline: auto;
     padding: var(--setup-pad-block) 24px;
-    overflow-y: auto;
 }
 
 .setup-card {
@@ -180,6 +186,34 @@ button.setup-rail-step:hover {
     padding: 20px 22px;
     border: 1px solid var(--accent-light);
     border-radius: var(--radius-lg);
+}
+
+/* This PC or the cloud: two cards of the same weight, the picked one outlined. */
+.setup-where {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.setup-where-card {
+    border-color: var(--border-light);
+    cursor: pointer;
+}
+
+.setup-where-card.is-active {
+    border-color: var(--accent-light);
+    box-shadow: inset 0 0 0 1px var(--accent-light);
+}
+
+.setup-where-card.is-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.setup-where-card .setup-hero-title input[type="radio"] {
+    margin-inline-end: 10px;
+    accent-color: var(--accent);
+    vertical-align: middle;
 }
 
 .setup-eyebrow {
@@ -387,6 +421,23 @@ button.setup-rail-step:hover {
     color: var(--accent-green);
 }
 
+.setup-key-label {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.setup-key-row {
+    flex-wrap: nowrap;
+}
+
+.setup-key-accepted {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+}
+
 .setup-content-name {
     display: block;
 }
@@ -447,6 +498,17 @@ button.setup-rail-step:hover {
     font-weight: 600;
 }
 
+/* Focus lands on the title so screen readers announce the new step: a thin line under
+   the words marks it, not the full-width box a control gets. */
+.setup-title[tabindex="-1"] {
+    inline-size: fit-content;
+}
+
+.setup-title[tabindex="-1"]:focus {
+    outline: none;
+    box-shadow: 0 2px 0 0 var(--accent-light);
+}
+
 .setup-close {
     align-self: flex-start;
 }
@@ -455,76 +517,6 @@ button.setup-rail-step:hover {
     margin: 6px 0 24px;
     color: var(--text-secondary);
     font-size: 14px;
-}
-
-.setup-steps {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    list-style: none;
-}
-
-.setup-step {
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.setup-step-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.setup-step-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: 1px solid var(--border-light);
-    border-radius: var(--radius-full);
-    color: var(--text-muted);
-    font-size: 12px;
-    flex-shrink: 0;
-}
-
-.setup-step-label {
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-.setup-step-detail {
-    color: var(--text-muted);
-}
-
-.setup-step.is-current .setup-step-label,
-.setup-step.is-active .setup-step-label {
-    color: var(--text-primary);
-    font-weight: 600;
-}
-
-.setup-step.is-done .setup-step-num {
-    border-color: var(--accent-green);
-    color: var(--accent-green);
-}
-
-.setup-step.is-active .setup-step-num {
-    border-color: var(--accent-light);
-    color: var(--accent);
-}
-
-.setup-step.is-failed .setup-step-num,
-.setup-step.is-cancelled .setup-step-num {
-    border-color: var(--danger);
-    color: var(--danger);
-}
-
-.setup-step-body {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-block: 10px 4px;
-    margin-inline: 34px 0;
 }
 
 .setup-choices {
@@ -606,10 +598,42 @@ button.setup-rail-step:hover {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 14px 16px;
     border: 1px solid var(--accent-light);
     border-radius: var(--radius-lg);
-    background: var(--accent-dim);
+}
+
+.setup-lemonade fieldset {
+    min-inline-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.setup-lemonade legend {
+    margin-block-end: 8px;
+    padding: 0;
+}
+
+label.setup-choice {
+    cursor: pointer;
+}
+
+.setup-choice input[type="radio"] {
+    flex-shrink: 0;
+    margin-block-start: 3px;
+    accent-color: var(--accent);
+}
+
+.setup-choice-tag {
+    margin-inline-start: 8px;
+    padding: 0 8px;
+    border: 1px solid var(--accent-light);
+    border-radius: var(--radius-full);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: 1px;
 }
 
 .setup-hint {
@@ -665,6 +689,12 @@ button.setup-rail-step:hover {
     background: var(--accent);
 }
 
+.setup-activity {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 .setup-log {
     margin-top: 16px;
 }
@@ -713,45 +743,6 @@ button.setup-rail-step:hover {
     color: var(--text-primary);
 }
 
-.setup-check {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    list-style: none;
-}
-
-.setup-check-row {
-    display: grid;
-    grid-template-columns: 16px 64px 1fr;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-}
-
-.setup-check-row svg {
-    color: var(--text-muted);
-}
-
-.setup-check-row.is-ok svg {
-    color: var(--accent-green);
-}
-
-.setup-check-label {
-    color: var(--text-muted);
-}
-
-.setup-check-value {
-    color: var(--text-primary);
-    overflow-wrap: anywhere;
-}
-
-.setup-step-action {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 14px 0 4px;
-    list-style: none;
-}
 
 .setup-done-head {
     display: flex;
@@ -772,6 +763,15 @@ button.setup-rail-step:hover {
 
 .setup-logs {
     margin-top: 16px;
+}
+
+/* The logs and the report sit one level in, under "Having trouble?". */
+.setup-help {
+    padding-inline-start: 17px;
+}
+
+.setup-help > .setup-log:first-child {
+    margin-top: 10px;
 }
 
 .setup-report {
@@ -798,10 +798,6 @@ button.setup-rail-step:hover {
 
 .setup-report-button > span {
     min-inline-size: 0;
-}
-
-.setup-stepnav {
-    margin-top: 20px;
 }
 
 /* What setup found: the facts that decide setup, where things are kept, then the rest. */

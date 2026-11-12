@@ -687,6 +687,7 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "cfg_claude_model": (
             getattr(cfg, "claude_model", None) if cfg is not None else None
         ),
+        "resend_reasoning": getattr(agent, "resend_reasoning_across_requests", None),
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
@@ -710,6 +711,8 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         cfg.use_claude = snapshot["cfg_use_claude"]
         cfg.model_id = snapshot["cfg_model_id"]
         cfg.claude_model = snapshot["cfg_claude_model"]
+    if snapshot["resend_reasoning"] is not None:
+        agent.resend_reasoning_across_requests = snapshot["resend_reasoning"]
     if snapshot["model_features"] is not None:
         agent.model_features = snapshot["model_features"]
     if snapshot["instance_tools"] is not None:
@@ -752,6 +755,13 @@ def _apply_switch(
                 cfg.model_id = model_id
             if claude_model is not None:
                 cfg.claude_model = claude_model
+        # Earlier turns' reasoning belongs to the old model: it can't hit the new
+        # model's cache, and some reasoner APIs reject it in input.
+        if (
+            getattr(agent, "resend_reasoning_across_requests", False)
+            and agent.model_id != snapshot["model_id"]
+        ):
+            agent.resend_reasoning_across_requests = False
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
@@ -1430,8 +1440,24 @@ def _memory_dump_event(agent: Any) -> Dict[str, Any]:
     return {"type": "final", "answer": json.dumps(payload)}
 
 
-def _usage_from_result(value: Any) -> Dict[str, Any]:
-    """Token counts for a turn that ended without printing its answer.
+def _tool_count_from_result(value: Dict[str, Any], *, fallback: int = 0) -> int:
+    """Count executed tool calls on a result whose answer was not printed."""
+    explicit = value.get("tools_used")
+    if isinstance(explicit, int) and not isinstance(explicit, bool):
+        return max(explicit, 0)
+    # Not model_messages: it carries earlier turns' tool results too.
+    messages = value.get("conversation")
+    if isinstance(messages, list):
+        return sum(
+            1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
+        )
+    if isinstance(fallback, int) and not isinstance(fallback, bool) and fallback > 0:
+        return fallback
+    return 0
+
+
+def _usage_from_result(value: Any, *, tool_count: int = 0) -> Dict[str, Any]:
+    """Turn counts for a turn that ended without printing its answer.
 
     Error exits (and a step limit whose summary could not be written) return
     the answer instead of printing it, so no ``answer`` event carried the usage
@@ -1439,6 +1465,12 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     rule as the printed path: a count that is absent or zero is left out.
     """
     if not isinstance(value, dict):
+        if (
+            isinstance(tool_count, int)
+            and not isinstance(tool_count, bool)
+            and tool_count > 0
+        ):
+            return {"tools_used": tool_count}
         return {}
     usage: Dict[str, Any] = {}
     for src, dst in (
@@ -1452,6 +1484,9 @@ def _usage_from_result(value: Any) -> Dict[str, Any]:
     cached = value.get("cached_tokens")
     if "input_tokens" in usage and isinstance(cached, int) and cached >= 0:
         usage["cached_tokens"] = cached
+    tools_used = _tool_count_from_result(value, fallback=tool_count)
+    if tools_used > 0:
+        usage["tools_used"] = tools_used
     return usage
 
 
@@ -1631,7 +1666,7 @@ def run_turn(
             _write(_terminal_error(exc), out)
             return
         final: Dict[str, Any] = {"type": "final", "answer": answer}
-        usage = _usage_from_result(value)
+        usage = _usage_from_result(value, tool_count=getattr(handler, "_tool_count", 0))
         if usage:
             final["usage"] = usage
         _write(final, out)

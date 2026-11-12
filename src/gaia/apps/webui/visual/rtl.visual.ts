@@ -435,6 +435,9 @@ for (const [title, locale, name] of [
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
         await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        // A long name is cut in the middle, so its extension stays in view.
+        await expect(page.locator('.composer-attachment-name')).toHaveText(/\.(mp4|m4a)$/);
+        await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -446,6 +449,75 @@ test('new chat', async ({ page }) => {
     await expect(page.locator('.sb-location-name')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`the new-chat message box stays put while typing (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        const before = (await box.boundingBox())!;
+        await box.fill('h');
+        await shot(page, `new-chat-typed-${locale}`);
+        const after = (await box.boundingBox())!;
+        expect(Math.abs(after.y - before.y), 'the box jumped on the first keystroke').toBeLessThan(2);
+        await expect(page.locator('.new-chat-greeting')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
+            json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
+        })));
+        const add = page.locator('.new-chat-meta button.new-chat-folder');
+        await expect(add).toBeVisible();
+        await expect(page.locator('.new-chat-meta')).not.toContainText('documents');
+        await shot(page, `new-chat-add-folder-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const width of [1440, 390]) {
+        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, '', locale);
+            const chips = page.locator('.try-chip');
+            await expect(chips).toHaveCount(7);
+            await expect(chips.first()).toBeVisible();
+            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
+            await shot(page, `try-chips-${locale}-${width}`);
+            // The closed sidebar drawer waits off screen at phone width; judge the chips.
+            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+            expect(problems).toEqual([]);
+        });
+    }
+}
 
 test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
@@ -492,6 +564,148 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
+async function withFailedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Give me three tips for better sleep.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'Error: `fireworks.no-such-model` isn\'t available on Fireworks AI (HTTP 404).',
+                        inference_stats: { seconds: 2, place: 'via Fireworks AI' },
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer is footed as failed (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedAnswer);
+        const footer = page.locator('.msg-assistant .msg-stats-summary');
+        await expect(footer).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').hover();
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer).toContainText('Action items from Aug 28');
+        const actions = answer.locator('.msg-actions');
+        await expect(actions).toHaveCSS('opacity', '1');
+        const [row, body] = [await actions.boundingBox(), await answer.locator('.msg-body').boundingBox()];
+        expect(row!.y).toBeGreaterThanOrEqual(body!.y + body!.height - 1);
+        const startGap = locale === 'ar'
+            ? Math.abs(row!.x + row!.width - (body!.x + body!.width))
+            : Math.abs(row!.x - body!.x);
+        expect(startGap).toBeLessThan(8);
+        for (const button of await actions.locator('button').all()) {
+            const box = await button.boundingBox();
+            expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(28);
+        }
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a sent message opened for editing (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('ArrowUp');
+        const editor = page.locator('.msg-edit-input');
+        await expect(editor).toBeFocused();
+        await editor.press('End');
+        await page.keyboard.type(' and the owners');
+        expect(await audit(page)).toEqual([]);
+        const [box, bubble] = [await editor.boundingBox(), await page.locator('.msg-user:has(.msg-edit) .msg-inner').boundingBox()];
+        expect(box!.width).toBeGreaterThan(bubble!.width * 0.8);
+        await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
+        await page.locator('.msg-assistant').last().hover();
+        await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+/** A turn GAIA re-checked: the model wrote its answer, read the file back, then wrote it again. */
+const CHECKED_ANSWER = [
+    'Done — except the last step, which you declined.',
+    '',
+    '| Month | Total |',
+    '|---|---|',
+    '| October 2026 | 47.70 |',
+    '| November 2026 | 36.75 |',
+    '| **Grand total** | **84.45** |',
+    '',
+    '**Renamed:** `draft_old.txt` → `draft_archive.txt`',
+].join('\n');
+
+async function withCheckedAnswer(page: Page): Promise<void> {
+    const step = (id: number, extra: Record<string, unknown>) => ({ id, active: false, timestamp: id, ...extra });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Total both expense files into summary.md and rename draft_old.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${CHECKED_ANSWER}\n\nSay the word and I'll add the line.`, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            step(1, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(2, { type: 'tool', label: 'Write file', tool: 'write_file', success: true }),
+                            step(3, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER }),
+                            step(4, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(5, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER.replace('declined.', 'declined (read back to confirm).') }),
+                            step(6, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a re-checked answer shows once (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCheckedAnswer);
+        await expect(page.locator('.md-table')).toHaveCount(1);
+        await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
+async function withStoppedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write about the history of canals', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The earliest canals carried water to fields, not boats. In Mesopotamia', created_at: NOW.toISOString(), rag_sources: null, stopped: true },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped answer offers Continue and Try again (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withStoppedAnswer);
+        const actions = page.locator('.msg-assistant .msg-try-again');
+        await expect(actions).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
     });
 }
 
@@ -581,6 +795,92 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await expect(seconds).toHaveText(/^\d+s$/);
         expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
         await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const QUESTION_EVENTS = [
+    {
+        type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
+        options: [
+            { value: 'red', label: 'Red', description: '' },
+            { value: 'green', label: 'Green', description: '' },
+            { value: 'blue', label: 'Blue', description: '' },
+        ],
+        allow_free_text: true, sensitive: false, timeout_seconds: 300,
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a waiting question is answered from the message box and kept as a record (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, QUESTION_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.route('**/api/chat/user-input', (route) => route.fulfill({ json: { status: 'ok', request_id: 'q-1' } }));
+        const box = page.getByRole('textbox').first();
+        await box.fill('Ask me a colour');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__option')).toHaveCount(3);
+        await expect(box).toBeFocused();
+        await expect(page.locator('.render-needs-input__hint').last(), 'the question is hidden under the message box').toBeInViewport({ ratio: 1 });
+        await shot(page, `question-waiting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await box.fill('2');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
+        await expect(page.locator('.queued-message')).toHaveCount(0);
+        await shot(page, `question-answered-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** A multi-step turn that reasons before every call, then keeps thinking. */
+function holdOnThoughtfulSteps(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const files = ['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt'];
+        const events = files.flatMap((f) => [
+            { type: 'thinking', content: `I need to read ${f} next.` },
+            { type: 'tool_start', tool: 'read_file', detail: `file_path: ${f}`, narration: `Reading file: ${f}` },
+            { type: 'tool_end', success: true, result: 'Read 2 KB' },
+        ]).concat([{ type: 'thinking', content: 'Now add up the months.' }]);
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a running turn lists its steps, not a thought between each (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnThoughtfulSteps);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Read the four files');
+        await box.press('Enter');
+        const live = page.locator('.flow-steps.live');
+        await expect(live.locator('.flow-tool')).toHaveCount(4);
+        await expect(live.locator('.flow-tool-thought-mark')).toHaveCount(4);
+        await expect(live.locator('.flow-reasoning')).toHaveCount(1);
+        await expect(live.locator('.flow-thought-hacker')).toHaveCount(0);
+        await shot(page, `thoughtful-steps-${locale}`);
+        await live.locator('.flow-tool-header').first().click();
+        await expect(live.locator('.flow-tool-thought')).toContainText('expenses_oct.csv');
+        await shot(page, `thoughtful-steps-open-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -687,6 +987,66 @@ test('document being indexed', async ({ page }) => {
     await expect(page.locator('.btn-cancel')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['ar', 'en']) {
+    // A library that couldn't be listed used to look empty, as if every document were gone.
+    test(`a document library that could not be listed, then a remove that failed (${locale})`, async ({ page }) => {
+        // The app lists documents at startup too, so the list fails until Try again.
+        let listable = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => {
+                if (listable) return route.fulfill({ json: { documents: [{ id: 'd1', filename: 'q3-board.pdf', filepath: 'C:/q3-board.pdf', file_size: 2_048_000, chunk_count: 40, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }], total: 1, total_size_bytes: 2_048_000, total_chunks: 40 } });
+                return route.fulfill({ status: 500, json: { detail: 'database is locked' } });
+            });
+            await p.route('**/api/documents/d1', (route) => route.fulfill({ status: 500, json: { detail: 'database is locked' } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-load-error')).toBeVisible();
+        await shot(page, `documents-${locale}-load-failed`);
+        expect(await audit(page)).toEqual([]);
+
+        listable = true;
+        await page.locator('.doc-load-error button').click();
+        await page.locator('.doc-delete').click();
+        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await shot(page, `documents-${locale}-remove-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // Over a list it already shows, the load error is a notice, not the empty-library error.
+    test(`a document library that could not reload over documents it lists (${locale})`, async ({ page }) => {
+        let listable = true;
+        let listed = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => (listable && ++listed
+                ? route.fulfill({ json: { documents: [{ id: 'd1', filename: 'q3-board.pdf', filepath: 'C:/q3-board.pdf', file_size: 2_048_000, chunk_count: 40, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }], total: 1, total_size_bytes: 2_048_000, total_chunks: 40 } })
+                : route.fulfill({ status: 500, json: { detail: 'database is locked' } })));
+        });
+        // The app's startup listing fills the store; the library's own load then fails.
+        await expect.poll(() => listed).toBeGreaterThan(0);
+        listable = false;
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await expect(page.locator('.doc-load-error')).toHaveCount(0);
+        await shot(page, `documents-${locale}-reload-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // A rename the server refused used to fail with only a console line.
+    test(`a chat rename the server refuses says why above the composer (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route(`**/api/sessions/${ANSWER_SESSION}`, (route) => (route.request().method() === 'PUT'
+                ? route.fulfill({ status: 500, json: { detail: 'database is locked' } })
+                : route.fallback()));
+        });
+        await page.locator('.task-title').click();
+        await page.locator('.title-edit').fill(locale === 'ar' ? 'خطة الربع الثالث' : 'Q3 plan');
+        await page.locator('.title-edit').press('Enter');
+        await expect(page.locator('.input-area .export-error-bar')).toBeVisible();
+        await shot(page, `chat-${locale}-rename-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 const OLD_FILE = { name: 'q1-plan.pdf', path: 'C:\\Users\\me\\Documents\\q1-plan.pdf', size: 2_048_000, at: '2026-03-14T10:00:00Z' };
 const ARABIC_MONTH = /يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر/;
@@ -1011,6 +1371,54 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** Starts with digits, like a real Hugging Face org: unisolated, an Arabic line moves them to its end. */
+const UNLISTED_ID = '01-ai/no-such-model-violet-otter';
+const CUSTOM_TITLE = { ar: 'معرّف نموذج مخصص', en: 'Custom model ID' };
+const CUSTOM_NOTE = {
+    ar: { unlisted: 'لا يُدرج', unchecked: 'تعذّر على GAIA التحقق' },
+    en: { unlisted: "doesn't list", unchecked: "couldn't check this ID" },
+};
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const checked of [true, false]) {
+        const state = checked ? 'unlisted' : 'unchecked';
+        test(`a saved custom model the server ${checked ? 'does not list' : 'could not check'} gets a note (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/settings', (route) => {
+                if (route.request().method() !== 'PUT') return route.fallback();
+                return route.fulfill({ json: {
+                    custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                    model_status: { found: false, downloaded: false, loaded: false, checked },
+                } });
+            }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const dialog = page.getByRole('dialog');
+            await dialog.locator('[data-section="advanced"]').click();
+            const section = dialog.locator('details.settings-disclosure', { has: page.locator('summary', { hasText: CUSTOM_TITLE[locale] }) });
+            await section.locator('summary').first().scrollIntoViewIfNeeded();
+            await section.locator('summary').first().click();
+            const input = section.locator('input.model-input');
+            await input.fill(UNLISTED_ID);
+            await input.press('Enter');
+
+            const note = section.locator('.model-warning[role="status"]');
+            await expect(note).toContainText(CUSTOM_NOTE[locale][state]);
+            await note.scrollIntoViewIfNeeded();
+            await shot(page, `custom-model-${state}-${locale}`);
+            if (checked) {
+                // The ID is its own bidi island in the Arabic sentence, under the section title and in the box.
+                await expect(note).toContainText(UNLISTED_ID);
+                if (locale === 'ar') expect(await note.textContent()).toContain(`⁨${UNLISTED_ID}⁩`);
+                expect(await section.locator('.settings-disclosure-hint').textContent()).toBe(`⁦${UNLISTED_ID}⁩`);
+                expect(await input.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(note).not.toContainText(UNLISTED_ID);
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.model-warning')).toEqual([]);
+        });
+    }
+}
+
 /** Text left in English in the Arabic UI, outside names, numbers and the English gloss. */
 const leftoverEnglish = (root: Page) =>
     root.locator('.setup').evaluate((setup) => {
@@ -1151,6 +1559,17 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a closed key store prompt reads as locked, with Try again', async ({ page }) => {
+            const message = 'The OS credential store is locked: its unlock prompt was closed (Prompt dismissed).';
+            await openModelPage(page, locale, { fireworks: { key_source: null, key_hint: null, models_discovered: false, key_state: 'store_locked', key_message: message } });
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.getByRole('button', { name: locale === 'ar' ? 'حاول مرة أخرى' : 'Try again' })).toBeVisible();
+            await expect(page.getByText(message)).toBeHidden();
+            await shot(page, `model-${locale}-cloud-key-store-locked`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-hint[role="status"]')).toEqual([]);
+        });
+
         test('dark theme', async ({ page }) => {
             await openModelPage(page, locale, { theme: 'dark' });
             await shot(page, `model-${locale}-dark`);
@@ -1211,6 +1630,31 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
     }
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, null);
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
+                    provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        await shot(page, `model-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
+        await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');
+        await shot(page, `model-menu-confirm-${locale}`);
+        // The question scrolls into view under its row, so the list is scrolled on purpose here.
+        expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
@@ -1481,6 +1925,36 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+const OPENCODE = 'opencode.big-model';
+
+for (const locale of ['ar', 'en']) {
+    test(`a cloud model learned from Lemonade's list reads as cloud (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            // No chats yet, so the chip goes by the picked model alone.
+            await p.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions: [], total: 0 } }));
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'local', model: OPENCODE, display_name: 'big-model', label: 'big-model · opencode', remote: true,
+                    provider_name: 'opencode', downloaded: null, inference_remote: true, inference_description: null,
+                    is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await expect(page.getByText('big-model · opencode')).toBeVisible();
+        await shot(page, `chip-${locale}-cloud-from-lemonade-list`);
+        const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.locator('.model-in-use-name')).toBeVisible();
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await shot(page, `model-${locale}-cloud-from-lemonade-list`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const FLASH = 'fireworks.deepseek-v4p1-flash';
 
 /** The answer chat on DeepSeek on Fireworks, with three priced answers and a stopped one. */
@@ -1523,6 +1997,31 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `spend-popover-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+const MONTH_SPENDING = {
+    month: '2026-10', total_usd: 3.42, turns: 37, unpriced_turns: 4, unreported_turns: 5,
+    limit_usd: 20, state: 'ok', by_model: [], price_source: 'list price',
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`monthly spending headline leaves out unpriced and unreported turns (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale);
+        await page.route((url) => url.pathname === '/api/spending', (route) => route.fulfill({ json: MONTH_SPENDING }));
+        await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+        const spending = page.locator('section.spending');
+        await expect(spending.locator('.spending-total')).toContainText('$3.42');
+        await expect(spending.locator('.spending-total')).toContainText('$20');
+        await expect(spending.locator('.spending-total')).toContainText(locale === 'ar' ? 'أدوار المحادثة السحابية: 28' : /28 cloud chat turns/);
+        await expect(spending.locator('p.settings-hint')).toHaveCount(2);
+        await expect(spending.locator('p.settings-hint').nth(0)).toContainText(locale === 'ar' ? '(4)' : 'Plus 4 turns on models with an unknown price');
+        await expect(spending.locator('p.settings-hint').nth(1)).toContainText(locale === 'ar' ? '(5)' : 'Plus 5 turns whose usage wasn’t reported');
+        await spending.scrollIntoViewIfNeeded();
+        await scrollPane(page, 'bottom');
+        await shot(page, `spending-month-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, 'section.spending')).toEqual([]);
     });
 }
 
@@ -1662,6 +2161,137 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-parsed-hint')).toBeVisible();
             await check(page, 'form-invalid');
         });
+    });
+}
+
+const LOG_LINES = [
+    { text: '2026-11-04 10:05:37.798 [Info] (main) Starting Lemonade Server...', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:05:37.799 [Info] (main)   Cache dir: C:\\Users\\you\\.gaia\\lemonade\\cache', severity: 'info', tag: 'main' },
+    { text: '2026-11-04 10:06:11.730 [Warn] (FastFlowLM) NPU is busy with another process; retrying the load', severity: 'warning', tag: 'FastFlowLM' },
+    { text: `2026-11-04 10:06:12.004 [Info] (Process) Tools JSON: [{"function":{"description":"${'List the skills installed on this machine. '.repeat(12)}"}}]`, severity: 'info', tag: 'Process' },
+    { text: '2026-11-04 10:06:15.512 [Error] (FLM) flm serve exited with code 1: device or resource busy', severity: 'error', tag: 'FLM' },
+];
+
+const LOG_STATES: Array<[string, Record<string, unknown>]> = [
+    ['gaia', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 1200, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: true, reason: null, detail: null }],
+    ['gaia-down', { owner: 'gaia', base_url: 'http://127.0.0.1:56150/api/v1', source: 'file', available: true, lines: LOG_LINES, cursor: '900', reset: false, dropped: 0, log_path: 'C:\\Users\\you\\.gaia\\lemonade\\lemond.log', server_answering: false, reason: null, detail: null }],
+    ['yours', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: 'stream', available: true, lines: LOG_LINES, cursor: '5', reset: false, dropped: 0, log_path: null, server_answering: true, reason: null, detail: null }],
+    ['yours-down', { owner: 'user', base_url: 'http://localhost:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: false, reason: 'not_running', detail: 'Lemonade not reachable at http://localhost:13305/api/v1: connection refused' }],
+    ['remote', { owner: 'remote', base_url: 'http://10.0.0.7:13305/api/v1', source: null, available: false, lines: [], cursor: null, reset: false, dropped: 0, log_path: null, server_answering: true, reason: 'remote', detail: 'ws://10.0.0.7:9000/logs/stream: ClientConnectorError' }],
+];
+
+const GAIA_LINES = [
+    { text: '[2026-11-04 11:48:15,102] | INFO | gaia.ui.server | server.py:991 | Agent UI backend listening on 127.0.0.1:4200', severity: 'info', tag: null },
+    { text: '[2026-11-04 11:48:16,311] | WARNING | gaia.llm.lemonade_client | lemonade_client.py:5828 | Model load took 41.2 s', severity: 'warning', tag: null },
+    { text: "[2026-11-04 11:48:17,004] | ERROR | gaia.ui.routers.chat | chat.py:412 | Turn failed: Couldn't reach the local LLM", severity: 'error', tag: null },
+    { text: 'Traceback (most recent call last):', severity: null, tag: null },
+    { text: '  File "C:\\Users\\you\\gaia\\llm\\providers\\lemonade.py", line 450, in chat', severity: null, tag: null },
+];
+
+const LOG_FILES = {
+    sources: [
+        { id: 'model_server', files: [] },
+        { id: 'gaia', files: [{ name: 'gaia.log', path: 'C:\\Users\\you\\.gaia\\gaia.log', size_bytes: 9_700_000, modified: 1 }] },
+        { id: 'service', files: [{ name: 'daemon.log', path: 'C:\\Users\\you\\.gaia\\host\\daemon.log', size_bytes: 120_000, modified: 1 }] },
+        {
+            id: 'agent',
+            files: [
+                { name: 'gaia-agent.log', path: 'C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', size_bytes: 2_048_000, modified: 2 },
+                { name: 'gaia/sidecar-54747.log', path: 'C:\\Users\\you\\.gaia\\agents\\gaia\\logs\\sidecar-54747.log', size_bytes: 51_200, modified: 1 },
+            ],
+        },
+        { id: 'desktop', files: [{ name: 'electron-main.log', path: 'C:\\Users\\you\\.gaia\\electron-main.log', size_bytes: 30_000, modified: 1 }] },
+        { id: 'other', files: [] },
+    ],
+};
+
+const fileRead = (path: string, lines: unknown[]) => ({
+    owner: null, base_url: null, source: 'file', available: true, lines, cursor: '400', reset: false,
+    dropped: 0, log_path: path, server_answering: null, reason: null, detail: null,
+});
+
+/** Every log route: each log whole once, then no new lines, so following doesn't repeat it. */
+async function withLogs(page: Page, server: Record<string, unknown>): Promise<void> {
+    await page.route('**/api/providers/local/status', (route) => route.fulfill({ json: LOCAL_STATUS }));
+    await page.route(/\/api\/logs(\/|\?|$)/, (route) => {
+        const url = new URL(route.request().url());
+        const source = url.pathname.split('/api/logs/')[1];
+        if (!source) return route.fulfill({ json: LOG_FILES });
+        const body = source === 'model_server' ? server
+            : source === 'gaia' ? fileRead('C:\\Users\\you\\.gaia\\gaia.log', GAIA_LINES)
+            : source === 'agent' ? fileRead('C:\\Users\\you\\.gaia\\logs\\gaia-agent.log', GAIA_LINES)
+            : { ...fileRead('', []), available: false, source: null, log_path: null, reason: 'no_file' };
+        return route.fulfill({ json: url.searchParams.has('after') ? { ...body, lines: [], reset: false } : body });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, body] of LOG_STATES) {
+        test(`model server log from the model popover: ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withLogs(p, body));
+            await page.locator('.sb-location').click();
+            await page.locator('.popover .model-status').getByRole('button', { name: locale === 'ar' ? /سجلّ خادم النماذج/ : /Model server log/ }).click();
+            const dialog = page.locator('.log-viewer');
+            await expect(dialog).toBeVisible();
+            await expect(dialog.locator('.spin')).toHaveCount(0);
+            if (body.available) {
+                const lines = dialog.locator('.log-viewer-lines');
+                await expect(lines).toBeVisible();
+                // Log text reads left to right in every language.
+                expect(await lines.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+                await expect(dialog.locator('.log-viewer-lines')).toHaveCount(0);
+            }
+            await shot(page, `log-viewer-${locale}-${state}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+            // No sideways scroll: a long line wraps inside the box.
+            expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        });
+    }
+
+    test(`model server log at phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withLogs(p, LOG_STATES[1][1]));
+        const sidebar = page.getByRole('button', { name: /Open sidebar|فتح الشريط الجانبي/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.locator('.sb-location').click();
+        await page.locator('.popover .model-status .btn-secondary').filter({ has: page.locator('svg.lucide-scroll-text') }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.locator('.log-viewer-lines')).toBeVisible();
+        // Opens on the newest line, whole.
+        await expect.poll(() => dialog.locator('.log-viewer-lines').evaluate((el) =>
+            JSON.stringify({ gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight), sh: el.scrollHeight, ch: el.clientHeight, st: el.scrollTop }))).toContain('"gap":0');
+        await shot(page, `log-viewer-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    });
+
+    test(`GAIA's logs from Settings › Advanced, then the agent's files (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withLogs(p, LOG_STATES[0][1]); });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('region', { name: locale === 'ar' ? /السجلات/ : 'Logs' });
+        await expect(card).toBeVisible();
+        await shot(page, `log-viewer-${locale}-settings-card`);
+        expect(await audit(page)).toEqual([]);
+        await card.getByRole('button', { name: locale === 'ar' ? /عرض السجلات/ : 'View logs' }).click();
+        const dialog = page.locator('.log-viewer');
+        await expect(dialog.getByRole('tab', { selected: true })).toHaveText(locale === 'ar' ? /GAIA/ : 'GAIA');
+        await expect(dialog.locator('.log-viewer-lines')).toContainText('Turn failed');
+        await shot(page, `log-viewer-${locale}-gaia-tab`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.log-viewer', 'bdi, pre')).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /الوكيل/ : 'Agent' }).click();
+        await expect(dialog.getByRole('combobox')).toHaveValue('gaia-agent.log');
+        await shot(page, `log-viewer-${locale}-agent-tab`);
+        expect(await audit(page)).toEqual([]);
+        await dialog.getByRole('tab', { name: locale === 'ar' ? /تطبيق سطح المكتب/ : 'Desktop app' }).click();
+        await expect(dialog.locator('.log-viewer-warning')).toBeVisible();
+        await shot(page, `log-viewer-${locale}-nothing-written`);
+        expect(await audit(page)).toEqual([]);
+        expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     });
 }
 
@@ -2423,6 +3053,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
+    { type: 'tool_result', success: false, summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded" },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'run_python', narration: 'Running Python' },
+    { type: 'tool_result', success: false, status: 'denied', summary: "Tool 'run_python' was denied by the user." },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`steps name the action, and a declined call says so (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('what colour is the picture?');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(1)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(1).locator('.flow-tool-label')).toHaveText('You declined: Running Python');
+        await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `declined-steps-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
@@ -2585,7 +3241,14 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         const meter = page.locator('button.context-meter');
         await expect(meter).toBeVisible();
-        await expect(page.locator('.context-warning')).toBeVisible();
+        const warning = page.locator('.context-warning');
+        await expect(warning).toBeVisible();
+        // One short line by default, so it never covers the end of the chat.
+        expect((await warning.boundingBox())!.height).toBeLessThan(60);
+        await shot(page, `context-warning-${locale}`);
+        await warning.getByRole('button', { expanded: false }).click();
+        await shot(page, `context-warning-details-${locale}`);
+        expect(await audit(page)).toEqual([]);
         await meter.click();
         await expect(page.locator('.context-meter-panel')).toBeVisible();
         expect(await audit(page)).toEqual([]);
@@ -2611,6 +3274,30 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
+        await page.locator('button.context-meter').click();
+        await expect(page.locator('.context-meter-note.is-setup')).toBeVisible();
+        await shot(page, `context-meter-setup-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
+            })));
+        const meter = page.locator('.context-meter.is-empty');
+        await expect(meter).toBeVisible();
+        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+        await shot(page, `context-meter-unmeasured-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);
@@ -2626,6 +3313,22 @@ test('composer chips stay whole at phone width', async ({ page }) => {
     const sorted = [...boxes].sort((x, y) => x.left - y.left);
     expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        await expect(page.locator('button.context-meter')).toBeVisible();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-${locale}`);
+        // The day's spend and the context bar give way before the model name is cut.
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
@@ -2895,6 +3598,12 @@ for (const locale of ['ar', 'en']) {
             await item.locator('.mem-about-btn').first().click();
             await expect(item.locator('textarea')).toBeVisible();
             await checkMemory(page, locale, 'about-editing');
+        });
+
+        test('about you, more than one page', async ({ page }) => {
+            await openMemory(page, locale, { more: true });
+            await expect(page.locator('.mem-about-more .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-more');
         });
 
         test('about you, empty', async ({ page }) => {
