@@ -7148,6 +7148,9 @@ def handle_api_command(args):
                 os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
             if getattr(args, "streaming", False):
                 os.environ["GAIA_API_STREAMING"] = "1"
+            # The app's agents and /health resolve the server from the environment.
+            if getattr(args, "base_url", None):
+                os.environ["LEMONADE_BASE_URL"] = args.base_url
 
             from gaia.api.local_http import (
                 UnauthenticatedBindError,
