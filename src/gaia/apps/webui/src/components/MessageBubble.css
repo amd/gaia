@@ -489,10 +489,19 @@
 
 /* ── Maths ───────────────────────────────────────────────────── */
 .md-math math { font-size: 1.05em; }
-.md-math-display {
-    margin: 12px 0;
+.md-math-display,
+.md-math-wide {
     overflow-x: auto;
+    /* A fraction's box is a pixel taller than its line: without this every formula gets an up/down scrollbar. */
+    overflow-y: hidden;
     scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+.md-math-display { margin: 12px 0; }
+.md-math-wide {
+    display: block;
+    margin: 4px 0;
+    padding-bottom: 2px;
 }
 
 /* ── Collapsible sections (<details><summary>) ───────────────── */

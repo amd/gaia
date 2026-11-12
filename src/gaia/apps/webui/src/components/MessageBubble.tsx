@@ -1145,8 +1145,29 @@ function MathFormula({ tex, display }: { tex: string; display: boolean }) {
         () => temml.renderToString(tex, { displayMode: display, throwOnError: false, errorColor: 'var(--danger)' }),
         [tex, display],
     );
+    const ref = useRef<HTMLElement | null>(null);
+    const [wide, setWide] = useState(false);
+    // A formula can't wrap: one wider than its line gets a line of its own that scrolls.
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (display || !el) return;
+        const measure = () => {
+            const math = el.firstElementChild;
+            // An inline ancestor (bold, a link) has no width of its own.
+            let block = el.parentElement;
+            while (block && block.clientWidth === 0) block = block.parentElement;
+            if (math && block) setWide(math.getBoundingClientRect().width > block.clientWidth);
+        };
+        measure();
+        const column = el.closest('.md-content');
+        if (!column || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(column);
+        return () => observer.disconnect();
+    }, [html, display]);
     const Tag = display ? 'div' : 'span';
-    return <Tag className={display ? 'md-math md-math-display' : 'md-math'} dir="ltr" dangerouslySetInnerHTML={{ __html: html }} />;
+    const className = display ? 'md-math md-math-display' : wide ? 'md-math md-math-wide' : 'md-math';
+    return <Tag ref={ref as React.Ref<never>} className={className} dir="ltr" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
