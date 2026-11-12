@@ -52,6 +52,21 @@ TEST(WorkspaceTest, ExtraRootsAreAllowed) {
     EXPECT_TRUE(ws.contains((d.other / "x").string()));
 }
 
+TEST(WorkspaceTest, CmdSwitchesAreNotPathsUnderCmdAndGetAHintUnderBash) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string listing = "dir \"" + d.work.string() + "\" /s /b /a:d /-c";
+    EXPECT_EQ(ws.checkCommand(listing, false), "") << "cmd.exe switches are not places";
+    EXPECT_NE(ws.checkCommand("type " + (d.other / "x.txt").string() + " /a", false), "")
+        << "a real path outside is still refused under cmd";
+#ifdef _WIN32
+    const std::string refused = ws.checkCommand(listing);
+    ASSERT_NE(refused, "") << "under bash /s is drive S";
+    EXPECT_NE(refused.find("run in bash"), std::string::npos) << refused;
+    EXPECT_NE(refused.find("ls -R"), std::string::npos) << refused;
+#endif
+}
+
 TEST(WorkspaceTest, CommandChecks) {
     Dirs d;
     Workspace ws({d.work.string()});

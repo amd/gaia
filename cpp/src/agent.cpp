@@ -763,7 +763,12 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
     if (responseJson.contains("choices") && !responseJson["choices"].empty()) {
         const auto& choice = responseJson["choices"][0];
-        if (choice.contains("message")) {
+        std::string finish;
+        if (choice.is_object() && choice.contains("finish_reason") &&
+            choice["finish_reason"].is_string()) {
+            finish = choice["finish_reason"].get<std::string>();
+        }
+        if (choice.contains("message") && choice["message"].is_object()) {
             const auto& message = choice["message"];
             // tool_calls first: a native call carries content: null, which the
             // content-only check below would reject as an unexpected format.
@@ -778,10 +783,17 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                     text = message["content"].get<std::string>();
                 }
                 return {text, extractUsage(responseJson),
-                        parseToolCallsArray(message["tool_calls"])};
+                        parseToolCallsArray(message["tool_calls"]), finish};
             }
             if (message.contains("content") && message["content"].is_string()) {
-                return {message["content"].get<std::string>(), extractUsage(responseJson), {}};
+                return {message["content"].get<std::string>(), extractUsage(responseJson), {},
+                        finish};
+            }
+            // No text and no calls (a cut-off reasoning block, or a reply that
+            // announces tool calls and carries none): an empty reply, which the
+            // loop asks about once before stopping.
+            if (!message.contains("content") || message["content"].is_null()) {
+                return {std::string(), extractUsage(responseJson), {}, finish};
             }
         }
     }
@@ -813,10 +825,32 @@ bool isContextOverflow(const std::exception& e) {
     if (const auto* he = dynamic_cast<const HttpError*>(&e)) what += he->body();
     for (const char* marker : {"exceeds the available context size", "context window too small",
                                "maximum context length", "context_length_exceeded",
-                               "context length", "too many tokens"}) {
+                               "context length", "too many tokens",
+                               "exceed_context_size", "got too long",
+                               // FastFlowLM's wording for a full window
+                               "Max length reached"}) {
         if (what.find(marker) != std::string::npos) return true;
     }
     return false;
+}
+
+// Shorten the model's own long replies, oldest first, keeping the newest message whole.
+size_t trimLongReplies(std::vector<Message>& messages) {
+    constexpr size_t kKeepHead = 600, kKeepTail = 300, kLong = 1500;
+    size_t freed = 0;
+    for (size_t i = 0; i + 1 < messages.size(); ++i) {
+        Message& m = messages[i];
+        if (m.role != MessageRole::ASSISTANT || m.content.size() <= kLong) continue;
+        size_t head = kKeepHead, tail = m.content.size() - kKeepTail;
+        while (head > 0 && (static_cast<unsigned char>(m.content[head]) & 0xC0) == 0x80) --head;
+        while (tail < m.content.size() && (static_cast<unsigned char>(m.content[tail]) & 0xC0) == 0x80) ++tail;
+        const std::string shorter = m.content.substr(0, head) +
+                                    "\n[...middle of this reply removed to fit the context window...]\n" +
+                                    m.content.substr(tail);
+        freed += m.content.size() - shorter.size();
+        m.content = shorter;
+    }
+    return freed;
 }
 
 } // namespace
@@ -848,7 +882,7 @@ std::string stripReasoning(const std::string& text) {
 Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
                                          const std::string& sysPrompt, const AgentConfig& cfg,
                                          bool allowTools) {
-    bool shrunk = false;
+    int shrinkStage = 0;
     int attempt = 0;
     for (;;) {
         try {
@@ -857,15 +891,25 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
             return r;
         } catch (const std::exception& e) {
             if (cancelRequested()) throw;
-            if (!shrunk && isContextOverflow(e)) {
-                shrunk = true;
-                if (elideOldToolOutputs(messages, 2) > 0) {
+            if (isContextOverflow(e)) {
+                // Free more each time: older tool output, then all of it, then long replies.
+                bool freed = false;
+                while (!freed && shrinkStage < 4) {
+                    const int stage = shrinkStage++;
+                    freed = (stage < 3 ? elideOldToolOutputs(messages, static_cast<size_t>(2 - stage))
+                                       : trimLongReplies(messages)) > 0;
+                }
+                if (freed) {
                     console_->printWarning(
-                        "Context window full; replaced older tool output with "
-                        "read_tool_output references and retrying.");
+                        "Context window full; shortened earlier tool output and replies, "
+                        "retrying.");
                     continue;
                 }
-                throw;
+                throw std::runtime_error(
+                    "The conversation no longer fits the model's context window, even after "
+                    "shortening earlier tool output. Start a new chat, ask about fewer or "
+                    "smaller files at a time, or load the model with a larger context window. "
+                    "Server said: " + std::string(e.what()).substr(0, 300));
             }
             if (attempt >= cfg.llmRetries || !isTransientLlmFailure(e)) throw;
             ++attempt;
@@ -1013,6 +1057,14 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const std::string resolved = tools_.resolveName(toolName);
     turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
                               !toolFailure(result).has_value(), turnStep_, wall, startedOnDisk});
+    if (stepLogger_) {
+        const ToolCallRecord& call = turnToolCalls_.back();
+        stepLogger_({{"kind", "tool"},
+                     {"step", call.step},
+                     {"name", call.name},
+                     {"wall_s", std::round(wall * 1000) / 1000},
+                     {"ok", call.succeeded}});
+    }
     return result;
 }
 
@@ -1677,8 +1729,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string finalAnswer;
     int errorCount = 0;
     json llmCallLog = json::array();
-    auto logLlmCall = [&llmCallLog](int step, std::chrono::steady_clock::time_point started,
-                                    const UsageStats& u) {
+    auto logLlmCall = [&llmCallLog, this](int step, std::chrono::steady_clock::time_point started,
+                                          const UsageStats& u) {
         const double wall =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         llmCallLog.push_back({{"step", step},
@@ -1686,6 +1738,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                               {"input_tokens", u.promptTokens},
                               {"cached_tokens", u.cachedTokens},
                               {"output_tokens", u.completionTokens}});
+        if (stepLogger_) {
+            json line = llmCallLog.back();
+            line["kind"] = "llm";
+            stepLogger_(line);
+        }
     };
     std::string lastError;
     ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
@@ -1697,6 +1754,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool lastToolFailed = false;
     bool loopWarned = false;
     bool emptyNudged = false;
+    bool emptyAtLimit = false;  // an empty reply that had used the whole reply limit
+    std::string llmError;       // the model call failure that ended the loop
+    constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
     bool answerReviewed = false;
@@ -1783,7 +1843,21 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 break;
             }
             console_->printError(std::string("LLM error: ") + e.what());
-            finalAnswer = std::string("Unable to complete task due to LLM error: ") + e.what();
+            llmError = e.what();
+            if (stepLogger_) {
+                stepLogger_({{"kind", "llm_error"}, {"step", stepsTaken}, {"error", llmError.substr(0, 600)}});
+            }
+            // A reply the agent could not use, after work was done: ask once for a
+            // closing answer. A server or window failure would only fail again.
+            const bool gathered = std::any_of(messages.begin(), messages.end(), [](const Message& m) {
+                return m.role == MessageRole::TOOL;
+            });
+            if (gathered && !dynamic_cast<const HttpError*>(&e) &&
+                llmError.find("no longer fits the model's context window") == std::string::npos) {
+                stopReason = "error";
+                break;
+            }
+            finalAnswer = "Unable to complete task due to LLM error: " + llmError;
             failed = true;
             break;
         }
@@ -1796,6 +1870,51 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Debug: show response
         if (cfg.showPrompts) {
             console_->printResponse(response, "LLM Response");
+        }
+
+        // A reply cut at the length limit loses its last call; the earlier ones are whole.
+        std::string batchNote;
+        if (!llmResult.toolCalls.empty() && llmResult.finishReason == "length") {
+            const size_t sent = llmResult.toolCalls.size();
+            while (!llmResult.toolCalls.empty()) {
+                try {
+                    llmResult.toolCalls.back().parsedArgs();
+                    break;
+                } catch (const std::exception&) {
+                    llmResult.toolCalls.pop_back();
+                }
+            }
+            if (llmResult.toolCalls.size() < sent) {
+                console_->printWarning("The model's reply was cut off at the length limit of " +
+                                       std::to_string(cfg.maxTokens) + " tokens mid tool call.");
+                batchNote = "[Your reply was cut off at the length limit of " +
+                            std::to_string(cfg.maxTokens) + " tokens, so " +
+                            std::to_string(sent - llmResult.toolCalls.size()) +
+                            " unfinished tool call(s) at the end did not run. Send fewer calls "
+                            "per reply and keep arguments short; write long content in parts.]";
+            }
+            if (llmResult.toolCalls.empty()) {
+                if (++malformedStreak > 2) {
+                    finalAnswer = "Unable to complete task: the model's reply was cut off at "
+                                  "the length limit of " + std::to_string(cfg.maxTokens) +
+                                  " tokens in the middle of a tool call three times in a row. "
+                                  "Raise the limit (--max-tokens) or ask for a smaller step.";
+                    failed = true;
+                    break;
+                }
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = batchNote;
+                messages.push_back(note);
+                continue;
+            }
+        }
+        if (llmResult.toolCalls.size() > kMaxToolCallsPerReply) {
+            batchNote += (batchNote.empty() ? "" : " ") + std::string("[Only the first ") +
+                         std::to_string(kMaxToolCallsPerReply) + " of your " +
+                         std::to_string(llmResult.toolCalls.size()) +
+                         " tool calls ran. Send the rest in later replies.]";
+            llmResult.toolCalls.resize(kMaxToolCallsPerReply);
         }
 
         // ---- Native OpenAI tool_calls branch ----
@@ -1839,17 +1958,22 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                     failed = true;
                     break;
                 }
+                bool explained = false;
                 for (const auto& tc : llmResult.toolCalls) {
                     Message reply;
                     reply.role = MessageRole::TOOL;
                     reply.name = tc.name;
                     reply.toolCallId = tc.id;
+                    // The reason once; a large batch must not fill the window with copies.
                     reply.content =
                         json{{"status", "error"},
-                             {"error", "Not run: the arguments in this batch were not valid "
-                                       "JSON (" + decodeError +
-                                       "). Resend the call with a valid JSON object."}}
+                             {"error", explained
+                                           ? std::string("Not run: see the first result of this batch.")
+                                           : "Not run: the arguments in this batch were not valid "
+                                             "JSON (" + decodeError.substr(0, 400) +
+                                             "). Resend the call with a valid JSON object."}}
                             .dump(-1, ' ', false, json::error_handler_t::replace);
+                    explained = true;
                     messages.push_back(reply);
                 }
                 continue;
@@ -1935,20 +2059,35 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
 
             if (loopDetected) break;
+            if (!batchNote.empty()) {
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = batchNote;
+                messages.push_back(note);
+            }
             continue;
         }
 
         // An empty reply is usually a cut-off reasoning block; ask once more.
         if (response.find_first_not_of(" \t\r\n") == std::string::npos) {
+            const bool atLimit = llmResult.finishReason == "length";
+            emptyAtLimit = emptyAtLimit || atLimit;
             if (emptyNudged) {
                 stopReason = "empty";
                 break;
             }
             emptyNudged = true;
-            console_->printWarning("The model's reply was empty; asking again.");
+            console_->printWarning(atLimit ? "The model used its whole reply limit of " +
+                                                 std::to_string(cfg.maxTokens) +
+                                                 " tokens without answering; asking again."
+                                           : "The model's reply was empty; asking again.");
             Message retry;
             retry.role = MessageRole::USER;
-            retry.content = "[Your last reply was empty, possibly cut off while reasoning.] "
+            retry.content = std::string(atLimit
+                                            ? "[Your last reply hit the length limit before any "
+                                              "answer or tool call; the reasoning used all of it.] "
+                                            : "[Your last reply was empty, possibly cut off while "
+                                              "reasoning.] ") +
                             "Continue: call a tool or give your final answer, keeping any "
                             "reasoning short.";
             messages.push_back(retry);
@@ -2088,6 +2227,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (stopReason.empty()) stopReason = "cap";
         const char* why = stopReason == "loop"  ? "[Stopped: repeated tool calls]"
                           : stopReason == "empty" ? "[Stopped: empty replies]"
+                          : stopReason == "error" ? "[Stopped: your last reply could not be used]"
                                                   : "[Step limit reached]";
         console_->printWarning(std::string(why) + " Asking for a closing answer.");
         if (cfg.stepBudgetNotices) {
@@ -2129,8 +2269,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (finalAnswer.empty()) {
             finalAnswer = stopReason == "loop"
                               ? "Task stopped due to repeated tool call loop."
+                          : stopReason == "error"
+                              ? "Unable to complete task due to LLM error: " + llmError
                           : stopReason == "empty"
-                              ? "Task stopped: the model returned empty replies."
+                              ? (emptyAtLimit
+                                     ? "Task stopped: the model used its whole reply limit of " +
+                                           std::to_string(cfg.maxTokens) +
+                                           " tokens without giving an answer. Raise the limit "
+                                           "(--max-tokens) or pick a model that reasons less."
+                                     : std::string("Task stopped: the model returned empty replies."))
                               : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
             console_->printWarning(finalAnswer);
             failed = true;

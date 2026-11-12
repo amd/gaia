@@ -615,6 +615,20 @@ int runPrint(const Cli& cli) {
                                      ". Point GAIA_TURN_LOG at a writable file, or unset it.");
         }
     }
+    // One flushed line per model or tool call, so a turn that is killed still leaves a record.
+    std::ofstream stepLog;
+    if (const char* path = std::getenv("GAIA_STEP_LOG"); path && *path) {
+        stepLog.open(path, std::ios::app);
+        if (!stepLog) {
+            throw std::runtime_error(std::string("Cannot write the step log at ") + path +
+                                     ". Point GAIA_STEP_LOG at a writable file, or unset it.");
+        }
+        agent.setStepLogger([&stepLog](const gaia::json& step) {
+            gaia::json line = step;
+            line["schema"] = "gaiacpp.step/1";
+            stepLog << line.dump(-1, ' ', false, gaia::json::error_handler_t::replace) << std::endl;
+        });
+    }
 
     g_agent = &agent;
     const auto t0 = std::chrono::steady_clock::now();

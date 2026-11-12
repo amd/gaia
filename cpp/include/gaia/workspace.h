@@ -36,7 +36,8 @@ public:
     std::string checkPath(const std::string& path) const;
 
     /// "" when the command names no outside location, else the refusal.
-    std::string checkCommand(const std::string& command) const;
+    /// `posixShell` false means cmd.exe runs it, where `/s` is a switch, not a path.
+    std::string checkCommand(const std::string& command, bool posixShell = true) const;
 
     /// True when a read-only command, split by splitShellCommand(), reads
     /// nothing outside the roots and the system folders: every argument is
@@ -51,7 +52,7 @@ public:
 
     /// Wrap a shell tool so its command argument must pass checkCommand().
     static ToolInfo confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
-                                 std::string commandArg = "command");
+                                 std::string commandArg = "command", bool posixShell = true);
 
 private:
     std::string refusal(const std::string& path) const;

@@ -177,6 +177,10 @@ public:
     /// reset when a run starts, so a Stop that lands just before one holds.
     void setCancelCheck(std::function<bool()> check) { cancelCheck_ = std::move(check); }
 
+    /// Called after every model call and tool call of a turn, as it happens,
+    /// so a turn that is killed or hangs still leaves a record.
+    void setStepLogger(std::function<void(const json&)> logger) { stepLogger_ = std::move(logger); }
+
     /// Check whether a cancel has been requested.
     bool isCancelled() const { return cancelRequested(); }
 
@@ -361,6 +365,8 @@ private:
         /// Native OpenAI tool calls, when the model answered with them.
         /// Always empty on the prompt-JSON path.
         std::vector<ToolCall> toolCalls;
+        /// The server's finish_reason ("stop", "length", "tool_calls"); empty when not reported.
+        std::string finishReason;
     };
 
     /// Send messages to the LLM and get a response with usage stats.
@@ -436,6 +442,7 @@ private:
     // Reset at the start of each processQuery().
     std::atomic<bool> cancelled_{false};
     std::function<bool()> cancelCheck_;
+    std::function<void(const json&)> stepLogger_;
     bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;

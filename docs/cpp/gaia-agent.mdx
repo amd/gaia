@@ -178,6 +178,8 @@ The token fields are 0 when the server reports no usage.
 
 Set `GAIA_TURN_LOG` to a file path and every `-p` run also appends one JSON line to it: the same counters, plus `llm_calls` (step, seconds, and input, cached and output tokens for each request) and `tool_calls` (step, tool name, seconds, and whether it succeeded). A path that cannot be written stops the run before it starts.
 
+Set `GAIA_STEP_LOG` to a file path to get one line per model call and tool call, written as each one finishes. A run that is killed or times out before the turn ends still leaves those lines, and a failed model call is recorded with its error.
+
 With `-p` and no prompt argument, the prompt is read from stdin until it closes.
 
 ## MCP server mode

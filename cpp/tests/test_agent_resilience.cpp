@@ -877,3 +877,213 @@ TEST(AgentResilience, ACutOffTagCallMidTurnIsSentBackAndNeverTheAnswer) {
         EXPECT_EQ(mock.requestCount(), 3);
     }
 }
+
+namespace {
+
+// A reply with several calls and a finish_reason.
+std::string calls(const std::vector<std::pair<std::string, std::string>>& nameArgs,
+                  const std::string& finish) {
+    json list = json::array();
+    int n = 0;
+    for (const auto& [name, args] : nameArgs) {
+        list.push_back({{"id", "b" + std::to_string(++n)},
+                        {"type", "function"},
+                        {"function", {{"name", name}, {"arguments", args}}}});
+    }
+    return json{{"choices",
+                 json::array({{{"finish_reason", finish},
+                               {"message",
+                                {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", list}}}}})}}
+        .dump();
+}
+
+std::string lastUserText(const std::string& body) {
+    const json messages = json::parse(body)["messages"];
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        if ((*it).value("role", "") == "user") return (*it)["content"].get<std::string>();
+    }
+    return "";
+}
+
+}  // namespace
+
+TEST(AgentResilience, AReplyCutOffMidCallRunsTheWholeCallsAndSaysWhatWasLost) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(calls({{"add", R"({"a":1,"b":2})"}, {"add", R"({"a":3,"b)"}}, "length"));
+    mock.pushResponse(answer("3"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "3");
+    EXPECT_EQ(r["status"], "success") << r.dump();
+    EXPECT_EQ(agent.executed.size(), 1u) << "the complete call ran; the cut one did not";
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const std::string note = lastUserText(bodies[1]);
+    EXPECT_NE(note.find("cut off at the length limit"), std::string::npos) << note;
+    int toolReplies = 0;
+    const json sent = json::parse(bodies[1]);
+    for (const auto& m : sent["messages"]) toolReplies += m["role"] == "tool";
+    EXPECT_EQ(toolReplies, 1) << "no reply for a call that was dropped from the assistant turn";
+}
+
+TEST(AgentResilience, AReplyCutOffInItsOnlyCallIsAskedAgainThenNamesTheLimit) {
+    bench::MockLlmServer mock;
+    mock.pushResponses(calls({{"add", R"({"a":1,)"}}, "length"), 3);
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "error") << r.dump();
+    const std::string result = r["result"].get<std::string>();
+    EXPECT_NE(result.find("length limit"), std::string::npos) << result;
+    EXPECT_NE(result.find("--max-tokens"), std::string::npos) << result;
+    EXPECT_TRUE(agent.executed.empty());
+    EXPECT_EQ(mock.requestCount(), 3);
+}
+
+TEST(AgentResilience, AnOversizedBatchRunsItsFirstCallsAndSaysSo) {
+    bench::MockLlmServer mock;
+    std::vector<std::pair<std::string, std::string>> many;
+    for (int i = 0; i < 40; ++i) many.push_back({"add", "{\"a\":" + std::to_string(i) + "}"});
+    mock.pushResponse(calls(many, "tool_calls"));
+    mock.pushResponse(answer("done"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "done");
+    EXPECT_EQ(agent.executed.size(), 24u);
+    EXPECT_NE(lastUserText(mock.receivedBodies()[1]).find("Only the first 24 of your 40"),
+              std::string::npos);
+}
+
+TEST(AgentResilience, AMalformedBatchExplainsOnceNotOncePerCall) {
+    bench::MockLlmServer mock;
+    std::vector<std::pair<std::string, std::string>> batch;
+    for (int i = 0; i < 10; ++i) batch.push_back({"add", "{\"a\":" + std::to_string(i) + "}"});
+    batch.push_back({"add", "{not json"});
+    mock.pushResponse(calls(batch, "tool_calls"));
+    mock.pushResponse(answer("done"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("go");
+    int explained = 0, brief = 0;
+    const json sent = json::parse(mock.receivedBodies()[1]);
+    for (const auto& m : sent["messages"]) {
+        if (m["role"] != "tool") continue;
+        const std::string text = m["content"].get<std::string>();
+        explained += text.find("not valid JSON") != std::string::npos;
+        brief += text.find("see the first result") != std::string::npos;
+    }
+    EXPECT_EQ(explained, 1);
+    EXPECT_EQ(brief, 10);
+}
+
+TEST(AgentResilience, AReplyAnnouncingCallsButCarryingNoneIsAskedAgain) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(
+        R"({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[]}}]})");
+    mock.pushResponse(answer("Here it is."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "Here it is.");
+    EXPECT_EQ(r["status"], "success") << r.dump();
+}
+
+TEST(AgentResilience, EmptyRepliesAtTheLengthLimitNameTheLimit) {
+    bench::MockLlmServer mock;
+    const std::string spent =
+        R"({"choices":[{"finish_reason":"length","message":{"role":"assistant","content":null}}]})";
+    mock.pushResponses(spent, 3);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.stepBudgetNotices = false;  // no closing call: the stop message itself is under test
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    const std::string result = r["result"].get<std::string>();
+    EXPECT_NE(result.find("whole reply limit"), std::string::npos) << result;
+    EXPECT_NE(lastUserText(mock.receivedBodies()[1]).find("hit the length limit"), std::string::npos);
+}
+
+TEST(AgentResilience, FastFlowLmsFullWindowWordingIsRecoveredFrom) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "big", "{}"));
+    mock.pushResponse(call("c2", "big", "{}"));
+    mock.pushResponse(call("c3", "big", "{}"));
+    mock.pushResponse(R"({"error":{"message":"Max length reached!"}})", 500);
+    mock.pushResponse(answer("fits now"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxToolResultChars = 3000;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "fits now") << r.dump();
+}
+
+TEST(AgentResilience, ContextOverflowKeepsTrimmingUntilTheRequestFits) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "big", "{}"));
+    mock.pushResponse(call("c2", "big", "{}"));
+    mock.pushResponse(call("c3", "big", "{}"));
+    const std::string full = R"({"error":{"message":"request exceeds the available context size"}})";
+    mock.pushResponses(full, 3);
+    mock.pushResponse(answer("fits now"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxToolResultChars = 3000;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "fits now") << r.dump();
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 7u);
+    int stubs = 0;
+    const json sent = json::parse(bodies[6]);
+    for (const auto& m : sent["messages"]) {
+        stubs += m["role"] == "tool" && m["content"].get<std::string>().find(
+                                            "removed to fit the context window") != std::string::npos;
+    }
+    EXPECT_EQ(stubs, 3) << "the third retry has given up every stored tool output";
+}
+
+TEST(AgentResilience, AnOverflowNothingCanTrimSaysWhatToDo) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(R"({"error":{"message":"request exceeds the available context size"}})", 400);
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "error");
+    const std::string result = r["result"].get<std::string>();
+    EXPECT_NE(result.find("no longer fits the model's context window"), std::string::npos) << result;
+    EXPECT_NE(result.find("Start a new chat"), std::string::npos) << result;
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(AgentResilience, StepLoggerSeesEachModelAndToolCallAsItHappens) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", R"({"a":1,"b":2})"));
+    mock.pushResponse(R"({"error":{"message":"bad request"}})", 400);
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    std::vector<std::string> kinds;
+    agent.setStepLogger([&kinds](const json& step) { kinds.push_back(step.value("kind", "")); });
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_EQ(kinds, (std::vector<std::string>{"llm", "tool", "llm_error"}));
+}
+
+TEST(AgentResilience, ACallWithNoArgumentsIsToldSoAndWhatItNeeds) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", "{}"));
+    mock.pushResponse(answer("ok"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("go");
+    std::string toolReply;
+    const json sent = json::parse(mock.receivedBodies()[1]);
+    for (const auto& m : sent["messages"]) {
+        if (m["role"] == "tool") toolReply = m["content"].get<std::string>();
+    }
+    EXPECT_NE(toolReply.find("arrived with no arguments"), std::string::npos) << toolReply;
+    EXPECT_NE(toolReply.find("'a'"), std::string::npos) << toolReply;
+    EXPECT_TRUE(agent.executed.empty());
+}

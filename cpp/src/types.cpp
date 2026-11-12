@@ -99,8 +99,7 @@ json ToolCall::parsedArgs() const {
             "Model returned tool call '" + name + "' (id " + id +
             ") with arguments that are not valid JSON: " + e.what() +
             "\n  Raw arguments: " + arguments.substr(0, 400) +
-            "\n  Retry the query, or set AgentConfig::nativeToolCalls = "
-            "NativeToolCalls::Never to use the prompt-JSON path with this model.");
+            "\n  Send the call again with the arguments as one complete JSON object.");
     }
     if (!parsed.is_object()) {
         throw std::runtime_error(

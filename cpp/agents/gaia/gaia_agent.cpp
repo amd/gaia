@@ -78,7 +78,8 @@ void GaiaAgent::registerTools() {
         reg.registerTool(Workspace::confine(GitTools::gitDiff(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitLog(), ws, {"path"}));
         reg.registerTool(Workspace::confine(GitTools::gitShow(), ws, {"path"}));
-        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws);
+        ToolInfo sh = Workspace::confineShell(BashTools::bashExecute(options_.shell), ws, "command",
+                                              !BashTools::detectShell().empty());
         const std::shared_ptr<ShellSession> shell = options_.shell;
         // A read skips the approval card only while it stays in the chat's folders.
         sh.needsConfirm = [ws, shell](const json& args) {
@@ -120,7 +121,8 @@ void GaiaAgent::registerTools() {
         std::string why;
         if (tool.name == "bash_execute") {
             if (args.contains("command") && args["command"].is_string()) {
-                why = ws->checkCommand(args["command"].get<std::string>());
+                why = ws->checkCommand(args["command"].get<std::string>(),
+                                       !BashTools::detectShell().empty());
             }
         } else if (args.contains("path") && args["path"].is_string()) {
             why = ws->checkPath(args["path"].get<std::string>());
