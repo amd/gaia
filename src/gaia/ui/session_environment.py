@@ -271,11 +271,13 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
 
     added = {_norm(p) for p in env["folders"]}
     managed = _norm(str(_managed_documents_dir()))
-    doc_paths = {
-        _norm(d["filepath"])
+    # A library copy's file name carries an id prefix; the person knows the original.
+    doc_names = {
+        _norm(d["filepath"]): d.get("filename")
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
+    doc_paths = set(doc_names)
     cwd = _norm(os.getcwd())
     from_env = {_norm(str(p)) for p in _env_scope_entries()}
     entries: Dict[str, Dict[str, Any]] = {}
@@ -301,6 +303,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "document"
         entries[key] = {
             "path": str(Path(path)),
+            "name": doc_names.get(key) or None,
             "kind": "file" if Path(path).is_file() else "folder",
             "source": source,
             # An attached document is removed from the chat's documents, which

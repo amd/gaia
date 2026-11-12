@@ -73,6 +73,32 @@ def test_default_is_internet_on_and_the_computed_scope(client, session_id):
     assert "gaia_documents" in sources
 
 
+def test_a_library_copy_is_listed_under_the_documents_own_name(
+    client, session_id, tmp_path
+):
+    # #7224: the copy's file name carries an internal id prefix.
+    copy = tmp_path / "6bebd6da81b2_outside.md"
+    copy.write_text("gate code", encoding="utf-8")
+    db = client.app.state.db
+    doc = db.add_document(
+        filename="outside.md",
+        filepath=str(copy),
+        file_hash="h-outside",
+        file_size=9,
+        chunk_count=1,
+        file_mtime=copy.stat().st_mtime,
+    )
+    db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    entry = next(f for f in body["folders"] if f["path"] == str(copy))
+    assert entry["source"] == "document"
+    assert entry["name"] == "outside.md"
+    others = [f for f in body["folders"] if f["path"] != str(copy)]
+    assert others and all(f["name"] is None for f in others)
+
+
 def test_add_then_remove_folder_persists(client, session_id, folder):
     added = client.post(
         f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}

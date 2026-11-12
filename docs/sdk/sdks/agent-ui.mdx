@@ -1548,7 +1548,7 @@ agent at once, so they take effect on its next step.
     ```json
     {
       "session_id": "...",
-      "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
+      "folders": [{"path": "C:\\work", "name": null, "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
       "enforced": true,
@@ -1558,7 +1558,9 @@ agent at once, so they take effect on its next step.
 
     `folders` is every folder and file the agent may read and write;
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
-    `working_folder` or `approved` (granted during the chat). `removable` is
+    `working_folder` or `approved` (granted during the chat). `name` is an
+    attached document's own name (its library copy's file name carries an id
+    prefix), else `null`. `removable` is
     false for an attached document, which leaves through the chat's document
     list. `enforced` covers the folders and is false for an agent that runs as
     its own process (a relayed sidecar); removing a folder then refuses with
