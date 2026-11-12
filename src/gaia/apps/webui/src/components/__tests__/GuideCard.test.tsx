@@ -166,7 +166,7 @@ describe('GuideCard', () => {
         const { container } = render(<RenderCard render="guide" data={recipe} />);
         expect(screen.getByText(/المكونات/)).toBeInTheDocument();
         expect(screen.getByText(/الخطوات/)).toBeInTheDocument();
-        expect(container.querySelector('.render-guide__servings-count')).toHaveTextContent(/2 حصص/);
+        expect(container.querySelector('.render-guide__servings-count')).toHaveTextContent(/الحصص: 2/);
         expect(screen.getByRole('button', { name: /بدء الطهي/ })).toBeInTheDocument();
         expect(screen.getByRole('note')).toHaveTextContent('غيّر عدد الحصص');
         expect(screen.queryByText(/^Ingredients$/)).toBeNull();
