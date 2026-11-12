@@ -656,7 +656,7 @@ def interactive_mode(agent: ChatAgent):
                     # Check if arg is a number (index)
                     if arg.isdigit():
                         index = int(arg) - 1  # Convert to 0-based index
-                        indexed_list = list(agent.rag.indexed_files)
+                        indexed_list = sorted(agent.rag.indexed_files)
                         if 0 <= index < len(indexed_list):
                             file_path = indexed_list[index]
                         else:

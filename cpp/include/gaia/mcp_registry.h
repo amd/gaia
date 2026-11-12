@@ -66,9 +66,8 @@ public:
 /// @endcode
 /// Ids are whatever the file uses; servers added by `gaia connectors` are keyed
 /// by their catalog id (for example `mcp-github` or `mcp-memory`).
-/// Unknown top-level keys are ignored, so the package-shipped descriptor at
-/// `src/gaia/mcp/mcp.json` (which also carries `clients`, `tools`, …) loads
-/// unchanged. `servers` is accepted as an alias for `mcpServers`, matching
+/// Unknown top-level keys are ignored. `servers` is accepted as an alias for
+/// `mcpServers`, matching
 /// Python's `MCPConfig._read_servers()`.
 ///
 /// Search paths, lowest precedence first, under the config directory
