@@ -125,6 +125,8 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    /** The document the notice is about, so removing it takes the notice with it. */
+    const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -275,6 +277,7 @@ export function DocumentLibrary() {
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
             setNotice(t('docs.willAttach', { name: filename }));
@@ -449,6 +452,7 @@ export function DocumentLibrary() {
         }
         indexingStartTimes.current.delete(id);
         removeDraftDocument(id);
+        if (noticeDocId.current === id) setNotice('');
         // The list now, not when the click happened: a poll may have refreshed it meanwhile.
         setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
         log.doc.info(`Deleted document: ${name}`);

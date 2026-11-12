@@ -125,6 +125,10 @@ button.context-meter:hover {
     line-height: 1.4;
 }
 
+.context-meter-note.is-setup {
+    margin: 0 0 8px;
+}
+
 .context-warning {
     display: flex;
     align-items: flex-start;

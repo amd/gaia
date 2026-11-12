@@ -63,6 +63,8 @@ interface MessageBubbleProps {
     /** Sends the edited text in place of this message and everything after it. */
     onEdit?: (message: Message, text: string) => void;
     onEditCancel?: () => void;
+    /** The chat's latest answer, whose actions stay in view. */
+    latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -572,7 +574,7 @@ function MessageEditor({ initial, onSend, onCancel }: { initial: string; onSend:
     );
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onRegenerate, onEditStart, editing = false, onEdit, onEditCancel, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onRegenerate, onEditStart, editing = false, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -676,7 +678,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     return (
         <div
-            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}${latest ? ' msg-latest' : ''}`}
             title={hoverTimestamp}
         >
             <div className="msg-inner">
