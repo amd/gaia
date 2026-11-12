@@ -449,12 +449,13 @@
     scrollbar-width: thin;
     scrollbar-color: var(--text-muted) transparent;
     /* macOS hides scrollbars until you scroll, so fade the far edge while more columns remain. */
-    mask-image: linear-gradient(to right, #000 calc(100% - var(--table-fade)), transparent);
-    animation: md-table-fade linear both;
+    mask-image: linear-gradient(to right, black calc(100% - var(--table-fade)), transparent);
+    animation: md-table-fade var(--ease-linear) both;
+    --table-fade: 0px;
     animation-timeline: scroll(self x);
 }
 [dir="rtl"] .md-table-wrap {
-    mask-image: linear-gradient(to left, #000 calc(100% - var(--table-fade)), transparent);
+    mask-image: linear-gradient(to left, black calc(100% - var(--table-fade)), transparent);
 }
 @property --table-fade {
     syntax: '<length>';
