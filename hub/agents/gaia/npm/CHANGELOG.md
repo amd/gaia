@@ -155,7 +155,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (answer only with a plan, use no tools, don't do anything yet) now turns
   both checks off. "Don't run anything yet" alone still lets the agent write
   the files it was asked for, and "don't do anything else" keeps both checks.
-  Such an answer no longer ends with a note that a named file was not read.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
   A ban the request lifts itself ("don't touch anything until you've read X",
   "only a plan, then do step 1") is not a request not to act, and neither is
   a ban that comes with the work ("fix foo.py but don't touch anything",

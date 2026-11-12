@@ -244,6 +244,44 @@ def test_a_plan_only_turn_still_notes_a_false_claim_about_the_file(
     assert reason in result["result"]
 
 
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Without using any tools, what does toybox/dates.py set `x` to?",
+        "Don't use any tools. What does toybox/dates.py set x to?",
+        "Use no tools: what does toybox/dates.py set x to?",
+    ],
+)
+def test_a_no_tools_answer_stating_a_file_unread_keeps_its_note(
+    agent, workspace, request_text
+):
+    """Not sent to look, since the user said not to, but the guess is still marked."""
+    answer = "toybox/dates.py sets `x` to 2."
+    sent = _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(request_text, max_steps=10)
+
+    assert not [m for m in sent[-1] if "Look with your tools first" in m["content"]]
+    assert "I didn't read `toybox/dates.py` this turn" in result["result"]
+
+
+def test_the_verifiers_version_question_keeps_its_note(agent, workspace):
+    (workspace / "src" / "gaia").mkdir(parents=True)
+    (workspace / "src" / "gaia" / "version.py").write_text(
+        '__version__ = "0.26.0"\n', encoding="utf-8"
+    )
+    answer = "src/gaia/version.py sets `__version__` to 0.9.1."
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(
+        "Without using any tools, what does src/gaia/version.py set "
+        "`__version__` to?",
+        max_steps=10,
+    )
+
+    assert "I didn't read `src/gaia/version.py` this turn" in result["result"]
+
+
 def test_an_unread_file_is_still_noted_when_the_user_did_not_forbid_looking(
     agent, workspace
 ):

@@ -16,6 +16,7 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _asks_for_a_plan_only,
     _asks_for_no_action,
     _split_announced_step,
     _unfinished_answer_kind,
@@ -777,6 +778,30 @@ def test_requests_not_to_act_are_recognised(request_text):
 )
 def test_requests_that_limit_the_work_are_not_requests_not_to_act(request_text):
     assert not _asks_for_no_action(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text, plan_only",
+    [
+        (NO_ACTION_PLAN_REQUEST, True),
+        ("Answer only with a short plan.", True),
+        ("Plan only, please.", True),
+        ("Use no tools in this turn. Answer only with a three-step plan.", True),
+        # No tools, but a question to answer: an unread file keeps its note.
+        (
+            "Without using any tools, what does src/gaia/version.py set "
+            "`__version__` to?",
+            False,
+        ),
+        ("Don't use any tools. What's the timeout in config.py?", False),
+        ("Use no tools: what does README.md say about installing?", False),
+        ("Don't do anything yet.", False),
+        ("Give me only a plan for the migration, then do step 1.", False),
+        ("", False),
+    ],
+)
+def test_only_a_plan_request_is_a_plan_only_turn(request_text, plan_only):
+    assert _asks_for_a_plan_only(request_text) is plan_only
 
 
 def test_a_plan_the_user_asked_for_is_the_answer(agent):

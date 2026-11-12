@@ -303,7 +303,7 @@ def look_findings(
     records: Sequence[Dict[str, Any]],
     locate: Optional[Callable[[str], Optional[str]]] = None,
     history: str = "",
-    told_not_to_look: bool = False,
+    plan_only: bool = False,
 ) -> List[Finding]:
     """The request's files and symbols nothing read, and unbacked "not found"s.
 
@@ -322,7 +322,7 @@ def look_findings(
     candidates it chose to leave: they count only when the answer says it read
     them or says they don't exist. An answer that says it read a target counts
     whether or not the file is on disk. The same holds for every target when
-    the user *told_not_to_look* this turn: not reading is what was asked for.
+    the user asked for a plan only (*plan_only*): it names files still to read.
     """
     targets = named_targets(query)
     if not targets:
@@ -336,7 +336,7 @@ def look_findings(
     found: List[str] = []
     where_is = {t: locate(t) if locate else None for t in targets if _is_file_name(t)}
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
-    engaged = told_not_to_look or any(_read_it(t, records) for t in targets)
+    engaged = plan_only or any(_read_it(t, records) for t in targets)
     for target in targets:
         if _read_it(target, records) or _slashed(target) in earlier:
             continue
@@ -984,7 +984,7 @@ def ungrounded(
     *,
     history: str = "",
     locate: Optional[Callable[[str], Optional[str]]] = None,
-    told_not_to_look: bool = False,
+    plan_only: bool = False,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
 
@@ -992,7 +992,7 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history, told_not_to_look)
+    findings = look_findings(answer, query, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:

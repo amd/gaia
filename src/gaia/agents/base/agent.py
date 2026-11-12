@@ -1781,14 +1781,14 @@ _PLAN_THEN_ACT_PATTERN = re.compile(
 )
 
 
-def _asks_for_no_action(request: str) -> bool:
-    """Whether the user's own words this turn forbid acting: a plan is the answer.
+def _no_action_requests(request: str) -> List[bool]:
+    """Each way the user's own words this turn forbid acting; True for a plan ask.
 
-    Such a request wins over GAIA's nudges to look first or to do an
-    announced step. A ban the request lifts itself, a report of an earlier
-    turn, and a plan followed by "then do it" are not such a request.
+    A ban the request lifts itself, a report of an earlier turn, and a plan
+    followed by "then do it" are not such a request.
     """
     text = (request or "").replace("’", "'")
+    found = []
     for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
         after = text[match.end() :]
         if match.group("forbid"):
@@ -1799,8 +1799,26 @@ def _asks_for_no_action(request: str) -> bool:
                 continue
         elif _PLAN_THEN_ACT_PATTERN.search(after):
             continue
-        return True
-    return False
+        found.append("plan" in match.group().lower())
+    return found
+
+
+def _asks_for_no_action(request: str) -> bool:
+    """Whether the user's own words this turn forbid acting.
+
+    Such a request wins over GAIA's nudges to look first or to do an
+    announced step.
+    """
+    return bool(_no_action_requests(request))
+
+
+def _asks_for_a_plan_only(request: str) -> bool:
+    """Whether this turn asked for a plan and nothing else ("answer only with a plan").
+
+    "Use no tools" alone still wants an answer: one that states a file's
+    contents unread keeps its note. A plan names files it has yet to read.
+    """
+    return any(_no_action_requests(request))
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -2995,8 +3013,8 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
-        # The user's own words this turn forbid acting ("answer only with a plan").
-        self._turn_no_action_requested = False
+        # The user's own words this turn ask only for a plan, not an answer.
+        self._turn_plan_only_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
@@ -10411,7 +10429,7 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
-            told_not_to_look=getattr(self, "_turn_no_action_requested", False),
+            plan_only=getattr(self, "_turn_plan_only_requested", False),
         )
 
     def _deliverable_findings(
@@ -11077,8 +11095,9 @@ Do NOT wrap conversational replies in JSON.
         # Grounding gates that already asked for one correction this turn.
         grounding_fired: set = set()
         # "Do not run anything, answer only with a plan": no nudge to act.
-        no_action_requested = _asks_for_no_action(self._request_text(user_input))
-        self._turn_no_action_requested = no_action_requested
+        request_text = self._request_text(user_input)
+        no_action_requested = _asks_for_no_action(request_text)
+        self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
         if no_action_requested:
             grounding_fired.add(LOOK)
 
