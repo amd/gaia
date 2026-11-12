@@ -262,7 +262,9 @@ class _Console:
 
 
 def _replay_question(case: dict) -> None:
-    from gaia_agent.chat_agent import ChatAgent
+    # The unit job has no flagship package; test_gaia_agent.yml runs this.
+    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
+    ChatAgent = chat_agent.ChatAgent
 
     stub = object.__new__(ChatAgent)
     stub.console = _Console(case.get("reply"))
