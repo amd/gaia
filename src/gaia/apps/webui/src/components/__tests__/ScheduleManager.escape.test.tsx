@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import * as api from '../../services/api';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
@@ -71,5 +71,23 @@ describe('ScheduleManager', () => {
 
         render(<ScheduleManager />);
         expect(screen.queryByLabelText('Name')).toBeNull();
+    });
+
+    it('drops the draft when a create finishes after the dialog was closed', async () => {
+        let finish: () => void = () => {};
+        const createSchedule = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+        useScheduleStore.setState({ createSchedule: createSchedule as never });
+        const first = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
+        fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
+        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Create/ }));
+        expect(createSchedule).toHaveBeenCalled();
+        first.unmount();
+        expect(useScheduleStore.getState().draft).not.toBeNull();
+
+        await act(async () => { finish(); });
+        expect(useScheduleStore.getState().draft).toBeNull();
     });
 });

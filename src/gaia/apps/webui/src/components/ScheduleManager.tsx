@@ -391,6 +391,7 @@ export function ScheduleManager() {
         try {
             // Pass the raw NL input as interval - backend will re-parse it
             await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
+            useScheduleStore.getState().setDraft(null);
             setNlInput('');
             setScheduleName('');
             setSchedulePrompt('');
