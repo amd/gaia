@@ -245,6 +245,9 @@ export interface UnavailableConnectorRow {
     id: string;
     display_name: string;
     error: 'unavailable';
+    /** Set when the shared activations file can't be read; `path` names it. */
+    reason?: 'activations_unreadable';
+    path?: string;
 }
 
 /** One entry of GET /api/connectors. */
@@ -942,6 +945,8 @@ export interface ActiveModel {
     display_name?: string | null;
     label: string | null;
     remote: boolean;
+    /** Who answers a cloud model, including one GAIA has no provider tab for; null when local. */
+    provider_name?: string | null;
     is_default: boolean;
     /** Local model on disk; null for a cloud model or while the server starts. */
     downloaded?: boolean | null;

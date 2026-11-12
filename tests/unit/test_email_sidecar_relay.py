@@ -812,17 +812,40 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert agent_errors[0]["content"] == detail
 
-    def test_404_http_error_still_shows_version_upgrade_message(self):
+    @pytest.mark.parametrize("path", ["/v1/email/query", "/v1/email/query/"])
+    def test_404_http_error_still_shows_version_upgrade_message(self, path):
         handler = _FakeHandler()
         proxy = _ScriptedProxy(
-            lambda: _RaisingIterator(
-                SidecarHTTPError(404, "Not Found", path="/v1/email/query")
-            )
+            lambda: _RaisingIterator(SidecarHTTPError(404, "Not Found", path=path))
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/v1/email/query/r1/tool_decision",
+            "/v1/email/query/r1/respond",
+            "/v1/email/sessions/s1/internet",
+            # Another agent's /query says nothing about this one's version.
+            "/v1/gaia/query",
+            "",
+        ],
+    )
+    def test_a_404_from_another_route_is_not_called_an_old_agent(self, path):
+        """Only a missing /query proves an old binary; a finished run 404s too."""
+        handler = _FakeHandler()
+        detail = "No run 'r1' is in flight. It may have already finished."
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(SidecarHTTPError(404, detail, path=path))
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        [agent_error] = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_error["content"] != relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+        assert "out of date" not in agent_error["content"]
+        assert detail in agent_error["content"]
 
     def test_detail_less_http_error_falls_back_to_stream_ended(self):
         handler = _FakeHandler()
