@@ -333,7 +333,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.commitDiscovery.mockResolvedValue({ stored: 1 });
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });
@@ -358,7 +358,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });

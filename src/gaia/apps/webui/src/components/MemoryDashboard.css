@@ -1355,10 +1355,18 @@
     margin: 0;
 }
 .mem-profile-note {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
-    font-style: italic;
     margin: 0;
+}
+/* One plain sentence on what a tab is for, above its controls. */
+.mem-tab-intro {
+    grid-column: 1 / -1;
+    max-width: 72ch;
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
 }
 .mem-profile-checkbox {
     display: flex;

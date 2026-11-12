@@ -2423,6 +2423,7 @@ export function MemoryDashboard() {
                     {/* ── Profile Setup Tab ──────────────────────────── */}
                     {activeTab === 'profile' && (
                         <div className="mem-profile-grid">
+                            <p className="mem-tab-intro">{t('mem.profile.intro')}</p>
                             {/* Card A: System Discovery */}
                             <div className="mem-profile-card">
                                 <div className="mem-profile-card-title">
@@ -2614,6 +2615,7 @@ export function MemoryDashboard() {
                     {/* ── Goals Tab ──────────────────────────────────────── */}
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
+                            <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
                             {goalStoreError && (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>
