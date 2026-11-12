@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -1810,3 +1812,79 @@ def test_a_new_turn_rechecks_whether_the_project_has_tests(agent, tmp_path):
     agent.process_query("hi")
 
     assert agent._project_has_tests(root)
+
+
+_PYTEST = "{py} -m pytest -q -p no:cacheprovider"
+_TRIMMED_RERUNS = [
+    (_PYTEST + " 2>&1", _PYTEST),
+    pytest.param(
+        _PYTEST + " 2>&1 | tail -40",
+        _PYTEST + " 2>&1 | tail -20",
+        marks=pytest.mark.skipif(not shutil.which("tail"), reason="needs tail"),
+    ),
+]
+
+
+@pytest.mark.skipif(" " in sys.executable, reason="the command names python unquoted")
+@pytest.mark.parametrize("before, after", _TRIMMED_RERUNS)
+def test_the_shell_tools_own_rerun_replaces_the_run_it_fixed(tmp_path, before, after):
+    """rc18 round 2: the shell tool declares its own check, so its target counts."""
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.base.verification import verification_record
+    from gaia.agents.tools import shell_tools
+    from gaia.security import PathValidator
+
+    test_file = tmp_path / "test_bill.py"
+    saved = dict(_TOOL_REGISTRY)
+    records = []
+    try:
+        mixin = shell_tools.ShellToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        mixin.register_shell_tools()
+        mixin._shell_session = shell_tools.ShellSession(start_cwd=str(tmp_path))
+        mixin._nothing_could_have_confirmed = lambda: False
+        run = _TOOL_REGISTRY["run_shell_command"]["function"]
+        # A different length each time, so a stale .pyc is never reused.
+        for template, total in ((before, 22), (after, 1)):
+            test_file.write_text(f"def test_bill():\n    assert 1 == {total}\n")
+            args = {"command": template.format(py=sys.executable)}
+            mixin.note_confirmed_call("run_shell_command", args)
+            result = run(args["command"])
+            records.append(
+                verification_record(
+                    "run_shell_command",
+                    args,
+                    result,
+                    errored=result.get("status") == "error",
+                )
+            )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert [r["check_label"] for r in records] == ["pytest", "pytest"]
+    assert [r["failed"] for r in records] == [True, False]
+    assert all(r["declared"] for r in records)
+    assert build_verification_scope(records) == ""
+    assert verification_summary(records)["state"] == "verified"
+
+
+def test_a_narrower_shell_rerun_does_not_replace_the_failed_suite():
+    from gaia.agents.base.checks import attach_check, check_from_command
+    from gaia.agents.base.verification import verification_record
+
+    def _record(command, code, out):
+        segments = [part.split() for part in command.split(" | ")]
+        result = attach_check(
+            {"status": "success" if code == 0 else "error", "return_code": code},
+            check_from_command(command, segments, code, out),
+        )
+        return verification_record(
+            "run_shell_command", {"command": command}, result, errored=code != 0
+        )
+
+    records = [
+        _record("pytest -q | tail -40", 1, "1 failed, 4 passed in 0.1s"),
+        _record("pytest -q tests/test_cart.py | tail -20", 0, "1 passed in 0.1s"),
+    ]
+    assert "didn't pass" in build_verification_scope(records)

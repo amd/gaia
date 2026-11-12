@@ -38,6 +38,7 @@ from gaia.agents.base.checks import (
     CheckResult,
     check_kind,
     command_check_label,
+    command_check_target,
     declares_check,
     invokes_test_runner,
     runner_summary,
@@ -187,26 +188,6 @@ def verification_check_label(
     return None
 
 
-# Trailing pieces that change how much output is shown or where it goes, never
-# what ran: "| tail -40", "| head", "| tee log", "| Select-Object -Last 20",
-# "2>&1", "> out.txt". A filter that drops lines by content (grep) is not one.
-_OUTPUT_TRIM_RE = re.compile(
-    r"(?:\s*\|\s*(?:tail|head|tee|more|less|out-string|out-host"
-    r"|select-object\s+-(?:first|last))(?:\s+[^|;&<>]*)?"
-    r"|\s*\d?>>?\s*(?:&\d|[^\s|;&<>]+))\s*$",
-    re.IGNORECASE,
-)
-
-
-def _without_output_trimming(command: str) -> str:
-    """*command* without the trailing pipes and redirections that only trim output."""
-    while True:
-        trimmed = _OUTPUT_TRIM_RE.sub("", command)
-        if trimmed == command or not trimmed:
-            return command
-        command = trimmed
-
-
 def verification_check_target(tool_name: str, tool_args: Any) -> str:
     """What a check ran against, so only reruns of the same command group.
 
@@ -218,7 +199,7 @@ def verification_check_target(tool_name: str, tool_args: Any) -> str:
         for key in _COMMAND_KEYS:
             command = tool_args.get(key)
             if isinstance(command, str) and command.strip():
-                return _without_output_trimming(" ".join(command.split()))
+                return command_check_target(command)
         return f"{tool_name} {json.dumps(tool_args, sort_keys=True, default=str)}"
     return f"{tool_name} {tool_args!r}"
 
