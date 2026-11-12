@@ -24,6 +24,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -659,7 +660,8 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
 )
 _TITLE_INSTRUCTION = (
     "Summarise the user's task in 3 to 6 plain words for a tab/window "
-    "title, in the language the user wrote in.  Reply with ONLY the "
+    "title, in the language the user wrote in.  Never translate it into "
+    "another language, whatever the reply or file names use.  Reply with ONLY the "
     "title, no quotes, no trailing "
     "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
     "user has not asked for anything yet (only a greeting or small "
@@ -716,6 +718,35 @@ def _echoes_title_instruction(title: str) -> bool:
     words = _WORD_RE.findall(title.lower())
     echoed = sum(word in _TITLE_INSTRUCTION_WORDS for word in words)
     return echoed >= 4 and echoed >= 0.75 * len(words)
+
+
+#: Writing systems a title is checked against, by Unicode name's first word.
+_TITLE_SCRIPTS = frozenset(
+    {
+        "LATIN",
+        "CJK",
+        "HIRAGANA",
+        "KATAKANA",
+        "HANGUL",
+        "CYRILLIC",
+        "ARABIC",
+        "HEBREW",
+        "GREEK",
+        "THAI",
+        "DEVANAGARI",
+    }
+)
+
+
+def _scripts(text: str) -> set:
+    """The writing systems *text*'s letters are in."""
+    found = set()
+    for ch in text:
+        if ch.isalpha():
+            script = unicodedata.name(ch, "").split(" ", 1)[0]
+            if script in _TITLE_SCRIPTS:
+                found.add(script)
+    return found
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
@@ -898,6 +929,15 @@ async def _generate_session_title(
     # Exact match: a real title can start with "None" ("None values in pandas").
     if title.lower() == "none":
         raise _NoTopicYet
+    foreign = _scripts(title) - _scripts(f"{user_msg} {latest_msg}")
+    if foreign:
+        logger.info(
+            "Auto-title: %s titled the chat in %s, which the user did not write "
+            "in; titling from the first question",
+            model_id,
+            "/".join(sorted(foreign)).lower(),
+        )
+        return _title_from_question(user_msg)
     return title[:64]
 
 
