@@ -13,7 +13,7 @@ const mockedApi = vi.mocked(api);
 const LINK = 'https://github.com/owner/library';
 
 function found(name: string, extra: Partial<LinkSkill> = {}): LinkSkill {
-    return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, permissions: [], verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
+    return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
 }
 
 beforeEach(() => {
@@ -59,6 +59,22 @@ describe('AddSkillsFromLink', () => {
         // Shown outright, not folded into Details.
         expect(perms.closest('details')).toBeNull();
         expect(screen.getAllByText("Asks for no permissions beyond GAIA's own tools.")).toHaveLength(4);
+    });
+
+    it('says a skill whose permissions could not be read is unknown, not empty', async () => {
+        mockedApi.previewSkillLink.mockResolvedValue({
+            link: LINK,
+            source: 'owner/library',
+            pin: 'commit:abc',
+            warning: 'Skills from a link are written by someone else.',
+            skills: [
+                found('deslop'),
+                found('garbled', { permissions_unreadable: true, error: "unknown permission 'teleport:everywhere'" }),
+            ],
+        });
+        await readLink();
+        expect(screen.getByText('Its permissions could not be read.')).toBeInTheDocument();
+        expect(screen.getAllByText("Asks for no permissions beyond GAIA's own tools.")).toHaveLength(1);
     });
 
     it('preselects only instruction-only skills that are new and pass the audit', async () => {

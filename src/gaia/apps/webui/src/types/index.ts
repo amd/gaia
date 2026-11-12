@@ -1267,6 +1267,8 @@ export interface LinkSkill {
     has_code: boolean;
     /** What the skill declares it may do: the raw grant and a plain-language sentence. */
     permissions: LinkPermission[];
+    /** The permissions could not be read, so an empty list does not mean none. */
+    permissions_unreadable: boolean;
     /** Security-audit verdict: ALLOW, REVIEW, or BLOCK. */
     verdict: string;
     findings: string[];

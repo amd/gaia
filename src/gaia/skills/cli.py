@@ -847,6 +847,8 @@ def _handle_add(args: argparse.Namespace) -> int:
                 print("      permissions :")
                 for grant in s.permissions:
                     print(f"        - {grant['text']} ({grant['grant']})")
+            elif s.permissions_unreadable:
+                print("      permissions : could not be read")
             else:
                 print("      permissions : none declared")
             for finding in s.findings:

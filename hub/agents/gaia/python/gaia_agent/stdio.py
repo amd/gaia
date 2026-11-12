@@ -1080,6 +1080,8 @@ def _format_link_preview(preview: Any, allow_code: bool) -> list:
         if s.permissions:
             lines.append("  - Can:")
             lines.extend(f"    - {g['text']} (`{g['grant']}`)" for g in s.permissions)
+        elif s.permissions_unreadable:
+            lines.append("  - Can: unknown (permissions could not be read)")
         else:
             lines.append(
                 "  - Can: nothing beyond GAIA's own tools (no permissions declared)"

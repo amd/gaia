@@ -2010,6 +2010,7 @@ export const enMessages = {
     'settings.skills.link.can': 'Can:',
     'settings.skills.link.permsAria': 'What {name} can do',
     'settings.skills.link.noPermissions': "Asks for no permissions beyond GAIA's own tools.",
+    'settings.skills.link.permissionsUnreadable': 'Its permissions could not be read.',
     'settings.skills.link.shipsCode': 'Ships code. Tick Include skills with code to add it.',
     'settings.skills.link.codeHint': 'Their scripts can run on this PC with your permissions.',
     'settings.skills.link.includeCode': 'Include skills with code',

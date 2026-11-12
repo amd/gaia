@@ -3127,10 +3127,14 @@ model with no known price reads as unknown, never $0. Cloud models from
   <Accordion title="POST /api/skills/link/preview">
     List and audit the skills behind a pasted link without installing any.
     Body: `{"url"}`. Returns `{"link", "source", "pin", "warning", "skills":
-    [{"name", "description", "path", "has_code", "permissions", "verdict",
-    "findings", "installed", "update", "error"}]}`. `permissions` lists what
-    the skill declares it may do as `[{"grant", "text"}]` — the raw grant
-    (`network:read:*.example.com`) and a plain-language sentence. **400** when
+    [{"name", "description", "path", "has_code", "permissions",
+    "permissions_unreadable", "verdict", "findings", "installed", "update",
+    "error"}]}`. `permissions` lists what the skill declares it may do as
+    `[{"grant", "text"}]` — the raw grant (`network:read:*.example.com`) and a
+    plain-language sentence. `permissions_unreadable` is true when they could
+    not be parsed, so an empty list means unknown, not none. `pin` is
+    `commit:<sha>` for a GitHub link and the archive's `sha256:<digest>` for any
+    other `.zip`. **400** when
     the link cannot be read or holds no skill.
   </Accordion>
 

@@ -2010,6 +2010,7 @@ const messages: Messages = {
     'settings.skills.link.can': 'يمكنها:',
     'settings.skills.link.permsAria': 'ما يمكن أن تفعله {name}',
     'settings.skills.link.noPermissions': 'لا تطلب أي أذونات غير أدوات GAIA نفسها.',
+    'settings.skills.link.permissionsUnreadable': 'تعذّرت قراءة أذوناتها.',
     'settings.skills.link.shipsCode': 'تحتوي على شيفرة. فعّل «تضمين المهارات التي تحتوي على شيفرة» لإضافتها.',
     'settings.skills.link.codeHint': 'يمكن لسكربتاتها أن تعمل على هذا الحاسوب بصلاحياتك.',
     'settings.skills.link.includeCode': 'تضمين المهارات التي تحتوي على شيفرة',

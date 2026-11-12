@@ -197,7 +197,9 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                                                     </ul>
                                                 </span>
                                             ) : (
-                                                <span className="skill-link-perms">{t('settings.skills.link.noPermissions')}</span>
+                                                <span className="skill-link-perms">
+                                                    {t(s.permissions_unreadable ? 'settings.skills.link.permissionsUnreadable' : 'settings.skills.link.noPermissions')}
+                                                </span>
                                             )}
                                             {hasDetails && (
                                                 <details className="skill-link-findings">

@@ -3972,7 +3972,7 @@ for (const locale of ['ar', 'en']) {
 const SKILL_LINK = 'https://github.com/michael-denyer/pstack-claude';
 const SKILL_LINK_PIN = `commit:${'4f2a9c1e'.repeat(5)}`;
 const linkSkill = (name: string, description: string, over: Record<string, unknown> = {}) => ({
-    name, description, path: `skills/${name}`, has_code: false, permissions: [], verdict: 'ALLOW',
+    name, description, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW',
     findings: [], installed: false, update: false, error: null, ...over,
 });
 const SKILL_LINK_PREVIEW = {

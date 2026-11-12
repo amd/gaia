@@ -148,6 +148,13 @@ def _preview_with_grants():
             ),
             link.LinkSkill(name="plain", description="notes", path="s/plain"),
             link.LinkSkill(
+                name="garbled",
+                description="",
+                path="s/garbled",
+                permissions_unreadable=True,
+                error="unknown permission 'teleport:everywhere'",
+            ),
+            link.LinkSkill(
                 name="shelly",
                 description="",
                 path="s/shelly",
@@ -172,7 +179,10 @@ def test_preview_says_what_each_skill_may_do(monkeypatch):
         "(`network:read:*.example.com`)" in answer
     )
     assert "Audit: [REVIEW] fetches remote content" in answer
-    assert "no permissions declared" in answer
+    assert answer.count("no permissions declared") == 1
+    garbled = answer[answer.index("`garbled`") :].split("\n- ", 1)[0]
+    assert "permissions could not be read" in garbled
+    assert "no permissions declared" not in garbled
     # A refused skill still shows what it asked for, so the refusal makes sense.
     assert "Run any command on this PC (`shell:execute`)" in answer
 

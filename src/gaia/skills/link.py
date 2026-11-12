@@ -119,6 +119,9 @@ class LinkSkill:
     #: What the skill declares it may do: ``{"grant": ..., "text": ...}`` with
     #: the raw grant and a plain-language sentence, in declared order.
     permissions: List[Dict[str, str]] = field(default_factory=list)
+    #: The permissions could not be read, so ``permissions`` being empty does
+    #: not mean the skill declares none.
+    permissions_unreadable: bool = False
     verdict: str = ""
     findings: List[str] = field(default_factory=list)
     installed: bool = False
@@ -134,8 +137,8 @@ class LinkPreview:
     source: str
     skills: List[LinkSkill]
     #: What was audited: ``commit:<sha>`` for a GitHub archive, else
-    #: ``sha256:<digest>``. Pass it to :func:`add_from_link` so what lands is
-    #: exactly what the user reviewed.
+    #: ``sha256:<digest>`` of the downloaded bytes. Pass it to
+    #: :func:`add_from_link` so what lands is exactly what the user reviewed.
     pin: str = ""
     warning: str = SECURITY_WARNING
 
@@ -282,11 +285,15 @@ def _download(url: str, destination: Path) -> Path:
     return destination
 
 
-def _archive_pin(archive: Path) -> str:
-    """``commit:<sha>`` when the zip records its commit (GitHub does), else a digest."""
+def _archive_pin(archive: Path, source: LinkSource) -> str:
+    """``commit:<sha>`` for a GitHub archive, else the sha256 of the archive bytes.
+
+    Only a GitHub source may pin by commit: the add re-downloads codeload at that
+    commit. Any other host can stamp the same zip comment on a different archive.
+    """
     with zipfile.ZipFile(archive) as zf:
         comment = zf.comment.decode("ascii", "ignore").strip()
-    if re.fullmatch(r"[0-9a-f]{40}", comment):
+    if source.repo and re.fullmatch(r"[0-9a-f]{40}", comment):
         return f"commit:{comment}"
     return "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
 
@@ -308,8 +315,15 @@ def _skip_links(archive: Path) -> Path:
     return cleaned
 
 
-def fetch_library(source: LinkSource, workdir: Path) -> tuple:
-    """Download and unpack *source*; return ``(directory to search, pin)``."""
+def fetch_library(
+    source: LinkSource, workdir: Path, *, expect_pin: Optional[str] = None
+) -> tuple:
+    """Download and unpack *source*; return ``(directory to search, pin)``.
+
+    Raises:
+        SkillLinkChangedError: *expect_pin* was given and the download does not
+            match it. Checked before anything is unpacked.
+    """
     try:
         archive = _download(source.download_url, workdir / "library.zip")
     except SkillLinkNotFoundError as exc:
@@ -321,11 +335,16 @@ def fetch_library(source: LinkSource, workdir: Path) -> tuple:
             ) from exc
         raise
     try:
-        pin = _archive_pin(archive)
+        pin = _archive_pin(archive, source)
     except zipfile.BadZipFile as exc:
         raise SkillLinkError(
             f"{source.link} did not download as a valid zip: {exc}."
         ) from exc
+    if expect_pin is not None and pin != expect_pin:
+        raise SkillLinkChangedError(
+            f"{source.link} changed since you previewed it, so nothing was "
+            "added. Read the link again to review the current version."
+        )
     unpacked = workdir / _UNPACKED
     try:
         safe_extract(
@@ -442,7 +461,11 @@ def _scan(
                 continue
             scanned[f"?{rel}"] = (
                 LinkSkill(
-                    name=directory.name, description="", path=rel, error=str(exc)
+                    name=directory.name,
+                    description="",
+                    path=rel,
+                    permissions_unreadable=True,
+                    error=str(exc),
                 ),
                 directory,
             )
@@ -462,6 +485,7 @@ def _scan(
             permissions = skill.parsed_permissions()
         except SkillError as exc:
             permissions, permission_error = None, str(exc)
+            entry.permissions_unreadable = True
         else:
             permission_error = None
             entry.permissions = describe_permissions(permissions)
@@ -541,9 +565,10 @@ def add_from_link(
         force: Replace a skill of the same name that came from somewhere else.
             One added earlier from this same source is always updated in place,
             which is how a library is brought up to its latest version.
-        pin: The preview's ``pin``, required. GitHub sources are downloaded at
-            that exact commit; any other source must still hash the same, or
-            nothing is added — so what lands is what the user reviewed.
+        pin: The preview's ``pin``, required. A ``commit:`` pin on a GitHub
+            source downloads that exact commit; every other pin is the sha256 of
+            the archive bytes, and a re-download that hashes differently adds
+            nothing — so what lands is what the user reviewed.
 
     Raises:
         SkillLinkError: *pin* is missing or malformed — preview the link first.
@@ -564,12 +589,7 @@ def add_from_link(
         source.download_url = pinned.download_url
     result = LinkAddResult()
     with tempfile.TemporaryDirectory(prefix="gaia-skill-link-") as tmp:
-        root, fetched = fetch_library(source, Path(tmp))
-        if fetched != pin:
-            raise SkillLinkChangedError(
-                f"{source.link} changed since you previewed it, so nothing was "
-                "added. Read the link again to review the current version."
-            )
+        root, _ = fetch_library(source, Path(tmp), expect_pin=pin)
         scanned = _scan(root, source, manager)
         wanted = None
         if names is not None:
