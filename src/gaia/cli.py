@@ -8797,6 +8797,15 @@ def handle_agent_command(args):
     Args:
         args: Parsed command-line arguments
     """
+    # A removed agent is refused before any verb prints or writes anything.
+    from gaia.retired_agents import RETIRED_AGENT_IDS, retired_agent_message
+
+    for field in ("agent_id", "id", "name"):
+        named = getattr(args, field, None)
+        if named in RETIRED_AGENT_IDS:
+            print(f"❌ {retired_agent_message(named)}", file=sys.stderr)
+            sys.exit(1)
+
     # Developer-workflow actions (init / version / test) handled in cli_agent.
     from gaia import cli_agent
 

@@ -120,3 +120,41 @@ def test_install_trust_required_names_the_flag(monkeypatch, capsys):
     assert exc.value.code == 1
     err = capsys.readouterr().err
     assert "--trust" in err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["agent", "install", "email"],
+        ["agent", "configure", "email", "--model", "x"],
+        ["agent", "configure", "email", "--show"],
+        ["agent", "health", "email"],
+        ["agent", "status", "email"],
+        ["agent", "init", "email"],
+    ],
+)
+def test_every_verb_refuses_the_removed_email_agent_first(
+    argv, monkeypatch, capsys, tmp_path
+):
+    """The refusal is the only output, and nothing is written or fetched."""
+    from gaia.retired_agents import EMAIL_DOCS_URL
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
+    monkeypatch.chdir(tmp_path)
+
+    def _never(*_a, **_kw):
+        raise AssertionError("a removed agent reached the installer")
+
+    monkeypatch.setattr(installer, "install", _never)
+    args = cli.build_parser().parse_args(argv)
+    with pytest.raises(SystemExit) as exc:
+        cli.handle_agent_command(args)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "The 'email' agent was removed from GAIA" in captured.err
+    assert EMAIL_DOCS_URL in captured.err
+    assert "Installing" not in captured.err
+    assert list(tmp_path.iterdir()) == []

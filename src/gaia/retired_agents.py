@@ -28,6 +28,15 @@ def retired_install_message(agent_id: str) -> str:
     )
 
 
+def retired_agent_message(agent_id: str) -> str:
+    """What every `gaia agent <verb>` says about a removed agent."""
+    return (
+        f"The '{agent_id}' agent was removed from GAIA, so there is nothing to "
+        "install, configure or check. The GAIA agent does its job now: run "
+        f"`gaia chat`, or open the Agent UI. See {EMAIL_DOCS_URL}"
+    )
+
+
 def is_retired_agent_source(source: Optional[str]) -> bool:
     """Whether a daemon-clock job came from a retired agent's own clock."""
     name = (source or "").split(":", 1)[0]
