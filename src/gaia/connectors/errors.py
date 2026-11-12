@@ -380,7 +380,7 @@ class UnknownAgentError(ConnectorsError):
         self.agent_ids = list(agent_ids)
         super().__init__(
             f"Unknown agent id(s): {', '.join(self.agent_ids)}. Check the "
-            "namespaced agent id (e.g. 'installed:email') via `gaia connectors "
+            "namespaced agent id (e.g. 'installed:gaia') via `gaia connectors "
             "grants list` or the Agent UI's agent picker."
         )
 

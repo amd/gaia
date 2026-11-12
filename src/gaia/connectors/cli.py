@@ -81,7 +81,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         dest="grant_agent",
         help=(
             "Also grant this connector to the named namespaced agent id (e.g. "
-            "'installed:email') in the same flow — one command instead of a "
+            "'installed:gaia') in the same flow — one command instead of a "
             "separate `grants grant`, and the scopes always match. Without "
             "--scopes, the scopes are derived from the agent's own declared "
             "REQUIRED_CONNECTORS; pass --scopes explicitly to grant a narrower "

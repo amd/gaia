@@ -85,8 +85,8 @@ class TestConnectSelfDocuments:
         assert "gaia connectors configure google --client-id" in err  # exact command
         # connect authorizes scopes and grants the agent in one flow (#2347).
         assert "gaia connectors connect google --scopes" in err
-        assert "--grant-agent installed:email" in err
-        assert "gmail.modify" in err  # copy-paste example has real scopes
+        assert "--grant-agent installed:gaia" in err
+        assert "gmail.readonly" in err  # copy-paste example has real scopes
         assert "amd-gaia.ai/docs/connectors/google" in err
 
 

@@ -270,7 +270,7 @@ class MicrosoftOAuthProvider:
                 ),
                 console_steps=console_steps,
                 example=(
-                    "  For the email agent, copy-paste (bash) after creating "
+                    "  For mail and calendar in GAIA, copy-paste (bash) after creating "
                     "the client above:\n"
                     f"    gaia connectors configure {self.provider_id} "
                     "--client-id <ID>\n"
@@ -278,7 +278,7 @@ class MicrosoftOAuthProvider:
                     "https://graph.microsoft.com/Mail.Send "
                     'https://graph.microsoft.com/Calendars.ReadWrite"\n'
                     f"    gaia connectors connect {self.provider_id} "
-                    "--scopes $SCOPES --grant-agent installed:email"
+                    "--scopes $SCOPES --grant-agent installed:gaia"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )
