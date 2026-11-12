@@ -364,6 +364,18 @@ class TestDemotion:
             host.turn(False)
         assert not _enabled(store, sid)
 
+    def test_runs_judged_per_session_hold_exactly_at_the_bar(self, host, store):
+        """3 learned runs + 5 accepted turns: 8/10 is at the bar, 8/11 below."""
+        sid = _procedure(store, successes=15, attempts=15, sessions=3)
+        host.recall(sid)
+        for _ in range(5):
+            host.turn(True)
+        host.turn(False)
+        host.turn(False)
+        assert _enabled(store, sid)
+        host.turn(False)
+        assert not _enabled(store, sid)
+
     def test_a_new_procedure_declined_three_times_is_disabled(
         self, host, store, caplog
     ):

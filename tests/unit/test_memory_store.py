@@ -5485,6 +5485,25 @@ class TestIterSessions:
             store.log_tool_call("sessClean", f"good{i}", {}, "ok", True)
         assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
 
+    def test_only_a_call_stopped_before_it_ran_counts_as_declined(self, store):
+        """A tool that ran and reported "denied", or a refusal that isn't a denial,
+        is not a decline."""
+        store.store_turn("sessMixed", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessMixed", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessMixed", "http_get", {}, "{'status': 'denied'}", True, executed=True
+        )
+        store.log_tool_call(
+            "sessMixed",
+            "run_shell",
+            {},
+            "{'status': 'error', 'error': 'not allowlisted'}",
+            False,
+            executed=False,
+        )
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
+
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""
         store.store_turn("sessW", "user", "goal")
