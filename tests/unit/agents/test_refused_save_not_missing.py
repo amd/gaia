@@ -186,3 +186,50 @@ def test_loop_never_asks_for_the_refused_save_through_another_tool(agent, tmp_pa
     assert "write_file" not in correction
     assert "was not permitted" in result["result"]
     assert "No successful write" not in result["result"]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Download https://example.com/ into {folder} and write a summary to notes.md.",
+        "Download https://example.com/ into {folder}. Then save a summary as notes.md",
+        "Write a summary to notes.md, then download https://example.com/ to {folder}",
+    ],
+)
+def test_a_refused_folder_does_not_swallow_a_file_meant_elsewhere(
+    tmp_path, request_text
+):
+    """A download refused with no file name is not every bare file's excuse."""
+    folder = tmp_path / ".ssh"
+    ledger = CompletionEvidence(request_text.format(folder=folder), str(tmp_path))
+    ledger.record(
+        "download_file",
+        {"url": "https://example.com/", "save_to": str(folder)},
+        _blocked(folder),
+        False,
+        executed=False,
+    )
+    claimed = (
+        "I can't save into `.ssh`, it is protected. I saved the summary to notes.md."
+    )
+    found = " ".join(_gaps(ledger, claimed))
+    assert "No successful write to `notes.md`" in found
+
+
+def test_the_file_named_beside_the_refused_folder_is_still_excused(tmp_path):
+    folder = tmp_path / ".ssh"
+    ledger = CompletionEvidence(
+        f"Save https://example.com/ as page.html in {folder}, and write notes.md.",
+        str(tmp_path),
+    )
+    ledger.record(
+        "download_file",
+        {"url": "https://example.com/", "save_to": str(folder)},
+        _blocked(folder),
+        False,
+        executed=False,
+    )
+    claimed = "I can't save into `.ssh`, it is protected. I saved notes.md."
+    found = " ".join(_gaps(ledger, claimed))
+    assert "No successful write to `page.html`" not in found
+    assert "No successful write to `notes.md`" in found

@@ -481,6 +481,26 @@ def _normalize_key(path: str, base: str) -> str:
         return os.path.normcase(os.path.normpath(joined))
 
 
+# Where one request ends and another begins inside a user's message.
+_CLAUSE_BREAK = re.compile(r"(?:[.;!?](?:\s|$)|,\s|\n|\s(?:and|then|also)\s)", re.I)
+
+
+def _named_together(query: str, name: str, folder: str) -> bool:
+    """True when one clause of *query* names both *name* and *folder*.
+
+    A refused download with no file name says nothing about which requested
+    file it was for; the request says so only when it puts the two together.
+    """
+    leaf = os.path.basename(folder.rstrip("/\\"))
+    if not leaf:
+        return False
+    for clause in _CLAUSE_BREAK.split(query):
+        lowered = clause.lower()
+        if os.path.basename(name).lower() in lowered and leaf.lower() in lowered:
+            return True
+    return False
+
+
 class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
@@ -502,6 +522,7 @@ class CompletionEvidence:
         self.refused: dict[str, str] = {}
         # Refused folders whose file was never named (a download's save_to).
         self.refused_folders: set[str] = set()
+        self.query = query if isinstance(query, str) else ""
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
@@ -1012,8 +1033,12 @@ class CompletionEvidence:
                         path in bare
                         and (
                             os.path.basename(key) == os.path.basename(path)
-                            # The file meant for a refused folder, named bare.
-                            or key in self.refused_folders
+                            # The file meant for a refused folder, named bare
+                            # beside it in the request.
+                            or (
+                                key in self.refused_folders
+                                and _named_together(self.query, path, key)
+                            )
                         )
                     )
                 ):
