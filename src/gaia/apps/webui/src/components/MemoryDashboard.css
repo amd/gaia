@@ -1833,11 +1833,12 @@ textarea.mem-input { resize: vertical; }
 }
 .mem-about-add {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 20px;
 }
 .mem-about-add .mem-input {
-    flex: 1;
+    flex: 1 1 360px;
     min-width: 0;
 }
 .mem-about-add .mem-about-when {
