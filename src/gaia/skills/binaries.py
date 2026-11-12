@@ -272,6 +272,8 @@ class Subcommand:
     denied_operand_prefixes: Mapping[str, str] = field(default_factory=dict)
     delegate_flag: str = ""
     script_args: bool = False
+    #: The first operand is an API path on the CLI's own host, never a URL.
+    relative_endpoint: bool = False
 
     def __post_init__(self) -> None:
         offered = (self.actions | self.confirm_actions) & set(
@@ -438,6 +440,13 @@ class BinaryPolicy:
     single_dash_long: bool = False
     abbreviated_options: bool = False
     exact_options: frozenset[str] = frozenset()
+    #: pflag reads ``-ab`` as ``-a -b`` when ``-a`` takes no value, and which
+    #: flags take one differs per subcommand. Refuse every single-dash token
+    #: longer than a flag, so no table of value flags has to be right.
+    refuse_bundled_short_flags: bool = False
+    #: Every request goes to github.com: no URL operand, and ``--repo`` is
+    #: ``OWNER/REPO`` only (gh reads ``HOST/OWNER/REPO`` as another server).
+    github_only: bool = False
     confirm_summary: str = "writes"
     refuse_note: str = (
         "Anything that installs, opens a shell, or prints a credential is "
@@ -519,7 +528,14 @@ _GH_API = Subcommand(
     # POST-by-default and can mutate through a query document.
     denied_actions=frozenset({"graphql"}),
     # Any field flag implies a request body, and a body implies a write.
-    denied_flags=frozenset({"-f", "--field", "-F", "--raw-field", "--input"}),
+    # --hostname points the call, and whatever it carries, at another server.
+    denied_flags=frozenset(
+        {"-f", "--field", "-F", "--raw-field", "--input", "--hostname"}
+    ),
+    denied_flag_reasons={
+        "--hostname": "it sends the request to a server other than GitHub",
+    },
+    relative_endpoint=True,
     flag_values={"-X": frozenset({"get"}), "--method": frozenset({"get"})},
     value_flags=frozenset(
         {
@@ -649,6 +665,10 @@ _GH_READ_DENIED_FLAGS = frozenset({"-w", "--web", "--watch"})
 
 _GH_AUTH_DENIED_FLAGS = _GH_READ_DENIED_FLAGS | {"-t", "--show-token"}
 
+_GH_AUTH_VALUE_FLAGS = frozenset(
+    {"-h", "--hostname", "--json", "-q", "--jq", "--template"}
+)
+
 _GH_AUTH_DENIED_FLAG_REASONS: Mapping[str, str] = MappingProxyType(
     {
         **_GH_WRITE_DENIED_FLAG_REASONS,
@@ -685,6 +705,7 @@ def _gh(
     *,
     denied_flags: frozenset[str] = _GH_READ_DENIED_FLAGS,
     denied_flag_reasons: Mapping[str, str] = _GH_WRITE_DENIED_FLAG_REASONS,
+    value_flags: frozenset[str] = _GH_COMMON_VALUE_FLAGS,
     never_offered: Mapping[str, str] | None = None,
 ) -> Subcommand:
     """One gh subcommand: reads that run unasked, plus writes the user approves.
@@ -705,7 +726,7 @@ def _gh(
     if not confirm_actions:
         return Subcommand(
             actions=frozenset(actions),
-            value_flags=_GH_COMMON_VALUE_FLAGS,
+            value_flags=value_flags,
             allowed_flags=_GH_READ_ALLOWED_FLAGS,
             denied_flags=denied_flags,
             denied_flag_reasons=denied_flag_reasons,
@@ -1386,8 +1407,58 @@ def _formatter(
 
 
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
+    # GAIA's own CLI, for the automations skill only: its automations and the
+    # Discord bridge's GitHub watches. Nothing else of `gaia` is reachable from
+    # a skill — no setup, no config, no connectors.
+    "gaia": BinaryPolicy(
+        binary="gaia",
+        confirm_summary="changes what GAIA does on its own and reports to you",
+        summary=(
+            "GAIA's own CLI — lists and changes its reminders, alerts, triggers "
+            "and summaries, and the Discord bridge's GitHub watches; every "
+            "change asks first."
+        ),
+        install_hint=(
+            "The `gaia` command ships with GAIA. Reinstall GAIA from "
+            "https://amd-gaia.ai/docs/guides/install to restore it."
+        ),
+        subcommands={
+            "automation": Subcommand(
+                actions=frozenset({"list", "ci-status"}),
+                confirm_actions=frozenset(
+                    {"add", "edit", "pause", "resume", "run", "remove"}
+                ),
+                value_flags=frozenset(
+                    {
+                        "--name",
+                        "--prompt",
+                        "--say",
+                        "--at",
+                        "--every",
+                        "--check",
+                        "--quiet",
+                        "--days",
+                        "--rename",
+                        "--repo",
+                        "--branch",
+                    }
+                ),
+                allowed_flags=frozenset({"--alert", "--all", "--plain"}),
+                strict_flags=True,
+            ),
+            "discord": Subcommand(
+                actions=frozenset({"watches", "always-allowed"}),
+                confirm_actions=frozenset({"watch", "unwatch"}),
+                value_flags=frozenset({"--repo", "--mine"}),
+                allowed_flags=frozenset(),
+                strict_flags=True,
+            ),
+        },
+    ),
     "gh": BinaryPolicy(
         binary="gh",
+        refuse_bundled_short_flags=True,
+        github_only=True,
         confirm_summary="writes to GitHub",
         # Issue numbers and repo slugs, not paths — nothing for the shell
         # tool's path scan to check.
@@ -1436,6 +1507,9 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 {"status"},
                 denied_flags=_GH_AUTH_DENIED_FLAGS,
                 denied_flag_reasons=_GH_AUTH_DENIED_FLAG_REASONS,
+                # `-a` is --active here, not --assignee: read as taking a value,
+                # `-at` hides --show-token behind it.
+                value_flags=_GH_AUTH_VALUE_FLAGS,
             ),
             "api": _GH_API,
         },
@@ -2412,6 +2486,31 @@ def policy_argv(argv: Sequence[str]) -> list[str]:
     return list(argv)
 
 
+_OWNER_REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def _names_another_server(text: str) -> bool:
+    """A URL or ``//host``: gh sends the request wherever it points."""
+    return "://" in text or text.startswith("//")
+
+
+#: ``HOST/OWNER/REPO`` and ``host:port/...``: gh reads both as another server.
+_HOST_SHAPED = re.compile(r"[^/\s]*[.:][^/\s]*/[^/\s]+/\S+|[\w.-]+:\d+(?:/\S*)?")
+
+
+def _positional_names_another_server(text: str) -> bool:
+    """A bare operand that sends the request elsewhere (``gh repo view h/o/r``)."""
+    return _names_another_server(text) or bool(_HOST_SHAPED.fullmatch(text))
+
+
+def _off_github(policy: "BinaryPolicy", subcommand: str, what: str) -> str:
+    return (
+        f"'{policy.binary} {subcommand} {what}' is not allowed: it can send the "
+        "request to a server other than github.com. Name the repository as "
+        "OWNER/REPO and the item by number."
+    )
+
+
 def _split_flag(
     token: str, *, single_dash_long: bool = False
 ) -> tuple[str, str | None]:
@@ -2730,6 +2829,13 @@ def classify_invocation(
         token = rest[cursor]
         cursor += 1
         if not token.startswith("-") or token == "-":
+            if policy.github_only and (
+                _positional_names_another_server(token)
+                # gh reads the first part of any x/y/z as a host (localhost/o/r);
+                # only `gh api` takes a longer path, and it is always github.com.
+                or (subcommand != "api" and token.count("/") > 1)
+            ):
+                return _refuse(_off_github(policy, subcommand, token))
             denial = _denied_operand(rule, policy.binary, token)
             if denial is not None:
                 return _refuse(denial)
@@ -2757,6 +2863,16 @@ def classify_invocation(
                 _denied_flag_message(
                     policy, f"{subcommand} ", token, name, denied, reason
                 )
+            )
+        if (
+            policy.refuse_bundled_short_flags
+            and not token.startswith("--")
+            and len(token) > 2
+        ):
+            return _refuse(
+                f"'{policy.binary} {subcommand} {token}' is not allowed: "
+                f"{policy.binary} may read it as several flags. Write each flag "
+                f"on its own and its value after a space, like '-L 5'."
             )
 
         # A flag this rule only ever reviewed as VALUELESS must not arrive
@@ -2823,6 +2939,12 @@ def classify_invocation(
             value = rest[cursor] if cursor < len(rest) else None
             cursor += 1  # the value is never the action positional
 
+        if takes_value and policy.github_only and value is not None:
+            if _names_another_server(value) or (
+                name in ("-R", "--repo") and not _OWNER_REPO.fullmatch(value)
+            ):
+                return _refuse(_off_github(policy, subcommand, f"{name} {value}"))
+
         if takes_value:
             denial = _denied_operand(rule, policy.binary, value)
             if denial is not None:
@@ -2842,6 +2964,17 @@ def classify_invocation(
                     f"{', '.join(sorted(v.upper() for v in allowed))}. "
                     "Other methods can modify the remote."
                 )
+
+    if (
+        rule.relative_endpoint
+        and action is not None
+        and ("://" in action or action.startswith("//") or ":" in action.split("/")[0])
+    ):
+        return _refuse(
+            f"'{policy.binary} {subcommand} {action}' is not allowed: name an API "
+            f"path such as repos/OWNER/REPO/pulls, not a URL — a URL can send "
+            "the request to another server."
+        )
 
     if action is not None and action.lower().strip("/") in rule.denied_actions:
         return _refuse(

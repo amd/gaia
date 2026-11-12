@@ -56,7 +56,6 @@ def test_split_flag_keeps_an_empty_attached_value(token, kwargs, expected):
     [
         "gh api --jq= --input body.json repos/o/r/issues",
         "gh api --method= -XDELETE repos/o/r",
-        "gh api -X= DELETE repos/o/r",
         "git commit -m= --amend",
         "git commit --message= --no-verify",
         "pytest -k= -p evil",
@@ -75,7 +74,9 @@ def test_an_empty_attached_value_is_refused(command):
         ("gh api --jq .x repos/o/r/issues", ALLOW),
         ("gh api --jq=.x repos/o/r/issues", ALLOW),
         ("gh api --method=GET repos/o/r", ALLOW),
-        ("gh api -XGET repos/o/r", ALLOW),
+        # gh refuses every bundled short flag, attached value or not.
+        ("gh api -XGET repos/o/r", REFUSE),
+        ("gh api -X= DELETE repos/o/r", REFUSE),
         ("git commit -m fix", CONFIRM),
         ("git commit --message=fix", CONFIRM),
         ("pytest -k foo tests/unit", ALLOW),
