@@ -81,13 +81,31 @@ func TestFitLineReportsAnNPUThatIsNotSetUp(t *testing.T) {
 	}
 }
 
-// An unread plan must not read as a confirmed absence: the zero NPU carries
-// no information, so the line says it could not check instead.
-func TestFitLineDoesNotClaimAbsenceWhenThePlanIsUnreadable(t *testing.T) {
+// An unread plan must not drop the memory verdict Lemonade already gave. It
+// keeps the fit decision and says readiness was not checked.
+func TestFitLineKeepsTheMemoryVerdictWhenReadinessIsUnknown(t *testing.T) {
 	size := 9.1
 	chat := gaiainit.Model{ID: "gemma4-it-e4b-FLM", SizeGB: &size}
 	big := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1, NPUMemoryGB: 64}
 	got := fitLine(big, setupapi.NPU{}, false, chat, true)
+	if !strings.Contains(got, "fits:") || !strings.Contains(got, "could not be checked") {
+		t.Fatalf("want a memory verdict with an unreadiness caveat, got %q", got)
+	}
+	for _, claim := range []string{"reports none", "not set up"} {
+		if strings.Contains(got, claim) {
+			t.Fatalf("an unread plan must not claim %q, got %q", claim, got)
+		}
+	}
+}
+
+// With no memory figure either, an unread plan must not read as a confirmed
+// absence: the zero NPU carries no information, so the line says it could not
+// check instead.
+func TestFitLineDoesNotClaimAbsenceWhenThePlanIsUnreadable(t *testing.T) {
+	size := 9.1
+	chat := gaiainit.Model{ID: "gemma4-it-e4b-FLM", SizeGB: &size}
+	none := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1}
+	got := fitLine(none, setupapi.NPU{}, false, chat, true)
 	if !strings.Contains(got, "could not be checked") {
 		t.Fatalf("want could not be checked, got %q", got)
 	}

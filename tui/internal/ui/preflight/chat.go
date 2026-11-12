@@ -175,16 +175,28 @@ func (l localRunner) localFit(ctx context.Context, rep Report, models []gaiainit
 	if err != nil {
 		return later
 	}
-	npu, known := readNPUVerdict(ctx)
 	chat, ok := gaiainit.Status{Models: models}.Chat()
+	var npu setupapi.NPU
+	known := false
+	if isFLMModel(chat.ID) {
+		npu, known = readNPUVerdict(ctx)
+	}
 	return fitLine(capacity, npu, known, chat, ok)
 }
 
+// isFLMModel reports whether the chat model runs on the Ryzen AI NPU. Only
+// these models need the setup plan's NPU verdict.
+func isFLMModel(id string) bool {
+	return strings.HasSuffix(strings.ToLower(id), "-flm")
+}
+
 // readNPUVerdict is the plan's NPU readiness, and whether the plan was read at
-// all. A plan that can't be read is not a claim that the PC has no NPU: the
-// caller must not report absence it did not observe.
+// all. It attaches to a running daemon rather than starting one: a first-run
+// screen must not leave a background process behind just to draw a fit line.
+// A plan that can't be read is not a claim that the PC has no NPU: the caller
+// must not report absence it did not observe.
 var readNPUVerdict = func(ctx context.Context) (setupapi.NPU, bool) {
-	return readNPUVerdictFrom(ctx, newSetupAPI())
+	return readNPUVerdictFrom(ctx, setupapi.NewAttachedDaemon())
 }
 
 func readNPUVerdictFrom(ctx context.Context, api setupapi.API) (setupapi.NPU, bool) {
@@ -205,32 +217,42 @@ const gbPerGiB = 1.073741824
 // distinct: no NPU found says so; one that is there but can't load a model yet
 // keeps the model listed and says why, with the server's reasons; a ready NPU
 // is judged on memory. When the plan could not be read (known false) the line
-// says it could not check, and claims neither absence nor readiness.
+// keeps Lemonade's memory verdict and says readiness was not checked, claiming
+// neither absence nor readiness.
 func fitLine(c lemonade.Capacity, npu setupapi.NPU, known bool, chat gaiainit.Model, knownSize bool) string {
-	if strings.HasSuffix(strings.ToLower(chat.ID), "-flm") {
+	readinessUnknown := false
+	if isFLMModel(chat.ID) {
 		if !known {
-			return chat.ID + " needs a Ryzen AI NPU, and whether this PC's NPU is ready could not be checked."
-		}
-		if !npu.Present {
+			n, ok := c.NPU()
+			if !ok {
+				return chat.ID + " needs a Ryzen AI NPU, and whether this PC's NPU is ready could not be checked."
+			}
+			c = n
+			readinessUnknown = true
+		} else if !npu.Present {
 			return chat.ID + " will not fit: it runs on a Ryzen AI NPU, and Lemonade reports none on this PC."
-		}
-		if !npu.Ready {
+		} else if !npu.Ready {
 			return chat.ID + " is not set up yet: " + npuProblemsLine(npu.Problems) +
 				". It needs this PC's NPU ready before chat can run on it."
+		} else {
+			n, ok := c.NPU()
+			if !ok {
+				// The plan says the NPU is ready; Lemonade's memory report is the
+				// one that can't say how much of it there is.
+				return chat.ID + " needs a Ryzen AI NPU, and Lemonade reports no NPU memory for it."
+			}
+			c = n
 		}
-		n, ok := c.NPU()
-		if !ok {
-			// The plan says the NPU is ready; Lemonade's memory report is the
-			// one that can't say how much of it there is.
-			return chat.ID + " needs a Ryzen AI NPU, and Lemonade reports no NPU memory for it."
-		}
-		c = n
+	}
+	caveat := ""
+	if readinessUnknown {
+		caveat = " Whether the NPU is set up could not be checked."
 	}
 	// Lemonade counts GiB; shown in decimal GB with one decimal, the figure
 	// the setup plan reports (model_choice.to_decimal_gb), so both agree.
 	have := fmt.Sprintf("this PC has %.1f GB for models (%s)", c.MemoryGB*gbPerGiB, c.MemorySource)
 	if !knownSize || chat.SizeGB == nil {
-		return "Setup picks the model that fits; " + have + "."
+		return "Setup picks the model that fits; " + have + "." + caveat
 	}
 	kv := 0.0
 	for _, r := range lemonade.RecommendedFor("local") {
@@ -239,9 +261,9 @@ func fitLine(c lemonade.Capacity, npu setupapi.NPU, known bool, chat gaiainit.Mo
 		}
 	}
 	if fits, why := c.Fit(*chat.SizeGB, kv); !fits {
-		return chat.ID + " will not fit: " + why + "."
+		return chat.ID + " will not fit: " + why + "." + caveat
 	}
-	return chat.ID + " fits: " + have + "."
+	return chat.ID + " fits: " + have + "." + caveat
 }
 
 // npuProblemsLine is the plan's NPU problems as one clause: the first reason's

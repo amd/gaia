@@ -12,6 +12,14 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
+// A cold start has no daemon to attach to, and the probe must not create one
+// just to read a verdict. NewAttachedDaemon is the constructor that says so.
+func TestNewAttachedDaemonNeverStartsOne(t *testing.T) {
+	if !NewAttachedDaemon().attachOnly {
+		t.Fatal("NewAttachedDaemon must attach only")
+	}
+}
+
 func TestDecodeReadsAPlan(t *testing.T) {
 	var p Plan
 	ack, err := decode("/daemon/v1/setup/plan", "read", 200,
