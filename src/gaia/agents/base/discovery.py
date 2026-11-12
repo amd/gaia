@@ -805,6 +805,27 @@ _PLATFORM_SUPPORT: Dict[str, Tuple[str, ...]] = {
 }
 
 
+#: Sources that answer one question on different operating systems.
+_PLATFORM_TWINS: Tuple[Tuple[str, ...], ...] = (
+    ("windows_userassist", "macos_app_usage"),
+)
+
+
+def covered_by_twin(source: str) -> bool:
+    """True when `source` can't run here but its other-OS twin can.
+
+    Nothing is missing then, so callers skip the source without a word instead
+    of telling a Windows user that a macOS scanner does not exist.
+    """
+    if unsupported_reason(source) is None:
+        return False
+    return any(
+        source in twins
+        and any(unsupported_reason(t) is None for t in twins if t != source)
+        for twins in _PLATFORM_TWINS
+    )
+
+
 def _platform_key() -> str:
     """Return the running platform as a ``_PLATFORM_SUPPORT`` key.
 

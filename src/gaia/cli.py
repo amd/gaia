@@ -8576,8 +8576,10 @@ def _collect_signal(source_key: str, scanner):
     Returns:
         The scanner's fact dicts, or [] after printing why there are none.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return []
     reason = unsupported_reason(source_key)
     if reason:
         print(f"\n  Skipped: {reason}")

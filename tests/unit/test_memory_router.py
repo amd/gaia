@@ -1876,8 +1876,8 @@ class TestStreamDiscoveryPlatformReporting:
             return client.get("/api/memory/stream-discovery")
 
     def test_unsupported_source_is_reported_by_name(self, client, tmp_path):
-        """On darwin, windows_userassist streams an explicit unsupported log."""
-        resp = self._stream(client, tmp_path, "darwin")
+        """On linux, where nothing reads app usage, the source says so by name."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         assert resp.status_code == 200
@@ -1887,11 +1887,35 @@ class TestStreamDiscoveryPlatformReporting:
             if "windows_userassist" in line and "no scanner" in line
         ]
         assert skipped, (
-            "windows_userassist must be reported as unsupported on darwin, "
+            "windows_userassist must be reported as unsupported on linux, "
             f"not silently empty. Body was:\n{body}"
         )
         assert '"type": "log"' in skipped[0]
-        assert "darwin" in skipped[0]
+        assert "linux" in skipped[0]
+        assert '"type": "done"' in body
+
+    @pytest.mark.parametrize(
+        "platform,other_os_source,label",
+        [
+            ("win32", "macos_app_usage", "App usage frequency (macOS)"),
+            ("darwin", "windows_userassist", "App usage frequency (Windows)"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, other_os_source, label
+    ):
+        """Windows reads app usage itself; a macOS line there is only noise."""
+        own = {
+            "win32": "scan_windows_userassist",
+            "darwin": "scan_macos_app_usage",
+        }[platform]
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}", return_value=[]
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert other_os_source not in body
+        assert label not in body
         assert '"type": "done"' in body
 
     def test_supported_source_is_not_reported_as_unsupported(self, client, tmp_path):
@@ -1913,11 +1937,11 @@ class TestStreamDiscoveryPlatformReporting:
         assert "App usage frequency (macOS)" in body
         assert '"type": "done"' in body
 
-    def test_macos_app_usage_is_reported_as_unsupported_on_windows(
+    def test_macos_app_usage_is_reported_as_unsupported_on_linux(
         self, client, tmp_path
     ):
-        """The mirror case: the macOS-only source is named when off darwin."""
-        resp = self._stream(client, tmp_path, "win32")
+        """The mirror case: the macOS-only source is named where no twin runs."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         skipped = [
@@ -1925,8 +1949,8 @@ class TestStreamDiscoveryPlatformReporting:
             for line in body.splitlines()
             if "macos_app_usage" in line and "no scanner" in line
         ]
-        assert skipped, f"macos_app_usage must be named on win32. Body:\n{body}"
-        assert "win32" in skipped[0]
+        assert skipped, f"macos_app_usage must be named on linux. Body:\n{body}"
+        assert "linux" in skipped[0]
 
 
 class TestStreamInferencePlatformReporting:
@@ -1959,9 +1983,8 @@ class TestStreamInferencePlatformReporting:
     @pytest.mark.parametrize(
         "platform,source",
         [
-            ("darwin", "windows_userassist"),
             ("linux", "windows_userassist"),
-            ("win32", "macos_app_usage"),
+            ("linux", "macos_app_usage"),
         ],
     )
     def test_unsupported_source_is_reported_by_name(
@@ -1998,6 +2021,27 @@ class TestStreamInferencePlatformReporting:
         ]
         assert not skipped, f"macos_app_usage must run on darwin. Body:\n{body}"
 
+    @pytest.mark.parametrize(
+        "platform,own,other_os_source",
+        [
+            ("win32", "scan_windows_userassist", "macos_app_usage"),
+            ("darwin", "scan_macos_app_usage", "windows_userassist"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, own, other_os_source
+    ):
+        """The Windows log must not print a macOS scanner line, nor the reverse."""
+        ran = []
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}",
+            side_effect=lambda: ran.append(own) or [],
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert ran == [own]
+        assert other_os_source not in body
+
     def test_scanner_failure_is_reported_with_a_correlation_id(self, client, tmp_path):
         """A crashing scanner was swallowed whole by `except Exception: pass`."""
         boom = patch(
@@ -2026,12 +2070,22 @@ class TestCollectSignalGate:
         def _must_not_run():
             raise AssertionError("scanner ran on a platform with no branch")
 
-        with patch("sys.platform", "darwin"):
+        with patch("sys.platform", "linux"):
             result = _collect_signal("windows_userassist", _must_not_run)
 
         assert result == []
         out = capsys.readouterr().out
-        assert "windows_userassist" in out and "darwin" in out
+        assert "windows_userassist" in out and "linux" in out
+
+    def test_another_os_twin_is_skipped_without_a_line(self, capsys):
+        from gaia.cli import _collect_signal
+
+        def _must_not_run():
+            raise AssertionError("scanner ran on a platform with no branch")
+
+        with patch("sys.platform", "win32"):
+            assert _collect_signal("macos_app_usage", _must_not_run) == []
+        assert capsys.readouterr().out == ""
 
     def test_supported_source_runs(self):
         from gaia.cli import _collect_signal
