@@ -123,7 +123,7 @@
 
 /* The setting a Setup row pointed at, marked for a moment after landing. */
 .settings-target-hit {
-    scroll-margin-top: 64px;
+    scroll-margin-top: 76px;
     outline: 2px solid var(--accent);
     outline-offset: 4px;
 }
