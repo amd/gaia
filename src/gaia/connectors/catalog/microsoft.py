@@ -198,15 +198,13 @@ MICROSOFT_WORK_SPEC = ConnectorSpec(
             kind="text",
             required=False,
             help_md=(
-                "Optional. Leave blank to use the multi-tenant 'organizations' "
-                "authority (any work/school account). Set this to your Azure "
-                "AD / Entra ID Directory (tenant) ID GUID if your app "
-                "registration is single-tenant — required for the daemon to "
-                "refresh correctly with no environment variables set "
-                "(#2616). The Overview page shows three GUIDs; copy the one "
+                "Optional. Leave blank to sign in with any work or school "
+                "account. If your organization's app is limited to a single "
+                "organization, enter its Directory (tenant) ID. In the Azure "
+                "portal, open your app's Overview page and copy the value "
                 "labeled 'Directory (tenant) ID', not 'Application (client) "
-                "ID' or 'Object ID'. Unvalidated here — an incorrect value "
-                "fails loudly at Microsoft's sign-in page, not silently."
+                "ID' or 'Object ID'. A wrong ID shows an error on Microsoft's "
+                "sign-in page."
             ),
         ),
     ),

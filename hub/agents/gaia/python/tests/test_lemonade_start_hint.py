@@ -62,6 +62,53 @@ def _init_body(monkeypatch):
     return response.json()
 
 
+def _missing_model_hint(monkeypatch, pull):
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.describe_client_hint", lambda *a, **k: pull
+    )
+    monkeypatch.setattr(
+        server_mod,
+        "_probe_lemonade",
+        lambda: {
+            "base_url": "http://127.0.0.1:13305/api/v1",
+            "reachable": True,
+            "version": server_mod.LEMONADE_MIN_VERSION,
+            "present": False,
+            "ctx_size": None,
+            "model_id": "Gemma-4-E4B-it-GGUF",
+        },
+    )
+    client = TestClient(server_mod.build_app(), base_url="http://127.0.0.1:8141")
+    caller_auth.reset()
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    try:
+        return client.get("/v1/gaia/init").json()["hint"]
+    finally:
+        caller_auth.reset()
+
+
+def test_a_missing_model_is_said_once_when_no_client_was_found(monkeypatch):
+    no_client = (
+        "Gemma-4-E4B-it-GGUF is not downloaded, and no Lemonade client CLI was "
+        "found to do it — see https://lemonade-server.ai."
+    )
+    hint = _missing_model_hint(monkeypatch, StartHint(instruction=no_client))
+
+    assert hint == no_client
+    assert hint.count("is not downloaded") == 1
+
+
+def test_a_missing_model_names_the_pull_command_when_there_is_one(monkeypatch):
+    pull = StartHint(instruction=_PULL_INSTRUCTION, command="lemonade pull")
+    hint = _missing_model_hint(monkeypatch, pull)
+
+    assert hint == (
+        f"The model Gemma-4-E4B-it-GGUF is not downloaded. {_PULL_INSTRUCTION}, "
+        "then re-check."
+    )
+
+
 def test_init_hint_names_the_host_start_instruction(monkeypatch, start_hint):
     hint = _init_body(monkeypatch)["hint"]
 
