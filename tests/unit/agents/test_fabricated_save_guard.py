@@ -186,6 +186,34 @@ SAVE_CLAIMS = [
         "I did not create any files besides `out/a.md`.",
         id="did-not-create-besides",
     ),
+    # The exception and the denied write share a clause.
+    pytest.param(
+        "I wrote nothing except `out/a.md` and nothing else.",
+        id="except-path-and-nothing-else",
+    ),
+    pytest.param(
+        "I saved nothing except `out/a.md` and `out/b.md`.", id="except-two-paths"
+    ),
+    pytest.param(
+        "I wrote nothing - except `out/a.md`; everything else stayed in chat.",
+        id="dash-except-then-semicolon",
+    ),
+    pytest.param(
+        "Other than out/a.md, I didn't write anything.",
+        id="fronted-exception-didnt-write",
+    ),
+    pytest.param(
+        "I read report.pdf, and I saved nothing except `out/summary.md`.",
+        id="read-clause-then-excepted-save",
+    ),
+    pytest.param(
+        "I didn't create any file except out/a.md, and I read report.pdf.",
+        id="excepted-save-then-read-clause",
+    ),
+    pytest.param(
+        "No file was written except out/a.md; that was all.",
+        id="except-path-semicolon-that",
+    ),
     # A file in the verb's own clause beats a remembered-value reading.
     pytest.param(
         "Here's the `summary` I saved to `out/summary.md`.",
@@ -354,6 +382,71 @@ NON_CLAIMS = [
         "I didn't write any file except to read report.pdf.",
         id="didnt-write-except-to-read",
     ),
+    # The exception belongs to another verb or another clause than the denial.
+    pytest.param(
+        "I wrote no file; other than report.pdf, I checked nothing.",
+        id="denial-semicolon-fronted-check",
+    ),
+    pytest.param(
+        "Apart from report.pdf, nothing was read and no file was written.",
+        id="fronted-exception-read-and-written",
+    ),
+    pytest.param(
+        'Except for "report.pdf", I opened nothing, and no file was saved.',
+        id="fronted-exception-opened-comma-and",
+    ),
+    pytest.param(
+        "Except report.pdf, nothing needed changes, so I saved no file.",
+        id="fronted-exception-comma-so",
+    ),
+    pytest.param(
+        "Besides report.pdf, there was nothing to read, and no file was written.",
+        id="fronted-exception-there-was",
+    ),
+    pytest.param(
+        "Other than notes.md, I only read files; no file was written.",
+        id="fronted-exception-read-semicolon",
+    ),
+    pytest.param(
+        "I saved nothing; I read every file except report.pdf.",
+        id="denial-semicolon-read-except",
+    ),
+    pytest.param(
+        "I didn't save anything — I read every file except `out/a.md`.",
+        id="denial-dash-read-except",
+    ),
+    pytest.param(
+        "I saved nothing and I ignored everything except notes.md.",
+        id="denial-and-new-subject-except",
+    ),
+    pytest.param(
+        "I wrote no files; all checks passed except lint.py.",
+        id="denial-semicolon-checks-except",
+    ),
+    pytest.param(
+        "Other than report.pdf, I wrote no file and read nothing else.",
+        id="fronted-exception-coordinated-read",
+    ),
+    pytest.param(
+        "Aside from report.pdf, I wrote no file and nothing else.",
+        id="fronted-exception-coordinated-object",
+    ),
+    pytest.param(
+        "I wrote no file, other than report.pdf, I checked nothing.",
+        id="comma-splice-fronted-check",
+    ),
+    pytest.param(
+        "I saved nothing except report.pdf — which I only read.",
+        id="except-path-dash-which",
+    ),
+    pytest.param(
+        "No files were saved — besides report.pdf, which I only read.",
+        id="dash-besides-path-which",
+    ),
+    pytest.param(
+        "Nothing was written, and I read everything other than out/a.md.",
+        id="denial-comma-and-read-other-than",
+    ),
     # rc18 round 2: a remembered value described as stored, beside a file.
     pytest.param(
         "(For what it's worth, that's a different thing from the `granite-1812` "
@@ -412,6 +505,20 @@ def test_a_long_unbroken_token_does_not_stall_the_process():
 
     # 8x the input: linear scanning grows ~8x, the old quadratic scan ~64x.
     # Compared to the same machine's small run, so a busy runner can't fail it.
+    assert large_s < 24 * max(
+        small_s, 1e-4
+    ), f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"
+    assert large_s < 1.0, f"scan took {large_s:.2f}s"
+
+
+def test_a_long_space_run_in_a_denial_does_not_stall_the_process():
+    """Splitting a denial into clauses must not rescan a run of spaces."""
+    small = "I saved nothing except " + " " * 4000 + "out/a.md"
+    large = "I saved nothing except " + " " * 32000 + "out/a.md"
+
+    small_s = _fastest_scan(small)
+    large_s = _fastest_scan(large)
+
     assert large_s < 24 * max(
         small_s, 1e-4
     ), f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"

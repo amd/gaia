@@ -9,6 +9,7 @@ from __future__ import annotations
 # Standard library imports
 import abc
 import ast
+import bisect
 import contextlib
 import contextvars
 import datetime
@@ -2153,7 +2154,7 @@ _EXCEPTED_OBJECT_PATTERN = re.compile(
     rf"|{_EXCEPTION_WORD}\s+(?:to|in|into|as|at|under)\s+"
     r")?"
     r"(?P<path>`[^`\n]+`|\S+?)"
-    r"\s*(?:[,;!?)—–]|[.:](?:\s|$)|\s-\s|$)"
+    r"\s*(?:[,;!?)—–]|[.:](?:\s|$)|\s-\s|(?=\s+(?:and|or)\b)|$)"
     r"(?!\s*(?:which|who|that|whose|where)\b)",
     re.IGNORECASE,
 )
@@ -2165,6 +2166,35 @@ _NEGATED_WRITE_PATTERN = re.compile(
 )
 # "I wrote no file", "I saved nothing": so does its object.
 _NEGATED_OBJECT_PATTERN = re.compile(rf"\s+{_NEGATED_OUTPUT}\b", re.IGNORECASE)
+# Clause edges inside a sentence: "; : — -", ", and/so", "and/but" + a subject.
+# It starts only where a space run starts, or a run of spaces scans quadratically.
+_CLAUSE_BOUNDARY_PATTERN = re.compile(
+    r"(?<!\s)(?:"
+    r"\s*(?:;|:(?=\s)|(?:[—–]|\s-\s)(?!\s*(?:which|who|that|whose|where)\b))\s*"
+    r"|,?\s+(?:and|so|but|yet|then)\s+"
+    r"(?=(?:I|we|you|he|she|they|it|there|all|every\w*)\b)"
+    r"|,\s*(?:and|so|yet|then)\s+"
+    r")",
+    re.IGNORECASE,
+)
+# Between "Other than r.md," and its write verb: only the verb's subject.
+_FRONTED_GAP_PATTERN = re.compile(
+    rf"\s*(?:(?:I|we)\s+|{_NEGATED_OUTPUT}(?:\s+else)?\s+)?", re.IGNORECASE
+)
+# "..., other than r.md, I checked nothing": a new subject fronts its clause.
+_SUBJECT_START_PATTERN = re.compile(
+    r"\s*(?:I|we|you|he|she|they|it|there)\b", re.IGNORECASE
+)
+_NON_SPACE_PATTERN = re.compile(r"\S")
+# Writes that can share one verb: each claim pattern and the negated one.
+_NEAREST_WRITES = len(_FILE_WRITE_CLAIM_PATTERNS) + 1
+_COORDINATION_PATTERN = re.compile(r"\s(?:and|or|but)\s", re.IGNORECASE)
+# Between a write verb and its "except r.md": only the negated object.
+_TRAILING_GAP_PATTERN = re.compile(
+    r"(?:[\s,—–-]|\b(?:nothing|anything|none|no|any|other|else|more|single"
+    r"|files?|outputs?|to|on|disk)\b)*",
+    re.IGNORECASE,
+)
 
 
 # "... stored as your bookshelf slot", "saved to memory": what was kept is a
@@ -2217,13 +2247,72 @@ def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool
     return not (re.search(r"[\\/~]", token) or _names_a_file(token))
 
 
-def _names_an_excepted_save(sentence: str) -> bool:
-    """A denial's exception whose own object is a file: "no file except r.md"."""
-    for match in _EXCEPTION_PHRASE_PATTERN.finditer(sentence):
-        excepted = _EXCEPTED_OBJECT_PATTERN.match(sentence, match.end())
-        if excepted and _names_a_path(excepted.group("path")):
-            return True
-    return False
+def _clause_spans(sentence: str) -> "list[tuple[int, int]]":
+    """Each clause's (start, end); a bare "- except r.md" joins the one before."""
+    spans, start = [], 0
+    for boundary in _CLAUSE_BOUNDARY_PATTERN.finditer(sentence):
+        spans.append((start, boundary.start()))
+        start = boundary.end()
+    spans.append((start, len(sentence)))
+    merged = [spans[0]]
+    for start, end in spans[1:]:
+        lead = _EXCEPTION_PHRASE_PATTERN.match(sentence, start, end)
+        tail = lead and _EXCEPTED_OBJECT_PATTERN.match(sentence, lead.end(), end)
+        if tail and tail.end() == end:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _excepted_writes(sentence: str, writes: "list[re.Match[str]]") -> "set[int]":
+    """Starts of the write verbs that a file exception in their clause governs.
+
+    "Other than r.md, I wrote no file" and "I saved nothing except r.md" claim
+    r.md; "Other than r.md, I read nothing and no file was written" does not.
+    """
+    governed: "set[int]" = set()
+    if not writes:
+        return governed
+    writes = sorted(writes, key=lambda write: write.start())
+    starts = [write.start() for write in writes]
+    coordinations = [m.start() for m in _COORDINATION_PATTERN.finditer(sentence)]
+    for start, end in _clause_spans(sentence):
+        for phrase in _EXCEPTION_PHRASE_PATTERN.finditer(sentence, start, end):
+            excepted = _EXCEPTED_OBJECT_PATTERN.match(sentence, phrase.end(), end)
+            if not excepted or not _names_a_path(excepted.group("path")):
+                continue
+            # Ahead of its clause, it governs that clause's lone verb ("and
+            # read nothing" leaves it unclear); at the end, the verb whose
+            # negated object it qualifies. Only the nearest verbs can qualify:
+            # a farther one has the nearer verb inside its gap.
+            rest = _NON_SPACE_PATTERN.search(sentence, excepted.end(), end)
+            fronted = rest is not None and bool(
+                _NON_SPACE_PATTERN.search(sentence, start, phrase.start()) is None
+                or _SUBJECT_START_PATTERN.match(sentence, rest.start(), end)
+            )
+            if fronted:
+                first = bisect.bisect_left(starts, excepted.end())
+                for write in writes[first : first + _NEAREST_WRITES]:
+                    later = bisect.bisect_left(coordinations, write.end())
+                    if (
+                        write.start() < end
+                        and _FRONTED_GAP_PATTERN.fullmatch(
+                            sentence, excepted.end(), write.start()
+                        )
+                        and not (
+                            later < len(coordinations) and coordinations[later] < end
+                        )
+                    ):
+                        governed.add(write.start())
+            else:
+                last = bisect.bisect_left(starts, phrase.start())
+                for write in writes[max(0, last - _NEAREST_WRITES) : last]:
+                    if write.start() >= start and _TRAILING_GAP_PATTERN.fullmatch(
+                        sentence, write.end(), phrase.start()
+                    ):
+                        governed.add(write.start())
+    return governed
 
 
 def _is_write_claim(sentence: str, denials: bool) -> bool:
@@ -2232,23 +2321,28 @@ def _is_write_claim(sentence: str, denials: bool) -> bool:
     *denials* (a turn that asked for a save) reads every write verb as a
     claim, a remembered value included: the save is owed either way.
     """
-    excepted = _names_an_excepted_save(sentence)
-    if excepted and _NEGATED_WRITE_PATTERN.search(sentence):
+    writes = [
+        match
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+        for match in pattern.finditer(sentence)
+    ]
+    negated_writes = list(_NEGATED_WRITE_PATTERN.finditer(sentence))
+    excepted = _excepted_writes(sentence, writes + negated_writes)
+    if any(match.start() in excepted for match in negated_writes):
         return True
     return any(
         denials
         or (
             not _describes_a_remembered_value(sentence, match)
             and (
-                excepted
+                match.start() in excepted
                 or not (
                     _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
                     or _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
                 )
             )
         )
-        for pattern in _FILE_WRITE_CLAIM_PATTERNS
-        for match in pattern.finditer(sentence)
+        for match in writes
     )
 
 
