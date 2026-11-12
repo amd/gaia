@@ -31,8 +31,7 @@ from gaia.ui.server import create_app
 from tests.fixtures.fake_lemonade import FakeLemonade
 
 EMBEDDER = "user.embeddinggemma-300m-GGUF"
-#: 300 is the size rc18 failed at. GAIA_SCALE_FILES lowers it for a lane that
-#: cannot afford the reloads #7288 still costs per file.
+#: 300 is the size rc18 failed at. GAIA_SCALE_FILES changes it for a local run.
 FILES = int(os.environ.get("GAIA_SCALE_FILES") or 300)
 MEMORIES = 500
 #: Seconds the index may take against a server that answers at once.
@@ -91,7 +90,6 @@ def test_a_large_folder_is_indexed_whole_with_one_row_each(indexed):
     assert not [path for path, count in paths.items() if count > 1]
 
 
-@pytest.mark.xfail(reason="amd/gaia#7288, fixed by open PR amd/gaia#7310", strict=True)
 def test_a_large_folder_loads_the_embedder_once_and_is_quick(indexed):
     loads, unloads = indexed["loads"], indexed["unloads"]
 
