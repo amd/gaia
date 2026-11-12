@@ -106,6 +106,23 @@ SAVE_CLAIMS = [
         "No file was harmed; I saved the output to out.csv.",
         id="negated-subject-elsewhere-then-a-save",
     ),
+    # A denial with an exception still claims the exception was saved.
+    pytest.param(
+        "I created no other files besides `notes.md`.",
+        id="no-other-files-besides",
+    ),
+    pytest.param(
+        "I saved nothing but the report to `r.md`.", id="nothing-but-the-report"
+    ),
+    pytest.param("I wrote no files except `summary.md`.", id="no-files-except"),
+    pytest.param(
+        "No other file was written apart from `out/report.md`.",
+        id="negated-subject-apart-from",
+    ),
+    pytest.param(
+        "No files were saved other than results.csv.",
+        id="negated-subject-other-than",
+    ),
 ]
 
 NON_CLAIMS = [
