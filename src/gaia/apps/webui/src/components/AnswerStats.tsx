@@ -23,12 +23,13 @@ export function spokenDuration(ms: number, say: Say = tEn.bare, mark: Mark = pla
 }
 
 /** How a turn that never finished its answer ended. */
-export type TurnEnding = 'stopped' | 'interrupted';
+export type TurnEnding = 'stopped' | 'interrupted' | 'failed';
 
 const LEAD: Record<TurnEnding | 'answered', readonly [MessageKey, MessageKey]> = {
     answered: ['answer.answeredIn', 'answer.answeredInPlace'],
     stopped: ['answer.stoppedAfter', 'answer.stoppedAfterPlace'],
     interrupted: ['answer.interruptedAfter', 'answer.interruptedAfterPlace'],
+    failed: ['answer.failedAfter', 'answer.failedAfterPlace'],
 };
 
 const CHIPS: Record<string, MessageKey> = { GPU: 'device.gpu', NPU: 'device.npu', CPU: 'device.cpu' };

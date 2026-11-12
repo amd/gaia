@@ -329,6 +329,8 @@ export const enMessages = {
     'answer.stoppedAfterPlace': 'Stopped after {time} {place}',
     'answer.interruptedAfter': 'Interrupted after {time}',
     'answer.interruptedAfterPlace': 'Interrupted after {time} {place}',
+    'answer.failedAfter': 'Failed after {time}',
+    'answer.failedAfterPlace': 'Failed after {time} {place}',
     'answer.answeredPlace': 'Answered {place}',
     'answer.ranPlace': 'Ran {place}',
     'answer.firstWord': 'first word in {time}',
