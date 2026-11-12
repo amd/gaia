@@ -289,6 +289,66 @@ class TestKnowledgeCRUD:
         assert set(resp.json()["knowledge_ids"]) == {hidden, visible}
         assert test_store._conn.execute("SELECT 1 FROM knowledge").fetchall() == []
 
+    def test_delete_of_a_long_wording_takes_the_short_ones(self, client, test_store):
+        """rc18 round 3: Forget on the long mango row left two shorter ones."""
+        long_one = test_store.store(
+            category="preference",
+            content=(
+                "Allergic to mango — mango makes their throat swell, so no "
+                "mango lassi or mango dishes."
+            ),
+            sensitive=True,
+            source="tool",
+        )
+        short = test_store.store(
+            category="fact",
+            content="Allergic to mango (causes throat swelling)",
+            source="llm_extract",
+        )
+        test_store.store(
+            category="fact",
+            content="Allergic to mango (private health info, marked sensitive)",
+            source="llm_extract",
+        )
+        kept = test_store.store(category="fact", content="User likes green tea")
+
+        resp = client.delete(f"/api/memory/knowledge/{long_one}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body["knowledge_ids"]) == {long_one, short}
+        assert body["sensitive"] is True
+        rows = test_store._conn.execute("SELECT id FROM knowledge").fetchall()
+        assert rows == [(kept,)]
+
+    def test_delete_says_when_nothing_sensitive_was_erased(self, client, test_store):
+        kid = test_store.store(category="fact", content="User likes green tea")
+
+        resp = client.delete(f"/api/memory/knowledge/{kid}")
+
+        assert resp.json() == {
+            "status": "deleted",
+            "knowledge_id": kid,
+            "sensitive": False,
+        }
+
+    def test_marking_one_copy_sensitive_marks_the_others(self, client, test_store):
+        first = test_store.store(
+            category="fact", content="My salary is 92,000 euros a year."
+        )
+        second = test_store.store(
+            category="fact",
+            content="User earns 92,000 euros per year",
+            source="llm_extract",
+        )
+        assert first != second
+
+        resp = client.put(f"/api/memory/knowledge/{first}", json={"sensitive": True})
+
+        assert resp.status_code == 200
+        flags = test_store._conn.execute("SELECT sensitive FROM knowledge").fetchall()
+        assert flags == [(1,), (1,)]
+
     def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
         """A copy saved under another context must not keep the fact alive."""
         kid = test_store.store(

@@ -61,8 +61,10 @@ from typing import (
     Dict,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
+    cast,
 )
 from uuid import uuid4
 
@@ -77,6 +79,8 @@ from gaia.agents.base.memory_store import (
     LESSON_SOURCE,
     MAX_CONTENT_LENGTH,
     MAX_EXTRACTION_TURN_LENGTH,
+    TURN_COVERED,
+    TURN_LINKED,
     VALID_CATEGORIES,
     MemoryContentError,
     MemoryScrubError,
@@ -613,6 +617,19 @@ SAVE_FAILED_ON_ARGUMENT = (
 )
 
 
+#: What a model sends for "no" in a yes/no tool argument.
+_NO_WORDS = frozenset({"", "false", "no", "n", "0", "off", "none", "null"})
+
+
+def _means_yes(value: Any) -> bool:
+    """Whether a yes/no tool argument says yes.
+
+    Anything that is not a plain no counts ("yes", "private", True): a
+    ``sensitive`` flag read as no stores the memory in plain sight.
+    """
+    return str(value).strip().lower() not in _NO_WORDS
+
+
 def _own_words(text: str) -> List[str]:
     """The paragraphs where a user gives instructions: the first, and the last
     unless the first introduces what follows ("Translate this letter:")."""
@@ -797,6 +814,8 @@ class _ExtractionJob:
     erase_count: Optional[int] = None
     #: The user's own forget or forget_everything ran in this turn.
     user_forgot: bool = False
+    #: Sensitive rows this turn's remember / update_memory saved or flagged.
+    sensitive_ids: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -2887,6 +2906,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         session.append(" ".join(raw[: wide * 2].split())[:wide])
         del session[:-SESSION_SOURCE_RECORD_MAX_CALLS]
 
+    def _note_if_sensitive(self, knowledge_id: str) -> None:
+        """Record a sensitive row this turn's tools saved or flagged, so the
+        turn's extraction cannot store a plain restatement of it."""
+        item = self._memory_store.get_item(knowledge_id)
+        if item and item.get("sensitive"):
+            noted = getattr(self, "_turn_sensitive_ids", None)
+            if noted is None:
+                noted = self._turn_sensitive_ids = []
+            noted.append(knowledge_id)
+
     def _unrequested_material(self, content: str, prior: str = "") -> bool:
         """Whether saving *content* would keep text the user never gave.
 
@@ -2935,12 +2964,18 @@ class MemoryMixin(ProceduralMemoryMixin):
         context: Optional[str] = None,
         said_at: Optional[str] = None,
         erase_count: Optional[int] = None,
+        sensitive_ids: Sequence[str] = (),
     ) -> _ExtractionCounts:
         """Execute the operations returned by _extract_via_llm().
 
         ADD → store() + embed
         UPDATE → store new + supersede old
         DELETE → delete(): newer information replaced it, the user didn't forget it
+
+        An ADD or UPDATE that restates a sensitive memory the turn's own tools
+        saved or flagged (*sensitive_ids*, plus any flagged since *said_at*) is
+        never stored plain: an ADD that adds nothing is dropped, anything
+        else is stored sensitive, in that memory's fact group when it restates it.
 
         Args:
             operations: Validated ops from ``_extract_via_llm``.
@@ -2959,6 +2994,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = self._memory_store
         target_context = context if context is not None else self._memory_context
         applied = _ExtractionCounts()
+        marked = list(sensitive_ids)
+        if said_at is not None:
+            marked += store.sensitive_since(said_at)
         for op in operations:
             # Per op: an erase can land between two writes of the same job.
             if store.erased_since(erase_count):
@@ -2995,6 +3033,21 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     continue
 
+                kin, how = (None, "")
+                if op_type in ("add", "update"):
+                    kin, how = store.turn_kin(
+                        op.get("content", ""), op.get("entity"), marked
+                    )
+                # An update still runs: its old row must be retired.
+                if how == TURN_COVERED and op_type == "add":
+                    # Id only: the row is sensitive and gaia.log is shared.
+                    logger.info(
+                        "[MemoryMixin] extraction: not stored, it restates "
+                        "sensitive memory %s saved this turn",
+                        kin,
+                    )
+                    continue
+
                 if op_type == "add":
                     new_id = store.store(
                         category=op["category"],
@@ -3005,7 +3058,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         due_at=op.get("due_at") or None,
                         source="llm_extract",
                         context=target_context,
+                        sensitive=bool(how),
                     )
+                    if how == TURN_LINKED:
+                        store.link(cast(str, kin), new_id)
                     applied.stored += 1
                     self._embed_and_index(new_id, op["content"], "extracted memory")
 
@@ -3041,13 +3097,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                         due_at=op.get("due_at") or inherited_due,
                         source="llm_extract",
                         context=target_context,
+                        # A reworded sensitive memory stays sensitive.
+                        sensitive=bool(how) or bool((target or {}).get("sensitive")),
                     )
+                    if how == TURN_LINKED:
+                        store.link(cast(str, kin), new_id)
                     applied.updated += 1
                     # Only supersede when store() actually created a new row.
                     # Dedup can collapse near-identical content back into old_id,
                     # which would point superseded_by at the row itself and hide
                     # it from every active query (recall, get_by_category).
                     if new_id != old_id:
+                        if target and target.get("sensitive"):
+                            store.link(old_id, new_id)
                         store.update(old_id, superseded_by=new_id)
                         self._faiss_remove(old_id)
                     self._embed_and_index(new_id, op["content"], "updated memory")
@@ -4273,6 +4335,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._turn_lessons = []
             self._turn_tool_record = []
             self._turn_forgot = False
+            self._turn_sensitive_ids = []
             self._memory_turn_query = user_input
             self._turn_person_decisions = []
 
@@ -5409,6 +5472,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 or datetime.now().astimezone().isoformat(),
                 erase_count=getattr(self, "_turn_erase_count", None),
                 user_forgot=getattr(self, "_turn_forgot", False),
+                sensitive_ids=tuple(getattr(self, "_turn_sensitive_ids", None) or ()),
             )
         )
 
@@ -5595,6 +5659,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     context=job.context,
                     said_at=job.said_at,
                     erase_count=job.erase_count,
+                    sensitive_ids=job.sensitive_ids,
                 )
                 if operations
                 else _ExtractionCounts()
@@ -5833,7 +5898,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # The agent owns scoping. A label the model picks can file a
             # memory where no later session reads it.
             ctx = mixin._memory_context
-            sens = sensitive.lower() == "true" if sensitive else False
+            sens = _means_yes(sensitive)
 
             was_truncated = len(fact) > MAX_CONTENT_LENGTH
             try:
@@ -5862,6 +5927,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             mixin._embed_and_index(
                 knowledge_id, fact[:MAX_CONTENT_LENGTH], "remembered fact"
             )
+            mixin._note_if_sensitive(knowledge_id)
 
             msg = f"Remembered: {fact[:80]}"
             if was_truncated:
@@ -6143,8 +6209,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                             "status": "error",
                             "message": "Invalid reminded_at. Use ISO 8601 format or 'now'.",
                         }
-            if sensitive:
-                kwargs["sensitive"] = sensitive.lower() == "true"
+            if str(sensitive).strip():
+                kwargs["sensitive"] = _means_yes(sensitive)
             if entity:
                 kwargs["entity"] = entity
 
@@ -6182,6 +6248,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         replace=True,
                     )
                 mixin._refresh_if_shown(knowledge_id)
+                mixin._note_if_sensitive(knowledge_id)
 
                 result = {"status": "updated", "knowledge_id": knowledge_id}
                 if content_truncated:

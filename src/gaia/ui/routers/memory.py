@@ -513,8 +513,13 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    sensitive = bool(item.get("sensitive"))
     if is_about_user(item):
         # Copies of the same fact go too, or the deleted fact is still recalled.
+        sensitive = sensitive or any(
+            (store.get_item(kid) or {}).get("sensitive")
+            for kid in store.copies_of(knowledge_id)
+        )
         deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
     elif store.delete(knowledge_id, allow_privileged=True):
         deleted = [knowledge_id]
@@ -522,7 +527,12 @@ def delete_knowledge(knowledge_id: str) -> Dict:
         deleted = []
     if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    # "sensitive" covers the copies too; the page offers no undo when set.
+    result: Dict[str, Any] = {
+        "status": "deleted",
+        "knowledge_id": knowledge_id,
+        "sensitive": sensitive,
+    }
     if len(deleted) > 1:
         result["knowledge_ids"] = deleted
     return result

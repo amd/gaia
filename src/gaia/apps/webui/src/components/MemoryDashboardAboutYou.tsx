@@ -179,11 +179,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const forget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
         try {
-            await memoryApi.deleteKnowledge(item.id);
+            const result = await memoryApi.deleteKnowledge(item.id);
+            // The server forgets every copy of the fact; drop them all, not just this row.
+            const gone = new Set<string>([item.id, ...(result.knowledge_ids ?? [])]);
+            const shown = (items ?? []).filter(i => gone.has(i.id));
             generation.current++;
-            setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
-            setTotal(prev => Math.max(prev - 1, 0));
-            setForgotten(prev => [item, ...prev]);
+            setItems(prev => (prev ?? []).filter(i => !gone.has(i.id)));
+            setTotal(prev => Math.max(prev - gone.size, 0));
+            const sensitive = item.sensitive || result.sensitive === true || shown.some(i => i.sensitive);
+            setForgotten(prev => [{ ...item, sensitive }, ...prev]);
             onChanged();
         } catch (err) {
             log.system.error('Failed to forget memory', err);
@@ -191,7 +195,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [onChanged, showToast, t]);
+    }, [items, onChanged, showToast, t]);
 
     const undoForget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
@@ -287,9 +291,12 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     <span>
                         {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: item.content })}
                     </span>
-                    <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(item)}>
-                        <Undo2 size={12} /> {t('mem.about.undo')}
-                    </button>
+                    {/* No undo for a sensitive one: it could only come back as a new, plain copy. */}
+                    {!item.sensitive && (
+                        <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(item)}>
+                            <Undo2 size={12} /> {t('mem.about.undo')}
+                        </button>
+                    )}
                 </div>
             ))}
 

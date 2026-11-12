@@ -123,6 +123,50 @@ describe('What GAIA knows about you', () => {
         ));
     });
 
+    it('drops every copy the server forgot, not just the clicked row', async () => {
+        const first = row({ id: 'b1', content: 'Blood type is O negative', sensitive: true });
+        const second = row({ id: 'b2', content: 'Blood type is O negative (O-)', sensitive: true });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [first, second, CALGARY], total: 3, offset: 0, limit: 200 });
+        mockedApi.deleteKnowledge.mockResolvedValue({
+            status: 'deleted', knowledge_id: 'b1', knowledge_ids: ['b1', 'b2'], sensitive: true,
+        });
+        await renderAbout();
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(3);
+
+        fireEvent.click(screen.getAllByRole('button', { name: /^Forget: .*sensitive memory/i })[0]);
+
+        await screen.findByText(/Forgotten: a sensitive memory/);
+        expect(mockedApi.deleteKnowledge).toHaveBeenCalledTimes(1);
+        expect(mockedApi.deleteKnowledge).toHaveBeenCalledWith('b1');
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(1);
+        expect(screen.getByText('Lives in Calgary')).toBeInTheDocument();
+    });
+
+    it('offers no undo after forgetting a sensitive memory', async () => {
+        mockedApi.deleteKnowledge.mockResolvedValue({ status: 'deleted', knowledge_id: 'k5', sensitive: true });
+        await renderAbout();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Forget: .*sensitive memory/i }));
+
+        await screen.findByText(/Forgotten: a sensitive memory/);
+        expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument();
+        expect(mockedApi.createKnowledge).not.toHaveBeenCalled();
+    });
+
+    it('treats a plain row as sensitive when a copy forgotten with it was', async () => {
+        // The clicked row is shown in plain text; the server says a hidden copy went too.
+        mockedApi.deleteKnowledge.mockResolvedValue({
+            status: 'deleted', knowledge_id: 'k2', knowledge_ids: ['k2', 'elsewhere'], sensitive: true,
+        });
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Lives in Calgary')).getByRole('button', { name: /Forget/ }));
+
+        const forgotten = (await screen.findByText(/Forgotten: a sensitive memory/)).closest('[role="status"]')!;
+        expect(forgotten).not.toHaveTextContent('Lives in Calgary');
+        expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument();
+    });
+
     it('keeps a forgotten item gone when an older load lands afterwards', async () => {
         // The first About load answers at once; the second (from the page's
         // own reload) is held until after the forget, then returns the old list.
