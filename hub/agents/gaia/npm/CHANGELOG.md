@@ -184,6 +184,25 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   background index that fails is now reported instead of dropping out of
   sight.
 
+### Fixed
+
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act, and neither is
+  a ban that comes with the work ("fix foo.py but don't touch anything",
+  "don't touch anything, just read config.py") or "plan only" inside a
+  request to do work ("my plan only covers Postgres; extend it").
+
 ## [0.3.5]
 
 Released with GAIA 0.25.4, and requires the `gaia` Python CLI 0.25.4+ on `PATH`
