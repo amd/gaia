@@ -126,8 +126,11 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
     // A deadline, not a tick count: background tabs throttle timers, and the
     // backend denies at its own deadline regardless of how often we ticked.
-    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
-    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    // A prompt replayed after a reload keeps the deadline it was asked with.
+    const deadline = useRef(hasTimeout ? notification.expiresAt ?? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(
+        deadline.current === null ? null : Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000)),
+    );
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
