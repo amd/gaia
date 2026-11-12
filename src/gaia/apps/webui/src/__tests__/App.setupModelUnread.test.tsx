@@ -42,6 +42,7 @@ let modelFailsFirst = 1;
 
 beforeEach(() => {
     modelReads = 0;
+    modelFailsFirst = 1;
     vi.stubGlobal('EventSource', class {
         close() { /* noop */ }
         addEventListener() { /* noop */ }
@@ -102,6 +103,5 @@ describe('a cloud install whose model the window could not read yet', () => {
         await advance(90_000);
         expect(text()).not.toContain('Set up GAIA');
         expect(text()).toMatch(/Could not check whether GAIA is set up/);
-        modelFailsFirst = 1;
     });
 });
