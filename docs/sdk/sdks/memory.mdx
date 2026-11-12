@@ -478,7 +478,7 @@ A session stays eligible until every turn is consolidated. `prune()` holds its o
 
 ### Forgetting
 
-A forgotten memory is not learned again from old conversations (#4730). The `forget` tool and the Memory page's **Forget** call `MemoryStore.forget()`, which deletes the row and records its content and the time in the `forgotten` table, in one transaction. A sensitive row keeps only its word stems there, and is never named in a prompt. The conversation that stated the fact stays in the log, so consolidation could otherwise distil it again. Instead each consolidation window is told what the user forgot after the window began (`get_forgotten(said_before=...)`), so a forget later in the same chat counts and the model skips reworded copies and leaves them out of the session summary. Any item that is the same memory (`is_forgotten`), or summary that repeats one (`mentions_forgotten`), is dropped. Extraction applies the same check from the moment the turn started, so a forget made by that turn's own tools counts.
+A forgotten memory is not learned again from old conversations (#4730). The `forget` tool and the Memory page's **Forget** call `MemoryStore.forget()`, which deletes the row and records its content and the time in the `forgotten` table, in one transaction. A sensitive row, or a copy of one, keeps only its word stems there, and is never named in a prompt. The conversation that stated the fact stays in the log, so consolidation could otherwise distil it again. Instead each consolidation window is told what the user forgot after the window began (`get_forgotten(said_before=...)`), so a forget later in the same chat counts and the model skips reworded copies and leaves them out of the session summary. Any item that is the same memory (`is_forgotten`), or summary that repeats one (`mentions_forgotten`), is dropped. Extraction applies the same check from the moment the turn started, so a forget made by that turn's own tools counts.
 
 Something the user says *after* forgetting it is the user telling GAIA again, and is learned as usual; storing it from a teaching source (`user` from the Memory page, `tool` from `remember`) also clears the forgotten record. A plain `delete()` — used when newer information replaces a memory — records nothing, and neither does deleting one of GAIA's own records (a tool lesson or session summary) from the Memory page: `DELETE /api/memory/knowledge/{id}` forgets only rows `is_about_user()` accepts.
 
@@ -701,13 +701,25 @@ def delete(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
 #### forget()
 
 ```python
-def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool
+def forget(
+    self, knowledge_id: str, *, allow_privileged: bool = False, sensitive: bool = False
+) -> bool
+def copies_of(
+    self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
+) -> List[str]
+def forget_with_copies(
+    self,
+    knowledge_id: str,
+    contexts: Optional[Tuple[str, ...]] = None,
+    *,
+    allow_privileged: bool = False,
+) -> List[str]
 def get_forgotten(self, said_before: Optional[str] = None, limit: int = 50) -> List[str]
 def is_forgotten(self, content: str, said_before: Optional[str] = None) -> bool
 def mentions_forgotten(self, text: str, said_before: Optional[str] = None) -> bool
 ```
 
-`forget()` deletes the entry and records that the user forgot it; see [Forgetting](#forgetting). `get_forgotten()` lists the text of what was forgotten, newest first, for a prompt (sensitive entries are left out). `is_forgotten()` says whether *content* is the same memory as one of them, and `mentions_forgotten()` whether a longer text, such as a session summary, repeats one. With `said_before`, each covers only what was forgotten after that moment.
+`forget()` deletes the entry and records that the user forgot it; see [Forgetting](#forgetting). `sensitive=True` records it as sensitive even when the row isn't flagged. `copies_of()` returns the ids of current rows that store the same fact: the same words bar filler, about the same subject, in a chat-writable category, limited to `contexts` when given. `forget_with_copies()` forgets the entry and those copies and returns every erased id; if any of them is sensitive, all are recorded as sensitive, so an unflagged copy can't leave the fact's words in the `forgotten` table. The `forget` tool and the Memory page's **Forget** go through it. `get_forgotten()` lists the text of what was forgotten, newest first, for a prompt (sensitive entries are left out). `is_forgotten()` says whether *content* is the same memory as one of them, and `mentions_forgotten()` whether a longer text, such as a session summary, repeats one. With `said_before`, each covers only what was forgotten after that moment.
 
 `get_all_knowledge(about_user=True)` (and `GET /api/memory/knowledge?about_user=true`) returns only rows about the user, leaving out tool lessons, session summaries, errors and system facts.
 
@@ -1090,7 +1102,7 @@ These 6 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="forget" icon="trash">
-    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). An id that isn't stored ("allergy:mango") is read as words too. Words erase only the one memory they clearly match: it holds every word that names something, as written or as a kin word: a plural ("allergy" meets "allergies") or a listed adjective ("allergic", "diabetic", "asthmatic"). "historic" doesn't meet "history", and a cut-off word like "allerg" meets nothing. Copies of the same words are one memory saved twice, so all of them go, whether it was forgotten by ID or by words, and the result lists their IDs as `knowledge_ids`. A memory that is only close in meaning is never erased; it comes back as a candidate for the model to confirm and forget by ID. A forget by words also returns the erased text as `erased`. Anything less erases nothing and returns the candidate IDs, spelled out in the message as ready-to-call `forget(knowledge_id=...)` lines with each memory's text (only memories in this session's context that share a word with the description or clear the recall floor, so a miss returns none), and the Agent UI step says nothing was erased rather than quoting the message written for the model.
+    Delete one memory, by its ID from `recall` or by the user's words for it ("allergic to shellfish"). An id that isn't stored ("allergy:mango") is read as words too. Words erase only the one memory they clearly match: it holds every word that names something, as written or as a kin word: a plural ("allergy" meets "allergies") or a listed adjective ("allergic", "diabetic", "asthmatic"). "historic" doesn't meet "history", and a cut-off word like "allerg" meets nothing. Copies of the same words, ignoring filler such as "User is", are one memory saved twice, so all of them go, whether it was forgotten by ID or by words, and the result lists their IDs as `knowledge_ids`. A memory that is only close in meaning is never erased; it comes back as a candidate for the model to confirm and forget by ID. A forget by words also returns the erased text as `erased`. Anything less erases nothing and returns the candidate IDs, spelled out in the message as ready-to-call `forget(knowledge_id=...)` lines with each memory's text (only memories in this session's context that share a word with the description or clear the recall floor, so a miss returns none), and the Agent UI step says nothing was erased rather than quoting the message written for the model.
   </Card>
 
   <Card title="forget_everything" icon="eraser">

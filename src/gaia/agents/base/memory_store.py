@@ -453,6 +453,11 @@ def _dedup_tokens(text: str) -> List[str]:
     return [w for w in words if w not in _DEDUP_FILLER_WORDS]
 
 
+def fact_words(text: str) -> Tuple[str, ...]:
+    """The words two copies of one fact share: ``_dedup_tokens`` of *text*."""
+    return tuple(_dedup_tokens(text))
+
+
 def _merged_duplicate(new: str, existing: str) -> Optional[str]:
     """The content to keep if *new* repeats *existing*, else None.
 
@@ -2278,13 +2283,20 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+    def forget(
+        self,
+        knowledge_id: str,
+        *,
+        allow_privileged: bool = False,
+        sensitive: bool = False,
+    ) -> bool:
         """Delete an entry the user asked to forget, and remember that they did.
 
         Unlike ``delete`` (used when newer information replaces a memory), the
         content is kept in ``forgotten`` in the same transaction, so a pass
         that re-reads conversations from before now can tell not to learn it
-        again (``is_forgotten``). A sensitive entry keeps only its word stems.
+        again (``is_forgotten``). A sensitive entry keeps only its word stems;
+        *sensitive* treats an unflagged entry as one (a copy of a sensitive fact).
 
         Returns False if not found. Same privileged-row rule as ``delete``.
         """
@@ -2299,7 +2311,8 @@ class MemoryStore:
                 ).fetchone()
                 if row is None:
                     return False
-                content, category, sensitive = row
+                content, category, flagged = row
+                sensitive = bool(flagged) or sensitive
                 if sensitive:
                     content = " ".join(sorted(content_stems(content)))
                 self._conn.execute(
@@ -2350,8 +2363,40 @@ class MemoryStore:
                 sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
                 args += tuple(contexts)
             rows = self._conn.execute(sql, args).fetchall()
-        words = _dedup_tokens(content)
-        return [kid for kid, other in rows if words and _dedup_tokens(other) == words]
+        words = fact_words(content)
+        return [kid for kid, other in rows if words and fact_words(other) == words]
+
+    def forget_with_copies(
+        self,
+        knowledge_id: str,
+        contexts: Optional[Tuple[str, ...]] = None,
+        *,
+        allow_privileged: bool = False,
+    ) -> List[str]:
+        """``forget`` *knowledge_id* and its ``copies_of``; the ids erased.
+
+        If any of them is sensitive, all are forgotten as sensitive, so an
+        unflagged copy can't leave the fact's words in ``forgotten``.
+        Returns [] when *knowledge_id* is not found.
+        """
+        copies = self.copies_of(knowledge_id, contexts)
+        group = (knowledge_id, *copies)
+        with self._locked():
+            sensitive = (
+                self._conn.execute(
+                    "SELECT 1 FROM knowledge WHERE sensitive AND id IN "
+                    f"({','.join('?' * len(group))})",
+                    group,
+                ).fetchone()
+                is not None
+            )
+        if not self.forget(
+            knowledge_id, allow_privileged=allow_privileged, sensitive=sensitive
+        ):
+            return []
+        return [knowledge_id] + [
+            kid for kid in copies if self.forget(kid, sensitive=sensitive)
+        ]
 
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.

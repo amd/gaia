@@ -513,14 +513,15 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    about_user = is_about_user(item)
-    # Copies of the same fact go too, or the deleted fact is still recalled.
-    copies = store.copies_of(knowledge_id) if about_user else []
-    remove = store.forget if about_user else store.delete
-    success = remove(knowledge_id, allow_privileged=True)
-    if not success:
+    if is_about_user(item):
+        # Copies of the same fact go too, or the deleted fact is still recalled.
+        deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
+    elif store.delete(knowledge_id, allow_privileged=True):
+        deleted = [knowledge_id]
+    else:
+        deleted = []
+    if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    deleted = [knowledge_id] + [kid for kid in copies if store.forget(kid)]
     result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
     if len(deleted) > 1:
         result["knowledge_ids"] = deleted

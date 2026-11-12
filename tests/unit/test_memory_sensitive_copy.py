@@ -182,3 +182,74 @@ def test_a_user_tag_is_the_user(store):
     first = store.store(category="fact", content=MANGO, entity="user:self")
     assert store.store(category="fact", content=MANGO, entity="health") == first
     assert store.store(category="fact", content=MANGO) == first
+
+
+def _plant_twin(store: MemoryStore, content: str, **kwargs) -> str:
+    """A copy stored apart, as before this fix, then moved back beside the first."""
+    kid = store.store(category="fact", content=content, context="apart", **kwargs)
+    store._conn.execute("UPDATE knowledge SET context = 'global' WHERE id = ?", (kid,))
+    store._conn.commit()
+    return kid
+
+
+def test_forgetting_by_words_erases_a_reworded_copy(store):
+    """'User is allergic to mango' and 'Allergic to mango.' are one memory."""
+    host = _Host(store)
+    first = store.store(category="fact", content=MANGO, sensitive=True, entity="user")
+    twin = _plant_twin(store, "Allergic to mango.")
+    for kid in (first, twin):
+        host._embed_and_index(kid, store.get_item(kid)["content"], "test memory")
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id="allergic to mango")
+
+    assert result["status"] == "removed", result
+    assert set(result["knowledge_ids"]) == {first, twin}
+    assert _rows(store) == []
+
+
+def test_forgetting_by_words_keeps_someone_elses_copy(store):
+    """Sam's allergy has the same words but is not the user's to erase."""
+    host = _Host(store)
+    mine = store.store(category="fact", content=MANGO)
+    sams = store.store(
+        category="fact", content="Allergic to mango", entity="person:Sam"
+    )
+    for kid in (mine, sams):
+        host._embed_and_index(kid, store.get_item(kid)["content"], "test memory")
+
+    with _tools(host) as tools:
+        tools["forget"](knowledge_id="allergic to mango")
+
+    assert store.get_item(sams) is not None
+
+
+@pytest.mark.parametrize("sensitive_one", ["first", "twin"])
+def test_a_copy_of_a_sensitive_fact_is_forgotten_as_sensitive(store, sensitive_one):
+    """No copy may leave the fact's words behind in the forgotten list."""
+    host = _Host(store)
+    first = store.store(
+        category="fact", content=MANGO, sensitive=sensitive_one == "first"
+    )
+    twin = _plant_twin(store, "Allergic to mango.", sensitive=sensitive_one == "twin")
+    assert first != twin
+
+    with _tools(host) as tools:
+        result = tools["forget"](knowledge_id=first)
+
+    assert set(result["knowledge_ids"]) == {first, twin}
+    kept = store._conn.execute("SELECT content, sensitive FROM forgotten").fetchall()
+    assert len(kept) == 2
+    assert all(sensitive == 1 and "mango" not in content for content, sensitive in kept)
+    assert store.is_forgotten("I am allergic to mango")
+
+
+def test_forgetting_an_unflagged_fact_keeps_its_words(store):
+    """Only a sensitive group is reduced to stems; plain facts stay readable."""
+    host = _Host(store)
+    first = store.store(category="fact", content="User likes green tea")
+    with _tools(host) as tools:
+        tools["forget"](knowledge_id=first)
+
+    kept = store._conn.execute("SELECT content, sensitive FROM forgotten").fetchall()
+    assert kept == [("User likes green tea", 0)]

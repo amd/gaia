@@ -81,6 +81,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -440,9 +441,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -6186,20 +6187,17 @@ class MemoryMixin(ProceduralMemoryMixin):
             if (gone := _store_gone()) is not None:
                 return gone
             ctx = mixin._memory_context
-            copies = mixin._memory_store.copies_of(
-                knowledge_id, None if ctx == "global" else (ctx, "global")
-            )
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if removed:
-                erased_ids += [kid for kid in copies if mixin._memory_store.forget(kid)]
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6215,8 +6213,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)
