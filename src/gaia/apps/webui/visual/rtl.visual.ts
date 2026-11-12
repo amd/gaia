@@ -578,6 +578,30 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withStoppedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write about the history of canals', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The earliest canals carried water to fields, not boats. In Mesopotamia', created_at: NOW.toISOString(), rag_sources: null, stopped: true },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped answer offers Continue and Try again (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withStoppedAnswer);
+        const actions = page.locator('.msg-assistant .msg-try-again');
+        await expect(actions).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
