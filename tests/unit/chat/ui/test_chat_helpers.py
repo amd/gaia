@@ -1203,6 +1203,30 @@ class TestSessionTitleRequest:
             ch._title_from_question(question)
         )
 
+    def test_a_title_naming_a_file_the_user_named_in_its_own_script_is_kept(self):
+        """The check is per script the user used, not per main language."""
+        question = "Rename 报告.docx to report.docx"
+        assert self._title_for(question, "Rename 报告 file") == "Rename 报告 file"
+
+    def test_a_title_with_no_letters_is_kept(self):
+        assert self._title_for("خطط لميزانية 2027", "2027") == "2027"
+
+    def test_the_users_later_message_counts_as_their_script(self):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("Gemma-4-E4B-it-GGUF", "Lisbon trip plan")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "Gemma-4-E4B-it-GGUF",
+                    "مرحبا",
+                    "ok",
+                    "Plan 3 days in Lisbon",
+                )
+            )
+        assert title == "Lisbon trip plan"
+
     def test_the_prompt_pins_the_title_to_the_users_message_language(self):
         from gaia.ui import _chat_helpers as ch
 
