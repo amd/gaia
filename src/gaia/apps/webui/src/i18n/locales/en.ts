@@ -2784,6 +2784,7 @@ export const enMessages = {
     'mem.about.showSensitive': 'Sensitive — show',
     'mem.about.sensitiveMemory': 'sensitive memory',
     'mem.about.edit': 'Edit',
+    'mem.about.editHidden': 'Show it first to edit',
     'mem.about.editAria': 'Edit: {name}',
     'mem.about.forget': 'Forget',
     'mem.about.forgetAria': 'Forget: {name}',

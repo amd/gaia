@@ -2785,6 +2785,7 @@ const messages: Messages = {
     'mem.about.showSensitive': 'حساسة، إظهار',
     'mem.about.sensitiveMemory': 'ذكرى حساسة',
     'mem.about.edit': 'تعديل',
+    'mem.about.editHidden': 'أظهِرها أولًا لتعديلها',
     'mem.about.editAria': 'تعديل: {name}',
     'mem.about.forget': 'نسيان',
     'mem.about.forgetAria': 'نسيان: {name}',

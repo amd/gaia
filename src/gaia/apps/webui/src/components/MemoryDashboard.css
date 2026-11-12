@@ -1879,10 +1879,14 @@
     font-size: 12px;
     cursor: pointer;
 }
-.mem-about-btn:hover,
+.mem-about-btn:not(:disabled):hover,
 .mem-about-btn:focus-visible {
     color: var(--text-primary);
     background: var(--bg-hover);
+}
+.mem-about-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 .mem-about-btn-remove:hover,
 .mem-about-btn-remove:focus-visible {

@@ -179,6 +179,20 @@ describe('What GAIA knows about you', () => {
         expect(screen.queryByText(/Bank PIN/)).not.toBeInTheDocument();
     });
 
+    it('keeps a sensitive item hidden from its edit button until it is shown', async () => {
+        await renderAbout();
+
+        const edit = screen.getByRole('button', { name: 'Edit: sensitive memory' });
+        expect(edit).toBeDisabled();
+        fireEvent.click(edit);
+        expect(screen.queryByRole('textbox', { name: 'Edit memory' })).not.toBeInTheDocument();
+        expect(screen.queryByDisplayValue(/Bank PIN/)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Sensitive — show/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Edit: Bank PIN hint is the dog' }));
+        expect(screen.getByRole('textbox', { name: 'Edit memory' })).toHaveValue('Bank PIN hint is the dog');
+    });
+
     it('says so when it has nothing yet', async () => {
         mockedApi.getKnowledge.mockResolvedValue({ items: [], total: 0, offset: 0, limit: 200 });
         render(<MemoryDashboard />);
