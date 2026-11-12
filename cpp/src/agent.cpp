@@ -506,18 +506,24 @@ std::string Agent::composeSystemPromptFor(const AgentConfig& cfg) const {
 // ---- LLM Communication ----
 
 namespace {
-/// Reject stream-assembled tool calls that never received an id or a name.
-/// Sending them on would produce a tool reply with an empty ``tool_call_id``,
-/// which a spec-strict server rejects on the next request.
-void validateStreamedToolCalls(const std::vector<ToolCall>& calls) {
+/// A 200 reply the agent cannot read: a proxy's HTML page, an empty or cut-off
+/// body, no choices. The same request may well succeed when sent again.
+struct UnreadableLlmReply : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+/// An id for a tool call the server sent without one. The id only has to match
+/// between the call echoed back and its result, and the agent writes both.
+std::string assignedToolCallId() {
+    static std::atomic<unsigned long long> next{0};
+    return "call_gaia_" + std::to_string(++next);
+}
+
+/// Give stream-assembled tool calls an id when the server sent none, and reject
+/// one that never received a name.
+void validateStreamedToolCalls(std::vector<ToolCall>& calls) {
     for (size_t i = 0; i < calls.size(); ++i) {
-        if (calls[i].id.empty()) {
-            throw std::runtime_error(
-                "Streamed tool_calls entry " + std::to_string(i) +
-                " never received an 'id' across the SSE deltas, so its result "
-                "cannot be correlated back to the call. Function name seen: '" +
-                calls[i].name + "'.");
-        }
+        if (calls[i].id.empty()) calls[i].id = assignedToolCallId();
         if (calls[i].name.empty()) {
             throw std::runtime_error(
                 "Streamed tool_calls entry " + std::to_string(i) + " (id " +
@@ -539,7 +545,16 @@ std::vector<ToolCall> parseToolCallsArray(const json& arr) {
     }
     calls.reserve(arr.size());
     for (const auto& entry : arr) {
-        calls.push_back(ToolCall::fromJson(entry));
+        const auto id = entry.is_object() ? entry.find("id") : entry.end();
+        const bool hasId = entry.is_object() && id != entry.end() && id->is_string() &&
+                           !id->get_ref<const std::string&>().empty();
+        if (entry.is_object() && !hasId) {
+            json withId = entry;
+            withId["id"] = assignedToolCallId();
+            calls.push_back(ToolCall::fromJson(withId));
+        } else {
+            calls.push_back(ToolCall::fromJson(entry));
+        }
     }
     return calls;
 }
@@ -702,7 +717,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         responseJson = json::parse(responseBody);
     } catch (const json::parse_error& e) {
         std::string preview = responseBody.substr(0, 200);
-        throw std::runtime_error(std::string("Failed to parse LLM response: ") + e.what() +
+        throw UnreadableLlmReply(std::string("Failed to parse LLM response: ") + e.what() +
                                  " | body: " + preview);
     }
 
@@ -731,7 +746,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         }
     }
     // Include truncated response body in error for debugging
-    throw std::runtime_error("Unexpected LLM response format: " + responseBody.substr(0, 200));
+    throw UnreadableLlmReply("Unexpected LLM response format: " + responseBody.substr(0, 200));
 }
 
 // ---- Resilient model calls ----
@@ -740,6 +755,7 @@ namespace {
 
 // Transient: the request may succeed unchanged if sent again.
 bool isTransientLlmFailure(const std::exception& e) {
+    if (dynamic_cast<const UnreadableLlmReply*>(&e)) return true;
     if (const auto* he = dynamic_cast<const HttpError*>(&e)) {
         const int s = he->status();
         if (s == 0) {

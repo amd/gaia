@@ -129,6 +129,65 @@ TEST(AgentResilience, TransientFailureIsRetried) {
     EXPECT_EQ(mock.requestCount(), 2);
 }
 
+TEST(AgentResilience, AnUnreadable200IsRetriedLikeAServerError) {
+    // A gateway's HTML page, an empty body and a reply with no choices, each with HTTP 200.
+    for (const char* garbage : {"<html><body>502 from the proxy</body></html>", "", R"({"id":"x","choices":[]})"}) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(garbage);
+        mock.pushResponse(answer("recovered"));
+        AgentConfig cfg = cfgFor(mock);
+        cfg.llmRetries = 1;
+        ResilienceAgent agent(cfg);
+        agent.initForTest();
+        json r = agent.processQuery("go");
+        EXPECT_EQ(r["result"], "recovered") << garbage;
+        EXPECT_EQ(r["status"], "success") << garbage;
+        EXPECT_EQ(mock.requestCount(), 2) << garbage;
+    }
+}
+
+TEST(AgentResilience, AnUnreadable200StillFailsTheTurnOnceRetriesRunOut) {
+    bench::MockLlmServer mock;
+    mock.pushResponse("<html>still down</html>");
+    ResilienceAgent agent(cfgFor(mock));  // llmRetries = 0
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "error");
+    EXPECT_NE(r["result"].get<std::string>().find("Failed to parse LLM response"), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 1);
+}
+
+TEST(AgentResilience, AToolCallSentWithoutAnIdStillRuns) {
+    bench::MockLlmServer mock;
+    const json noId = {
+        {"choices",
+         json::array({{{"message",
+                        {{"role", "assistant"},
+                         {"content", nullptr},
+                         {"tool_calls",
+                          json::array({{{"type", "function"},
+                                        {"function", {{"name", "add"}, {"arguments", "{\"a\": 2, \"b\": 3}"}}}}})}}}}})}};
+    mock.pushResponse(noId.dump());
+    mock.pushResponse(answer("done"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["status"], "success") << r.dump();
+    EXPECT_EQ(r["result"], "done");
+
+    // The id the agent assigned ties the echoed call to its result.
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const json messages = json::parse(bodies[1])["messages"];
+    std::string callId, replyId;
+    for (const auto& m : messages) {
+        if (m.value("role", "") == "assistant" && m.contains("tool_calls")) callId = m["tool_calls"][0].value("id", "");
+        if (m.value("role", "") == "tool") replyId = m.value("tool_call_id", "");
+    }
+    EXPECT_FALSE(callId.empty());
+    EXPECT_EQ(callId, replyId);
+}
+
 TEST(AgentResilience, ClientErrorIsNotRetried) {
     bench::MockLlmServer mock;
     mock.pushResponse(R"({"error":{"message":"bad model"}})", 400);
