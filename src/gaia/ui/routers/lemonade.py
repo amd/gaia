@@ -94,6 +94,7 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
         )
     try:
         previous_mode = choice.saved_mode()
+        over_env = body.mode == choice.MODE_GAIA and choice.configured_source() == "env"
         if body.mode == choice.MODE_EXTERNAL:
             if not (body.base_url or "").strip():
                 raise choice.LemonadeChoiceError(
@@ -101,7 +102,8 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
                     "http://localhost:13305."
                 )
             choice.use_external(body.base_url, body.api_key)
-        else:
+        elif not over_env:
+            # Over LEMONADE_BASE_URL it is saved with the switch, so a failed start undoes both.
             choice.set_mode(body.mode)
     except choice.LemonadeChoiceError as e:
         raise HTTPException(
@@ -113,10 +115,14 @@ def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     _drop_cached_agents()
     applied = None
     try:
-        if body.mode == choice.MODE_GAIA:
+        if over_env:
+            applied = choice.switch_to_gaia_over_env()
+        elif body.mode == choice.MODE_GAIA:
             applied = choice.apply_gaia_switch(previous_mode)
         else:
             applied = choice.apply_to_daemon()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except DaemonError as e:
         if body.mode != choice.MODE_GAIA:
             raise HTTPException(

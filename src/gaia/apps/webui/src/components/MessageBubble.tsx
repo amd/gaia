@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -21,10 +21,13 @@ import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
+import { useLogsStore } from '../stores/logsStore';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -54,6 +57,8 @@ interface MessageBubbleProps {
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** What a running tool's own model calls are doing; shown on that tool's row. */
+    toolStatus?: string | null;
     /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
     awaitingUser?: boolean;
 }
@@ -148,6 +153,20 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+/** The answer an agent writes when a model call ends its turn (`_model_failure_answer` in agent.py). */
+const MODEL_FAILURE_RE = /^The model (?:call failed|stopped responding) at step \d+, so this request is unfinished\./;
+
+export function isModelFailure(content: string): boolean {
+    return MODEL_FAILURE_RE.test(content.trimStart());
+}
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -378,7 +397,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -428,9 +447,9 @@ export function escapeBareNumberLines(text: string): string {
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
-function formatFullTimestamp(iso: string): string {
+function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(dateLocale(t), {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
@@ -473,7 +492,7 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
     return splitCutOff(content) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -483,6 +502,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         [agentSteps, message.content, message.role, isStreaming],
     );
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const place = useInferencePlace();
+    const showServerLog = useLogsStore((s) => s.show);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -498,6 +519,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const summaryFiles = message.turnSummary?.files;
+    const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -567,7 +591,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at) })
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
     return (
@@ -592,6 +616,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
@@ -622,6 +649,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             isActive={agentStepsActive ?? false}
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
+                            toolStatus={isStreaming ? toolStatus : null}
                             answer={isStreaming ? undefined : cleanedContent}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
@@ -661,7 +689,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -688,6 +716,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
+                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
+                    {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.serverLog')}
+                        </button>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
+                    )}
                     {message.role === 'assistant'
                         && !isStreaming
                         && isAuthRequiredMessage(cleanedContent) && (
@@ -697,7 +735,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
                                 <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at)}
+                                    {formatFullTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
@@ -709,6 +747,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>
@@ -798,11 +838,30 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
 // inside a last name of at most three words ending in an extension (`Q3 report.txt`);
 // otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: (?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ ){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
+// A path in double quotes runs to the closing quote, spaces and all.
+const WIN_PATH_RE = /(?<=["\u201c])[A-Z]:[\\/][^*?"<>|\r\n\u201c\u201d]+(?=["\u201d])|\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: +(?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ +){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
 const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
+
+/** Paths of the files this answer's turn wrote (`turn_summary.files`). */
+const WrittenFilesContext = createContext<readonly string[]>([]);
+
+/**
+ * The written file an inline-code span names: its exact path, or a bare name
+ * only one written file has. Two writes sharing a name stay plain code.
+ */
+function writtenFileFor(files: readonly string[], children: React.ReactNode): string | null {
+    if (typeof children !== 'string' || files.length === 0) return null;
+    const text = children.trim();
+    if (!text) return null;
+    if (files.includes(text)) return text;
+    if (/[\\/]/.test(text)) return null;
+    const name = text.toLowerCase();
+    const matches = files.filter((f) => (f.split(/[\\/]/).pop() ?? '').toLowerCase() === name);
+    return matches.length === 1 ? matches[0] : null;
+}
 
 function inlineCodePath(children: React.ReactNode): string | null {
     if (typeof children !== 'string') return null;
@@ -810,7 +869,7 @@ function inlineCodePath(children: React.ReactNode): string | null {
     return WIN_PATH_ONLY_RE.test(text) ? text : null;
 }
 
-function FilePathLink({ path }: { path: string }) {
+function FilePathLink({ path, label }: { path: string; label?: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         api.openFileOrFolder(path).catch((err) => {
@@ -828,27 +887,31 @@ function FilePathLink({ path }: { path: string }) {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {path}
+            {label ?? path}
         </span>
     );
 }
 
+/** Each Windows path in `text`; a quoted one is kept exactly, a trailing dot and all. */
+function findFilePaths(text: string): Array<{ start: number; path: string }> {
+    return [...text.matchAll(new RegExp(WIN_PATH_RE.source, 'gi'))].map((m) => {
+        const end = m.index + m[0].length;
+        const quoted = '"“'.includes(text[m.index - 1] ?? '\n') && '"”'.includes(text[end] ?? '\n');
+        return { start: m.index, path: quoted ? m[0] : m[0].replace(PATH_TRAILING_PUNCT_RE, '') };
+    });
+}
+
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
-    // Combine both regexes: match files first, then directories
-    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match: RegExpExecArray | null;
 
-    while ((match = combined.exec(text)) !== null) {
-        // Add text before the match
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
+    for (const { start, path } of findFilePaths(text)) {
+        if (start > lastIndex) {
+            parts.push(text.slice(lastIndex, start));
         }
-        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
-        parts.push(<FilePathLink key={match.index} path={path} />);
-        lastIndex = match.index + path.length;
+        parts.push(<FilePathLink key={start} path={path} />);
+        lastIndex = start + path.length;
     }
 
     // No paths found — return original text
@@ -911,7 +974,11 @@ function leadingPages(index: CitationIndex, text: string): FoundPage[] {
  * (in inline code), whose pages may open the run.
  */
 function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
-    const citations = findCitations(index, text);
+    // A filename that ends a longer path stays inside that path's chip.
+    const paths = findFilePaths(text);
+    const citations = findCitations(index, text).filter(
+        (c) => !paths.some((p) => p.start < c.start && c.start < p.start + p.path.length),
+    );
     const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
     const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
         for (const pg of pages) {
@@ -980,12 +1047,15 @@ function Linkified({ children }: { children?: React.ReactNode }) {
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
 function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
     const index = useContext(CitationContext);
+    const writtenFiles = useContext(WrittenFilesContext);
     const t = useT();
     // A filename here outside a block Linkified handles (e.g. inside **bold**).
     const doc = inlineCodeDoc(index, children);
     if (doc) return <CitationLink doc={doc} t={t} />;
     const path = inlineCodePath(children);
     if (path) return <FilePathLink path={path} />;
+    const written = writtenFileFor(writtenFiles, children);
+    if (written) return <FilePathLink path={written} label={String(children).trim()} />;
     return (
         <code className="inline-code" dir="ltr" {...props}>
             {children}
@@ -1093,7 +1163,9 @@ const MARKDOWN_COMPONENTS: Components = {
     },
 };
 
-export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
+const NO_WRITTEN_FILES: readonly string[] = [];
+
+export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     if (!content && !showCursor) return null;
@@ -1102,6 +1174,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
     return (
         <StreamingContext.Provider value={isStreaming}>
         <CitationContext.Provider value={citations}>
+        <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
@@ -1113,6 +1186,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </WrittenFilesContext.Provider>
         </CitationContext.Provider>
         </StreamingContext.Provider>
     );

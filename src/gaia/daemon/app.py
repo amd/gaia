@@ -88,6 +88,7 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    keychain_auth=None,
     clock=None,
     lemonade=None,
     lemonade_owner=None,
@@ -356,6 +357,10 @@ def create_app(
 
         install_custody_exception_handler(app)
         app.include_router(build_custody_router(custody_auth, custody_store))
+        if keychain_auth is not None:
+            from gaia.daemon.custody.keychain_routes import build_keychain_router
+
+            app.include_router(build_keychain_router(keychain_auth))
     elif custody_auth is not None or custody_store is not None:
         raise ValueError(
             "create_app requires custody_auth AND custody_store together to "

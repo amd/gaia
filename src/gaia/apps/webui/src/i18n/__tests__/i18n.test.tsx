@@ -27,7 +27,9 @@ describe('locale registry', () => {
         for (const key of EN_KEYS as MessageKey[]) {
             expect(locale.messages[key].trim(), key).not.toBe('');
             // A dropped or misspelled {param} would render raw or throw at runtime.
-            expect(placeholders(locale.messages[key]), key).toEqual(placeholders(enMessages[key]));
+            // A plural form for one exact number may leave {n} out ("دقيقتين", two minutes).
+            const own = (text: string) => placeholders(text).filter((p) => p !== 'n' || !/\.(zero|one|two)$/.test(key));
+            expect(own(locale.messages[key]), key).toEqual(own(enMessages[key]));
         }
     });
 
@@ -77,10 +79,10 @@ describe('translate', () => {
     });
 
     it('resolves a message param in each language, without nested brackets', () => {
-        expect(ar('tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('تعذّر: البحث في المستندات (Searching documents failed)');
-        expect(translate('en', 'tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('Searching documents failed');
+        expect(ar('tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('تعذّر: الاستعلام في المستندات (Querying documents failed)');
+        expect(translate('en', 'tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('Querying documents failed');
     });
 
     it('fails loudly when a param is missing', () => {

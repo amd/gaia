@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 
 """
-System prompts for SD Agent with research-backed prompt engineering strategies.
+Prompt-enhancement guidance for the Stable Diffusion tool mixin (SDToolsMixin),
+with research-backed prompt engineering strategies.
 
 Research Sources (2026):
 - SDXL Best Practices: https://neurocanvas.net/blog/sdxl-best-practices-guide/

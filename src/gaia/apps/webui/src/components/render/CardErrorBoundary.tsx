@@ -14,8 +14,7 @@ interface CardErrorBoundaryState {
 
 /**
  * Error boundary wrapping every registered render card (see RenderCard.tsx).
- * A bug in one card must never blank the whole assistant message — no
- * boundary exists anywhere else in the app, so this is the first one.
+ * A bug in one card must never blank the whole assistant message.
  */
 export class CardErrorBoundary extends Component<CardErrorBoundaryProps, CardErrorBoundaryState> {
     constructor(props: CardErrorBoundaryProps) {

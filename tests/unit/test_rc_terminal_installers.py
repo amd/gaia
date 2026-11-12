@@ -139,6 +139,23 @@ def test_the_installers_reuse_binaries_only_when_told_to():
     assert "(!inputs.build_binaries && needs.tui-build.result == 'skipped')" in cond
 
 
+@pytest.mark.parametrize(
+    "workflow, job",
+    [("tui_installers.yml", "tui-installers"), ("windows_setup.yml", "build")],
+)
+def test_an_explicit_gate_still_requires_the_frozen_core(workflow, job):
+    # `!cancelled()` turns off the implicit success() for every need, so a need
+    # the condition doesn't name would no longer stop the job when it fails.
+    spec = _jobs(workflow)[job]
+    needs = spec["needs"]
+    assert "core" in needs
+    cond = spec["if"]
+    assert "!cancelled()" in cond
+    assert "needs.core.result == 'success'" in cond
+    for need in needs:
+        assert f"needs.{need}.result" in cond, f"{job} ignores a failed {need}"
+
+
 def test_the_windows_setup_waits_on_the_binaries_not_the_packages(publish):
     binaries = publish["tui-binaries"]
     assert binaries["uses"] == "./.github/workflows/tui_installers.yml"
@@ -199,13 +216,17 @@ def test_the_final_release_job_steps(publish):
         "Extract release notes",
         "Download TUI binaries",
         "Checksum TUI binaries",
+        "Download the gaia core builds",
+        "Attach and checksum the gaia core",
         "Download the combined Windows setup",
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",
         "Download Desktop Installer (macOS DMG)",
         "Download Desktop Installer (Linux DEB + AppImage)",
         "Check every desktop installer is attached",
-        "Create GitHub Release",
+        "actions/setup-python@v7",
+        "Check the update manifests name only attached files",
+        "Create GitHub Release with bounded rate-limit retry",
     ]
 
 

@@ -168,3 +168,56 @@ def test_the_ui_lists_edits_and_resets_preferences(home, client):
     assert client.delete("/api/skills/slide-decks/preferences").json()["reset"] is True
     assert client.get("/api/skills/slide-decks/preferences").json()["preferences"] == {}
     assert not Path(home / "skill-preferences" / "slide-decks.json").exists()
+
+
+# Where the agent runs as its own binary (the apps), the UI has no gaia_agent.
+
+
+@pytest.fixture
+def no_agent_package(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+    from gaia.ui.routers import skills as skills_router
+
+    return skills_router
+
+
+def test_a_user_skills_schema_is_read_from_disk_without_the_agent_package(
+    no_agent_package, monkeypatch, skill_dir
+):
+    monkeypatch.setattr(
+        "gaia.skills.manager.SkillManager.load",
+        lambda self, name: SimpleNamespace(directory=skill_dir),
+    )
+    assert no_agent_package._preference_schema("slide-decks") == SCHEMA
+
+
+def test_a_skill_bundled_in_the_agent_binary_takes_no_schema(
+    no_agent_package, monkeypatch
+):
+    from gaia.skills.errors import SkillError
+
+    def not_on_disk(self, name):
+        raise SkillError(f"No skill named '{name}'.")
+
+    monkeypatch.setattr("gaia.skills.manager.SkillManager.load", not_on_disk)
+    monkeypatch.setattr(
+        no_agent_package, "_skills_from_agent", lambda: {"skills": [{"name": "pptx"}]}
+    )
+    assert no_agent_package._preference_schema("pptx") is None
+    with pytest.raises(Exception) as missing:
+        no_agent_package._preference_schema("nope")
+    assert getattr(missing.value, "status_code", None) == 404
+
+
+def test_no_bundled_skill_ships_a_preferences_schema():
+    """The UI can't read a schema inside the agent binary, so a bundled skill
+    must ship none until the agent serves it over its own route."""
+    repo = Path(__file__).resolve().parents[2]
+    bundled = [
+        repo / "hub" / "skills",
+        repo / "hub" / "agents" / "gaia" / "python" / "gaia_agent" / "skills",
+    ]
+    found = [p for root in bundled for p in root.rglob("preferences.schema.json")]
+    assert not found, found

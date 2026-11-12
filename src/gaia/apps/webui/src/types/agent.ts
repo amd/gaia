@@ -42,6 +42,8 @@ export interface GaiaNotification {
   risk?: string;
   /** The agent's own one-line description of the call, shown when no args came with it. */
   summary?: string;
+  /** A path-access prompt backing the call just allowed, so it reads as a follow-up. */
+  pathFollowUp?: boolean;
   /** For policy_alert type. */
   decision?: string;
   reason?: string;
@@ -67,8 +69,15 @@ export interface TraySettings {
   startOnLogin: boolean;
 }
 
+/** Whether this desktop shows tray icons (stock GNOME doesn't); checked once at startup. */
+export interface TrayHost {
+  available: boolean;
+  reason: null | 'checking' | 'no-host' | 'check-failed';
+}
+
 export interface TrayConfig {
   tray: TraySettings;
+  host: TrayHost;
 }
 
 export interface TrayChatRef {
@@ -97,6 +106,21 @@ export type TrayCommand =
   | { type: 'open-settings'; section: 'general' }
   | { type: 'refresh-status' };
 
+/** services/backend-supervisor.cjs state, plus the API base for its port. */
+export interface BackendLifecycle {
+  status: 'running' | 'restarting' | 'stopped';
+  port: number | null;
+  /** When this outage began (ms epoch), or null while running. */
+  since: number | null;
+  attempt: number;
+  maxRestarts: number;
+  /** When the next try starts, or null while one is starting. */
+  nextAttemptAt: number | null;
+  lastExit: { code: number | null; signal: string | null } | null;
+  lastError: string | null;
+  apiBase: string | null;
+}
+
 /** The part of window.gaiaAPI (preload.cjs) the UI calls. Present only in Electron. */
 export interface GaiaElectronAPI {
   notification: {
@@ -118,6 +142,14 @@ export interface GaiaElectronAPI {
     /** The OS folder picker. Resolves the chosen absolute path, or null when cancelled. */
     pickFolder: (defaultPath?: string) => Promise<string | null>;
   };
+  /** GAIA's backend process, as services/backend-supervisor.cjs sees it. */
+  backend: {
+    getState: () => Promise<BackendLifecycle>;
+    /** Restart GAIA: start the backend now, with a fresh restart budget. */
+    restart: () => Promise<BackendLifecycle>;
+    /** Returns an unsubscribe function. */
+    onState: (cb: (state: BackendLifecycle) => void) => () => void;
+  };
   tray: {
     getConfig: () => Promise<TrayConfig>;
     /** Resolves with the saved config; rejects with why it couldn't be saved. */
@@ -138,7 +170,7 @@ export interface GaiaWindowFrame {
 }
 
 /** FAILURE_REASONS in services/backend-installer.cjs. */
-export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked';
+export type EngineInstallReason = 'disk' | 'network' | 'tls' | 'locked' | 'daemon';
 
 export interface EngineInstallError {
   stage: string | null;

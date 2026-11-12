@@ -5,6 +5,7 @@ EmailSidecarManager — mode select, ephemeral port, spawn-arg shape, health,
 tree-kill, PLUS the new spec-parametrization and resolved_mode-capture
 mechanics (#2142 T1)."""
 
+import argparse
 import dataclasses
 import importlib.util
 import logging
@@ -157,16 +158,15 @@ def test_error_hierarchy_relocated_verbatim():
     assert "502" in str(err) and "boom" in str(err) and "/v1/x" in str(err)
 
 
-def test_ui_email_sidecar_errors_is_a_reexport_shim():
-    # gaia.ui.email_sidecar.errors becomes a pure re-export shim: identity, not
-    # just equality, so existing `from ... import SidecarError` callers still
-    # get the exact same class object as the new location.
-    import gaia.daemon.sidecars.errors as new_errors
-    import gaia.ui.email_sidecar.errors as old_errors
+def test_ui_email_sidecar_package_reexports_daemon_errors():
+    # Identity, not equality: an `except SidecarError` in the UI must catch
+    # what the daemon raises.
+    import gaia.daemon.sidecars.errors as daemon_errors
+    import gaia.ui.email_sidecar as ui_pkg
 
-    assert old_errors.SidecarError is new_errors.SidecarError
-    assert old_errors.VersionMismatchError is new_errors.VersionMismatchError
-    assert old_errors.SidecarSpawnError is new_errors.SidecarSpawnError
+    assert ui_pkg.SidecarError is daemon_errors.SidecarError
+    assert ui_pkg.VersionMismatchError is daemon_errors.VersionMismatchError
+    assert ui_pkg.SidecarSpawnError is daemon_errors.SidecarSpawnError
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +234,16 @@ def test_user_mode_spawn_command_uses_fetched_binary(monkeypatch, tmp_path):
     m = mgr.AgentSidecarManager(builtin_specs()["email"])
     argv, kwargs = m.build_spawn_command(port=9123)
     assert argv[0] == str(fake_binary)
-    assert "--port" in argv and "9123" in argv
     assert "4001" not in argv
+
+    # The binary's own `serve` parser must accept every argument the daemon
+    # passes; a mismatch exits the sidecar with code 2 at spawn.
+    server = pytest.importorskip("gaia_agent_email.server")
+    sidecar_parser = argparse.ArgumentParser()
+    server._add_serve_args(sidecar_parser)
+    parsed = sidecar_parser.parse_args(argv[1:])
+    assert parsed.port == 9123
+    assert parsed.host == m.host
 
 
 def test_user_mode_fetch_failure_raises_with_remedy(monkeypatch):
@@ -991,3 +999,73 @@ def test_the_flagship_gets_time_for_a_cold_first_start():
     """30 s timed out a first start on a cold Windows runner before it answered."""
     assert builtin_specs()["gaia"].health_timeout >= 120.0
     assert builtin_specs()["email"].health_timeout == 30.0
+
+
+# ---------------------------------------------------------------------------
+# LEMONADE_BASE_URL the Agent UI chose GAIA's own over (#6671)
+# ---------------------------------------------------------------------------
+
+_DEAD_ENV_URL = "http://127.0.0.1:59999/api/v1"
+
+
+def _ignore_env_url(monkeypatch, tmp_path, *, gaia_running=True):
+    """The daemon inherited LEMONADE_BASE_URL; setup then chose GAIA's own."""
+    import json
+
+    from gaia.config import GaiaConfig
+
+    home = tmp_path / "gaia-home"
+    monkeypatch.setenv("GAIA_HOME", str(home))
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("LEMONADE_BASE_URL", _DEAD_ENV_URL)
+    monkeypatch.setenv("LEMONADE_API_KEY", "dead-server-key")
+    GaiaConfig.save_keys(
+        {"lemonade_mode": "gaia", "lemonade_env_url_ignored": _DEAD_ENV_URL}
+    )
+    if gaia_running:
+        state = home / "lemonade" / "state.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"port": 63207, "api_key": "k"}), encoding="utf-8")
+
+
+def test_a_sidecar_never_inherits_an_ignored_lemonade_base_url(monkeypatch, tmp_path):
+    # The agent binary is built separately and may not read the saved choice.
+    _ignore_env_url(monkeypatch, tmp_path)
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    # The launch secret is pinned by its own tests; this pins the Lemonade env.
+    monkeypatch.setattr(m, "_apply_secret_delivery", lambda env: None)
+    m.start()
+    env = captured["popen_kwargs"]["env"]
+    assert env["LEMONADE_BASE_URL"] == "http://localhost:63207/api/v1"
+    assert env["GAIA_LEMONADE_EMBEDDED"] == "1"
+    assert "LEMONADE_API_KEY" not in env
+    assert m.uses_ignored_lemonade is False
+    m.shutdown()
+
+
+def test_a_sidecar_gets_no_url_while_gaias_own_is_not_running(monkeypatch, tmp_path):
+    _ignore_env_url(monkeypatch, tmp_path, gaia_running=False)
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    # The launch secret is pinned by its own tests; this pins the Lemonade env.
+    monkeypatch.setattr(m, "_apply_secret_delivery", lambda env: None)
+    m.start()
+    env = captured["popen_kwargs"]["env"]
+    assert "LEMONADE_BASE_URL" not in env and "LEMONADE_API_KEY" not in env
+    m.shutdown()
+
+
+def test_a_sidecar_spawned_before_the_switch_is_marked_stale(monkeypatch, tmp_path):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("LEMONADE_BASE_URL", _DEAD_ENV_URL)
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    # The launch secret is pinned by its own tests; this pins the Lemonade env.
+    monkeypatch.setattr(m, "_apply_secret_delivery", lambda env: None)
+    m.start()
+    assert captured["popen_kwargs"]["env"]["LEMONADE_BASE_URL"] == _DEAD_ENV_URL
+    assert m.uses_ignored_lemonade is False
+    GaiaConfig.save_key("lemonade_env_url_ignored", _DEAD_ENV_URL)
+    assert m.uses_ignored_lemonade is True
+    m.shutdown()

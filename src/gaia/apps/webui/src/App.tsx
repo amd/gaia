@@ -7,9 +7,11 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
 import { ModelNeededDialog } from './components/ModelNeededDialog';
+import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
@@ -21,6 +23,7 @@ import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
@@ -31,12 +34,13 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
+import { followBackendLifecycle } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
-import { useT } from './i18n/useT';
+import { getT, useT } from './i18n/useT';
 import type { SetupCheck, StartCard } from './types';
 
 // Heavy, occasional screens load on first use.
@@ -78,10 +82,10 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
         const status = await api.getSetupStatus();
         if (status.state === 'ready') return;
         if (status.state === 'failed' || status.state === 'cancelled') {
-            throw new UpgradeFailed(status.error || 'The update stopped before it finished.');
+            throw new UpgradeFailed(status.error || getT().bare('setup.upgrading.stopped'));
         }
         if (Date.now() >= deadline) {
-            throw new Error('Updating the local model server is taking longer than usual. Check again to keep waiting.');
+            throw new Error(getT().bare('setup.upgrading.slow'));
         }
         await sleep(RETRY_INITIAL_MS);
     }
@@ -169,10 +173,10 @@ function App() {
         try {
             for (;;) {
                 await useModelStore.getState().refresh();
-                const active = useModelStore.getState().active;
+                const remote = !!useModelStore.getState().active?.remote;
                 let check: SetupCheck;
                 try {
-                    check = await api.checkSetup(!!active?.remote);
+                    check = await api.checkSetup(remote);
                 } catch (err) {
                     if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
@@ -181,14 +185,14 @@ function App() {
                     continue;
                 }
                 // A new pinned embedded server is an update, not first-run setup: the models stay.
-                if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
+                if (!check.ready && check.stage === 'upgrade') {
                     setSetup({ state: 'upgrading' });
                     // A re-check after the wait timed out finds that update still going: follow it.
                     const run = await api.getSetupStatus();
                     const updating = run.upgrade_embedded && (run.state === 'running' || run.state === 'verifying');
-                    if (!updating) await api.startSetup(false, false, { upgradeEmbedded: true });
+                    if (!updating) await api.startSetup(remote, false, { upgradeEmbedded: true });
                     await waitForEmbeddedUpgrade();
-                    check = await api.checkSetup(false);
+                    check = await api.checkSetup(remote);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
@@ -345,6 +349,8 @@ function App() {
     refreshStatus.current = checkSystemStatus;
 
     useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
+    // The desktop app restarts a crashed backend on a new port; re-check once it's back.
+    useEffect(() => followBackendLifecycle(() => { void checkSystemStatus(); }), [checkSystemStatus]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -681,7 +687,7 @@ function App() {
     useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
     useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
 
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const isMobile = useMediaQuery('(max-width: 768px)');
 
     // A transient status loss must not replace a UI that was already shown.
     const showStartup = shouldShowStartupScreen(
@@ -753,11 +759,13 @@ function App() {
                 aria-hidden="true"
             />
 
-            <Sidebar
-                onNewChat={newChat}
-                onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
-                tunnelActive={tunnelActive}
-            />
+            <ErrorBoundary area="sidebar" variant="compact">
+                <Sidebar
+                    onNewChat={newChat}
+                    onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
+                    tunnelActive={tunnelActive}
+                />
+            </ErrorBoundary>
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
@@ -768,8 +776,8 @@ function App() {
                     </div>
                 ) : (
                     <div className="app-notice is-warning" role="status">
-                        <span>Could not check whether GAIA is set up: {setup.error}</span>
-                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>Check again</button>
+                        <span>{t('setup.unknown.failed', { error: setup.error })}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup()}>{t('setup.unknown.retry')}</button>
                     </div>
                 ))}
                 {/* Model downloads, here when the sidebar that usually shows them is closed or collapsed. */}
@@ -788,7 +796,13 @@ function App() {
                         </button>
                     </div>
                 )}
-                {main}
+                {/* Leaving the crashed area, or New chat again, clears the crash. */}
+                <ErrorBoundary
+                    resetKey={showMemoryDashboard ? 'memory' : (currentSessionId ?? `new-${newChatFocus}`)}
+                    area="main"
+                >
+                    {main}
+                </ErrorBoundary>
             </div>
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
@@ -813,8 +827,21 @@ function App() {
             )}
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
+            <LogsDialog />
             <UpdateIndicator />
-            {createError && <div className="toast" role="alert">{createError}</div>}
+            {createError && (
+                <div className="toast toast-dismissible" role="alert">
+                    <span>{createError}</span>
+                    <button
+                        type="button"
+                        className="toast-dismiss"
+                        onClick={() => setCreateError(null)}
+                        aria-label={t('banner.dismiss')}
+                    >
+                        <X size={14} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

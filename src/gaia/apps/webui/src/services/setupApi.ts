@@ -95,6 +95,20 @@ export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = f
     return apiFetch('POST', '/setup/chat-model', { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
 }
 
+/** Read the NPU's setup afresh, after the user fixed something; returns the new plan. */
+export async function recheckSetupNpu(): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/npu/recheck');
+}
+
+/**
+ * Raise the locked-memory limit the NPU needs, behind the desktop's administrator
+ * prompt (Linux). It applies after a restart. A refused prompt is a 409 whose
+ * detail `code` is `cancelled` or `timeout`.
+ */
+export async function fixSetupNpuMemlock(): Promise<SetupPlan> {
+    return apiFetch('POST', '/setup/npu/memlock-fix');
+}
+
 /** Pick the model that reads images, or null for GAIA's choice; returns the new plan. */
 export async function chooseSetupVisionModel(modelId: string | null): Promise<SetupPlan> {
     return apiFetch('POST', '/setup/vision-model', { model_id: modelId });
@@ -137,7 +151,7 @@ export async function getStartScreen(): Promise<StartScreen> {
     return apiFetch('GET', '/onboarding/start');
 }
 
-/** A troubleshooting report: setup's record, GAIA's logs and a system snapshot; logs go in as they are. */
+/** A troubleshooting report: setup's record, GAIA's logs and a system snapshot, logs redacted. */
 export interface SetupReport {
     name: string;
     /** Where the backend kept it, beside GAIA's logs. */

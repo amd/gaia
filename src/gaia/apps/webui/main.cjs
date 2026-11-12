@@ -85,6 +85,9 @@ const _inSafeMode = _crashCount >= SAFE_MODE_THRESHOLD;
 
 // Services (loaded after app.whenReady)
 const TrayManager = require("./services/tray-manager.cjs");
+const { probeTrayHost } = require("./services/tray-host.cjs");
+const { installAppImageLauncher } = require("./services/appimage-launcher.cjs");
+const { revealWhenReady } = require("./services/window-reveal.cjs");
 const { appIconPath, appUserModelId } = require("./services/app-icon.cjs");
 const {
   attachWindowGuards,
@@ -92,6 +95,7 @@ const {
   fetchWorkInProgress,
   installQuitGuard,
   QUIT,
+  quitOnTermSignal,
   RESTART_FOR_UPDATE,
 } = require("./services/quit-guard.cjs");
 const AgentProcessManager = require("./services/agent-process-manager.cjs");
@@ -100,25 +104,18 @@ const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
+const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
 const { createEngineInstall } = require("./services/engine-install.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
-const systemMetrics = require("./services/system-metrics.cjs");
 const folderDialog = require("./services/folder-dialog.cjs");
-const {
-  parseDeepLink,
-  extractDeepLinkFromArgv,
-  dispatchDeepLink,
-  buildInstallPrompt,
-} = require("./services/deep-link.cjs");
 const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
 } = require("./services/link-policy.cjs");
-const { createStartupDeepLinkQueue } = require("./services/deep-link-queue.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
@@ -212,6 +209,8 @@ const APP_NAME = "GAIA";
 // from prior aborted sessions (issue #782 / T5).
 const DEFAULT_BACKEND_PORT = 4200;
 const STARTUP_TIMEOUT = 30000;
+// A restart must answer within this, or it counts as a failed try.
+const RESTART_TIMEOUT = 90000;
 
 // Parse CLI args (T11: --minimized flag for auto-start)
 const startMinimized = process.argv.includes("--minimized");
@@ -242,6 +241,8 @@ let backendProcess = null;
 let backendStarting = null;
 // Set as cleanup() begins; startup stops at its next step once it is.
 let shutdownStarted = false;
+// Set once an update install starts quitting the app.
+let updateQuitStarted = false;
 let backendPort = DEFAULT_BACKEND_PORT;
 let healthCheckUrl = `http://localhost:${backendPort}/api/health`;
 let backendStderrTail = [];
@@ -256,6 +257,8 @@ let engineInstall = null;
 
 /** @type {TrayManager | null} */
 let trayManager = null;
+/** Settles once the tray knows whether this desktop shows tray icons. */
+let trayHostReady = null;
 
 /** @type {AgentProcessManager | null} */
 let agentProcessManager = null;
@@ -276,6 +279,11 @@ const portManager = new PortManager({
  * Prevents minimize-to-tray from intercepting the close event.
  */
 let isQuitting = false;
+
+/** Any quit is under way, an update install's included: start no backend. */
+function quitStarted() {
+  return shutdownStarted || isQuitting || updateQuitStarted;
+}
 
 // ── Backend Process ────────────────────────────────────────────────────────
 
@@ -385,8 +393,13 @@ async function startBackend() {
       env: {
         ...process.env,
         GAIA_APP_PID: String(process.pid),
+        // Piped stdout is block-buffered: a dying backend's last lines would never arrive.
+        PYTHONUNBUFFERED: "1",
         ...(app.isPackaged && {
           GAIA_BUNDLED_LEMONADE_DIR: path.join(process.resourcesPath, "vendor", "lemonade"),
+          // The daemon exits once this is deleted: a Trashed macOS app or a
+          // deleted AppImage runs no uninstall step. An AppImage's exe is a mount.
+          GAIA_APP_PATH: process.env.APPIMAGE || app.getPath("exe"),
         }),
       },
       detached: false,
@@ -430,17 +443,16 @@ async function startBackend() {
   }
 
   child.on("exit", (code, signal) => {
-    if (code !== 0 && code !== null) {
-      console.error(`Backend exited with code ${code} (signal=${signal})`);
+    // Any exit we didn't ask for leaves the window without a backend, even code 0.
+    const crashed = !isIntentionalKill && !isQuitting;
+    if (crashed) {
+      console.error(`Backend exited with code ${code} (signal=${signal}, pid=${child.pid})`);
     }
-    const crashed = !isIntentionalKill && code !== 0 && code !== null;
-    backendProcess = null;
+    if (backendProcess === child) backendProcess = null;
     if (trayManager && !isQuitting) trayManager.setBackendAlive(false);
 
-    if (crashed && !isQuitting) {
-      // Fire-and-forget — don't block the event loop.
-      void handleBackendCrash(code, signal);
-    }
+    // Once restarts run out, the supervisor's onStopped shows the crash dialog.
+    if (crashed) backendSupervisor.crashed({ code, signal });
 
     // Remove pidfile on exit to avoid leaving stale PID behind.
     try {
@@ -457,12 +469,82 @@ async function startBackend() {
     }
   });
 
+  // "close" waits for stdio to drain, so the tail holds the backend's last words.
+  child.once("close", (code, signal) => {
+    if (isIntentionalKill || isQuitting) return;
+    const tail = backendStderrTail.length ? backendStderrTail.join("\n") : "(nothing on stderr)";
+    console.error(`[main] Backend pid ${child.pid} closed (code=${code}, signal=${signal}). Last stderr lines:\n${tail}`);
+  });
+
   return child;
 }
 
 /**
+ * Start a new backend for the supervisor and resolve once it answers.
+ * Rejects when it exits first or never answers, so the supervisor retries.
+ */
+async function restartBackend() {
+  backendStarting = startBackend();
+  const child = await backendStarting;
+  if (!child) {
+    throw new Error("GAIA's backend program is missing, so it can't restart. Reinstall GAIA.");
+  }
+  if (quitStarted()) {
+    isIntentionalKill = true;
+    await portManager.killBackend(child);
+    throw new Error("GAIA is quitting, so the restarted backend was stopped.");
+  }
+  backendProcess = child;
+  const alive = () => child.exitCode === null && child.signalCode === null;
+  const ready = await waitForBackend(RESTART_TIMEOUT, alive);
+  if (!ready) {
+    if (!alive()) {
+      throw new Error(`The backend exited (code ${child.exitCode}, signal ${child.signalCode}) before it answered.`);
+    }
+    isIntentionalKill = true;
+    await portManager.killBackend(child);
+    throw new Error(`The backend did not answer within ${RESTART_TIMEOUT / 1000} s.`);
+  }
+  console.log(`[main] Backend restarted on port ${backendPort} (pid=${child.pid})`);
+  if (trayManager) {
+    trayManager.setBackendPort(backendPort);
+    trayManager.setBackendAlive(true);
+  }
+  return { port: backendPort };
+}
+
+/** What the renderer needs: the supervisor's state plus the API base to use. */
+function backendStateForRenderer(state) {
+  return { ...state, apiBase: state.port ? buildIndexQuery(state.port).api : null };
+}
+
+const backendSupervisor = createBackendSupervisor({
+  start: restartBackend,
+  onStopped: (state) => {
+    const { code = null, signal = null } = state.lastExit || {};
+    void handleBackendCrash(code, signal);
+  },
+  onState: (state) => {
+    console.log(
+      `[main] Backend ${state.status}` +
+        (state.status === "restarting" ? ` (try ${state.attempt} of ${state.maxRestarts})` : "") +
+        (state.lastError ? `: ${state.lastError}` : "")
+    );
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("backend:state", backendStateForRenderer(state));
+    }
+  },
+});
+
+ipcMain.handle("backend:get-state", () => backendStateForRenderer(backendSupervisor.getState()));
+ipcMain.handle("backend:restart", () => {
+  backendSupervisor.restartNow();
+  return backendStateForRenderer(backendSupervisor.getState());
+});
+
+/**
  * Tell the user the backend stopped and offer Restart / Save diagnostics /
- * Quit. Invoked from child.on("exit") when the kill was NOT initiated by us.
+ * Quit. Invoked by the supervisor's onStopped once automatic restarts run out.
  */
 async function handleBackendCrash(code, signal) {
   autoUpdater.reportStartFailure();
@@ -484,11 +566,11 @@ async function handleBackendCrash(code, signal) {
   }
 }
 
-async function waitForBackend(timeoutMs) {
+async function waitForBackend(timeoutMs, isAlive = () => true) {
   const start = Date.now();
   const http = require("http");
 
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() - start < timeoutMs && isAlive()) {
     try {
       await new Promise((resolve, reject) => {
         const req = http.get(healthCheckUrl, (res) => {
@@ -648,11 +730,10 @@ function createWindow() {
     platform: process.platform,
     reportNoticeError: (err) => {
       console.error("[main] First-close notice failed:", err.message);
-      const where = process.platform === "darwin" ? "menu bar" : "tray";
+      const { message, detail } = trayManager.closeNoticeText();
       dialog.showErrorBox(
         "GAIA is still running",
-        `GAIA is still running in the ${where}. Quit from the ${where} menu to stop it.\n\n` +
-          `(The usual notice failed: ${err.message})`
+        `${message} ${detail}\n\n(The usual notice failed: ${err.message})`
       );
     },
   });
@@ -663,17 +744,22 @@ function createWindow() {
   });
 
   // Show window when ready (unless --minimized or startMinimized config)
-  mainWindow.once("ready-to-show", () => {
-    console.log("[main] ready-to-show fired");
-    const shouldStartMinimized =
-      startMinimized || (trayManager && trayManager.startMinimized);
+  revealWhenReady(mainWindow, (via) => {
+    console.log(`[main] Window ready to show (${via})`);
+    Promise.resolve(trayHostReady).then(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      // Never start hidden where no tray icon would bring the window back.
+      const canHide = Boolean(trayManager && trayManager.trayHost.available);
+      const shouldStartMinimized =
+        canHide && (startMinimized || trayManager.startMinimized);
 
-    if (!shouldStartMinimized) {
-      console.log("[main] mainWindow.show() called");
-      mainWindow.show();
-    } else {
-      console.log("[main] Starting minimized to tray");
-    }
+      if (!shouldStartMinimized) {
+        console.log("[main] mainWindow.show() called");
+        mainWindow.show();
+      } else {
+        console.log("[main] Starting minimized to tray");
+      }
+    });
   });
 
   return mainWindow;
@@ -753,8 +839,8 @@ async function loadApp() {
 function reopenWindow() {
   createWindow();
   // Asked for from the tray or the dock: show it even when starting minimized.
-  mainWindow.once("ready-to-show", () => mainWindow && mainWindow.show());
-  if (agentProcessManager) agentProcessManager.mainWindow = mainWindow;
+  const reopened = mainWindow;
+  revealWhenReady(reopened, () => !reopened.isDestroyed() && reopened.show());
   if (trayManager) trayManager.mainWindow = mainWindow;
   if (notificationService) notificationService.mainWindow = mainWindow;
   loadApp().catch((err) => {
@@ -768,12 +854,7 @@ function initializeServices() {
   console.log("[main] Initializing services...");
 
   // T2: Agent Process Manager (manages OS agent subprocesses)
-  // getBackendPort lets its install/uninstall handlers proxy to the live
-  // Python backend's install runtime (issue #1721) on whatever random port
-  // port-manager picked this session.
-  agentProcessManager = new AgentProcessManager(mainWindow, {
-    getBackendPort: () => backendPort,
-  });
+  agentProcessManager = new AgentProcessManager();
 
   // T1: Tray Manager (system tray icon + context menu)
   trayManager = new TrayManager(mainWindow, {
@@ -781,6 +862,14 @@ function initializeServices() {
     reopenWindow: () => reopenWindow(),
   });
   trayManager.create();
+  trayHostReady = probeTrayHost()
+    .then((host) => {
+      if (trayManager) trayManager.setHost(host);
+    })
+    .catch((err) => {
+      // The host stays unknown, so closing quits instead of hiding.
+      console.error(`[main] Could not record the tray host: ${err.message}`);
+    });
   try {
     trayManager.syncLoginItem();
   } catch (err) {
@@ -796,9 +885,6 @@ function initializeServices() {
 
   // #5226: hold off idle sleep while a chat turn runs
   keepAwake = new KeepAwake();
-
-  // #2007: System metrics for the observability dashboard
-  systemMetrics.registerIpcHandlers();
 
   folderDialog.registerIpcHandlers();
 
@@ -870,194 +956,6 @@ async function goBackToPreviousVersion() {
   await autoUpdater.revertUpdate();
 }
 
-// ── gaia:// deep-link install bridge (issue #1725) ──────────────────────────
-//
-// The website's "Open in GAIA" button opens a `gaia://hub/install/<id>` URL.
-// The OS routes it to this app (registered as the gaia:// protocol client);
-// we parse it and hand the agent id to the install runtime (issue #1721).
-//
-// Sources of the URL differ per OS:
-//   • macOS      — the `open-url` app event (registered before whenReady).
-//   • Win/Linux  — a command-line argument, either at cold start (process.argv)
-//                  or on a second launch (the `second-instance` event argv).
-// A malformed/unsupported link surfaces a loud error dialog — never a silent
-// no-op (deep-link.cjs throws with an actionable message).
-
-// Holds gaia:// links until startup has waited for the backend (the install
-// gate verifies the agent through its catalog API), then dispatches each once.
-const startupDeepLinks = createStartupDeepLinkQueue({
-  dispatch: (rawUrl) => {
-    void runDeepLink(parseDeepLink(rawUrl));
-  },
-  reportNotReady: reportDeepLinksNotReady,
-  logger: console,
-});
-
-/**
- * Register this app as the handler for the gaia:// scheme. In dev (`electron .`)
- * the launcher is Electron itself, so the app path must be threaded through
- * explicitly; packaged builds register their own executable.
- */
-function registerProtocolHandler() {
-  try {
-    let registered;
-    if (process.defaultApp && process.argv.length >= 2) {
-      // Dev: `electron . <args>` — point the scheme at this script.
-      registered = app.setAsDefaultProtocolClient("gaia", process.execPath, [
-        path.resolve(process.argv[1]),
-      ]);
-    } else {
-      registered = app.setAsDefaultProtocolClient("gaia");
-    }
-    if (registered) {
-      console.log("[main] Registered as gaia:// protocol client");
-    } else {
-      console.warn(
-        "[main] Could not register gaia:// protocol client — deep-link installs may not route to this app"
-      );
-    }
-  } catch (err) {
-    console.warn(
-      `[main] setAsDefaultProtocolClient failed: ${err && err.message ? err.message : err}`
-    );
-  }
-}
-
-/**
- * Entry point for any inbound deep link. Validates it now (a bad link is
- * refused loudly and immediately), then hands it to the startup queue, which
- * holds it until the backend is ready and dispatches it immediately after.
- */
-function handleDeepLink(rawUrl) {
-  try {
-    parseDeepLink(rawUrl);
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    console.error(`[main] Rejected deep link: ${message}`);
-    try {
-      dialog.showErrorBox("Invalid GAIA link", message);
-    } catch {
-      /* dialog may be unavailable pre-ready — the log line above still fires */
-    }
-    return;
-  }
-
-  startupDeepLinks.accept(rawUrl);
-}
-
-/**
- * Explicit, INFORMED per-agent confirmation for a web-triggered install. This
- * is the security gate: the user must confirm the SPECIFIC agent — and see
- * its real trust tier and permissions, not just its bare id — before any
- * download happens (issue #2196 review; hardened so the shown facts match
- * the backend's non-verified gate, which now covers every non-verified
- * agent, not just native ones). Defaults to the safe (Cancel) option.
- *
- * Fails closed: if the agent can't be found in the catalog, or the backend
- * is unreachable, the install is refused with an explanatory error — never
- * installed blind.
- * @returns {Promise<boolean>}
- */
-async function confirmDeepLinkInstall(command) {
-  let entry;
-  try {
-    entry = await agentProcessManager.fetchCatalogEntry(command.agentId);
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    console.error(
-      `[main] Refusing deep-link install of "${command.agentId}": ${message}`
-    );
-    try {
-      dialog.showErrorBox("Could not verify this agent", message);
-    } catch {
-      /* best-effort */
-    }
-    return false;
-  }
-
-  const prompt = buildInstallPrompt(entry);
-  const choice = await dialog.showMessageBox(
-    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
-    {
-      type: "question",
-      buttons: [prompt.requiresTrust ? "Trust & Install" : "Install", "Cancel"],
-      defaultId: 1, // Enter selects the safe option
-      cancelId: 1,
-      title: prompt.title,
-      message: prompt.message,
-      detail: prompt.detail,
-      noLink: true,
-    }
-  );
-  return !!choice && choice.response === 0;
-}
-
-/** Wire the injected deep-link dispatcher to this process's runtime effects. */
-async function runDeepLink(command) {
-  console.log(`[main] Deep-link install request: ${command.agentId}`);
-  try {
-    await dispatchDeepLink(command, {
-      confirm: confirmDeepLinkInstall,
-      installAgent: (agentId, opts) => agentProcessManager.installAgent(agentId, opts),
-      focusWindow: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          if (!mainWindow.isVisible()) mainWindow.show();
-          mainWindow.focus();
-        }
-      },
-      logger: { log: console.log.bind(console), error: console.error.bind(console) },
-    });
-  } catch (err) {
-    const message = err && err.message ? err.message : String(err);
-    console.error(
-      `[main] Deep-link install of "${command.agentId}" failed: ${message}`
-    );
-    try {
-      dialog.showErrorBox(`Could not install "${command.agentId}"`, message);
-    } catch {
-      /* best-effort */
-    }
-  }
-}
-
-/**
- * Release queued deep links, plus any gaia:// URL in the cold-start argv. Call
- * once, after startup has waited for the backend.
- *
- * @param {boolean} backendReady Whether the backend API answered its health check.
- */
-function processStartupDeepLinks(backendReady) {
-  startupDeepLinks.drain({ backendReady, argvUrl: extractDeepLinkFromArgv(process.argv) });
-}
-
-/** The backend never came up: tell the user instead of dispatching blind. */
-function reportDeepLinksNotReady(urls) {
-  const why = backendProcess
-    ? `did not answer within ${Math.round(STARTUP_TIMEOUT / 1000)}s`
-    : "could not be started";
-  const message =
-    `GAIA could not open ${urls.map((u) => `"${u}"`).join(", ")} because ` +
-    `its backend ${why}, so the agent cannot be verified before install. ` +
-    `Check ${_MAIN_LOG_PATH} for the startup error, then click the link ` +
-    "again once GAIA is running.";
-  console.error(`[main] ${message}`);
-  try {
-    dialog.showErrorBox("GAIA is not ready yet", message);
-  } catch {
-    /* best-effort */
-  }
-}
-
-// macOS delivers deep links via this event; it can fire before whenReady, so
-// register it at module load and let handleDeepLink queue as needed.
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  handleDeepLink(url);
-});
-
-registerProtocolHandler();
-
 // ── App Lifecycle ──────────────────────────────────────────────────────────
 
 // Note: electron-squirrel-startup was removed in Phase C of the
@@ -1100,7 +998,13 @@ if (process.platform === "win32") {
   app.setAppUserModelId(appUserModelId(app.isPackaged));
 }
 
-app.on("second-instance", (_event, argv, _cwd) => {
+// Older builds registered gaia:// at runtime; nothing handles it any more.
+if (app.isPackaged && app.isDefaultProtocolClient("gaia")) {
+  const removed = app.removeAsDefaultProtocolClient("gaia");
+  console.log(`[main] Removed stale gaia:// registration: ${removed}`);
+}
+
+app.on("second-instance", () => {
   // A second launch happened while we were running. Surface our window
   // (the user almost certainly wanted to see it).
   if (typeof mainWindow !== "undefined" && mainWindow && !mainWindow.isDestroyed()) {
@@ -1108,11 +1012,6 @@ app.on("second-instance", (_event, argv, _cwd) => {
     if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   }
-
-  // Win/Linux: a `gaia://…` deep link from the second launch arrives as an argv
-  // entry. Route it into the already-running first instance (issue #1725).
-  const deepLink = extractDeepLinkFromArgv(argv);
-  if (deepLink) handleDeepLink(deepLink);
 });
 
 app.whenReady().then(async () => {
@@ -1129,6 +1028,17 @@ app.whenReady().then(async () => {
   // The window, and the tray that keeps a closed one reachable, come before
   // anything that can take time, so an install runs in plain sight.
   titleDownloadSaveDialogs();
+  // Before the window: the desktop ties a window to its launcher when it appears.
+  if (app.isPackaged) {
+    try {
+      const launcher = installAppImageLauncher();
+      if (launcher.status !== "not-appimage") {
+        console.log(`[main] AppImage launcher ${launcher.status}: ${launcher.entry}`);
+      }
+    } catch (err) {
+      console.error(`[main] ${err.message}`);
+    }
+  }
   createWindow();
   initializeServices();
   engineInstall = createEngineInstall({
@@ -1186,7 +1096,7 @@ app.whenReady().then(async () => {
   if (showingInstallScreen) {
     const installed = await engineInstall.run();
     if (!installed) {
-      console.log("[main] Quit while the install waited on Try again");
+      console.log("[main] Quit during the backend install");
       return;
     }
     engineInstall.starting();
@@ -1196,6 +1106,7 @@ app.whenReady().then(async () => {
   if (shutdownStarted) return;
   backendStarting = startBackend();
   backendProcess = await backendStarting;
+  if (backendProcess) backendSupervisor.running(backendPort);
   if (shutdownStarted) {
     console.log("[main] Quit during startup — not opening the window");
     return;
@@ -1252,11 +1163,6 @@ app.whenReady().then(async () => {
     if (mainWindow) await loadApp();
   }
 
-  // Act on any gaia:// deep link that arrived during bootstrap or via the
-  // cold-start command line (issue #1725) — after the backend is listening,
-  // because the install gate queries its catalog API.
-  processStartupDeepLinks(backendReady);
-
   // Auto-start enabled agents (T2)
   if (agentProcessManager) {
     try {
@@ -1297,14 +1203,20 @@ function workCanBeLost() {
   return Boolean(trayManager && backendProcess);
 }
 
-/** Ask about losing work in front of the window, even when it was hidden in the tray. */
+/** Ask about losing work in front of the window, even when it was hidden or minimized. */
 function askAboutRunningWork(action) {
   return confirmQuit({
     action,
     getWork: () => fetchWorkInProgress(backendPort),
     showMessageBox: (opts) => {
       if (!mainWindow || mainWindow.isDestroyed()) return dialog.showMessageBox(opts);
+      const wasMinimized = mainWindow.isMinimized();
+      if (wasMinimized) mainWindow.restore();
       if (!mainWindow.isVisible()) mainWindow.show();
+      // Wayland can't un-minimize a window, and a modal would stay minimized with it.
+      if (process.platform === "linux" && wasMinimized && !mainWindow.isFocused()) {
+        return dialog.showMessageBox(opts);
+      }
       return dialog.showMessageBox(mainWindow, opts);
     },
   });
@@ -1327,6 +1239,7 @@ const quitGuard = installQuitGuard({
     // Mark any subsequent backend exit as intentional so we don't pop the
     // crash dialog during normal shutdown.
     isIntentionalKill = true;
+    backendSupervisor.stop();
   },
   onError: (err) => {
     console.error("[main] Quit check failed:", err);
@@ -1338,11 +1251,21 @@ const quitGuard = installQuitGuard({
   },
 });
 
+// The installer is already running: a restart now would hold its files open.
+electronAutoUpdater.on("before-quit-for-update", () => {
+  updateQuitStarted = true;
+  backendSupervisor.stop();
+});
+
+quitOnTermSignal({ proc: process, app, guard: quitGuard });
+
 installQuitCleanup({ app, cleanup });
 
 async function cleanup() {
   shutdownStarted = true;
-  if (engineInstall) engineInstall.stop();
+  backendSupervisor.stop();
+  const installStopped = engineInstall ? engineInstall.stop() : null;
+  const updating = app.isPackaged && autoUpdater.installsOnQuit();
 
   // Phase F: tear down auto-updater timers and IPC handlers.
   try {
@@ -1365,14 +1288,30 @@ async function cleanup() {
     keepAwake = null;
   }
 
-  // The agents and the backend stop side by side: each waits out its own
-  // grace period, and in series they could overrun the quit's time limit.
-  await Promise.all([stopAgentsForQuit(), stopBackendForQuit()]);
+  // The install, the agents and the backend stop side by side: each waits out
+  // its own grace period, and in series they could overrun the quit's time limit.
+  await Promise.all([installStopped, stopAgentsForQuit(), stopBackendForQuit()]);
+  if (updating) await stopDaemonForUpdate();
 
   // Destroy tray icon
   if (trayManager) {
     trayManager.destroy();
     trayManager = null;
+  }
+}
+
+/**
+ * The daemon runs from the app's own files, which the update is about to
+ * replace, and macOS has no installer step that stops it first.
+ */
+async function stopDaemonForUpdate() {
+  const gaia = backendInstaller.findGaiaBin();
+  if (!gaia) return;
+  console.log("Stopping the GAIA daemon before the update replaces its files...");
+  try {
+    await backendInstaller.stopRunningDaemon({ gaiaBin: gaia, timeoutMs: 30000 });
+  } catch (err) {
+    console.error(`[main] Couldn't stop the GAIA daemon before the update: ${err.message}`);
   }
 }
 

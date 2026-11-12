@@ -150,6 +150,13 @@ def recipe_unavailable_reason(recipe: Optional[str], system_info: Any) -> Option
     unavailable = info.get("unavailable_recipes") or []
     if recipe in unavailable:
         return f"this Lemonade cannot run {recipe} models on this PC"
+    if recipe == "flm":
+        from gaia.llm import npu_linux
+
+        # Says what is missing; Lemonade's own reason for these is "Requires XDNA2 NPU".
+        not_ready = npu_linux.summary(npu_linux.check(info))
+        if not_ready:
+            return not_ready
     entry = _as_dict(_as_dict(info.get("recipes")).get(recipe))
     backends = _as_dict(entry.get("backends"))
     if not backends:

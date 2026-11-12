@@ -13,6 +13,7 @@ vi.mock('../../services/api', async (importActual) => ({
     ...(await importActual<typeof import('../../services/api')>()),
     downloadModel: vi.fn(),
     getSystemStatus: vi.fn(),
+    loadModelAskingFirst: vi.fn(),
 }));
 
 const mockedApi = vi.mocked(api);
@@ -73,11 +74,34 @@ describe('useModelActions.downloadModel', () => {
     });
 });
 
+describe('useModelActions.loadModel', () => {
+    it('leaves the window to the server when no size is given', async () => {
+        mockedApi.loadModelAskingFirst.mockResolvedValueOnce(true);
+        const { result, unmount } = renderHook(() => useModelActions('Gemma-4-E4B-it-GGUF'));
+        await act(() => result.current.loadModel());
+
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenCalledWith('Gemma-4-E4B-it-GGUF', undefined);
+        unmount();
+    });
+
+    it('passes an explicit size through', async () => {
+        mockedApi.loadModelAskingFirst.mockResolvedValueOnce(true);
+        const { result, unmount } = renderHook(() => useModelActions('Gemma-4-E4B-it-GGUF', 65536));
+        await act(() => result.current.loadModel());
+        await act(() => result.current.loadModel(undefined, 8192));
+
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenNthCalledWith(1, 'Gemma-4-E4B-it-GGUF', 65536);
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenNthCalledWith(2, 'Gemma-4-E4B-it-GGUF', 8192);
+        unmount();
+    });
+});
+
 describe('the download banner Retry', () => {
     it("replaces the old failure with the server's reason the retry was refused", async () => {
         useChatStore.setState({ systemStatus: {
             lemonade_running: true,
             default_model_name: 'amd.Some-Gateway',
+            model_loaded: 'amd.Active-Model',
             download_progress: { state: 'error', model_name: 'amd.Some-Gateway', message: 'Pull failed earlier.' },
         } as unknown as SystemStatus });
         const gateway = "'amd.Some-Gateway' is hosted on a gateway, so there is nothing to download.";
@@ -87,7 +111,7 @@ describe('the download banner Retry', () => {
 
         await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
 
-        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false);
+        expect(mockedApi.downloadModel).toHaveBeenCalledWith('amd.Some-Gateway', false, false);
         expect(screen.getByRole('alert')).toHaveTextContent(gateway);
         expect(screen.getByRole('alert')).not.toHaveTextContent('Pull failed earlier.');
     });

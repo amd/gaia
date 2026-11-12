@@ -19,6 +19,11 @@ from gaia.installer.init_command import (
 from gaia.ui import setup_runner as sr
 
 
+def _local_chat(run):
+    """The model the app's chat opens on, for runs that don't test that choice."""
+    return "Gemma-4-E4B-it-GGUF"
+
+
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
@@ -56,7 +61,7 @@ def _lines(*events):
 def _start(monkeypatch, proc, **kw):
     monkeypatch.setattr(sr.subprocess, "Popen", lambda *a, **k: proc)
     runner = sr.SetupRunner()
-    runner.start(False, **kw)
+    runner.start(False, **kw, chat_model_for=_local_chat)
     return runner
 
 
@@ -138,7 +143,7 @@ def test_a_malformed_event_stops_the_child_it_can_no_longer_read(monkeypatch):
     second = _Proc(b"", returncode=1)
     monkeypatch.setattr(sr.subprocess, "Popen", lambda *a, **k: second)
     assert proc.killed and proc.waited
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
 
 
 def test_an_event_missing_a_field_is_ignored():
@@ -250,7 +255,7 @@ def test_a_timed_out_test_does_not_tell_the_user_to_delete_their_models():
 
     assert _verify(cmd, _client(), inference) is False
     text = "\n".join(printed)
-    assert "uninstall --models" not in text, text
+    assert "--force-models" not in text, text
     assert "stopped answering" in text
 
 

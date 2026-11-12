@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, Settings } from 'lucide-react';
+import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, ScrollText, Settings } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, displayModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { useLogsStore } from '../stores/logsStore';
+import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { ctxLabel } from './modelMeta';
 import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
@@ -55,6 +56,7 @@ export function ModelStatusPill() {
     const place = useInferencePlace();
     const systemStatus = useChatStore((s) => s.systemStatus);
     const openSettings = useChatStore((s) => s.openSettings);
+    const showServerLog = useLogsStore((s) => s.show);
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
@@ -93,9 +95,12 @@ export function ModelStatusPill() {
     }, [load]);
 
     // At a glance, from the status the app already polls; the popover reads the full report.
+    // Green only for the model the pill names — another resident model means a load is due.
     const dot: Dot = !systemStatus
         ? 'idle'
-        : !systemStatus.lemonade_running ? 'stopped' : systemStatus.model_loaded ? 'loaded' : 'idle';
+        : !systemStatus.lemonade_running
+            ? 'stopped'
+            : sameModelId(systemStatus.model_loaded, active?.model) ? 'loaded' : 'idle';
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = active?.model ? displayModelName(active.model) : null;
     const text = [place?.label, name].filter(Boolean).join(' · ') || t('modelStatus.fallbackName');
@@ -181,6 +186,15 @@ export function ModelStatusPill() {
                         >
                             <Settings size={13} aria-hidden="true" /> {t('modelStatus.settings')}
                         </button>
+                        {!s?.active_remote && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => { setOpen(false); showServerLog('model_server'); }}
+                            >
+                                <ScrollText size={13} aria-hidden="true" /> {t('logs.serverLog')}
+                            </button>
+                        )}
                         {canRestart && <button
                             type="button"
                             className="btn-secondary"

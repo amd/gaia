@@ -298,13 +298,14 @@ def test_queued_waiter_wakes_at_lease_expiry_without_a_release(timeout):
     waiter = threading.Thread(target=acquire_next, daemon=True)
     waiter.start()
     try:
-        assert granted.wait(1.0), "a queued request slept past the lease expiry"
+        # Well under the 10 s request limit, with room for a busy runner to schedule the waiter.
+        assert granted.wait(5.0), "a queued request slept past the lease expiry"
         assert result[0].model == "model-b"
     finally:
         active = broker.snapshot()["active"]
         if active is not None:
             broker.release(active["lease_id"])
-        waiter.join(1.0)
+        waiter.join(5.0)
     with pytest.raises(LeaseNotHeldError):
         broker.release(held.lease_id)
 

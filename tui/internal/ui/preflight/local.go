@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,9 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/status"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // The local runner: readiness for an agent the TUI spawns itself.
@@ -530,7 +533,7 @@ func probeLemonadeHTTP(ctx context.Context) (base string, reachable bool, trace 
 	defer cancel()
 
 	var bases []string
-	if override := strings.TrimSpace(os.Getenv(lemonadeBaseURLEnv)); override != "" {
+	if override := lemonade.EnvBaseURL(); override != "" {
 		// The agent will use exactly this, so it is the only thing worth
 		// probing — a local server on 13305 proves nothing about it.
 		bases = []string{lemonade.ResolveBaseURL(override)}
@@ -1040,14 +1043,7 @@ func downloadSize(models []gaiainit.Model) string {
 	if len(models) == 0 {
 		return ""
 	}
-	return formatGB(total)
-}
-
-func formatGB(gb float64) string {
-	if gb < 1 {
-		return fmt.Sprintf("%.0f MB", gb*1000)
-	}
-	return fmt.Sprintf("%.1f GB", gb)
+	return textutil.FormatGB(total)
 }
 
 // describeChat names a local chat model for the hand-off line.
@@ -1055,14 +1051,14 @@ func describeChat(m gaiainit.Model) string {
 	if m.SizeGB == nil {
 		return m.ID + " (on this machine)"
 	}
-	return fmt.Sprintf("%s (%s, on this machine)", m.ID, formatGB(*m.SizeGB))
+	return fmt.Sprintf("%s (%s, on this machine)", m.ID, textutil.FormatGB(*m.SizeGB))
 }
 
 func sizeSuffix(gb *float64) string {
 	if gb == nil {
 		return ""
 	}
-	return " (" + formatGB(*gb) + ")"
+	return " (" + textutil.FormatGB(*gb) + ")"
 }
 
 func modelSummaries(st gaiainit.Status) []string {
@@ -1079,6 +1075,27 @@ const installDocs = "https://amd-gaia.ai/docs/guides/install"
 
 // maxSetupLog bounds the setup transcript kept for `d details`.
 const maxSetupLog = 200
+
+// installCLI and canInstallCLI add the `gaia` CLI when setup finds none. Vars
+// so tests need no network.
+var (
+	installCLI    = update.InstallCLI
+	canInstallCLI = update.CanInstallCLI
+)
+
+// lastLines splits out into lines and keeps the last n non-empty ones.
+func lastLines(out string, n int) []string {
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r", "\n"), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
 
 // lemonadeNotInstalled is the first-run test: no Lemonade on this machine at
 // all, neither a system install nor GAIA's own. A var so tests need no machine.
@@ -1113,6 +1130,34 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	}
 
 	ch, cancel, err := start()
+	var log []string
+	if errors.Is(err, gaiainit.ErrNoCLI) && canInstallCLI() {
+		// A .pkg, .deb or .rpm install carries no CLI, so add this release's.
+		if onProgress != nil {
+			onProgress(Progress{Row: KeyLemonade, Text: "Installing GAIA's Python part, about 2 minutes", Percent: -1})
+		}
+		var out bytes.Buffer
+		installErr := installCLI(ctx, &out)
+		log = lastLines(out.String(), maxSetupLog)
+		if installErr != nil {
+			return FixResult{Err: installErr, Log: log, Diagnosis: Diagnosis{
+				Cause:   fmt.Sprintf("GAIA could not install its Python part: %v.", installErr),
+				Remedy:  "Press d for what the installer said. Or install GAIA with the command below, then open a new terminal and start GAIA again.",
+				Command: gaiainit.InstallCommand,
+				Where:   installDocs,
+			}}
+		}
+		ch, cancel, err = start()
+	}
+	if errors.Is(err, gaiainit.ErrNoCLI) {
+		return FixResult{Err: err, Log: log, Diagnosis: Diagnosis{
+			Cause:      "The GAIA CLI isn't installed, and setup needs it.",
+			Remedy:     "Install GAIA with the command below, then open a new terminal and start GAIA again.",
+			Command:    gaiainit.InstallCommand,
+			PowerShell: gaiainit.InstallPowerShellCommand,
+			Where:      installDocs,
+		}}
+	}
 	if err != nil {
 		return FixResult{Err: err, Diagnosis: Diagnosis{
 			Cause:   err.Error(),
@@ -1124,7 +1169,6 @@ func (l localRunner) Fix(ctx context.Context, _ Config, kind FixKind, onProgress
 	defer cancel()
 
 	var (
-		log     []string
 		current = Progress{Row: KeyLemonade, Text: "Starting setup", Percent: -1}
 		failure string
 	)

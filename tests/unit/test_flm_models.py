@@ -11,6 +11,7 @@ the model list mirrors the shape of FastFlowLM's ``src/model_list.json``.
 
 import asyncio
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -639,14 +640,57 @@ def test_setup_says_an_flm_model_needs_an_npu():
     assert fit["fits"] is False and "Ryzen AI NPU" in fit["fit_reason"]
 
 
-def test_an_apu_carve_out_comes_off_the_npu_memory():
-    info = _system_info(
-        devices={
-            "amd_npu": {"available": True},
-            "amd_igpu": {"available": True, "vram_gb": 16.0, "name": "Radeon"},
+def _apu_info(os_version, physical_gb, carve_out_gb):
+    return _system_info(
+        **{
+            "OS Version": os_version,
+            "Physical Memory": f"{physical_gb:.2f} GB",
+            "devices": {
+                "amd_npu": {"available": True},
+                "amd_igpu": {
+                    "available": True,
+                    "vram_gb": carve_out_gb,
+                    "name": "Radeon",
+                },
+            },
         }
     )
+
+
+def test_on_windows_the_carve_out_comes_off_installed_ram():
+    info = _apu_info("Windows 11 Pro 24H2", 64.0, 16.0)
     assert capacity_from_system_info(info).npu_memory_gb == 48.0
+
+
+def test_on_linux_memtotal_already_excludes_the_carve_out():
+    info = _apu_info("Linux-6.14.0-ubuntu-24.04", 48.0, 16.0)
+    assert capacity_from_system_info(info).npu_memory_gb == 48.0
+
+
+@pytest.mark.parametrize("carve_out_gb", [64.0, 96.0])
+def test_a_linux_apu_with_a_large_carve_out_still_has_its_npu(carve_out_gb):
+    # A 128 GB Strix Halo set to a 64 GB carve-out reports MemTotal 62.4 GB.
+    info = _apu_info("Linux-7.0.0-31-generic", 128.0 - carve_out_gb - 1.6, carve_out_gb)
+    cap = capacity_from_system_info(info)
+    assert cap.has_npu
+    assert npu_capacity(cap).memory_gb == pytest.approx(128.0 - carve_out_gb - 1.6)
+
+
+def test_setup_on_a_large_carve_out_linux_apu_does_not_say_no_npu(monkeypatch):
+    from gaia.llm import npu_linux
+
+    monkeypatch.setattr(npu_linux, "problems", lambda: [])
+    client = MagicMock()
+    client.get_system_info.return_value = _apu_info(
+        "Linux-7.0.0-31-generic", 62.4, 64.0
+    )
+    model, _, npu = lc.recommend_npu_chat_model(client)
+    assert model == lc.NPU_DEFAULT_MODEL_NAME and npu.memory_gb == 62.4
+
+
+def test_a_windows_report_whose_carve_out_fills_ram_has_no_npu_room():
+    info = _apu_info("Windows 11 Pro 24H2", 16.0, 16.0)
+    assert capacity_from_system_info(info).npu_memory_gb is None
 
 
 def test_a_load_reads_free_system_ram_not_free_gpu_memory():

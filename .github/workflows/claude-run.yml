@@ -116,8 +116,9 @@ jobs:
           # checkout@v7 refuses fork-PR checkout under pull_request_target by default (pwn-request
           # guard). Safe to opt in HERE because the fork tree is only diffed and READ as review
           # input — never executed. The ONLY step that runs PR code (the evidence stage below) is
-          # gated to head.repo.fork == false. INVARIANT: any future step that builds/installs/runs
-          # the checked-out tree MUST carry that same fork gate, or this opt-in becomes an RCE.
+          # gated to pull_request_target AND head.repo.fork == false. INVARIANT: any future step
+          # that builds/installs/runs the checked-out tree MUST carry that same gate, or this
+          # opt-in becomes an RCE. Enforced by tests/unit/test_claude_run_fork_gate.py.
           allow-unsafe-pr-checkout: true
 
       - name: Generate PR diff
@@ -268,7 +269,7 @@ jobs:
       # Agent-UI / real-inference lane is the self-hosted strix-halo follow-up.
       - name: Detect testable surface
         id: surface
-        if: inputs.generate_evidence && github.event.pull_request.head.repo.fork == false
+        if: inputs.generate_evidence && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.fork == false
         run: |
           # COARSE gate only: is there any runnable, non-test source change to test at all?
           # We deliberately do NOT enumerate specific surfaces — that path list rots and
@@ -457,7 +458,7 @@ jobs:
       # not red-X a contributor's PR CI. Visibility comes from the verification step.
       - name: Run Claude (attempt 1)
         id: a1
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
@@ -480,7 +481,7 @@ jobs:
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
         if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -541,7 +542,7 @@ jobs:
       - name: Run Claude on the secondary account (primary out of quota)
         id: b1
         if: "!cancelled() && steps.quota.outputs.retry == 'true'"
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}

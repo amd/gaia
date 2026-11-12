@@ -16,7 +16,9 @@ phase runs past its threshold in installer/install_time_thresholds.json.
 A failure that is a filed, open bug is listed in installer/headless/
 known_failures.json with the issue and an output signature. It shows as "known
 #N" instead of failing the row, and the row fails again the moment the bug stops
-reproducing, so the entry cannot outlive the fix.
+reproducing, so the entry cannot outlive the fix. ``check-known`` fails an entry
+whose issue has no release milestone, was closed unfixed, or whose milestone has
+shipped, so it cannot outlive the schedule either.
 
 Stdlib only: it runs on stock GitHub-hosted runners before anything is installed.
 
@@ -24,6 +26,7 @@ Stdlib only: it runs on stock GitHub-hosted runners before anything is installed
     python journey.py run       --results r.json --phases "download install ..." --known K --thresholds T -- <command with {phase}>
     python journey.py finding   --results r.json --phase install --text "..."
     python journey.py summarize --dir results/ --known K --thresholds T --out install-timings.json
+    python journey.py check-known --known K --repo amd/gaia
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -50,6 +54,8 @@ PHASES = [
     "setup",
     "preflight",
     "quit",
+    # After quit: the app's own Lemonade must not stand in for a fresh start.
+    "engine",
     "uninstall",
     "leftovers",
 ]
@@ -150,6 +156,79 @@ def stale_known(result: Dict[str, Any], known: Dict[str, Any]) -> List[str]:
                     f"its entry from {KNOWN_URL}"
                 )
     return errors
+
+
+MILESTONE_VERSION = re.compile(r"^(v\d+\.\d+\.\d+)\b")
+
+
+def unscheduled_known(
+    entry: Dict[str, Any], issue: Dict[str, Any], released: bool
+) -> Optional[str]:
+    """Why an entry may no longer hide its bug, or None while its fix is scheduled.
+
+    ``issue`` is ``gh issue view --json state,stateReason,milestone``; ``released``
+    says whether the milestone's version has a published final release.
+    """
+    n = entry["issue"]
+    if issue.get("state") == "CLOSED" and issue.get("stateReason") != "COMPLETED":
+        return f"#{n} was closed without a fix, so its entry would hide the bug forever"
+    title = (issue.get("milestone") or {}).get("title", "")
+    if not MILESTONE_VERSION.match(title):
+        return f"#{n} has no release milestone (got '{title}'), so nothing schedules its fix"
+    if released:
+        return (
+            f"#{n}'s milestone {title} has shipped and the journeys still allow its bug"
+        )
+    return None
+
+
+def _gh_json(*args: str) -> Any:
+    out = subprocess.run(
+        ["gh", *args], capture_output=True, text=True, timeout=60, check=False
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"gh {' '.join(args[:3])} failed: {out.stderr.strip()}")
+    return json.loads(out.stdout)
+
+
+def _is_released(repo: str, version: str) -> bool:
+    out = subprocess.run(
+        ["gh", "api", f"repos/{repo}/releases/tags/{version}", "--jq", ".prerelease"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if out.returncode != 0:
+        if "(HTTP 404)" in out.stderr:
+            return False
+        raise RuntimeError(f"gh api release {version} failed: {out.stderr.strip()}")
+    return out.stdout.strip() == "false"
+
+
+def cmd_check_known(args: argparse.Namespace) -> int:
+    errors = []
+    for entry in _optional(args.known).get("entries", []):
+        issue = _gh_json(
+            "issue",
+            "view",
+            str(entry["issue"]),
+            "--repo",
+            args.repo,
+            "--json",
+            "state,stateReason,milestone",
+        )
+        title = (issue.get("milestone") or {}).get("title", "")
+        match = MILESTONE_VERSION.match(title)
+        released = bool(match) and _is_released(args.repo, match.group(1))
+        problem = unscheduled_known(entry, issue, released)
+        if problem:
+            errors.append(
+                f"{problem}. Fix it, move it to a later milestone with a reason, or remove the entry from {KNOWN_URL}"
+            )
+    for e in errors:
+        print(f"::error title=Known failure not scheduled::{e}")
+    return 1 if errors else 0
 
 
 # ── threshold gate ───────────────────────────────────────────────────────────
@@ -616,6 +695,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--known")
     p.add_argument("--out")
     p.set_defaults(func=cmd_summarize)
+
+    p = sub.add_parser("check-known")
+    p.add_argument("--known", required=True)
+    p.add_argument("--repo", required=True)
+    p.set_defaults(func=cmd_check_known)
 
     args = ap.parse_args(argv)
     return args.func(args)

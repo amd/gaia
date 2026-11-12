@@ -45,7 +45,6 @@ files:
   - "!**/.gaia/**"
   - "!gaia.log"
   - "!**/node_modules/.cache/**"
-  - "!forge.config.cjs"
   - "!vite.config.ts"
   - "!tsconfig.json"
   - "!index.html"
@@ -62,15 +61,11 @@ extraResources:
     to: agents
     filter:
       - "**/*"
-  # Bundled `uv` binary (issue #782 T3). The CI job `fetch-uv-binary` in
-  # .github/workflows/build-electron-apps.yml downloads a pinned astral-sh/uv
-  # release, SHA256-verifies it, and extracts the single `uv` binary to
-  # build/vendor/uv/linux-x64/uv (mode 0755). Shipping this inside the
-  # AppImage removes the runtime `curl | sh` bootstrap that breaks on
-  # Ubuntu 24.04 minimal (curl not installed by default). Runtime path
-  # inside the mounted AppImage is <resources>/vendor/uv/linux-x64/uv.
-  - from: build/vendor/uv
-    to: vendor/uv
+  # The frozen `gaia` core (installer/core/freeze.py), unpacked here by the
+  # build-installers job. backend-installer.cjs runs it from <resources>/core,
+  # so the app installs no Python package on the user's PC.
+  - from: build/core
+    to: core
     filter:
       - "**/*"
   # Pinned embeddable Lemonade archive for this platform, fetched and verified
@@ -91,8 +86,8 @@ asar: true
 asarUnpack: []
 
 # afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
-# Replaces the postPackage hook from forge.config.cjs.
-afterPack: ../../../../installer/scripts/after-pack.cjs
+# electron-builder only loads hooks from inside this app's own folder.
+afterPack: ./scripts/after-pack.cjs
 
 # Auto-update provider — R2-primary generic feed (#1724).
 #
@@ -243,10 +238,9 @@ linux:
       Name: GAIA
       Comment: Privacy-first agentic AI interface for AMD Ryzen AI
       Categories: Development;Utility;
-      # StartupWMClass must match the X11 WM_CLASS the app reports at
-      # runtime. Electron derives WM_CLASS from the executable basename
-      # by default, so with executableName: gaia-desktop this becomes
-      # "gaia-desktop". Getting this wrong breaks taskbar icon grouping.
+      # Electron takes the window's app_id / WM_CLASS from package.json's
+      # desktopName ("gaia-desktop.desktop"); this and the .desktop file name
+      # (from executableName) must match it, or docks can't tie the window to GAIA.
       StartupWMClass: gaia-desktop
 
 deb:
@@ -262,9 +256,6 @@ deb:
     - libdrm2
     - libgbm1
     - libxcb-dri3-0
-  recommends:
-    - python3
-    - python3-venv
   priority: optional
   fpm:
     - "--after-install=../../../../installer/debian/postinst"

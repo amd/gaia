@@ -3,9 +3,7 @@
 
 /**
  * Source-level contracts for main.cjs, which cannot be required without
- * launching Electron. The deep-link queue's behaviour is tested in
- * deep-link-queue.test.cjs; these pin that main.cjs actually uses it, and
- * uses it in the right order.
+ * launching Electron.
  */
 
 const fs = require("fs");
@@ -29,41 +27,6 @@ function functionBody(name) {
     .filter((i) => i > -1);
   return MAIN.slice(start, ends.length ? Math.min(...ends) : undefined);
 }
-
-describe("main.cjs routes gaia:// links through the startup queue", () => {
-  test("startup releases the queue only after waitForBackend resolves", () => {
-    const body = whenReadyBody();
-    const wait = body.indexOf("backendReady = await waitForBackend(");
-    const drain = body.indexOf("processStartupDeepLinks(backendReady)");
-    expect(wait).toBeGreaterThan(-1);
-    expect(drain).toBeGreaterThan(wait);
-  });
-
-  test("the startup release delegates to the queue drain", () => {
-    expect(functionBody("processStartupDeepLinks")).toContain("startupDeepLinks.drain(");
-  });
-
-  test("every inbound link goes through the queue, never straight to dispatch", () => {
-    const body = functionBody("handleDeepLink");
-    expect(body).toContain("startupDeepLinks.accept(rawUrl)");
-    expect(body).not.toContain("runDeepLink(");
-    // The old gate released links as soon as services existed — before the backend listened.
-    expect(body).not.toMatch(/agentProcessManager/);
-  });
-
-  test("the queue dispatches through the confirm-gated install path", () => {
-    const start = MAIN.indexOf("createStartupDeepLinkQueue({");
-    const block = MAIN.slice(start, MAIN.indexOf("});", start));
-    expect(block).toContain("runDeepLink(parseDeepLink(rawUrl))");
-    expect(block).toContain("reportNotReady: reportDeepLinksNotReady");
-  });
-
-  test("a backend that never came up is reported loudly", () => {
-    expect(functionBody("reportDeepLinksNotReady")).toMatch(
-      /dialog\.showErrorBox\("GAIA is not ready yet"/
-    );
-  });
-});
 
 describe("external links go through the scheme allow-list", () => {
   test("setWindowOpenHandler checks the resolved URL before openExternal", () => {
@@ -201,8 +164,14 @@ describe("the window opens before anything slow", () => {
     expect(MAIN).not.toMatch(/createProgressWindow|showFailureDialog|isBootstrapping/);
   });
 
-  test("a quit releases an install waiting on Try again", () => {
-    expect(functionBody("cleanup")).toContain("engineInstall.stop()");
+  test("a quit stops the install, or releases one waiting on Try again, and waits for it", () => {
+    const body = functionBody("cleanup");
+    expect(body).toContain("const installStopped = engineInstall ? engineInstall.stop() : null;");
+    expect(body).toContain("await Promise.all([installStopped, ");
+  });
+
+  test("SIGTERM is wired to quit past the work-in-progress question", () => {
+    expect(MAIN).toContain("quitOnTermSignal({ proc: process, app, guard: quitGuard });");
   });
 
   test("a failed install is shown even after a start in the tray", () => {

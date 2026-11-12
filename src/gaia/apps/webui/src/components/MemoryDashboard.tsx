@@ -15,8 +15,8 @@ import * as memoryApi from '../services/memoryApi';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { ref, type MessageKey } from '../i18n/registry';
-import { useT, type Translate } from '../i18n/useT';
-import { MemoryDashboardAboutYou, dateLocale } from './MemoryDashboardAboutYou';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -1493,7 +1493,7 @@ export function MemoryDashboard() {
                                     <select className="mem-filter-select" value={kContext}
                                         onChange={e => { setKContext(e.target.value); setKOffset(0); }}
                                         aria-label={t('mem.knowledge.filterContext')}>
-                                        <option value="">{t('mem.knowledge.allContexts')}</option>
+                                        <option value="">{t.bare('mem.knowledge.allContexts')}</option>
                                         {contexts.map(c => (
                                             <option key={c} value={c}>{c}</option>
                                         ))}
@@ -1501,7 +1501,7 @@ export function MemoryDashboard() {
                                     <select className="mem-filter-select" value={kEntity}
                                         onChange={e => { setKEntity(e.target.value); setKOffset(0); }}
                                         aria-label={t('mem.knowledge.filterEntity')}>
-                                        <option value="">{t('mem.knowledge.allEntities')}</option>
+                                        <option value="">{t.bare('mem.knowledge.allEntities')}</option>
                                         {entities.map(e => (
                                             <option key={e.entity} value={e.entity}>{e.entity} ({e.count})</option>
                                         ))}
@@ -1544,7 +1544,7 @@ export function MemoryDashboard() {
                                             <select value={formData.category}
                                                 onChange={e => setFormData(prev => ({ ...prev, category: e.target.value }))}>
                                                 {ALL_CATEGORIES.map(c => (
-                                                    <option key={c} value={c}>{t(CATEGORY_KEYS[c])}</option>
+                                                    <option key={c} value={c}>{t.bare(CATEGORY_KEYS[c])}</option>
                                                 ))}
                                             </select>
                                         </div>
@@ -1640,7 +1640,9 @@ export function MemoryDashboard() {
                                                         >
                                                             <td>
                                                                 <span className={`mem-cat-badge ${entry.category}`}>
-                                                                    <Code value={entry.category} keys={CATEGORY_KEYS} />
+                                                                    {entry.category === 'error' && entry.source === 'error_auto'
+                                                                        ? t('mem.cat.errorLearned')
+                                                                        : <Code value={entry.category} keys={CATEGORY_KEYS} />}
                                                                 </span>
                                                             </td>
                                                             <td>
@@ -2673,9 +2675,9 @@ export function MemoryDashboard() {
                                             value={goalForm.priority}
                                             onChange={e => setGoalForm(f => ({ ...f, priority: e.target.value as memoryApi.Priority }))}
                                         >
-                                            <option value="low">{t('mem.goals.priorityLow')}</option>
-                                            <option value="medium">{t('mem.goals.priorityMedium')}</option>
-                                            <option value="high">{t('mem.goals.priorityHigh')}</option>
+                                            <option value="low">{t.bare('mem.goals.priorityLow')}</option>
+                                            <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
+                                            <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
                                         <button className="btn-primary" onClick={() => {
                                             if (!goalForm.title.trim()) return;

@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
-import { ChevronDown, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ChevronDown, Loader2, CheckCircle2, AlertCircle, ScrollText } from 'lucide-react';
 import * as api from '../../services/api';
 import { log } from '../../utils/logger';
-import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../../utils/constants';
+import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
+import { SaveAllLogs } from '../LogsDialog';
+import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
@@ -199,7 +201,7 @@ export function AdvancedSettings() {
                                 </div>
                                 <button
                                     className="btn-model-action btn-model-action--download"
-                                    onClick={() => downloadModel(false)}
+                                    onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
                                     {isDownloadingModel ? (
@@ -219,7 +221,7 @@ export function AdvancedSettings() {
                                         {wrongModel ? t('settings.advanced.wrongModel') : t('settings.advanced.smallContext')}
                                     </span>
                                     <span className="model-action-desc">
-                                        {t('settings.advanced.loadHint', { name: modelName ?? '', size: `${(MIN_CONTEXT_SIZE / 1024).toFixed(0)}K` })}
+                                        {t('settings.advanced.loadHint', { name: modelName ?? '' })}
                                     </span>
                                 </div>
                                 <button
@@ -269,7 +271,7 @@ export function AdvancedSettings() {
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
                                         className="btn-force-redownload"
-                                        onClick={() => downloadModel(true)}
+                                        onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
                                         {isDownloadingModel ? (
@@ -289,6 +291,8 @@ export function AdvancedSettings() {
                     </div>
                 )}
             </section>
+
+            <LogsCard />
 
             <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
                 <ModelServerPanel />
@@ -393,6 +397,24 @@ export function AdvancedSettings() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Every log GAIA keeps, one click away, and all of them saved as one file to share. */
+function LogsCard() {
+    const t = useT();
+    const show = useLogsStore((s) => s.show);
+    return (
+        <section className="settings-card" aria-labelledby="settings-logs-title">
+            <h3 className="settings-label" id="settings-logs-title">{t('logs.title')}</h3>
+            <p className="settings-hint">{t('logs.settingsHint')}</p>
+            <div className="settings-row">
+                <button type="button" className="btn-secondary" onClick={() => show('gaia')}>
+                    <ScrollText size={13} aria-hidden="true" /> {t('logs.view')}
+                </button>
+            </div>
+            <SaveAllLogs />
+        </section>
+    );
+}
 
 function SaveError({ message }: { message: string }) {
     const t = useT();

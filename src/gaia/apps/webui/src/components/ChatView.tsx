@@ -2,19 +2,26 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
-import { Edit3, Download, Upload, ArrowDown, FileText, FolderSearch, CheckCircle2, X } from 'lucide-react';
-import { MessageBubble, isErrorContent, turnEnding } from './MessageBubble';
+import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
+import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
-import { agentEventToStep, isProgressTick } from '../utils/streamSteps';
+import { agentEventToStep } from '../utils/streamSteps';
+import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useReadAloudStore } from '../stores/readAloudStore';
+import { readsAloudWhenDone } from '../utils/autoReadAloud';
+import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
+import { RecordingProgress } from './RecordingProgress';
 import { ensureModel, modelKnownReady } from '../stores/modelNeededStore';
-import { useNotificationStore, PATH_ACCESS_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp, selectSessionPermissionPrompt } from '../stores/notificationStore';
-import type { GaiaNotification } from '../types/agent';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../stores/notificationStore';
+import { policyAlertNotification, showPermissionRequest, toolResultUpdates } from '../utils/toolEvents';
 import * as api from '../services/api';
+import { isStarting } from '../services/statusPoll';
 import { refreshActiveRuns } from '../services/activeRuns';
 import { claimView, dispatchNext, idleByPoll, isBusyError, markActivity, requeueRefused, type QueuedSend, type SendOutcome } from '../services/queueDispatch';
 import { log } from '../utils/logger';
+import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
@@ -29,15 +36,19 @@ import { PermissionModeChip } from './PermissionModeChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
+import { SpendMeter } from './SpendMeter';
 import { RetryWithMenu } from './RetryWithMenu';
 import { AnswerComparison } from './AnswerComparison';
 import * as messageQueue from '../utils/messageQueue';
 import type { QueuedMessage } from '../utils/messageQueue';
 import { SessionPanel, SessionPanelToggle } from './session-panel/SessionPanel';
 import { PrivateChatButton } from './PrivateChatButton';
+import { SessionDocsBar } from './SessionDocsBar';
+import { ResourceMonitor } from './ResourceMonitor';
 import { OfflineNotice } from './session-panel/OfflineNotice';
 import { ExportErrorBar } from './ExportErrorBar';
 import { useSessionPanelStore } from '../stores/sessionPanelStore';
+import { useResourceMonitorStore } from '../stores/resourceMonitorStore';
 import { useAttachments } from '../hooks/useAttachments';
 import { useAnswerComparison } from '../hooks/useAnswerComparison';
 import { useContextUsage } from '../hooks/useContextUsage';
@@ -48,9 +59,12 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
+import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
+import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
+import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
 import { getT, useT } from '../i18n/useT';
 
@@ -71,6 +85,14 @@ const historyNotices = new Map<number, string>();
 /** One quiet line saying older turns left the model's view. */
 function HistoryNotice({ text }: { text: string }) {
     return <div className="history-notice" role="note">{text}</div>;
+}
+
+function LibraryNotices({ notices }: { notices: string[] }) {
+    return (
+        <div className="library-notices" role="note">
+            {notices.map((notice, index) => <div key={`${index}-${notice}`} dir="auto">{notice}</div>)}
+        </div>
+    );
 }
 
 interface ChatViewProps {
@@ -97,7 +119,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
         cards, appendCard, clearCards,
-        documents, setDocuments, setShowDocLibrary, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
+        setDocuments, setShowFileBrowser, isLoadingMessages, setLoadingMessages,
         systemStatus,
     } = useChatStore();
 
@@ -107,6 +129,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const setNotificationTypeFilter = useNotificationStore((s) => s.setTypeFilter);
     const pendingPrompt = useChatStore((s) => (s.pendingPrompt?.sessionId === sessionId ? s.pendingPrompt : null));
     const liveStatus = useChatStore((s) => s.liveStatus);
+    const toolStatus = useChatStore(selectToolStatus);
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
@@ -114,8 +137,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const hasOpenPrompt = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     const session = sessions.find((s) => s.id === sessionId);
-    const sessionDocIds = new Set(session?.document_ids ?? []);
-    const sessionDocs = documents.filter(d => sessionDocIds.has(d.id));
     const [input, setInput] = useChatDraft(sessionId, session?.private);
     const [editingTitle, setEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState('');
@@ -123,11 +144,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     // Store agent steps snapshot for completed messages
     const attach = useAttachments();
-    const [docsExpanded, setDocsExpanded] = useState(false);
     const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
     const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
     const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
     const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
+    // Why the last rename, private toggle, drop or detach failed.
+    const [actionError, setActionError] = useState<string | null>(null);
+    useEffect(() => setActionError(null), [sessionId]);
+    const handleDetachFailed = useCallback((name: string, err: unknown) => {
+        setActionError(t('chat.detachFailed', { name, error: requestErrorParam(err) }));
+    }, [t]);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -148,6 +174,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     useEffect(() => {
         if (cards.length > 0) lastCardsRef.current = [...cards];
     }, [cards]);
+    // Auto-read needs the saved choice before the first reply finishes.
+    useReadAloudSettings();
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -311,14 +339,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const mountedRef = useRef(true);
     // Left pendingPrompt, not yet sent.
     const openingRef = useRef(false);
+    const initializing = isStarting(systemStatus);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
     useEffect(() => {
         const pending = pendingPrompt?.text;
-        // Wait for the history load, or it would replace the message just sent.
-        if (!pending || useChatStore.getState().isLoadingMessages) return;
+        // Wait for the history load, or it would replace the message just sent;
+        // and for GAIA to start, or the send would refuse a message already taken.
+        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
         useChatStore.getState().setPendingPrompt(null);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
@@ -327,7 +357,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             openingRef.current = false;
             if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
         }, 0);
-    }, [pendingPrompt, isLoadingMessages]);
+    }, [pendingPrompt, isLoadingMessages, initializing]);
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -415,6 +445,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const panelWidth = useSessionPanelStore((s) => s.width);
     const revealPanelSection = useSessionPanelStore((s) => s.reveal);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
+    const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    const closeResources = useCallback(() => {
+        setShowResources(false);
+        // The close button unmounts with the strip; keep keyboard focus nearby.
+        resourcesToggleRef.current?.focus();
+    }, [setShowResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -468,8 +506,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    // Send message
-    const sendMessage = useCallback(async (overrideText?: string, options?: SendOptions) => {
+    /** With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone. */
+    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions) => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
@@ -479,14 +517,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const fromQueue = options?.queued === true;
         // reconnect=N re-attaches a stream that went silent, replacing the dead one still marked live.
         const reconnect = reattach ? options?.reconnect ?? 0 : 0;
-        const text = (overrideText || input).trim();
-        const hasAttachments = !fromQueue && attach.hasUploaded;
+        const fromComposer = !reattach && givenText === undefined;
+        const text = (fromComposer ? input : givenText ?? '').trim();
+        const hasAttachments = fromComposer && attach.hasUploaded;
+        const hasImage = fromComposer && attach.hasImage;
+        const takeDraft = () => {
+            if (!fromComposer) return text;
+            const composed = attach.compose(text);
+            setInput('');
+            attach.clear();
+            inputRef.current?.focus();
+            return composed;
+        };
 
         // User just sent a message — re-pin scroll to the bottom so the
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        const isInitializing = systemStatus?.init_state === 'initializing';
+        const isInitializing = isStarting(systemStatus);
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
@@ -500,10 +548,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             if (isStreaming && !reconnect) return;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
-            setQueue((q) => messageQueue.enqueue(q, attach.compose(text), 'queued'));
-            setInput('');
-            attach.clear();
-            inputRef.current?.focus();
+            const queued = takeDraft();
+            setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
             return;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             notTaken({ kind: 'busy' });
@@ -514,11 +560,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
 
         // Asked here so a send that was going to be queued or refused asks nothing.
-        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!attach.hasImage || modelKnownReady('vision')))) {
+        if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!hasImage || modelKnownReady('vision')))) {
             if (checkingModelRef.current) return;
             checkingModelRef.current = true;
             try {
-                if (!(await ensureModel('chat')) || (attach.hasImage && !(await ensureModel('vision')))) return;
+                if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return;
             } finally {
                 checkingModelRef.current = false;
             }
@@ -528,15 +574,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         let messageText = text;
         let optimisticUser: Message | null = null;
         if (!reattach) {
-            messageText = fromQueue ? text : attach.compose(text);
+            messageText = takeDraft();
 
             log.chat.info(`Sending message to session=${sessionId}`, { length: messageText.length, preview: messageText.slice(0, 80) });
-
-            if (!fromQueue) {
-                setInput('');
-                inputRef.current?.focus();
-                attach.clear();
-            }
 
             closeForNewTurn();
 
@@ -764,48 +804,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     useNotificationStore.getState().dismissSessionPrompts(sessionId);
                 }
                 if (event.type === 'permission_request') {
-                    const toolName = event.tool || '';
-                    const toolLabel = event.tool_label || toolName;
-                    const { addNotification: addNotif, notifications } = useNotificationStore.getState();
-                    // A re-attach replays the run: keep an answered prompt as it is, and
-                    // bring back one still waiting that earlier replayed steps hid.
-                    const known = event.confirm_id ? notifications.find((n) => n.id === event.confirm_id) : undefined;
-                    if (known) {
-                        if (!known.response && known.dismissed) {
-                            useNotificationStore.setState((st) => ({
-                                notifications: st.notifications.map((n) => (n.id === known.id ? { ...n, dismissed: false } : n)),
-                            }));
-                        }
-                        return;
-                    }
-                    const isPathAccess = toolName === PATH_ACCESS_TOOL;
-                    const followUp = isPathAccess && isPathAccessFollowUp(notifications, sessionId, event.args);
-                    addNotif({
-                        id: event.confirm_id ?? `perm-${Date.now()}`,
-                        type: 'permission_request',
-                        agentId: sessionId,
-                        sessionId,
-                        agentName: 'GAIA',
-                        title: isPathAccess ? pathAccessTitle(event.args, followUp) : `Allow ${toolLabel}?`,
-                        message: isPathAccess
-                            ? pathAccessQuestion(event.args, followUp)
-                            : `GAIA needs your OK before ${toolLabel}.`,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'high',
-                        tool: toolName,
-                        toolArgs: event.args as Record<string, unknown> | undefined,
-                        confirmId: event.confirm_id,
-                        alwaysScope: typeof event.always_scope === 'string' ? event.always_scope : undefined,
-                        alwaysLabel: typeof event.always_label === 'string' && event.always_label ? event.always_label : undefined,
-                        toolLabel: event.tool_label || undefined,
-                        risk: typeof event.risk === 'string' ? event.risk : undefined,
-                        // A relayed agent sends a summary of the call instead of its args.
-                        summary: typeof event.summary === 'string' && event.summary ? event.summary : undefined,
-                        // No timeout from the backend means it waits; don't invent one.
-                        timeoutSeconds: event.timeout_seconds,
-                    });
+                    showPermissionRequest(event, sessionId);
                     return;
                 }
 
@@ -853,34 +852,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
 
                 if (event.type === 'policy_alert') {
-                    const toolName = event.tool || 'unknown tool';
-                    const reason =
-                        event.reason ||
-                        event.message ||
-                        event.content ||
-                        'Tool execution was blocked by governance policy.';
-                    const notification: GaiaNotification = {
-                        id: event.receipt_id ?? `policy-${Date.now()}-${stepIdRef.current + 1}`,
-                        type: 'policy_alert',
-                        agentId: sessionId,
-                        agentName: 'GAIA',
-                        title: `Blocked: ${toolName} is restricted by policy.`,
-                        message: reason,
-                        timestamp: Date.now(),
-                        read: false,
-                        dismissed: false,
-                        priority: 'critical',
-                        tool: toolName,
-                        decision: event.decision || 'BLOCK',
-                        reason,
-                        ruleIds: event.rule_ids ?? [],
-                        policyVersion: event.policy_version,
-                        receiptId: event.receipt_id,
-                    };
+                    const notification = policyAlertNotification(event, sessionId, `policy-${Date.now()}-${stepIdRef.current + 1}`);
                     addNotification(notification);
                     const step = agentEventToStep(event, stepIdRef);
                     if (step) addAgentStep(step);
-                    showPolicyToast({ tool: toolName, receiptId: event.receipt_id });
+                    showPolicyToast({ tool: notification.tool, receiptId: event.receipt_id });
                     return;
                 }
 
@@ -901,48 +877,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     if (typeof event.render === 'string' && event.render.length > 0) {
                         appendCard({ render: event.render, data: event.data });
                     }
-                    const updates: Partial<AgentStep> = {
-                        result: event.summary || event.title || 'Done',
-                        active: false,
-                        success: event.success !== false,
-                        latencyMs: event.latency_ms,
-                    };
-                    // Pass through structured command output if available
-                    if (event.command_output) {
-                        updates.commandOutput = {
-                            command: event.command_output.command,
-                            stdout: event.command_output.stdout,
-                            stderr: event.command_output.stderr,
-                            returnCode: event.command_output.return_code,
-                            expectedExit: event.command_output.expected_exit,
-                            cwd: event.command_output.cwd,
-                            durationSeconds: event.command_output.duration_seconds,
-                            truncated: event.command_output.truncated,
-                        };
-                    }
-                    if (event.mcp_output?.text) updates.mcpOutput = event.mcp_output;
-                    // Pass through retrieval chunks if available
-                    if (event.result_data?.chunks && event.result_data.chunks.length > 0) {
-                        updates.retrievalChunks = event.result_data.chunks.map((c) => ({
-                            id: c.id,
-                            source: c.source,
-                            sourcePath: c.sourcePath,
-                            page: c.page,
-                            score: c.score,
-                            preview: c.preview,
-                            content: c.content,
-                        }));
-                    }
-                    // Pass through file list if available
-                    if (event.result_data?.type === 'file_list' &&
-                        (event.result_data as any).files?.length > 0) {
-                        updates.fileList = {
-                            files: (event.result_data as any).files,
-                            total: (event.result_data as any).total ??
-                                (event.result_data as any).files.length,
-                        };
-                    }
-                    updateLastToolStep(updates);
+                    updateLastToolStep(toolResultUpdates(event));
                     return;
                 }
                 // Tool args update the last TOOL step with detail
@@ -962,6 +897,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
+                // A load_skill call is already its own row; other pickups get one.
+                if (event.type === 'skill_use') {
+                    useChatStore.getState().addSkillStep(
+                        event.how === 'model' ? null : agentEventToStep(event, stepIdRef),
+                    );
+                    return;
+                }
+
                 // The text streamed so far narrated the call that follows: it leaves the answer for the timeline.
                 if (event.type === 'commentary') {
                     fullContent = '';
@@ -971,6 +914,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     const step = agentEventToStep(event, stepIdRef);
                     if (step) addAgentStep(step);
                     return;
+                }
+
+                // Not the answer: it was reasoning (a lone </think>), or was cut off (status; say so).
+                if (event.retracts_answer) {
+                    fullContent = '';
+                    toolOccurredRef.current = false;
+                    streamBufferRef.current = '';
+                    setStreamContent('');
+                    if (event.type === 'status') {
+                        const step = agentEventToStep(
+                            { type: 'status', status: 'warning', message: getT()('live.answerRestarted') } as StreamEvent,
+                            stepIdRef,
+                        );
+                        if (step) addAgentStep(step);
+                        return;
+                    }
                 }
 
                 // One "Thinking" step per turn. appendThinkingContent() appends
@@ -988,46 +947,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Consolidate status events ────────────────────────────
-                // Working/info status messages are progress indicators.
-                // Consolidate consecutive ones into a single entry.
                 if (event.type === 'status') {
-                    const status = event.status;
-                    const msg = (event.message || '').trim();
-                    if (status === 'history_cut') {
-                        historyNotice = msg || undefined;
+                    if (event.status === 'history_cut') {
+                        historyNotice = (event.message || '').trim() || undefined;
                         setLiveHistoryNotice(historyNotice ?? null);
                         return;
                     }
-                    if (event.phase && msg) useChatStore.getState().setLiveStatus(msg, event.phase);
-                    // The client's own wait notice is not a step of the turn.
-                    if (event.phase === 'waiting') return;
-                    if (isProgressTick(event)) return;
-                    // Skip "Executing <tool>" messages - redundant with tool_start
-                    if (msg.toLowerCase().startsWith('executing ')) return;
-                    if (status === 'working' || status === 'warning' || status === 'info') {
-                        const currentSteps = useChatStore.getState().agentSteps;
-                        const lastStep = currentSteps[currentSteps.length - 1];
-                        // Consolidate with previous status step (but NOT thinking —
-                        // overwriting a thinking step's detail would discard all
-                        // accumulated thinking text).
-                        if (lastStep && lastStep.type === 'status' && lastStep.active) {
-                            updateLastAgentStep({
-                                label: msg || 'Working',
-                                detail: msg,
-                            });
-                            return;
-                        }
-                        // If the last step is thinking, update only the label
-                        // so the summary bar shows the status, but preserve the
-                        // accumulated thinking detail.
-                        if (lastStep && lastStep.type === 'thinking' && lastStep.active) {
-                            updateLastAgentStep({ label: msg || 'Thinking' });
-                            return;
-                        }
-                        const step = agentEventToStep(event, stepIdRef);
-                        if (step) addAgentStep(step);
-                    }
+                    applyStatusEvent(event, stepIdRef);
                     return;
                 }
 
@@ -1068,6 +994,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 }
                 streamBufferRef.current = '';
 
+                // Even for a backgrounded chat: these are library and chat-list state.
+                showAddedDocuments(sessionId, event.documents_added ?? []);
+
                 // A completion for a backgrounded session is persisted
                 // server-side, so don't touch the shared store (#1580).
                 if (isStale()) return;
@@ -1101,9 +1030,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                         stopState,
                         historyNotice,
+                        libraryNotices: event.library_notices,
+                        failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
                     addMessage(assistantMsg);
+                    const readAloud = useReadAloudStore.getState();
+                    if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
+                        void readAloud.read(`${sessionId}:${assistantMsg.id}`, cleanToolCallContent(content));
+                    }
                 }
 
                 setStreaming(false);
@@ -1137,6 +1072,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ...m,
                                     cards: prev?.cards ?? m.cards,
                                     stopState: m.stopState ?? prevMsgs.find((p) => p.id === m.id)?.stopState,
+                                    failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                 };
                             });
                             setMessages(msgs);
@@ -1432,11 +1368,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || systemStatus?.init_state === 'initializing') return;
+        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, systemStatus?.init_state, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1493,9 +1429,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
         // Untouched draft: never cut an old over-long title the user didn't edit.
         if (title && titleDraft !== session?.title && title !== session?.title) {
-            // Explicit rename — pin against the auto-retitler (#2165).
-            await api.updateSession(sessionId, { title, title_is_custom: true });
-            updateSessionInList(sessionId, { title });
+            setActionError(null);
+            try {
+                // Explicit rename — pin against the auto-retitler (#2165).
+                await api.updateSession(sessionId, { title, title_is_custom: true });
+                updateSessionInList(sessionId, { title });
+            } catch (err) {
+                log.chat.error(`Could not rename chat ${sessionId}`, err);
+                setActionError(t('chat.renameFailed', { error: requestErrorParam(err) }));
+            }
         }
         setEditingTitle(false);
     };
@@ -1503,76 +1445,40 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Toggle private (incognito) mode
     const handleTogglePrivate = useCallback(async () => {
         if (!sessionId) return;
+        setActionError(null);
         try {
             const updated = await api.toggleSessionPrivacy(sessionId);
             updateSessionInList(sessionId, { private: updated.private });
         } catch (err) {
             log.ui.warn('Failed to toggle private mode', err);
+            setActionError(t('chat.privateFailed', { error: requestErrorParam(err) }));
         }
-    }, [sessionId, updateSessionInList]);
+    }, [sessionId, updateSessionInList, t]);
 
-    /** Detach a document from this session via the context bar (does not delete from library). */
-    const handleRemoveDocument = useCallback(async (e: React.MouseEvent, docId: string) => {
-        e.stopPropagation(); // Don't trigger the context bar click
-        const doc = documents.find((d) => d.id === docId);
-        log.doc.info(`Detaching document from session: ${doc?.filename || docId}`);
-        try {
-            await api.detachDocument(sessionId, docId);
-            // Read fresh state after await to avoid stale-closure bugs when
-            // the user removes multiple documents in quick succession.
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-            const remaining = (freshSession?.document_ids ?? []).filter(id => id !== docId);
-            updateSessionInList(sessionId, { document_ids: remaining });
-            // Auto-collapse when 3 or fewer session docs remain after removal
-            if (remaining.length <= 3) setDocsExpanded(false);
-            log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
-        } catch (err) {
-            log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
-        }
-    }, [documents, sessionId, updateSessionInList]);
-
-    // Drag & drop — uploads the file blob directly rather than relying on
-    // File.path (which is browser-undefined and was removed in Electron 32+).
-    // Dropped files index quietly and auto-attach to the current session;
-    // the Document Library panel is NOT forced open so the drop doesn't
-    // interrupt the chat view. Users can still open the library manually
-    // to see progress for large files. See issue #728.
+    // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
         if (e.dataTransfer.files.length === 0) return;
 
+        const dropped = Array.from(e.dataTransfer.files);
+        // A recording is transcribed by the agent, not indexed as a document.
+        const recordings = dropped.filter((file) => isMediaFile(file.name));
+        if (recordings.length > 0) attach.addFiles(recordings);
+        const documents = dropped.filter((file) => !isMediaFile(file.name));
+        if (documents.length === 0) return;
+
         if (!(await ensureModel('embedding'))) return;
-        for (const file of Array.from(e.dataTransfer.files)) {
-            log.doc.info(`Dropped on chat view: ${file.name}`);
-            try {
-                const doc = await api.uploadDocumentBlob(file);
-                if (sessionId && doc?.id) {
-                    try {
-                        await api.attachDocument(sessionId, doc.id);
-                        const freshSession = useChatStore.getState().sessions.find(s => s.id === sessionId);
-                        const existing = freshSession?.document_ids ?? [];
-                        if (!existing.includes(doc.id)) {
-                            updateSessionInList(sessionId, { document_ids: [...existing, doc.id] });
-                        }
-                        log.doc.info(`Auto-attached "${file.name}" to session ${sessionId}`);
-                    } catch (attachErr) {
-                        log.doc.warn(`Could not attach dropped document to session: ${attachErr}`);
-                    }
-                }
-            } catch (err) {
-                log.doc.error(`Upload failed: ${file.name}`, err);
-            }
+        setActionError(null);
+        const failures = await addDroppedFiles(sessionId, documents);
+        if (failures.length > 0) {
+            setActionError(failures.map(({ name, stage, error }) => t(
+                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                { name, error: requestErrorParam(error) },
+            )).join(' '));
         }
-        // The document bar lists only documents the store knows about.
-        try {
-            const data = await api.listDocuments();
-            setDocuments(data.documents || []);
-        } catch (err) {
-            log.doc.error('Could not refresh the document list after a drop', err);
-        }
-    }, [sessionId, updateSessionInList, setDocuments]);
+    }, [sessionId, attach, t]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1604,7 +1510,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
     const composerBlocked = retiredAgent
         ? `This chat used the retired "${retiredAgent}" agent and is read-only. Start a new chat.`
-        : systemStatus?.init_state === 'initializing'
+        : isStarting(systemStatus)
             ? STARTING_REASON
             : null;
 
@@ -1643,6 +1549,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
                 </div>
                 <div className="task-header-right">
+                    <button
+                        ref={resourcesToggleRef}
+                        className="btn-icon-sm task-header-resources"
+                        onClick={() => setShowResources(!showResources)}
+                        aria-pressed={showResources}
+                        aria-label={t('resources.toggle')}
+                        title={t(showResources ? 'resources.hide' : 'resources.show')}
+                    >
+                        <Activity size={15} aria-hidden="true" />
+                    </button>
                     <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
                     <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
                         <FolderSearch size={15} />
@@ -1654,51 +1570,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 </div>
             </header>
 
-            {sessionDocs.length > 0 && (() => {
-                const sorted = [...sessionDocs].sort((a, b) => {
-                    const aTime = a.last_accessed_at || a.indexed_at || '';
-                    const bTime = b.last_accessed_at || b.indexed_at || '';
-                    return bTime.localeCompare(aTime);
-                });
-                const visibleDocs = docsExpanded ? sorted : sorted.slice(0, 3);
-                const hiddenCount = sorted.length - 3;
-                return (
-                    <div
-                        className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-                        aria-label={`${sessionDocs.length} indexed document${sessionDocs.length !== 1 ? 's' : ''}`}
-                    >
-                        <CheckCircle2 size={12} className="doc-context-icon" aria-hidden="true" />
-                        <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title="Manage documents">
-                            {sessionDocs.length} indexed
-                        </button>
-                        <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
-                            {visibleDocs.map((d) => (
-                                <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
-                                    <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                                    <span className="doc-pill-name">{d.filename}</span>
-                                    <button
-                                        className="doc-pill-remove"
-                                        onClick={(e) => handleRemoveDocument(e, d.id)}
-                                        aria-label={`Remove ${d.filename} from this chat`}
-                                    >
-                                        <X size={10} />
-                                    </button>
-                                </span>
-                            ))}
-                            {!docsExpanded && hiddenCount > 0 && (
-                                <button className="doc-pill-more" onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}>
-                                    +{hiddenCount} more
-                                </button>
-                            )}
-                            {docsExpanded && hiddenCount > 0 && (
-                                <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
-                                    show less
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                );
-            })()}
+            {showResources && <ResourceMonitor onClose={closeResources} />}
+
+            <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
@@ -1740,6 +1614,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 data-role={msg.role}
                             >
                                 {notice && <HistoryNotice text={notice} />}
+                                {msg.libraryNotices && msg.libraryNotices.length > 0 && (
+                                    <LibraryNotices notices={msg.libraryNotices} />
+                                )}
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
@@ -1754,6 +1631,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     latencyMs={latency}
                                 />
+                                {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
+                                    <ModelServerDownNotice />
+                                )}
                                 {comparison?.messageId === msg.id && (
                                     <AnswerComparison
                                         original={msg}
@@ -1770,6 +1650,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     })}
 
                     {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
+                    {isStreaming && <RecordingProgress />}
                     {(isStreaming || streamEnding) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
@@ -1786,6 +1667,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
+                                toolStatus={isStreaming ? toolStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}
                             />
                         </div>
@@ -1840,13 +1722,23 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="input-area">
                 <div className="input-column">
-                    <ExportErrorBar message={exportError} onDismiss={clearExportError} />
+                    <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
+                    <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />
                     <OfflineNotice sessionId={sessionId} />
+                    {pendingPrompt && initializing && (
+                        <ul className="queued-messages" aria-label={t('composer.heldLabel')} aria-live="polite">
+                            <li className="queued-message is-queued">
+                                <Clock size={12} aria-hidden="true" />
+                                <span className="queued-message-text" title={pendingPrompt.text}>{pendingPrompt.text}</span>
+                                <span className="queued-message-state">{t('composer.heldUntilStarted')}</span>
+                            </li>
+                        </ul>
+                    )}
                     <QueuedMessages
                         items={queue}
                         onRemove={(id) => setQueue((q) => messageQueue.remove(q, id))}
@@ -1880,6 +1772,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onUsage={showContextUsage}
                                     onDetails={() => revealPanelSection('context')}
                                 />
+                                <SpendMeter sessionId={sessionId} busy={busy} />
                                 <SessionFolderChip sessionId={sessionId} onOpen={() => revealPanelSection('environment')} />
                                 <ModelChip />
                             </>

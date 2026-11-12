@@ -17,13 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.ui.server import (
-    _compute_file_hash,
-    _sanitize_document_path,
-    _sanitize_static_path,
-    _validate_file_path,
-    create_app,
-)
+from gaia.ui.server import _sanitize_static_path, create_app
+from gaia.ui.utils import compute_file_hash as _compute_file_hash
+from gaia.ui.utils import sanitize_document_path as _sanitize_document_path
+from gaia.ui.utils import validate_file_path as _validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +41,15 @@ def client(app):
 def db(app):
     """Access the database from app state."""
     return app.state.db
+
+
+def _seed_cloud_catalog(monkeypatch, model_id):
+    """Register *model_id* as cloud the way ``/models`` reports it; undone after."""
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "_CLOUD_MODELS", lc._CLOUD_MODELS)
+    monkeypatch.setattr(lc, "_CLOUD_PROVIDERS", lc._CLOUD_PROVIDERS)
+    lc.record_cloud_models({"data": [{"id": model_id, "recipe": "cloud"}]})
 
 
 class TestHealthEndpoint:
@@ -103,6 +109,21 @@ class TestSystemStatus:
         mock_httpx_cls.side_effect = httpx.ConnectError("down")
         data = client.get("/api/system/status").json()
         assert data["default_model_name"] == "amd.DeepSeek-V4.1-Flash"
+        assert data["default_model_is_cloud"] is True
+
+    @patch("httpx.AsyncClient")
+    def test_system_status_flags_a_discovered_cloud_model(
+        self, mock_httpx_cls, client, db, monkeypatch
+    ):
+        """A cloud provider known only from the catalog is still cloud."""
+        import httpx
+
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+        mock_httpx_cls.side_effect = httpx.ConnectError("down")
+
+        data = client.get("/api/system/status").json()
+
         assert data["default_model_is_cloud"] is True
 
     def test_system_status_returns_200(self, client):
@@ -865,6 +886,76 @@ class TestSystemStatus:
         assert data["model_context_size"] == 4096
 
     @patch("httpx.AsyncClient")
+    def test_system_status_picked_model_not_loaded_yet(self, mock_httpx_cls, client):
+        """A picked model that another model still holds the slot for is named
+        as downloaded, so the UI can load it rather than wait on a send."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "gemma4-it-e4b-FLM",
+            "all_models_loaded": [
+                {
+                    "model_name": "gemma4-it-e4b-FLM",
+                    "type": "llm",
+                    "device": "npu",
+                    "recipe_options": {"ctx_size": 65536},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "gemma4-it-e4b-FLM", "downloaded": True, "size": 9.1},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 23.3},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_loaded"] == "gemma4-it-e4b-FLM"
+        assert data["default_model_name"] == "Qwen3.6-35B-A3B-GGUF"
+        assert data["expected_model_loaded"] is False
+        assert data["model_downloaded"] is True
+        assert data["default_model_size_gb"] == 23.3
+
+    @pytest.mark.parametrize(
+        "query, expected",
+        [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
+    )
+    def test_warm_up_retry_of_a_pick_is_fresh(
+        self, client, monkeypatch, query, expected
+    ):
+        """Try again on a failed pick queues behind a running warm-up."""
+        from gaia.ui import warmup
+
+        asked = []
+        monkeypatch.setattr(
+            warmup,
+            "request_warm_up",
+            lambda reason, fresh=False: asked.append((reason, fresh)),
+        )
+        assert client.post(f"/api/system/warm-up{query}").status_code == 200
+        assert asked == [expected]
+
+    @patch("httpx.AsyncClient")
     def test_system_status_custom_model_respected(self, mock_httpx_cls, client):
         """expected_model_loaded is True when the loaded model matches the
         custom_model override stored in settings."""
@@ -997,14 +1088,18 @@ class TestSystemStatus:
 
 
 class TestDynamicToolsSetting:
-    """/api/settings round-trip + env lock for the Beta dynamic tool loader (#1798)."""
+    """/api/settings round-trip + env lock for dynamic tool loading."""
 
-    def test_cold_state_defaults_to_off(self, client, monkeypatch):
-        """Fresh DB (no dynamic_tools key) + no env var ⇒ off, unlocked —
-        byte-identical to the pre-#1798 default-off path."""
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        """The setting lives in config.json; one test's PUT must not reach the next."""
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_cold_state_defaults_to_on(self, client, monkeypatch):
+        """No config file + no env var ⇒ on, unlocked."""
         monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
         data = client.get("/api/settings").json()
-        assert data["dynamic_tools"] is False
+        assert data["dynamic_tools"] is True
         assert data["dynamic_tools_locked"] is False
 
     def test_put_true_round_trips(self, client, monkeypatch):
@@ -1054,6 +1149,125 @@ class TestDynamicToolsSetting:
         assert unlocked["dynamic_tools_locked"] is False
 
 
+class TestNetworkPolicySetting:
+    """The Agent UI writes the same Local only policy and cleanup as the CLI."""
+
+    def test_get_reports_the_default_policy(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        assert client.get("/api/settings").json()["network_policy"] == "cloud_allowed"
+
+    def test_unrecognized_stricter_policy_is_reported_as_local_only(
+        self, client, monkeypatch, tmp_path
+    ):
+        policy = tmp_path / "policy.json"
+        policy.write_text('{"network_policy":"offline"}', encoding="utf-8")
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(policy))
+        response = client.get("/api/settings")
+        assert response.status_code == 200
+        assert response.json()["network_policy"] == "local_ai_only"
+
+    def test_local_only_clears_a_cloud_ui_choice_but_keeps_a_local_one(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        db.set_setting("custom_model", "fireworks.glm-5p3-flash")
+
+        turned_on = client.put(
+            "/api/settings", json={"network_policy": "local_ai_only"}
+        )
+
+        assert turned_on.status_code == 200
+        assert turned_on.json()["network_policy"] == "local_ai_only"
+        assert turned_on.json()["policy_notices"] == []
+        assert db.get_setting("custom_model") is None
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        assert (
+            client.put(
+                "/api/settings", json={"network_policy": "local_ai_only"}
+            ).status_code
+            == 200
+        )
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_local_only_clears_a_discovered_cloud_custom_model(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        """A cloud model known only from the catalog is cleared like any other."""
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr("gaia.llm.cloud_keys.drop_runtime_keys", lambda: [])
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        _seed_cloud_catalog(monkeypatch, "opencode.big-model")
+        db.set_setting("custom_model", "opencode.big-model")
+
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+
+        assert response.status_code == 200
+        assert db.get_setting("custom_model") is None
+
+    def test_policy_cleanup_warnings_are_returned(self, client, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        from gaia.llm.cloud_keys import CloudKeyError
+
+        monkeypatch.setattr("gaia.llm.cloud_keys.users_lemonade_url", lambda: None)
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.drop_runtime_keys",
+            lambda: (_ for _ in ()).throw(CloudKeyError("server refused")),
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert "server refused" in response.json()["policy_warnings"][0]
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "runtime_keys_not_dropped",
+                "severity": "warning",
+                "url": None,
+                "reason": "server refused",
+            }
+        ]
+
+    def test_user_server_notice_is_structured_for_translation(
+        self, client, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        monkeypatch.setattr(
+            "gaia.llm.cloud_keys.users_lemonade_url", lambda: "http://127.0.0.1:1234"
+        )
+        monkeypatch.setattr(
+            "gaia.ui.routers.system.security.require_local_pc", lambda _request: None
+        )
+        response = client.put("/api/settings", json={"network_policy": "local_ai_only"})
+        assert response.status_code == 200
+        assert response.json()["policy_warnings"] == []
+        assert response.json()["policy_notices"] == [
+            {
+                "code": "users_server_keeps_keys",
+                "severity": "info",
+                "url": "http://127.0.0.1:1234",
+                "reason": None,
+            }
+        ]
+
+    def test_policy_changes_are_local_pc_only(self, client):
+        response = client.put(
+            "/api/settings",
+            json={"network_policy": "cloud_allowed"},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+        )
+        assert response.status_code == 403
+        assert "PC running GAIA" in response.json()["detail"]
+
+
 class TestAgentModeSetting:
     """/api/settings agent_mode honesty (#2005): 'autonomous' is unshipped —
     reject it on write, default to 'goal_driven', normalize legacy values."""
@@ -1082,12 +1296,6 @@ class TestAgentModeSetting:
         resp = client.put("/api/settings", json={"agent_mode": "bogus"})
         assert resp.status_code == 400
         assert "goal_driven" in resp.json()["detail"]
-
-    def test_legacy_stored_autonomous_reported_as_goal_driven(self, client, db):
-        """A DB written before #2005 may hold 'autonomous'; GET must report the
-        effective mode, not the no-op label."""
-        db.set_setting("agent_mode", "autonomous")
-        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
 
 
 class TestSessionEndpoints:

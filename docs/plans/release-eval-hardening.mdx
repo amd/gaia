@@ -38,12 +38,13 @@ Every row below was checked against the workflow or the code, not the docs. Runt
 
 | Tier | What it covers | Trigger | Hardware | Runtime | Blocks a release? |
 |---|---|---|---|---|---|
-| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Yes.** `util/check_release_ci.py` requires `lint`, `test_unit`, `test_gaia_cli_linux` |
-| Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Yes, as part of `test_unit` |
+| Unit tests (`test_unit.yml`) | ~22,500 tests, mostly against fakes | PR, merge | Hosted: Linux, macOS arm64, Windows | 11–18 min after #5161 | **Final: yes**, every job. **RC: no**; every job is reported as a warning (`util/check_release_ci.py`) |
+| Offline integration (`test_unit.yml` job) | Daemon, CLI tool-confirmation, wheel journey, TLS, checksum pins | PR, merge | Hosted Linux only | Minutes | Final only, as part of `test_unit` |
 | Electron (`test_electron.yml`) | Jest suites. Real-process tree and quit tests only since #5438 | PR, merge | Hosted Linux | ≤15 min | No |
 | TUI (`build_tui.yml`) | ~240 Go test files | PR, merge | Hosted, 3 OSes | Minutes | No |
 | Distributed seams (`test_distributed_seams.yml`) | Checks that event and error vocabularies match across daemon, relay and sidecar | PR, merge | Hosted Linux | ≤20 min | No |
 | `gaia init` on hardware (`test_gaia_init_hw.yml`) | Fresh-profile init against real Lemonade | PR, merge, weekly | Strix Halo | ≤60 min | No |
+| NPU agent chat (`test_npu_agent_chat.yml`) | Cold `gaia init --profile npu`, then one Agent UI turn on the NPU model | Windows: PR, merge. Linux: tags, weekly, dispatch | Strix Halo, Windows and Linux | ≤150 min | **Final: Windows yes; Linux advisory** until its runners lock enough memory for the model (#6764). **RC: no**; both reported |
 | **Flagship scenario eval** (`eval_flagship.yml`) | 29 categories in 12 lanes (`eval/ci_lanes.json`): 343 scenarios, Claude as the user and the judge | Release and RC tags, dispatch | **12 Strix Halo machines** | 3.3 h wall, ~26 machine-hours | **No.** Report mode by default. Only a dispatch can `enforce` |
 | Task outcomes (`gaia eval tasks`, same workflow) | `everyday`, `therock`. The `adversarial` suite (9 traps: red suite, flaky test, hang, lying README, injected note) runs only on dispatch | Tags, dispatch | Strix Halo, Qwen3.6-35B | ~1.5 h | No. No expectations are committed |
 | Release subset (`test_gaia_agent_eval.yml`) | 5 categories, from `release_agent_gaia.yml` | Agent-package tags | Strix Halo | Hours | No, advisory. Compares against the flagship baseline since #5197 was fixed |
@@ -54,9 +55,8 @@ Every row below was checked against the workflow or the code, not the docs. Runt
 | Linux Strix Halo (`test_linux_strix_halo.yml`) | User-reported Linux bugs on real hardware: memory guard, port reuse, idle stop, fresh install | Tags, dispatch | Linux Strix Halo | 3–90 min | No. #5169 rates it the best bugs-per-runner-hour of any layer |
 | Lemonade restart harness (`util/lemonade_restart_harness.py`) | Kills, hangs and idle-stops a real `lemond`; can stress 16 sessions | **Hand-run only** | Any | ~7 min | No (allowlisted out of CI) |
 | Live Lemonade contract tests | `/health`, `/tokenize`, residency, gateway, broker load races | **Run nowhere** (`util/test_lane_allowlist.yml`) | Needs live Lemonade | Minutes | No |
-| Agent UI stress (`tests/stress/test_agent_ui_stress.py`) | 32 HTTP checks: long chats, concurrency | **Hand-run.** Not pytest, unchanged since 2026-09-07 | Any | — | No |
+| Agent UI stress (`tests/stress/stress_agent_ui.py`) | 32 HTTP checks: long chats, concurrency | **Hand-run.** Not pytest, unchanged since 2026-09-07 | Any | — | No |
 | Agent UI visual (`webui/visual/`) | Playwright snapshots of fixture data | Local tool | — | — | No |
-| Clean-state TUI runner (`util/tui_eval.py`) | Runs `gaia_*` scenarios through the TUI control API | Local | — | — | No |
 
 Two structural facts matter more than any single row:
 
@@ -233,7 +233,7 @@ Wire the existing hand-run pieces into one job: `util/lemonade_restart_harness.p
 
 ### 10. Housekeeping
 
-- Port `tests/stress/test_agent_ui_stress.py` into item 2's suite as pytest, or delete it. A hand-run script nobody runs gives a false sense of coverage.
+- Port `tests/stress/stress_agent_ui.py` into item 2's suite as pytest, or delete it. A hand-run script nobody runs gives a false sense of coverage.
 - Add hosted, fault-server-backed Playwright journeys for #883 (reload mid-stream, two tabs, backend killed, Esc versus Stop). They don't need Strix Halo.
 - Give Slack and Telegram adapters a fake platform API that rate-limits and drops the socket.
 - Add the #5169 test-value rule to `REVIEW.md`: a fix's test covers the *class* of bug at the layer where it lived.

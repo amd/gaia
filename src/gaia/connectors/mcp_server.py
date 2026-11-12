@@ -20,16 +20,19 @@ if a referenced keyring entry is missing (plan amendment A5b).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from gaia.config import mcp_servers_path
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, InvalidConfigValueError
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
 from gaia.connectors.store import SERVICE_NAME
@@ -45,6 +48,20 @@ def _mcp_servers_path() -> Path:
 def _keyring_ref(connector_id: str, env_key: str) -> str:
     """Return the ``$keyring`` reference string for a given env key."""
     return f"{SERVICE_NAME}:{connector_id}:{env_key}"
+
+
+def _checked_value(spec: ConnectorSpec, env_key: str, raw: Any) -> str:
+    # A pasted token often carries a stray space or newline, which the service rejects.
+    value = str(raw).strip()
+    field = next((f for f in spec.config_schema if f.key == env_key), None)
+    prefix = field.prefix if field else ""
+    if not value or not value.startswith(prefix):
+        label = field.label if field else env_key
+        expected = f" should start with {prefix}" if prefix else " is empty"
+        raise InvalidConfigValueError(
+            f"The {label}{expected}. Copy it again from the setup steps."
+        )
+    return value
 
 
 def _write_mcp_servers_json(servers: Dict[str, Any]) -> None:
@@ -112,6 +129,76 @@ def _saved_keyring_usernames(connector_id: str, entry: Any) -> List[str]:
         if isinstance(ref, str) and ref.startswith(prefix):
             usernames.append(ref[len(SERVICE_NAME) + 1 :])
     return usernames
+
+
+def _rederived_env(spec: ConnectorSpec, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Build *spec*'s ``$keyring`` env block; a renamed key reads its old slot."""
+    saved = set(_saved_keyring_usernames(spec.id, entry))
+    stale = sorted(saved - {f"{spec.id}:{env_key}" for env_key in spec.mcp_env_keys})
+    unsaved = [k for k in spec.mcp_env_keys if f"{spec.id}:{k}" not in saved]
+    env: Dict[str, Any] = {
+        env_key: {"$keyring": _keyring_ref(spec.id, env_key)}
+        for env_key in spec.mcp_env_keys
+    }
+    # One key gone and one new: a rename, so the secret is still under the old name.
+    if len(stale) == 1 and len(unsaved) == 1:
+        env[unsaved[0]] = {"$keyring": f"{SERVICE_NAME}:{stale[0]}"}
+    return env
+
+
+def rederive_catalog_entries(servers: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return *servers* with each catalog connector's entry rebuilt from the catalog.
+
+    A saved entry holds what ``configure`` wrote at the time, so catalog fixes
+    (a version pin, a new command, a renamed env var) never reached people who
+    had already connected. The catalog-owned fields (``command``, ``args`` and
+    the ``env`` keys it defines) are rebuilt; the user's own (``disabled``,
+    ``timeout``, plain env values they added) are kept, and secrets stay in the
+    keyring.
+
+    Ids the catalog doesn't know (hand-added servers) are returned unchanged.
+    Nothing is written back: ``configure`` / ``disconnect`` stay the only writers.
+    """
+    # Imported here: the catalog imports this module to register the handler.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    rebuilt = dict(servers)
+    for connector_id, entry in servers.items():
+        if connector_id not in REGISTRY or not isinstance(entry, dict):
+            continue
+        spec = REGISTRY.get(connector_id)
+        if spec.type != "mcp_server":
+            continue
+        saved_env = entry.get("env")
+        env = {
+            key: value
+            for key, value in (saved_env if isinstance(saved_env, dict) else {}).items()
+            if key not in spec.mcp_env_keys and isinstance(value, str)
+        }
+        env.update(_rederived_env(spec, entry))
+        rebuilt[connector_id] = {
+            **entry,
+            "command": spec.mcp_command,
+            "args": list(spec.mcp_args),
+            "env": env,
+        }
+    return rebuilt
+
+
+def _saved_secret(spec: ConnectorSpec, env_key: str) -> Optional[str]:
+    """Return *env_key*'s secret; a renamed key reads the slot it was saved under."""
+    value = keyring.get_password(SERVICE_NAME, f"{spec.id}:{env_key}")
+    if value is not None:
+        return value
+    entry = _read_mcp_servers_json().get(spec.id)
+    if not isinstance(entry, dict):
+        return None
+    _, _, username = _rederived_env(spec, entry)[env_key]["$keyring"].partition(":")
+    if username == f"{spec.id}:{env_key}":
+        return None
+    return keyring.get_password(SERVICE_NAME, username)
 
 
 def _delete_keyring_slots(usernames: Iterable[str]) -> None:
@@ -185,10 +272,9 @@ class McpServerHandler:
         env: Dict[str, str] = {}
         missing: List[str] = []
         for env_key in spec.mcp_env_keys:
-            username = f"{spec.id}:{env_key}"
-            value = keyring.get_password(SERVICE_NAME, username)
+            value = _saved_secret(spec, env_key)
             if value is None:
-                missing.append(f"{SERVICE_NAME}:{username}")
+                missing.append(_keyring_ref(spec.id, env_key))
             else:
                 env[env_key] = value
 
@@ -228,10 +314,12 @@ class McpServerHandler:
                 "Supply them in the config dict."
             )
 
+        values = {k: _checked_value(spec, k, config[k]) for k in spec.mcp_env_keys}
+
         # Store secret env values in keyring + build $keyring reference env block.
         env_block: Dict[str, Any] = {}
         for env_key in spec.mcp_env_keys:
-            value = config[env_key]
+            value = values[env_key]
             username = f"{spec.id}:{env_key}"
             keyring.set_password(SERVICE_NAME, username, str(value))
             env_block[env_key] = {"$keyring": _keyring_ref(spec.id, env_key)}
@@ -340,29 +428,55 @@ class McpServerHandler:
 
     async def test(self, spec: ConnectorSpec) -> Dict[str, Any]:
         """
-        Verify the connector by checking all required keyring entries exist.
+        Start the server once, the way chat does, and report whether it started.
 
-        Does NOT actually spawn the MCP server process — that would require
-        the real ``npx`` / command binary which may not be available in CI.
-        The presence of all keyring slots is treated as "configured and ready
-        to spawn".
+        A server that checks its token at startup (Slack) fails here on a bad
+        one. A server that only checks it on a tool call (GitHub) still passes.
+        ``reason`` is ``"timeout"`` when it was too slow to tell (a first
+        ``npx`` download), so callers don't blame the token.
         """
-        if not spec.mcp_env_keys:
-            return {"ok": True, "detail": "no_secrets_required"}
-
-        missing: List[str] = []
-        for env_key in spec.mcp_env_keys:
-            username = f"{spec.id}:{env_key}"
-            if keyring.get_password(SERVICE_NAME, username) is None:
-                missing.append(env_key)
-
+        missing = [k for k in spec.mcp_env_keys if _saved_secret(spec, k) is None]
         if missing:
+            return {"ok": False, "detail": f"missing keyring entries: {missing!r}"}
+
+        entry = rederive_catalog_entries(_read_mcp_servers_json()).get(spec.id)
+        if entry is None:
+            return {"ok": False, "detail": "not configured"}
+        if entry.get("disabled"):
             return {
                 "ok": False,
-                "detail": f"missing keyring entries: {missing!r}",
+                "reason": "disabled",
+                "detail": "turned off; turn it on to use and check it",
             }
+        return await asyncio.to_thread(_start_once, spec.id, entry)
 
-        return {"ok": True, "detail": "keyring_entries_present"}
+
+def _start_once(name: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+    from gaia.mcp.client.mcp_client import MCPClient, server_timeout
+    from gaia.mcp.client.mcp_client_manager import _CONNECT_TIMEOUT_S
+
+    try:
+        deadline = server_timeout(name, entry, _CONNECT_TIMEOUT_S)
+        client = MCPClient.from_config(name, entry)
+    except (ValueError, RuntimeError) as e:
+        return {"ok": False, "detail": str(e)}
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        if not pool.submit(client.connect).result(timeout=deadline):
+            return {"ok": False, "detail": client.last_error or "did not start"}
+        count = len(client.list_tools())
+        return {"ok": True, "detail": f"started, {count} tool{'s' * (count != 1)}"}
+    except FutureTimeoutError:
+        return {
+            "ok": False,
+            "reason": "timeout",
+            "detail": f"did not start within {deadline:.0f} seconds",
+        }
+    finally:
+        # Stopping the process also unblocks a connect still waiting on it.
+        client.disconnect()
+        pool.shutdown(wait=False)
 
 
 # Register the handler singleton at import time.

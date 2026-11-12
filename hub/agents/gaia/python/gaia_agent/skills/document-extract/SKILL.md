@@ -21,6 +21,10 @@ metadata:
    sequentially and retains source-backed entries. Do not replace this with a
    summary or manually calculated page offsets. When specifying fields in the
    tool call, pass `fields: ["name", "owner", "deadline"]` (the actual requested names).
+   When every wanted item must contain a word ("every section that mentions a
+   code"), pass `terms` with that word and its variants, such as
+   `["code", "error"]`: only pages containing one are read. Leave `terms` out
+   when an item could be worded without any of them.
 3. If an extraction fails, report it as incomplete. Do not silently switch to
    a shorter list, a guessed count, or a script that has not been run.
 4. If the user requested a saved inventory, use `save_extracted_items` for the

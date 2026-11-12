@@ -17,7 +17,6 @@ import {
     FolderOpen,
     BarChart3,
     Globe,
-    Code2,
     FileEdit,
     Copy,
     Check,
@@ -28,6 +27,8 @@ import {
     Circle,
     Sparkles,
     Link,
+    AudioLines,
+    Captions,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -40,6 +41,7 @@ import { log } from '../utils/logger';
 import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -68,28 +70,29 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     analyze_data_file: BarChart3,
     // Shell & code
     run_shell_command: Terminal,
-    execute_code: Code2,
     // RAG & documents
     query_documents: BookOpen,
     query_specific_file: BookOpen,
     search_indexed_chunks: BookOpen,
-    semantic_search: BookOpen,
     evaluate_retrieval: BookOpen,
     index_document: Database,
     index_documents: Database,
     index_directory: Database,
-    index_file: Database,
     list_indexed_documents: Database,
     summarize_document: FileText,
     dump_document: FileText,
     rag_status: Database,
     add_watch_directory: FolderOpen,
+    // Recordings
+    transcribe_media: AudioLines,
+    refine_transcript: FileText,
+    analyze_transcript: ListChecks,
+    export_transcript: Captions,
     // Web
     web_search: Globe,
     search_web: Globe,
     fetch_page: Link,
     fetch_webpage: Link,
-    analyze_data: BarChart3,
     // GAIA agent: files, memory, questions
     find_files: Search,
     edit_file: FileEdit,
@@ -102,6 +105,7 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     request_user_input: MessageCircleQuestionMark,
     // Skills
     load_skill: Sparkles,
+    use_skill: Sparkles,
     unload_skill: Sparkles,
     list_skills: Sparkles,
     search_skill_hub: Sparkles,
@@ -118,8 +122,8 @@ for (const name of Object.keys(TOOL_ICON)) {
     }
 }
 
-/** Tools whose row marks the agent picking up a skill. */
-const SKILL_USE_TOOLS = new Set(['load_skill']);
+/** Rows that mark the agent picking up a skill; use_skill is one GAIA adds itself. */
+const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
 // Memory works in the background: its steps show only when they fail.
 const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
@@ -176,6 +180,8 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
 export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
+    // GAIA writes this row itself, so it can say it in the UI's language.
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -471,12 +477,14 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
+    /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
+    toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
     answer?: string;
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
@@ -491,6 +499,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     // While the turn runs, the latest plan stays in view as a live checklist.
     const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    const statusRowId = running && toolStatus
+        ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active)?.id
+        : undefined;
     const filtering = !!toolNameFilter || statusFilter !== 'all';
 
     const toggleTool = useCallback((id: number) => {
@@ -524,6 +535,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     isExpanded={expandedTools.has(step.id)}
                     now={now}
                     awaitingUser={running && awaitingUser}
+                    status={step.id === statusRowId ? toolStatus : null}
                     onToggle={() => toggleTool(step.id)}
                 />
             );
@@ -615,9 +627,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                         value={statusFilter}
                         onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
                     >
-                        <option value="all">{t('activity.filter.all')}</option>
-                        <option value="success">{t('activity.filter.success')}</option>
-                        <option value="error">{t('activity.filter.error')}</option>
+                        <option value="all">{t.bare('activity.filter.all')}</option>
+                        <option value="success">{t.bare('activity.filter.success')}</option>
+                        <option value="error">{t.bare('activity.filter.error')}</option>
                     </select>
                 </div>
             )}
@@ -801,14 +813,17 @@ interface FlowToolCardProps {
     now: number;
     /** The turn is waiting on the user (an approval or a question). */
     awaitingUser?: boolean;
+    /** Live line from this running call's own model calls; replaces its label. */
+    status?: string | null;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
     const waiting = !!step.active && awaitingUser;
-    const line = waiting ? t('activity.waiting') : toolRowText(step, t);
+    const live = !waiting && !!step.active && status ? localizeLiveStatus(t, status) : '';
+    const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const failure = step.success === false && step.result ? step.result : '';
@@ -825,7 +840,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                 onClick={onToggle}
                 aria-expanded={isExpanded}
                 title={
-                    waiting
+                    waiting || live
                         ? toolRowText(step, t)
                         : step.narration && step.narration !== line ? step.narration : undefined
                 }

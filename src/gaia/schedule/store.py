@@ -35,6 +35,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only on 3.10
 import tomli_w
 
 from gaia.schedule.lock import store_lock
+from gaia.utils.file_lock import replace_retrying
 
 DEFAULT_STORE_PATH = Path(os.path.expanduser("~/.gaia/schedules.toml"))
 
@@ -352,7 +353,9 @@ class TomlScheduleStore:
                 # zero-length store.
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(pending, self.path)
+            # Readers load without the store lock; on Windows an open reader
+            # refuses the rename for a moment.
+            replace_retrying(pending, self.path)
         finally:
             if pending is not None:
                 pending.unlink(missing_ok=True)

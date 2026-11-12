@@ -445,7 +445,7 @@ want to test an installed wheel.
 
 **Changes that REQUIRE eval coverage (a local run, or categories named in the PR for the next RC):**
 
-- GaiaAgent / ChatAgent / ChatAgentLite system prompts (`_get_system_prompt()`) or any mixin prompt fragment
+- GaiaAgent / ChatAgent system prompts (`_get_system_prompt()`) or any mixin prompt fragment
 - The base agent's `_compose_system_prompt`, prompt-assembly order, or `_format_tools_for_prompt`
 - Tool registration, tool docstrings, or the JSON tool schema sent to Lemonade
 - Error classification (`LemonadeError` subclasses, `_classify_chat_exception`, `_extract_lemonade_user_message`) or the agent-loop catchall
@@ -589,16 +589,13 @@ gaia/
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
-│   │   ├── llm/        # LLM standalone app
-│   │   ├── example/    # Reference/starter app
-│   │   └── _shared/    # Shared assets for apps
+│   │   └── llm/        # LLM standalone app
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
-│   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
@@ -684,7 +681,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
-| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; `hub/agents/chat/` is a deprecated re-export shim for one release (#6099) |
+| **ChatAgent** | The flagship's base class, in the flagship package (`gaia/`, `gaia_agent.chat_agent`). Its old `chat`/`doc`/`file` ids resolve to `gaia`; the `gaia-agent-chat` re-export shim was removed in #6103 |
 | **EmailTriageAgent** | Email triage for Gmail or Outlook (local inference; needs the Google or Microsoft connector) — hub (`email/`) |
 
 Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
@@ -709,6 +706,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `code_index` | `gaia.agents.tools.code_index_tools.CodeIndexToolsMixin` | Semantic code search (FAISS) |
 | `file_search` | `gaia.agents.tools.file_tools.FileSearchToolsMixin` | Fuzzy/glob file search |
 | `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | Read/write/edit files |
+| `file_monitor` | `gaia.agents.tools.file_monitor_tools.FileToolsMixin` | Watch directories for new documents |
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | Sandboxed shell commands |
 | `cli_setup` | `gaia.agents.tools.cli_setup_tools.CliSetupToolsMixin` | Install and sign in to a skill's CLI |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | Screen capture |
@@ -720,7 +718,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
 | `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 | `skill_learning` | `gaia.agents.tools.skill_learning_tools.SkillLearningToolsMixin` | Persist lessons learned while running a skill |
-| `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio/video via Lemonade, then label speakers |
+| `audio` | `gaia.agents.tools.audio_tools.AudioToolsMixin` | Transcribe audio, video or a video link via Lemonade, label speakers, extract a timestamped list, export subtitles |
 | `audio_generation` | `gaia.agents.tools.audio_generation_tools.AudioGenerationToolsMixin` | Generate WAV music and sound effects via Lemonade |
 | `wait` | `gaia.agents.tools.wait_tools.WaitToolsMixin` | `sleep` up to 300 s, e.g. until a rate limit resets; ends early on Stop |
 | `reasoning_effort` | `gaia.agents.tools.reasoning_tools.ReasoningEffortToolsMixin` | `set_reasoning_effort` low/medium/high per step, on models that grade reasoning (gpt-oss) |
@@ -735,7 +733,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 - Agents that leave `model_id` unset call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. That covers GaiaAgent and ChatAgent. Sharing one model id is what keeps switching agents from evicting and cold-reloading the resident model.
 - **EmailTriageAgent is the one exception.** With no explicit `model_id` it calls `resolve_default_email_model()` (`hub/agents/email/python/gaia_agent_email/model_select.py`), which returns `gemma4-it-e2b-FLM` when an NPU is present *and* that model is already servable, and `DEFAULT_MODEL_NAME` in every other case.
 - Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` in `MODELS` ([`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)) gets the largest window that fits the GPU memory Lemonade reports (`largest_context` in [`src/gaia/llm/model_fit.py`](src/gaia/llm/model_fit.py)), and the fit check charges the KV cache at that same window. Every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). FLM models size the same way, against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768, FastFlowLM's default) is only the starting window for an FLM build with no memory figures, never a limit. Settings › Model (`context_sizes`) and `GAIA_CTX_SIZE` override it on any device, up to the model's `max_context_window`. Gemma-4-E4B loads at 65536 (the eval baseline was captured there) when memory allows. Before every load, free memory is checked too (`check_free_memory` in `model_fit.py`): when it is short, the window drops in 8K steps to a 32K floor, and below that the load is refused with how much is needed and free.
-- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK reads scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`)
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (`vlm/mixin.py`, `llm/vlm_client.py`, `vlm/structured_extraction.py`); `Qwen3-VL-4B-Instruct-GGUF` also supported. The RAG SDK reads scans and images with a tested vision model already loaded, else the default chat model when it has vision, else Gemma, and none while chat runs on the NPU (`resident_vision_model`, `resolve_default_vision_model`). When that pick isn't downloaded and the user chose no `vision_model`, the image tools and RAG read with a downloaded `VISION_CHAT_MODELS` entry, a loaded one first (`downloaded_vision_model`, from the VLM client's `check_availability` and `_refuse_missing_vlm`); with none on disk they ask for the download
 - Image generation (SD): `SDXL-Turbo`
 
 ### IMPORTANT: Never hardcode how Lemonade is started — `lemonade-server serve` is dead
@@ -818,7 +816,6 @@ the installers. **Skills are the one exception:** each final release publishes
 
 **Evaluation & analysis** (see [`docs/reference/eval.mdx`](docs/reference/eval.mdx)):
 - `gaia eval agent` - Run the agent eval benchmark (`--fix` auto-fixes failures)
-- `gaia report` - Render eval reports
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):

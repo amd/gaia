@@ -66,7 +66,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -230,6 +230,17 @@ class QueryRequest(_Strict):
             "the run until the question times out, which reads as a hang. When "
             "false, a step that would ask instead fails immediately with what "
             "the user should do on this surface."
+        ),
+    )
+    memory: Optional[Literal["on", "private", "off"]] = Field(
+        default=None,
+        description=(
+            "Whether this turn may use or save memory (contract >= 2.16): 'on', "
+            "'private' (a private chat), or 'off' (memory turned off in the "
+            "host's settings). 'private' and 'off' suppress memory reads and "
+            "writes, including automatic personalization and lessons. Send it "
+            "every turn: a retained session keeps the last value. Omit it to "
+            "leave the session's current setting unchanged."
         ),
     )
     session_id: Optional[str] = Field(
@@ -512,7 +523,43 @@ _QUERY_SSE_RESPONSES = {
                 }
             }
         },
+    },
+    400: {
+        "description": (
+            "`provider` is set to something other than `lemonade`: the email "
+            "agent runs local inference only."
+        )
+    },
+    409: {
+        "description": (
+            "The session already has a turn in progress, or `run_id` is already "
+            "in flight."
+        )
+    },
+    500: {"description": "The run failed to start after the agent was built."},
+    502: {
+        "description": (
+            "The email agent could not be built, or could not be switched to the "
+            "requested `model`."
+        )
+    },
+}
+_RUN_NOT_IN_FLIGHT = {
+    404: {
+        "description": (
+            "No run with this `run_id` is in flight: it finished, was cancelled, "
+            "or the id is wrong."
+        )
     }
+}
+_RESPOND_RESPONSES = {
+    **_RUN_NOT_IN_FLIGHT,
+    409: {
+        "description": (
+            "The run is not waiting on this `request_id`: the question was "
+            "already answered, timed out, or belongs to another run."
+        )
+    },
 }
 
 
@@ -528,6 +575,18 @@ def _carry_runtime_settings(previous: Any, rebuilt: Any) -> None:
     rebuilt_level = getattr(getattr(rebuilt, "config", None), "autonomy_level", None)
     if previous_level is not None and previous_level != rebuilt_level:
         rebuilt.set_autonomy_level(previous_level)
+
+
+def _apply_memory_mode(agent: Any, mode: Optional[str]) -> None:
+    """Apply the host's per-turn memory mode before the email loop runs.
+
+    ``private`` and ``off`` must suppress both memory reads and writes. ``on``
+    only re-enables a store that was initialized; it never turns on memory that
+    failed to initialize or was disabled by configuration.
+    """
+    if mode is None:
+        return
+    agent.set_memory_enabled(mode == "on")
 
 
 @router.post("/query", responses=_QUERY_SSE_RESPONSES)
@@ -560,6 +619,10 @@ async def query(request: QueryRequest) -> StreamingResponse:
     config_kwargs: Dict[str, Any] = {}
     if request.model:
         config_kwargs["model_id"] = request.model
+    if request.memory in {"private", "off"}:
+        # A throwaway /query agent still has to honor the host's privacy mode
+        # from its very first turn, before any memory context is composed.
+        config_kwargs["memory_enabled"] = False
 
     # session_id resolves through the SAME session-scoped registry the
     # stateful /v1/email/agent/* surface uses (#2829), so the agent — and
@@ -666,6 +729,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
             {"role": item.role, "content": item.content} for item in request.context
         ]
         agent.console = handler
+        # Apply the host's per-turn privacy mode after session/model resolution
+        # and before the worker composes memory context or writes a turn.
+        _apply_memory_mode(agent, request.memory)
         # Streamed calls put `token` events on this wire and let Stop cut a call short.
         agent.streaming = True
         # Read by ``question.ask``: a caller that cannot answer must be
@@ -821,7 +887,11 @@ async def query(request: QueryRequest) -> StreamingResponse:
     )
 
 
-@router.post("/query/{run_id}/cancel", response_model=QueryCancelResponse)
+@router.post(
+    "/query/{run_id}/cancel",
+    response_model=QueryCancelResponse,
+    responses=_RUN_NOT_IN_FLIGHT,
+)
 async def cancel_query(run_id: str) -> QueryCancelResponse:
     """Cancel an in-flight ``/query`` run — stops tool execution between steps.
 
@@ -840,7 +910,11 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     return QueryCancelResponse(run_id=run_id, cancelled=True)
 
 
-@router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)
+@router.post(
+    "/query/{run_id}/respond",
+    response_model=QueryRespondResponse,
+    responses=_RESPOND_RESPONSES,
+)
 async def respond_query(run_id: str, body: QueryRespondRequest) -> QueryRespondResponse:
     """Answer a ``needs_input`` question and let the paused run continue.
 
