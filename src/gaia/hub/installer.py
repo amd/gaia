@@ -58,6 +58,7 @@ from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
 from gaia.utils.archive import ArchiveError, safe_extract
 from gaia.utils.file_lock import (
     FileLockTimeout,
@@ -121,6 +122,16 @@ PipRunner = Callable[[List[str]], None]
 
 class InstallError(RuntimeError):
     """Base class for install-lifecycle failures (actionable message)."""
+
+
+class RetiredAgentError(InstallError):
+    """The requested agent was removed from GAIA."""
+
+
+def refuse_retired_agent(agent_id: str) -> None:
+    """Raise :class:`RetiredAgentError` when *agent_id* was removed from GAIA."""
+    if agent_id in RETIRED_AGENT_IDS:
+        raise RetiredAgentError(retired_install_message(agent_id))
 
 
 class ChecksumError(InstallError):
@@ -1802,6 +1813,7 @@ def install(
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
     """
+    refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
     root = install_root or default_install_root()

@@ -71,8 +71,7 @@ export function isAuthRequiredMessage(content: string): boolean {
     const lower = content.toLowerCase();
     if (
         lower.includes('connectors → google') ||
-        lower.includes('connections → google') ||
-        lower.includes('email agent needs additional google permissions')
+        lower.includes('connections → google')
     ) {
         return true;
     }

@@ -40,6 +40,7 @@ from gaia.daemon.scheduler.lease import (
 from gaia.daemon.scheduler.models import STATUS_FAILED, STATUS_PENDING
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_JOB_MESSAGE, is_retired_agent_source
 
 log = get_logger(__name__)
 
@@ -261,6 +262,8 @@ class DaemonClock:
                     f"(source {job['source']!r}) — the job cannot fire in the "
                     "daemon process"
                 )
+                if is_retired_agent_source(job["source"]):
+                    msg = RETIRED_AGENT_JOB_MESSAGE
                 recorded = store.mark_failed(
                     db, job_id=job_id, claim_id=claim_id, error=msg
                 )

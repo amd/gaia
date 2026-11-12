@@ -39,16 +39,6 @@ describe('isAuthRequiredMessage', () => {
         ).toBe(true);
     });
 
-    // Agent-specific override message from _AGENT_GRANT_MIGRATION_MESSAGES
-    it('returns true for email agent migration message', () => {
-        expect(
-            isAuthRequiredMessage(
-                'Email agent needs additional Google permissions (gmail.modify, gmail.send, calendar.events). ' +
-                'Open Settings → Connectors → Google → Reconnect to grant the missing scopes.'
-            )
-        ).toBe(true);
-    });
-
     // Fallback fuzzy matches
     it('returns true when message mentions connectors → google', () => {
         expect(

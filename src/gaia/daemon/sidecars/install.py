@@ -35,6 +35,7 @@ a remedy.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -53,6 +54,7 @@ from gaia.daemon.sidecars.errors import (
     UnknownAgentError,
 )
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS
 
 logger = get_logger(__name__)
 
@@ -741,17 +743,76 @@ def uninstall(
 # Retired agents
 # ---------------------------------------------------------------------------
 
-#: Sidecar agents GAIA no longer ships. The daemon has no spec for them, so an
-#: install left over from an older GAIA could never start or be updated again.
-RETIRED_AGENT_IDS = ("email",)
+# The daemon has no spec for a retired agent, so an install left over from an
+# older GAIA could never start or be updated again.
+
+# What a Hub install or a fetched binary leaves in its folder, besides the binary.
+_RETIRED_INSTALL_NAMES = frozenset(
+    {
+        ".installed",
+        "gaia-agent.yaml",
+        "binaries.lock.json",
+        "site-packages",
+        "logs",
+        "_internal",
+    }
+)
+_RETIRED_INSTALL_SUFFIXES = (".lock", ".log", ".part", ".tmp")
+
+
+def _is_retired_binary(name: str, agent_id: str) -> bool:
+    stem = name[:-4] if name.lower().endswith(".exe") else name
+    return (
+        stem == f"{agent_id}-agent"
+        or stem.startswith(f"{agent_id}-agent-")
+        or stem.startswith(f"gaia-agent-{agent_id}")
+    )
+
+
+def _sentinel_names(agent_dir: Path, agent_id: str) -> bool:
+    try:
+        recorded = json.loads((agent_dir / ".installed").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(recorded, dict) and recorded.get("id") == agent_id
+
+
+def retired_install_verdict(agent_dir: Path, agent_id: str) -> Optional[str]:
+    """Why *agent_dir* is NOT the retired agent's own install, or ``None`` if it is.
+
+    ``~/.gaia/agents/<id>/`` is also where a person's own agent lives, so the
+    folder is deleted only when everything in it is something GAIA put there.
+    """
+    names = sorted(entry.name for entry in agent_dir.iterdir())
+    if "agent.py" in names:
+        return "it holds an agent.py, so it is someone's own agent"
+    proof = (
+        _sentinel_names(agent_dir, agent_id)
+        or "binaries.lock.json" in names
+        or any(_is_retired_binary(name, agent_id) for name in names)
+    )
+    if not proof:
+        return "nothing in it marks it as the agent GAIA installed"
+    foreign = [
+        name
+        for name in names
+        if name not in _RETIRED_INSTALL_NAMES
+        and not _is_retired_binary(name, agent_id)
+        and not name.endswith(_RETIRED_INSTALL_SUFFIXES)
+        and not name.startswith(".gaia-hub-tmp-")
+    ]
+    if foreign:
+        return f"it also holds files GAIA did not put there ({', '.join(foreign)})"
+    return None
 
 
 def remove_retired_agents(install_root: Optional[Path] = None) -> List[str]:
     """Delete leftover installs of retired agents; return the ids removed.
 
     Covers a Hub install and a lazily fetched binary alike — both live in
-    ``~/.gaia/agents/<id>/``. A directory a live process still runs from is
-    left alone and logged, and the next daemon start tries again.
+    ``~/.gaia/agents/<id>/``. A folder that is not provably that install is
+    left alone and logged. So is one a live process still runs from, and the
+    next daemon start tries again.
     """
     import shutil
 
@@ -760,6 +821,19 @@ def remove_retired_agents(install_root: Optional[Path] = None) -> List[str]:
     for agent_id in RETIRED_AGENT_IDS:
         agent_dir = root / agent_id
         if not agent_dir.is_dir():
+            continue
+        try:
+            kept_because = retired_install_verdict(agent_dir, agent_id)
+        except OSError as exc:
+            kept_because = f"it could not be read ({exc})"
+        if kept_because:
+            logger.warning(
+                "daemon: left %s alone: GAIA no longer ships an '%s' agent, but "
+                "%s. Delete the folder yourself if you no longer need it.",
+                agent_dir,
+                agent_id,
+                kept_because,
+            )
             continue
         try:
             assert_no_live_process_in(agent_dir, agent_id)
