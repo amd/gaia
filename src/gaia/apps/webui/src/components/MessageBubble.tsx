@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,7 +18,6 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -51,8 +50,12 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
-    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    /** Shows a labelled Try again under a failed, cut-off or stopped reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** Shows Continue under a stopped reply that wrote something. */
+    onContinue?: () => void;
+    /** The chat's latest answer, whose actions stay in view. */
+    latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -68,68 +71,27 @@ interface MessageBubbleProps {
 /**
  * Live status next to GAIA's name: the model's current phase ("Reading your request",
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
- * Types out on first show, swaps text in place after that, erases when done.
+ * One calm line in the UI font; the whole label shows at once.
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
-    const [reduceMotion] = useState(prefersReducedMotion);
-    const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
-    const wasActiveRef = useRef(active);
-    const textLengthRef = useRef(text.length);
-    textLengthRef.current = text.length;
-
-    // Type out characters
-    useEffect(() => {
-        if (phase !== 'typing') return;
-        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
-        const timer = setTimeout(() => setChars(c => c + 1), 30);
-        return () => clearTimeout(timer);
-    }, [phase, chars, text.length, reduceMotion]);
-
-    // Detect active → false: start erasing
-    useEffect(() => {
-        if (wasActiveRef.current && !active) {
-            setChars(textLengthRef.current);
-            setPhase(reduceMotion ? 'done' : 'erasing');
-        }
-        wasActiveRef.current = active;
-    }, [active, reduceMotion]);
-
-    // Erase characters
-    useEffect(() => {
-        if (phase !== 'erasing') return;
-        if (chars <= 0) { setPhase('done'); return; }
-        const timer = setTimeout(() => setChars(c => c - 1), 20);
-        return () => clearTimeout(timer);
-    }, [phase, chars]);
-
-    // Reset on new active cycle
-    useEffect(() => {
-        if (active && phase === 'done') {
-            setChars(0);
-            setPhase('typing');
-        }
-    }, [active, phase]);
-
     const elapsed = useElapsedSeconds(active, text);
     // One clock for the whole silent wait: a repeated or retried phase must not restart it.
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
 
-    if (phase === 'done') return null;
+    if (!active) return null;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
-            <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
-            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+        <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
+            <span className="thinking-indicator-text">{text}</span>
+            {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
-            {active && <span className="cursor" />}
             {showModelWaitHint && (
                 <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
@@ -501,12 +463,13 @@ export function splitCutOff(content: string): CutOff | null {
 }
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
-export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+export function turnEnding(content: string, stopState: Message['stopState'], failed = false): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    return splitCutOff(content) ? 'interrupted' : undefined;
+    if (splitCutOff(content)) return 'interrupted';
+    return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -610,7 +573,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     return (
         <div
-            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}${latest ? ' msg-latest' : ''}`}
             title={hoverTimestamp}
         >
             <div className="msg-inner">
@@ -724,6 +687,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 : say(cutOff.notice)))}
                         </p>
                     )}
+                    {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
+                        <button type="button" className="msg-try-again" onClick={onContinue}>
+                            <Play size={12} aria-hidden="true" />
+                            {t('msg.continue')}
+                        </button>
+                    )}
                     {onTryAgain && !isStreaming && (
                         <button type="button" className="msg-try-again" onClick={onTryAgain}>
                             <RotateCw size={12} aria-hidden="true" />
@@ -755,7 +724,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (

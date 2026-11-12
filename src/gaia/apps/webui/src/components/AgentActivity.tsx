@@ -226,6 +226,35 @@ export interface ActivityRow extends AgentStep {
     count?: number;
     /** Per-plan-step status, parallel to planSteps (plan rows with a known current step). */
     planStatuses?: PlanItemStatus[];
+    /** The finished reasoning that led to this call, opened from the call's row. */
+    thought?: ActivityRow;
+}
+
+/**
+ * Fold each finished thought into the call it led to, so the list reads as steps
+ * instead of "Thought" between every one. A thought still streaming, or one that
+ * led to a note, a plan or the answer, keeps its own row.
+ */
+export function foldThoughts(rows: ActivityRow[]): ActivityRow[] {
+    const out: ActivityRow[] = [];
+    let pending: ActivityRow | undefined;
+    for (const row of rows) {
+        if (row.type === 'thinking' && !row.active && (row.detail || '').trim()) {
+            if (pending) out.push(pending);
+            pending = row;
+            continue;
+        }
+        if (pending && row.type === 'tool') {
+            out.push({ ...row, thought: pending });
+            pending = undefined;
+            continue;
+        }
+        if (pending) out.push(pending);
+        pending = undefined;
+        out.push(row);
+    }
+    if (pending) out.push(pending);
+    return out;
 }
 
 /** The agent's own bookkeeping lines while it walks a plan; the checklist already says this. */
@@ -536,7 +565,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} />;
         }
         if (step.type === 'tool') {
             return (
@@ -544,6 +573,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     key={step.id}
                     step={step}
                     isExpanded={expandedTools.has(step.id)}
+                    thoughtMs={step.thought ? durations.get(step.thought.id) : undefined}
                     now={now}
                     awaitingUser={running && awaitingUser}
                     status={step.id === statusRowId ? toolStatus : null}
@@ -567,7 +597,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
-        rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan));
+        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan)));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -683,25 +713,25 @@ function FlowNote({ text }: { text: string }) {
 
 // ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
-/** "Thought for 8s" once reasoning is over and its length is known. */
+/** Live reasoning shorter than this needs no clock. */
+const THINKING_ELAPSED_MIN_MS = 3000;
+
+/** "Thinking · 4s" while it runs, "Thought for 8s" once it is over and its length is known. */
 export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = tEn): string {
-    if (live) return t('activity.thinking');
+    if (live) {
+        return durationMs != null && durationMs >= THINKING_ELAPSED_MIN_MS
+            ? t('activity.thinkingFor', { time: formatElapsed(durationMs / 1000) })
+            : t('activity.thinking');
+    }
     if (durationMs == null || durationMs < 1000) return t('activity.thought');
     return t('activity.thoughtFor', { time: formatElapsed(durationMs / 1000) });
 }
 
-function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolean; durationMs?: number }) {
+/** Reasoning stays one line, live or done, until the user opens it. */
+function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: boolean; durationMs?: number; now: number }) {
     const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    // Keep the newest reasoning in view as it streams.
-    useEffect(() => {
-        if (live && containerRef.current) {
-            containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-    }, [text, live]);
 
     if (!text) return null;
 
@@ -713,15 +743,10 @@ function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolea
                 aria-expanded={open}
             >
                 {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
-                <span>{thoughtLabel(live, durationMs, t)}</span>
+                <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
-            {(open || live) && (
-                <div ref={containerRef} className={`flow-thought-hacker ${open ? '' : 'peek'}`}>
-                    <span>{text}</span>
-                    {live && <span className="flow-thought-cursor" />}
-                </div>
-            )}
+            {open && <div className="flow-thought-hacker">{text}</div>}
         </div>
     );
 }
@@ -828,9 +853,11 @@ interface FlowToolCardProps {
     awaitingUser?: boolean;
     /** Live line from this running call's own model calls; replaces its label. */
     status?: string | null;
+    /** How long the reasoning folded into this call ran. */
+    thoughtMs?: number;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
@@ -867,13 +894,19 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{line}</span>
+                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
                     {failure && <span className="flow-tool-failure">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
+                    {step.thought && (
+                        <span className="flow-tool-thought-mark" title={t('activity.thoughtFirst')} aria-hidden="true">
+                            <Brain size={11} />
+                        </span>
+                    )}
                     {timing && <span className="flow-tool-latency">{timing}</span>}
                     <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
                         <ChevronRight size={12} />
@@ -883,6 +916,12 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
 
             {isExpanded && (
                 <div className="flow-tool-detail">
+                    {step.thought?.detail && (
+                        <div className="flow-tool-thought">
+                            <span className="detail-section-label">{thoughtLabel(false, thoughtMs, t)}</span>
+                            <div className="flow-thought-hacker">{step.thought.detail.trim()}</div>
+                        </div>
+                    )}
                     <div className="flow-tool-raw">
                         <span className="detail-section-label">{t('activity.detail.tool')}</span>
                         <code className="flow-tool-badge">{step.tool || 'unknown'}</code>
