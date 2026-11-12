@@ -8,6 +8,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **`/init` says a missing model once.** On a PC with no Lemonade client, the
+  `hint` read "The model X is not downloaded. X is not downloaded, and no
+  Lemonade client CLI was found …, then re-check." It is now the one sentence.
+
+- **Add skills from a pasted link (`/skills`).** On the stdio transport,
+  `/skills add <link>` lists the skills in a GitHub repository or folder, a
+  skills.sh page or an https `.zip`, with what each one is allowed to do (its
+  declared permissions, in plain words), its audit result, and a security
+  warning; `/skills add <link> confirm` adds exactly the version that was shown,
+  at the `experimental` tier. A `confirm` with no preview earlier in the session
+  shows the preview instead of adding anything, and a link that changed since
+  its preview is refused.
+  Skills that ship code need `--allow-code`. Bare `/skills` lists what is
+  installed.
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
   guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose

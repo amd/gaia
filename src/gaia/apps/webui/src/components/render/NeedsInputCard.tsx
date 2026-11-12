@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState } from 'react';
+import { QuestionText } from './QuestionText';
 import { UnsupportedCard } from './UnsupportedCard';
 import { respondToInput } from '../../services/api';
 import { useChatStore, type LiveQuestion } from '../../stores/chatStore';
@@ -22,8 +23,8 @@ import { spokenDuration } from '../AnswerStats';
  * keeps its own masked field, so the secret never sits in the message box.
  *
  * Rendering safety: `question`/option labels can carry agent/tool-derived
- * text — render as plain text nodes only, never through a markdown/innerHTML
- * path (mirrors ConfirmationCard's rule for `summary`).
+ * text. Option labels are plain text nodes; the question goes through
+ * `QuestionText`, which shows formatting only (no links, images or HTML).
  *
  * Once answered the card stays as a record of the question and the answer
  * (`chatStore.questionAnswers`); a sensitive answer is never echoed back.
@@ -181,8 +182,8 @@ export function NeedsInputCard({ data }: { data: unknown }) {
     if (isAnswered) {
         return (
             <div className="render-needs-input render-needs-input--answered">
-                {/* Plain text node only — question text can carry tool-derived content. */}
-                <p className="render-needs-input__question"><bdi>{data.question}</bdi></p>
+                {/* Formatting only: question text can carry tool-derived content. */}
+                <QuestionText text={data.question} />
                 <p className="render-needs-input__answered-note" role="status">
                     {answerShown === null || data.sensitive
                         ? t('question.youAnsweredHidden')
@@ -198,7 +199,7 @@ export function NeedsInputCard({ data }: { data: unknown }) {
                 <div className="render-needs-input__header">
                     <span className="render-needs-input__badge">{t('question.badge')}</span>
                 </div>
-                <p className="render-needs-input__question"><bdi>{data.question}</bdi></p>
+                <QuestionText text={data.question} />
                 <p className="render-needs-input__expired-note" role="status">{t('question.expired')}</p>
             </div>
         );
@@ -212,7 +213,7 @@ export function NeedsInputCard({ data }: { data: unknown }) {
                     <span className="render-needs-input__sensitive-badge">{t('question.sensitive')}</span>
                 )}
             </div>
-            <p className="render-needs-input__question"><bdi>{data.question}</bdi></p>
+            <QuestionText text={data.question} />
             {data.options.length > 0 && (
                 <div className="render-needs-input__options">
                     {data.options.map((opt) => (

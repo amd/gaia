@@ -398,7 +398,7 @@ One more key is not a primitive an agent picks, but the host's own:
 
 | `render` | `data` schema |
 |---|---|
-| `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
+| `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes; a host starts sign-in with no scopes and that agent in `grant_agents`, so consent covers only what the agent declares, and sends the user to Settings › Connectors when the agent does not declare the connector. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -835,6 +835,28 @@ or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once. The model is told on every such turn, not once: the oldest user
 message it is sent opens with a one-sentence note that earlier turns exist and
 are no longer shown.
+
+### 10.4 Session listing
+
+Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the
+agent keeps a listing beside the transcript so a host can show and reopen the
+session without reading SQLite. `<id>.json` holds `version`, `id`, `title` (the
+first line of the first question), `kind`, `status`, `created_at`, `updated_at`,
+`pid` and `turns`, and is replaced atomically on every change. `status` is
+`running` while a turn runs, `waiting` while it is parked on a
+`needs_confirmation`, then `done` or `failed` by the turn's terminal event; `pid`
+is cleared to 0 on a clean exit. `<id>.jsonl` gains one line per finished turn:
+`{"user", "answer"}` or `{"user", "error"}`. `clear_conversation` empties it.
+The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
+life; that lock, not `pid`, is how a host tells an open session from a closed
+one, since it dies with the process and a reused pid cannot fake it. Reopening
+a session takes the lock and rewrites `<id>.json` at once (a status left at
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
+Only real turns move the listing — sentinels and `/model` do not. Without
+`--session-kind` nothing is written. The TUI passes `chat`; other launchers name
+their own kind (`eval`, `scheduled`), which the TUI hides by default.
 
 Over stdio the agent never sends `needs_confirmation.confirm_url` or
 `error.source`. The TUI decodes them for other transports, and it sets `source`
