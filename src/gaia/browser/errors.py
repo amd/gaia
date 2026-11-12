@@ -12,10 +12,7 @@ from __future__ import annotations
 
 import sys
 
-
-def _frozen() -> bool:
-    """An installed GAIA binary, with no Python for pip or Playwright to run in."""
-    return bool(getattr(sys, "frozen", False))
+from gaia.agents.install_hints import _frozen
 
 
 def _install_chromium_command() -> str:
