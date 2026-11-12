@@ -150,6 +150,7 @@
 .composer-attachments {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: 6px;
     list-style: none;
 }
@@ -200,11 +201,8 @@
 .composer-attachment.has-error .composer-attachment-state {
     order: 1;
     flex-basis: 100%;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     white-space: normal;
+    overflow-wrap: anywhere;
     padding-block: 0 2px;
     padding-inline: 0 4px;
     color: var(--danger);
