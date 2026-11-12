@@ -2659,6 +2659,34 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const CHANGE_PROMPTS = {
+    write: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\summary.md', content: '# Expenses Summary\n\n| Month | Total |\n|---|---|\n| October | 412.50 |\n| November | 388.10 |\n\nGrand total: 800.60\n' },
+    },
+    edit: {
+        type: 'permission_request', tool: 'edit_file', tool_label: 'editing file', confirm_id: 'c-edit',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\notes.txt', old_content: '- owner: Dana\n', new_content: '- owner: Dana\nreviewed\n' },
+    },
+};
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const [kind, prompt] of Object.entries(CHANGE_PROMPTS)) {
+        test(`a ${kind} prompt shows what will land in the file (${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [prompt]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('update my notes');
+            await page.keyboard.press('Enter');
+            const preview = page.locator('.perm-card-change');
+            await expect(preview).toBeVisible();
+            await expect(page.locator('.perm-card-pre').filter({ hasText: '"file_path"' })).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+            await shot(page, `permission-${kind}-${locale}`);
+        });
+    }
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },

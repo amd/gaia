@@ -19,6 +19,7 @@ import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
+import { ChangePreview, fileChange } from './PermissionChangePreview';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -222,6 +223,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
                     {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
+                    <ChangePreview args={args} />
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title={t('prompt.timer')}>{formatCountdown(remaining)}</span>
@@ -236,7 +238,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         aria-expanded={showArgs}
                     >
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
-                        {t('prompt.details')}
+                        {t(fileChange(args) ? 'prompt.technicalDetails' : 'prompt.details')}
                     </button>
                     {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
                 </div>
