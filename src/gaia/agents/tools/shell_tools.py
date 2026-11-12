@@ -644,36 +644,145 @@ _FETCHERS = frozenset(
 _LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
 
 
+#: Public names that always answer with this PC's own address.
+_LOOPBACK_NAMES = ("localhost", "localtest.me", "lvh.me", "vcap.me")
+
+#: Services whose names answer with the address written inside the name.
+_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io")
+
+_IPV4_PART = re.compile(r"0x[0-9a-f]+|0[0-7]*|[1-9][0-9]*")
+_DOTTED_IN_NAME = re.compile(r"(?:^|[.-])(\d{1,3}(?:[.-]\d{1,3}){3})$")
+_HEX_IN_NAME = re.compile(r"(?:^|[.-])([0-9a-f]{8})$")
+
+#: Fetcher flags whose value is a number, so ``--max-time 10.5`` is no address.
+_NUMBER_FLAGS = frozenset(
+    {
+        "-m",
+        "--max-time",
+        "--connect-timeout",
+        "--retry",
+        "--retry-delay",
+        "--retry-max-time",
+        "--limit-rate",
+        "--max-filesize",
+        "--max-redirs",
+        "--max-redirect",
+        "--speed-limit",
+        "--speed-time",
+        "-y",
+        "-Y",
+        "-C",
+        "--continue-at",
+        "--keepalive-time",
+        "--expect100-timeout",
+        "--parallel-max",
+        "--rate",
+        "-t",
+        "--tries",
+        "-T",
+        "--timeout",
+        "--dns-timeout",
+        "--read-timeout",
+        "-w",
+        "--wait",
+        "--waitretry",
+        "-l",
+        "--level",
+        "-Q",
+        "--quota",
+        "-timeoutsec",
+        "-maximumredirection",
+        "-maximumretrycount",
+        "-retryintervalsec",
+    }
+)
+
+
 def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
-    """``2130706433`` or ``0x7f000001``, which curl reads as an address."""
+    """*name* read as inet_aton reads it: ``127.1``, ``0177.0.0.1``, ``0x7f000001``.
+
+    One to four parts, each decimal, octal or hex; the last fills the bytes left.
+    """
+    parts = name.lower().split(".")
+    if len(parts) > 4 or not all(_IPV4_PART.fullmatch(part) for part in parts):
+        return None
+    numbers = [
+        int(part, 16 if part.startswith("0x") else 8 if part[0] == "0" else 10)
+        for part in parts
+    ]
+    value = numbers.pop()
+    if any(number > 255 for number in numbers) or value >= 256 ** (4 - len(numbers)):
+        return None
+    for index, number in enumerate(numbers):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
+
+
+def _address_in_name(name: str) -> Optional[ipaddress._BaseAddress]:
+    """The address a nip.io or sslip.io *name* answers with, read off the name."""
+    for ending in _ADDRESS_IN_NAME_ENDINGS:
+        if name.endswith(ending):
+            label = name[: -len(ending)]
+            break
+    else:
+        return None
     try:
-        value = int(name, 16) if name.startswith("0x") else int(name)
+        dotted = _DOTTED_IN_NAME.search(label)
+        if dotted:
+            return ipaddress.IPv4Address(dotted.group(1).replace("-", "."))
+        packed = _HEX_IN_NAME.search(label)
+        if packed:
+            return ipaddress.IPv4Address(int(packed.group(1), 16))
+        return ipaddress.IPv6Address(label.rsplit(".", 1)[-1].replace("-", ":"))
     except ValueError:
         return None
-    return ipaddress.IPv4Address(value) if 0 <= value < 2**32 else None
 
 
 def private_destination(host: str) -> str:
     """Where *host* is, when the web tools would refuse to fetch it; else "".
 
-    Judged from the text alone: an address, ``localhost``, or a name only a local
-    network uses. A public-looking name is not looked up.
+    Judged from the text alone: an address in any spelling a fetcher accepts,
+    ``localhost``, a name that always answers with a local address, or a name
+    only a local network uses. No name is looked up.
     """
     from gaia.web.client import _is_blocked_ip
 
     name = host.strip("[]").rstrip(".").lower()
-    if name == "localhost" or name.endswith(".localhost"):
+    if name in _LOOPBACK_NAMES or name.endswith(
+        tuple(f".{known}" for known in _LOOPBACK_NAMES)
+    ):
         return "this PC"
     try:
         ip = ipaddress.ip_address(name)
     except ValueError:
-        ip = _numeric_ipv4(name)
+        ip = _numeric_ipv4(name) or _address_in_name(name)
     if ip is None:
         return "your local network" if name.endswith(_LOCAL_NAME_ENDINGS) else ""
     carried = getattr(ip, "ipv4_mapped", None) or ip
     if carried.is_loopback or carried.is_unspecified:
         return "this PC"
     return "your local network" if _is_blocked_ip(ip) else ""
+
+
+def _operand_host(token: str, after: str) -> str:
+    """The host a fetcher reads from its bare operand *token*, or "" for none.
+
+    *after* is the token before it: a number after a flag is that flag's value
+    unless it has a port or path, or is too large to be anything but an address.
+    """
+    address = re.split(r"[/?#]", token, maxsplit=1)[0].rsplit("@", 1)[-1]
+    if not address.startswith("["):
+        address = address.rsplit(":", 1)[0]
+    number = _numeric_ipv4(address)
+    if number is None:
+        named = "." in address or ":" in address or "localhost" in address
+        return address if named else ""
+    if address == token and after.startswith("-"):
+        if after in _NUMBER_FLAGS or after.lower() in _NUMBER_FLAGS:
+            return ""
+        if "." not in address and 0 < int(number) < 2**24:
+            return ""
+    return address
 
 
 #: Programs that can open a connection to an address on their line.
@@ -722,14 +831,11 @@ def _private_hosts(
             hosts.extend(m.group(1) for m in _URL_HOST.finditer(" ".join(segment)))
             if program not in _FETCHERS:
                 continue
-            for token in segment[1:]:
+            for after, token in zip(segment, segment[1:]):
                 if token.startswith("-") or "://" in token:
                     continue
-                address = re.split(r"[/?#]", token, maxsplit=1)[0]
-                if not address.startswith("["):
-                    address = address.rsplit(":", 1)[0]
-                # A bare number is a flag's value ('--retry 3'), not an address.
-                if "." in address or ":" in address or "localhost" in address:
+                address = _operand_host(token, after)
+                if address:
                     hosts.append(address)
     found = []
     for host in dict.fromkeys(hosts):
