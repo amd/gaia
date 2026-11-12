@@ -37,10 +37,18 @@ function serve(...list: Schedule[]) {
 
 const errors = () => useNotificationStore.getState().notifications.filter((n) => n.type === 'error');
 
-beforeEach(() => {
-    vi.mocked(api.listSchedules).mockReset();
+const ANNOUNCED_KEY = 'gaia-schedule-announced-errors';
+
+/** A new app launch: in-memory state is gone, localStorage survives. */
+function relaunch() {
     useScheduleStore.setState({ schedules: [], errorCounts: null, error: null, loading: false });
     useNotificationStore.setState({ notifications: [] });
+}
+
+beforeEach(() => {
+    vi.mocked(api.listSchedules).mockReset();
+    localStorage.removeItem(ANNOUNCED_KEY);
+    relaunch();
 });
 
 describe('scheduled run failures', () => {
@@ -69,10 +77,43 @@ describe('scheduled run failures', () => {
         expect(errors()).toHaveLength(1);
     });
 
-    it('are not news on the first load', async () => {
+    it('from while the app was closed reach the bell on the first load', async () => {
+        serve(schedule({ error_count: 1, last_error: 'failed overnight' }));
+        await useScheduleStore.getState().loadSchedules();
+
+        expect(errors()).toHaveLength(1);
+        expect(errors()[0].message).toBe('failed overnight');
+    });
+
+    it('already announced in a past session are not announced again after relaunch', async () => {
+        serve(schedule({ error_count: 3, last_error: 'old failure' }));
+        await useScheduleStore.getState().loadSchedules();
+        expect(errors()).toHaveLength(1);
+
+        relaunch();
         serve(schedule({ error_count: 3, last_error: 'old failure' }));
         await useScheduleStore.getState().loadSchedules();
 
         expect(errors()).toHaveLength(0);
+    });
+
+    it('newer than the last session are announced after relaunch', async () => {
+        serve(schedule({ error_count: 3, last_error: 'old failure' }));
+        await useScheduleStore.getState().loadSchedules();
+
+        relaunch();
+        serve(schedule({ error_count: 4, last_error: 'new failure' }));
+        await useScheduleStore.getState().loadSchedules();
+
+        expect(errors()).toHaveLength(1);
+        expect(errors()[0].message).toBe('new failure');
+    });
+
+    it('are announced when the saved record is corrupt', async () => {
+        localStorage.setItem(ANNOUNCED_KEY, '{not json');
+        serve(schedule({ error_count: 2, last_error: 'boom' }));
+        await useScheduleStore.getState().loadSchedules();
+
+        expect(errors()).toHaveLength(1);
     });
 });
