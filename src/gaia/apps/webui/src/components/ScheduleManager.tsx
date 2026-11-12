@@ -361,10 +361,10 @@ export function ScheduleManager() {
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
-    const [nameTaken, setNameTaken] = useState(false);
     // The schedule the form is changing; null when it makes a new one.
     const [editing, setEditing] = useState<string | null>(null);
     const formRef = useRef<HTMLDivElement>(null);
+    const [nameTaken, setNameTaken] = useState(false);
     const fieldId = useId();
     const scheduleFieldId = `${fieldId}-when`;
     const scheduleErrorId = `${fieldId}-when-error`;
