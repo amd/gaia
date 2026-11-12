@@ -2460,7 +2460,7 @@ def _pipeline_segments(text: str, bypass_gates: bool) -> tuple:
 
 def _unbalanced_parentheses(text: str) -> bool:
     """Whether *text* opens or closes a ``(`` group it does not finish itself."""
-    text = re.sub(r"\"[^\"]*\"|'[^']*'", "", text)
+    text = re.sub(r"\\.|\"[^\"]*\"|'[^']*'", "", text)
     return text.count("(") != text.count(")")
 
 

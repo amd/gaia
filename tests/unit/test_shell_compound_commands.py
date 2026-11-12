@@ -281,6 +281,13 @@ def test_single_quotes_do_not_smuggle_an_operator_past_the_split(command, notes)
         "cd sub && (python get_rates.py || python get_rates.py)",
         "(ls || ls) && ls",
         "ls && (ls; ls)",
+        "ls&&(ls||ls)",
+        "((ls || ls)) && ls",
+        "ls && ((ls) || ls)",
+        # A quoted or escaped paren must not cancel out a real one.
+        "echo ')' && (ls || ls)",
+        r"echo \) && (ls || ls)",
+        "(ls || echo \"(\") && ls",
     ],
 )
 def test_grouping_a_chain_in_parentheses_is_refused_with_a_way_out(command, notes):
@@ -302,6 +309,9 @@ def test_grouping_a_chain_in_parentheses_is_refused_with_a_way_out(command, note
         'findstr "a (b || c)" notes.txt',
         "grep -n 'def foo(' notes.txt && ls",
         "git log --format='%h (%an' && ls",
+        r"grep \( notes.txt && ls",
+        r"grep -c \) notes.txt || ls",
+        r"find . \( -name a -o -name b \) && ls",
     ],
 )
 def test_parentheses_inside_one_step_are_left_alone(command, notes):
