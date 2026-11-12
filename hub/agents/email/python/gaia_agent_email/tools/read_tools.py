@@ -22,6 +22,7 @@ import inspect
 import json
 import re
 import time
+import unicodedata
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -128,9 +129,49 @@ class EnvelopeBudgetExceeded(RuntimeError):
     """
 
 
+def _fence_side(char: str) -> str:
+    """``<`` or ``>`` for a character that reads as one, in any width; else ""."""
+    if char in "<>":
+        return char
+    folded = unicodedata.normalize("NFKC", char)
+    return folded if folded in ("<", ">") else ""
+
+
+def _neutralize_fence_runs(body: str) -> str:
+    """*body* with each run of 3+ ``<`` (or ``>``) look-alikes cut to two ASCII.
+
+    Invisible format characters inside a run don't break it, so no marker can
+    be spelled from what is left, whatever its case, width or padding.
+    """
+    out: List[str] = []
+    start = 0
+    while start < len(body):
+        side = _fence_side(body[start])
+        if not side:
+            out.append(body[start])
+            start += 1
+            continue
+        count, last, at = 0, start, start
+        while at < len(body):
+            if _fence_side(body[at]) == side:
+                count, last = count + 1, at
+            elif unicodedata.category(body[at]) != "Cf":
+                break
+            at += 1
+        out.append(side * 2 if count >= 3 else body[start : last + 1])
+        start = last + 1
+    return "".join(out)
+
+
 def wrap_untrusted_body(body: str) -> str:
-    """Wrap a body in the untrusted-input delimiter pair."""
-    return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
+    """Wrap a body in the untrusted-input delimiter pair.
+
+    Fence-like runs in the body are cut first, so it can't close the fence early.
+    """
+    return (
+        f"{UNTRUSTED_BODY_OPEN}\n{_neutralize_fence_runs(body)}\n"
+        f"{UNTRUSTED_BODY_CLOSE}"
+    )
 
 
 def _truncate(text: str, limit: int) -> tuple[str, int]:

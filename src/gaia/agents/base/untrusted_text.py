@@ -17,6 +17,9 @@ from gaia.agents.base.person_approval import is_hidden
 UNTRUSTED_FIELD_OPEN = "<<<UNTRUSTED_TEXT>>>"
 UNTRUSTED_FIELD_CLOSE = "<<<END_UNTRUSTED_TEXT>>>"
 
+# Joiners and direction marks: legitimate in a name, invisible inside a fence run.
+_INVISIBLE_MARKS = frozenset("\u200c\u200d\u200e\u200f")
+
 
 def _fence_side(char: str) -> str:
     """``<`` or ``>`` for a character that reads as one, in any width; else ""."""
@@ -44,7 +47,7 @@ def _without_fence_runs(text: str) -> str:
         while at < len(text):
             if _fence_side(text[at]) == side:
                 count, last = count + 1, at
-            elif not is_hidden(text[at]):
+            elif not (is_hidden(text[at]) or text[at] in _INVISIBLE_MARKS):
                 break
             at += 1
         out.append(side * 2 if count >= 3 else text[start : last + 1])

@@ -140,8 +140,14 @@ _DOMAIN_RE = re.compile(r"@([\w.\-]+)")
 
 
 def wrap_untrusted_body(body: str) -> str:
-    """Fence a message body so the model reads it as data, not instructions."""
-    return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
+    """Fence a message body so the model reads it as data, not instructions.
+
+    Fence-like runs in the body are cut first, so it can't close the fence early.
+    """
+    return (
+        f"{UNTRUSTED_BODY_OPEN}\n{strip_untrusted_field_markers(body)}\n"
+        f"{UNTRUSTED_BODY_CLOSE}"
+    )
 
 
 def _subject_reason(subject_lower: str) -> str:
