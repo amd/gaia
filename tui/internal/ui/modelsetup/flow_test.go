@@ -1669,21 +1669,33 @@ func TestUnreadyNPUModelIsBlockedNotAcknowledged(t *testing.T) {
 	}
 }
 
-// Both of memory_fit's NPU reasons are shown as they come, with exactly one
-// full stop: no NPU is a hardware statement, not ready names a fix.
+// Every NPU reason is shown as its own clause with exactly one full stop:
+// no NPU is a hardware statement, not ready names a fix, an unavailable
+// backend starts with "this", and a driver message may already end in a stop.
 func TestUnreadyNPUModelShowsEachReasonVerbatim(t *testing.T) {
 	for _, tc := range []struct{ name, reason, want string }{
 		{
 			"not ready",
 			notReadyReason,
-			"This model can't be used on this PC: it needs this PC's NPU set up first: " +
+			"This model can't be used on this PC: Needs this PC's NPU set up first: " +
 				"Locked-memory limit is too low. Raise the limit.",
 		},
 		{
 			"no NPU",
 			noNpuReason,
-			"This model can't be used on this PC: it runs on a Ryzen AI NPU, " +
+			"This model can't be used on this PC: Runs on a Ryzen AI NPU, " +
 				"and Lemonade reports none on this PC.",
+		},
+		{
+			"backend cannot run FLM",
+			"this Lemonade cannot run flm models on this PC",
+			"This model can't be used on this PC: This Lemonade cannot run flm models on this PC.",
+		},
+		{
+			"driver message ends in a full stop",
+			"needs an AMD Ryzen AI NPU and its driver (install the driver.)",
+			"This model can't be used on this PC: Needs an AMD Ryzen AI NPU " +
+				"and its driver (install the driver).",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -272,13 +272,24 @@ func noFitAsk(need, have float64) string {
 }
 
 // npuBlockedLine is the warning under a model the NPU can't run yet. The
-// server's sentence says which case it is — no NPU, or one not set up — and
-// both block; the frame says "on this PC" because it covers either.
+// server's sentence says which case it is (no NPU, or one not set up), and
+// both block. The reason is capitalised and its final full stop is removed,
+// including one inside a closing parenthesis, so it reads as its own clause
+// without doubling the stop when ours is appended.
 func npuBlockedLine(reason *string) string {
 	if reason == nil {
 		return "This model can't be used on this PC."
 	}
-	return "This model can't be used on this PC: it " + *reason + "."
+	r := strings.TrimSpace(*reason)
+	r = strings.TrimRight(r, ".")
+	if strings.HasSuffix(r, ".)") {
+		r = strings.TrimSuffix(r, ".)") + ")"
+	}
+	if r == "" {
+		return "This model can't be used on this PC."
+	}
+	r = strings.ToUpper(r[:1]) + r[1:]
+	return "This model can't be used on this PC: " + r + "."
 }
 
 // npuBlockedPurpose is the job caption for a model the NPU can't run yet: it
