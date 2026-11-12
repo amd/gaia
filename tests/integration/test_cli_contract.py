@@ -68,11 +68,6 @@ BINDS_A_PORT = {"mcp start", "api start"}
 #: line. Keyed by (rule, command as typed); the rule is "traceback" or
 #: "model server".
 KNOWN_BUGS = {
-    ("traceback", "schedule show contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule remove contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule pause contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule resume contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule run contract-walk"): "amd/gaia#7333",
     ("traceback", "connectors connect contract-walk"): "amd/gaia#7334",
     ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
     ("traceback", "mcp code-index"): "amd/gaia#7335",

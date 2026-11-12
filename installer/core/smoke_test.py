@@ -149,11 +149,6 @@ NEVER_STARTED = {
 #: Commands that fail the walk today, each with its issue. Strict: once one
 #: starts cleanly the walk fails until its line is deleted.
 KNOWN_BROKEN = {
-    "schedule show": "amd/gaia#7333",
-    "schedule remove": "amd/gaia#7333",
-    "schedule pause": "amd/gaia#7333",
-    "schedule resume": "amd/gaia#7333",
-    "schedule run": "amd/gaia#7333",
     "connectors connect": "amd/gaia#7334",
     "mcp engineering": "amd/gaia#7335",
     "mcp code-index": "amd/gaia#7335",
