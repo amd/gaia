@@ -5401,7 +5401,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
-            spending.record_turn(db, model_id, inference_stats)
+            # A stopped answer may still be billed; one that failed unanswered is not.
+            spending.record_turn(
+                db,
+                model_id,
+                inference_stats,
+                failed=turn_failed and not turn_cancelled,
+            )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
                 _maybe_update_session_title(
