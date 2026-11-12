@@ -49,6 +49,9 @@ function describeFolderResult(folderName: string, result: IndexFolderResponse): 
 /** How often an indexing document's status (and progress) is asked for. */
 export const INDEX_POLL_MS = 1000;
 
+/** A library longer than this gets a filter box. */
+const FILTER_AFTER = 5;
+
 /** The progress map with `id` set to `progress`, or dropped once there is none. */
 function withProgress(map: Record<string, api.IndexProgress>, id: string, progress: api.IndexProgress | null | undefined) {
     if (progress) return { ...map, [id]: progress };
@@ -125,6 +128,9 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    const [filter, setFilter] = useState('');
+    const filterText = documents.length > FILTER_AFTER ? filter.trim().toLowerCase() : '';
+    const matchesFilter = (doc: Document) => !filterText || doc.filename.toLowerCase().includes(filterText);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -640,6 +646,22 @@ export function DocumentLibrary() {
         }
     };
 
+    /** Which chats a readable document is in, from the open chat and the server's count. */
+    const renderUsage = (doc: Document) => {
+        if (doc.indexing_status && doc.indexing_status !== 'complete') return null;
+        const inThisChat = !!currentSession?.document_ids?.includes(doc.id);
+        const others = Math.max((doc.sessions_using ?? 0) - (inThisChat ? 1 : 0), 0);
+        let label: string;
+        if (inThisChat) {
+            label = others > 0 ? t.plural('docs.usage.hereAndOthers', others) : t('docs.usage.here');
+        } else if (draftDocumentIds.includes(doc.id)) {
+            label = t('docs.usage.next');
+        } else {
+            label = others > 0 ? t.plural('docs.usage.chats', others) : t('docs.usage.none');
+        }
+        return <span className={`doc-usage${inThisChat ? ' is-here' : ''}`}>{label}</span>;
+    };
+
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label={t('docs.title')}>
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
@@ -671,7 +693,7 @@ export function DocumentLibrary() {
 
                     {/* Drop zone */}
                     <div
-                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''}`}
+                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''} ${documents.length > 0 ? 'drop-zone-compact' : ''}`}
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
@@ -770,6 +792,23 @@ export function DocumentLibrary() {
                         </div>
                     )}
 
+                    {documents.length > FILTER_AFTER && (
+                        <div className="doc-filter">
+                            <Search size={14} className="doc-filter-icon" aria-hidden="true" />
+                            <input
+                                type="search"
+                                className="doc-filter-input"
+                                value={filter}
+                                onChange={(e) => setFilter(e.target.value)}
+                                placeholder={t('docs.filterPlaceholder')}
+                                aria-label={t('docs.filterAria')}
+                            />
+                        </div>
+                    )}
+                    {filterText && documents.length > 0 && !documents.some(matchesFilter) && (
+                        <p className="doc-filter-empty">{t('docs.filterNone', { text: filter.trim() })}</p>
+                    )}
+
                     {/* Document list */}
                     <div className="doc-list">
                         {loadError && documents.length === 0 && (
@@ -789,10 +828,11 @@ export function DocumentLibrary() {
                             </div>
                         )}
                         {documents.map((doc) => (
-                            <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
+                            <div key={doc.id} hidden={!matchesFilter(doc)} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
                                     <span className="doc-name" dir="auto">{doc.filename}</span>
                                     {renderDocStatus(doc)}
+                                    {renderUsage(doc)}
                                 </div>
                                 <div className="doc-row-actions">
                                     {doc.filepath && (
@@ -810,7 +850,7 @@ export function DocumentLibrary() {
                                         ? currentSession?.document_ids?.includes(doc.id)
                                         : draftDocumentIds.includes(doc.id)) && (
                                         <button
-                                            className="btn-icon-sm doc-attach"
+                                            className="doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
                                             title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
                                             aria-label={targetSessionId
@@ -818,6 +858,7 @@ export function DocumentLibrary() {
                                                 : t('docs.attachNextAria', { name: doc.filename })}
                                         >
                                             <Link2 size={14} />
+                                            {targetSessionId ? t('docs.addToThisChat') : t('docs.addToNextChat')}
                                         </button>
                                     )}
                                     {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (

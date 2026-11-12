@@ -63,6 +63,19 @@
 .drop-zone p { margin-top: 10px; font-size: 14px; font-weight: 500; font-family: var(--font-sans); }
 .drop-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; font-family: var(--font-sans); }
 
+/* Once there are documents, the drop zone is one line so the list gets the room. */
+.drop-zone-compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+}
+.drop-zone-compact svg { width: 18px; height: 18px; }
+.drop-zone-compact p,
+.drop-zone-compact .drop-hint { margin-top: 0; }
+.drop-zone-compact .upload-spinner { width: 16px; height: 16px; border-width: 2px; }
+
 .upload-spinner {
     width: 28px; height: 28px;
     border: 3px solid var(--border);
@@ -177,6 +190,62 @@
 
 .doc-delete { color: var(--text-muted); }
 .doc-delete:hover { color: var(--danger); }
+
+.doc-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.doc-attach:hover { background: var(--bg-hover); color: var(--accent); }
+
+.doc-row[hidden] { display: none; }
+
+/* Which chats a document is in */
+.doc-usage {
+    display: inline-block;
+    margin-inline-start: 8px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+.doc-usage.is-here { background: var(--accent-dim2); color: var(--accent); }
+
+.doc-filter {
+    position: relative;
+    margin-bottom: 8px;
+}
+.doc-filter-icon {
+    position: absolute;
+    inset-inline-start: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+.doc-filter-input {
+    width: 100%;
+    padding: 7px 10px;
+    padding-inline-start: 30px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+}
+.doc-filter-input:focus { border-color: var(--accent); }
+.doc-filter-empty {
+    margin: 4px 2px 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
 
 /* Empty state */
 .empty-docs {
