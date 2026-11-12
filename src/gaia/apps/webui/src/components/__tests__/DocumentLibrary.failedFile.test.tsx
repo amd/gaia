@@ -120,3 +120,36 @@ describe('the chat bar with a document that failed', () => {
         expect(document.querySelector('.doc-context-icon.lucide-circle-check')).toBeNull();
     });
 });
+
+describe('the status lines above the list', () => {
+    it('drops the "couldn\'t be added" banner once a later file is added', async () => {
+        mockedApi.uploadDocumentByPath.mockResolvedValueOnce(BROKEN).mockResolvedValueOnce(GOOD);
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/broken.pdf');
+        expect(await screen.findByRole('alert')).toHaveTextContent("broken.pdf couldn't be added");
+
+        addByPath('/tmp/notes.txt');
+        expect(await screen.findByRole('status')).toHaveTextContent('notes.txt');
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('shows only the Removed line, and keeps the summary, when the attached file is removed', async () => {
+        mockedApi.uploadDocumentByPath.mockResolvedValue(GOOD);
+        mockedApi.listDocuments.mockResolvedValue({ documents: [GOOD, BROKEN], total: 2, total_size_bytes: 3072, total_chunks: 3 });
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/notes.txt');
+        expect(await screen.findByRole('status')).toHaveTextContent('Attached notes.txt');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
+
+        const statuses = screen.getAllByRole('status');
+        expect(statuses).toHaveLength(1);
+        expect(statuses[0]).toHaveTextContent('Removed notes.txt from your library.');
+        const stats = document.querySelector('.doc-stats');
+        expect(stats).not.toBeNull();
+        expect(stats).toHaveTextContent("1 couldn't be read");
+        expect(stats).not.toHaveTextContent(/\b1 document\b/);
+    });
+});

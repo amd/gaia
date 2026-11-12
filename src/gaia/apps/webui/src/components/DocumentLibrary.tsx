@@ -284,8 +284,9 @@ export function DocumentLibrary() {
         return () => clearInterval(refreshInterval);
     }, [setDocuments]);
 
-    const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const unreadableCount = documents.filter((d) => d.indexing_status === 'failed').length;
+    const shownDocs = documents.filter((d) => d.id !== pendingRemoval?.id);
+    const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
+    const unreadableCount = shownDocs.filter((d) => d.indexing_status === 'failed').length;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
@@ -361,6 +362,7 @@ export function DocumentLibrary() {
         setUploadStatus(t('docs.indexingFile', { name: filename }));
         setUploadError(null);
         setFolderNotice(null);
+        setActionError(null);
         setNotice('');
         try {
             const doc = await uploader();
@@ -488,7 +490,10 @@ export function DocumentLibrary() {
 
     const handleDeleteDoc = useCallback((id: string) => {
         const name = documents.find((d) => d.id === id)?.filename || id;
+        // The Undo bar is now the one status line.
         setActionError(null);
+        setNotice('');
+        setFolderNotice(null);
         flushRemoval();
         const pending = { id, name };
         pendingRemovalRef.current = pending;
@@ -825,9 +830,9 @@ export function DocumentLibrary() {
                     )}
 
                     {/* Stats */}
-                    {documents.length > 0 && !pendingRemoval && (
+                    {shownDocs.length > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', documents.length - unreadableCount)}</span>
+                            <span>{t.plural('docs.count', shownDocs.length - unreadableCount)}</span>
                             {unreadableCount > 0 && (
                                 <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
                             )}
@@ -854,7 +859,7 @@ export function DocumentLibrary() {
                                 <span>{t('docs.emptyHint')}</span>
                             </div>
                         )}
-                        {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
+                        {shownDocs.map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
                                     <span className="doc-name" dir="auto">{doc.filename}</span>

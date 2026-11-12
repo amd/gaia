@@ -220,8 +220,9 @@ describe('DocumentLibrary says where documents go', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
 
-        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
-        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+        expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull();
+        expect(screen.getByRole('status')).toHaveTextContent('Removed good.pdf from your library.');
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]));
     });
 
     it('says so when indexing worked but attaching did not', async () => {
