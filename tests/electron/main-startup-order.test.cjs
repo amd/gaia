@@ -72,6 +72,14 @@ describe("backend port selection fails loudly", () => {
     expect(body).toMatch(/catch \(err\) \{\s*throw new Error\(/);
   });
 
+  test("a failed spawn rejects before any pidfile is written", () => {
+    const body = functionBody("startBackend");
+    const waited = body.indexOf("await waitForSpawn(child, { command: gaiaCmd, logPath: _MAIN_LOG_PATH });");
+    expect(waited).toBeGreaterThan(body.indexOf("spawn("));
+    expect(waited).toBeLessThan(body.indexOf("fs.writeFileSync(pidFile, String(child.pid)"));
+    expect(body.match(/fs\.writeFileSync\(pidFile/g)).toHaveLength(1);
+  });
+
   test("a rejected startup routes to the fatal error dialog", () => {
     const body = whenReadyBody();
     expect(body).toContain("backendStarting = startBackend();");

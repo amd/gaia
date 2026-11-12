@@ -104,6 +104,7 @@ const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
+const { waitForSpawn } = require("./services/backend-spawn.cjs");
 const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
@@ -346,6 +347,7 @@ async function cleanupOrphanedBackend() {
  *
  * Returns the ChildProcess, or null if the gaia binary cannot be found
  * (shouldn't happen post-ensureBackend, but we guard just in case).
+ * Rejects when the OS cannot start the program, naming the spawn error.
  */
 async function startBackend() {
   const gaiaCmd = backendInstaller.findGaiaBin();
@@ -428,20 +430,8 @@ async function startBackend() {
   });
 
   child.on("error", (err) => {
-    console.error("Failed to start backend:", err.message);
+    console.error("Backend process error:", err.message);
   });
-
-  // Write a PID file so subsequent AppImage launches can detect and
-  // cleanup this backend if it becomes orphaned. The pidfile is removed
-  // when the child exits.
-  try {
-    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
-    const pidFile = path.join(_GAIA_DIR, "backend.pid");
-    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
-    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
-  } catch (err) {
-    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
-  }
 
   child.on("exit", (code, signal) => {
     // Any exit we didn't ask for leaves the window without a backend, even code 0.
@@ -476,6 +466,20 @@ async function startBackend() {
     const tail = backendStderrTail.length ? backendStderrTail.join("\n") : "(nothing on stderr)";
     console.error(`[main] Backend pid ${child.pid} closed (code=${code}, signal=${signal}). Last stderr lines:\n${tail}`);
   });
+
+  await waitForSpawn(child, { command: gaiaCmd, logPath: _MAIN_LOG_PATH });
+
+  // Write a PID file so subsequent AppImage launches can detect and
+  // cleanup this backend if it becomes orphaned. The pidfile is removed
+  // when the child exits.
+  try {
+    try { fs.mkdirSync(_GAIA_DIR, { recursive: true }); } catch { /* ignore */ }
+    const pidFile = path.join(_GAIA_DIR, "backend.pid");
+    fs.writeFileSync(pidFile, String(child.pid), { mode: 0o600 });
+    console.log(`[main] Wrote backend pidfile ${pidFile} (pid=${child.pid})`);
+  } catch (err) {
+    console.warn(`[main] Could not write backend pidfile: ${err.message}`);
+  }
 
   return child;
 }
