@@ -61,3 +61,29 @@ def test_an_unstopped_load_reports_every_document():
     assert agent.rag.loaded == paths
     assert handler.events[-1]["success"] is True
     assert handler.events[-1]["summary"].startswith("Indexed 3 document(s) in ")
+
+
+def test_a_stop_before_the_first_document_loads_none():
+    handler = _Handler()
+    handler.cancelled.set()
+    agent = _Agent(_Rag(handler, stop_after=None))
+    paths = [f"/docs/doc{n}.txt" for n in range(4)]
+
+    _index_rag_with_progress(agent, paths, handler)
+
+    assert agent.rag.loaded == []
+    assert agent.indexed_files == set()
+    assert handler.events[-1]["success"] is False
+    assert "4 of 4" in handler.events[-1]["summary"]
+
+
+def test_a_stop_during_the_last_document_reports_all_loaded():
+    handler = _Handler()
+    agent = _Agent(_Rag(handler, stop_after=3))
+    paths = [f"/docs/doc{n}.txt" for n in range(3)]
+
+    _index_rag_with_progress(agent, paths, handler)
+
+    assert agent.rag.loaded == paths
+    assert handler.events[-1]["success"] is True
+    assert "Stopped" not in handler.events[-1]["summary"]
