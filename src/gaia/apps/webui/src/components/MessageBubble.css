@@ -428,6 +428,14 @@
     text-align: end;
 }
 
+/* ── Maths ───────────────────────────────────────────────────── */
+.md-math math { font-size: 1.05em; }
+.md-math-display {
+    margin: 12px 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
 /* ── Collapsible sections (<details><summary>) ───────────────── */
 .md-content details {
     margin: 8px 0;
