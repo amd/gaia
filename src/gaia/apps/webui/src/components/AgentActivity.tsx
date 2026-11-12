@@ -746,7 +746,7 @@ function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: b
                 <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
-            {open && <div className="flow-thought-hacker" dir="auto">{text}</div>}
+            {open && <div className="flow-thought-hacker">{text}</div>}
         </div>
     );
 }
@@ -919,7 +919,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {step.thought?.detail && (
                         <div className="flow-tool-thought">
                             <span className="detail-section-label">{thoughtLabel(false, thoughtMs, t)}</span>
-                            <div className="flow-thought-hacker" dir="auto">{step.thought.detail.trim()}</div>
+                            <div className="flow-thought-hacker">{step.thought.detail.trim()}</div>
                         </div>
                     )}
                     <div className="flow-tool-raw">

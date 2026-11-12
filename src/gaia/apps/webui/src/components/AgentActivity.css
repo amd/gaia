@@ -140,6 +140,9 @@
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
+    /* Each line of reasoning takes its own direction, whatever the app's language. */
+    unicode-bidi: plaintext;
+    text-align: start;
     border-radius: var(--radius-xs);
     background: var(--bg-recessed);
     border: 1px solid var(--border-recessed);
