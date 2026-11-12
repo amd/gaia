@@ -23,7 +23,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
-import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, messageExcerpt, sizeLabel } from './LongContent';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
@@ -791,7 +791,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
                                 controls={userBodyId}
-                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(message.content))}
+                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(t, message.content))}
                                 expandedLabel={t('msg.showLess')}
                                 className="msg-expand-toggle"
                             />
@@ -931,8 +931,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
                     expanded={expanded}
                     onToggle={() => setExpanded((v) => !v)}
                     controls={bodyId}
-                    collapsedLabel={`Expand (${lines.toLocaleString('en-US')} lines)`}
-                    expandedLabel="Collapse"
+                    collapsedLabel={t('code.expand', { size: lineCount(t, lines) })}
+                    expandedLabel={t('code.collapse')}
                     className="code-expand-toggle"
                 />
             )}
