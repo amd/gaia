@@ -2091,13 +2091,28 @@ _NEGATED_SUBJECT_PATTERN = re.compile(
 _SAVE_EXCEPTION = (
     r"(?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for)"
 )
-_SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
-# "I wrote no file", "I saved nothing": so does its object.
-# "I saved nothing else than r.md": "but" or "than" after it names a save.
-_NEGATED_OBJECT_PATTERN = re.compile(
-    rf"\s+{_NEGATED_OUTPUT}\b(?!(?:\s+(?:else|other))?\s+(?:but|than)\b)",
+# "I saved nothing else but r.md", "no other file than r.md": the same.
+_EXCEPTION_PHRASE_PATTERN = re.compile(
+    rf"\b{_SAVE_EXCEPTION}\b(?:\s+for\b)?"
+    rf"|\b{_NEGATED_OUTPUT}(?:\s+(?:else|other))?\s+(?:but|than)\b",
     re.IGNORECASE,
 )
+# "except that I need access", "apart from reading r.pdf", "nothing but read
+# r.pdf": a clause or an act, not a saved file.
+_NOT_A_SAVED_OBJECT_PATTERN = re.compile(
+    r"\s*(?:that|what|how|when|whether|if|to|I|we|you|he|she|they"
+    r"|read|opened|checked|looked|reviewed|searched|answered|listed"
+    r"|\w{2,}ing(?![\w./\\-]))\b",
+    re.IGNORECASE,
+)
+# "except the totals is in notes.md": the excepted object ends at a verb.
+_EXCEPTION_OBJECT_END_PATTERN = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|will|would|can|could|should|must"
+    r"|may|might|need|needs|do|does|did)\b",
+    re.IGNORECASE,
+)
+# "I wrote no file", "I saved nothing": so does its object.
+_NEGATED_OBJECT_PATTERN = re.compile(rf"\s+{_NEGATED_OUTPUT}\b", re.IGNORECASE)
 
 
 # "... stored as your bookshelf slot", "saved to memory": what was kept is a
@@ -2150,15 +2165,26 @@ def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool
     return not (re.search(r"[\\/~]", token) or _names_a_file(token))
 
 
+def _names_an_excepted_save(sentence: str) -> bool:
+    """A denial's exception whose own object is a file: "no file except r.md"."""
+    for match in _EXCEPTION_PHRASE_PATTERN.finditer(sentence):
+        rest = sentence[match.end() :]
+        if _NOT_A_SAVED_OBJECT_PATTERN.match(rest):
+            continue
+        clause = _CLAUSE_END_PATTERN.split(rest, maxsplit=1)[0]
+        clause = _EXCEPTION_OBJECT_END_PATTERN.split(clause, maxsplit=1)[0]
+        if _names_a_path(clause):
+            return True
+    return False
+
+
 def _is_write_claim(sentence: str, denials: bool) -> bool:
     """A write verb in *sentence*; with *denials* false, not one negated.
 
     *denials* (a turn that asked for a save) reads every write verb as a
     claim, a remembered value included: the save is owed either way.
     """
-    # An exception anywhere ("Apart from r.md, no file was written",
-    # "I saved nothing, except r.md") names a save the denial leaves out.
-    excepted = _SAVE_EXCEPTION_PATTERN.search(sentence) is not None
+    excepted = _names_an_excepted_save(sentence)
     return any(
         denials
         or (

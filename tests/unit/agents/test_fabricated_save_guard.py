@@ -157,6 +157,14 @@ SAVE_CLAIMS = [
     pytest.param(
         "Except for `out/r.md`, I saved nothing.", id="exception-before-negated-object"
     ),
+    pytest.param(
+        "Other than `out/a.md`, I wrote no file.", id="other-than-before-negation"
+    ),
+    pytest.param("I saved nothing - except `out/a.md`.", id="nothing-dash-except"),
+    pytest.param(
+        "I saved nothing, except the summary I wrote to `out/s.md`.",
+        id="except-object-with-its-own-verb",
+    ),
     # A file in the verb's own clause beats a remembered-value reading.
     pytest.param(
         "Here's the `summary` I saved to `out/summary.md`.",
@@ -266,6 +274,29 @@ NON_CLAIMS = [
     pytest.param("None of the files were written.", id="none-of-the-files"),
     pytest.param("I have created no files.", id="i-have-created-no-files"),
     pytest.param("I saved nothing to disk.", id="i-saved-nothing"),
+    # An exception word alone is not a save: its own object must be a file.
+    pytest.param("Besides, no file was written.", id="besides-discourse-marker"),
+    pytest.param("Besides, I saved nothing to disk.", id="besides-then-denial"),
+    pytest.param(
+        "I saved nothing, except that I need write access to the folder.",
+        id="except-that-clause",
+    ),
+    pytest.param(
+        "Apart from reading report.pdf, I saved no files.", id="apart-from-a-read"
+    ),
+    pytest.param("Other than answering, I wrote no file.", id="other-than-an-act"),
+    pytest.param(
+        "I wrote no files; everything except the totals is already in your "
+        "notes.md.",
+        id="exception-object-is-not-the-file",
+    ),
+    pytest.param(
+        "I saved nothing, except I read `out/a.md`.", id="except-a-new-clause"
+    ),
+    pytest.param("I wrote nothing but read report.pdf.", id="nothing-but-a-read"),
+    pytest.param(
+        "I wrote no file, but `notes.md` already exists.", id="denial-comma-but"
+    ),
     # rc18 round 2: a remembered value described as stored, beside a file.
     pytest.param(
         "(For what it's worth, that's a different thing from the `granite-1812` "
