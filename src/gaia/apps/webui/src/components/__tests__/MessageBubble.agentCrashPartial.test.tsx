@@ -52,6 +52,16 @@ describe('an answer the agent died writing', () => {
             .toHaveLength(2);
     });
 
+    it('keeps the last error step when the answer ends with it mid-paragraph, not as its own', () => {
+        expect(dropErrorsEchoedInAnswer(STEPS, `${ESSAY} The log said: ${NOTICE}`).steps).toHaveLength(2);
+        expect(dropErrorsEchoedInAnswer(STEPS, `${ESSAY}\n${NOTICE}`).steps).toHaveLength(2);
+    });
+
+    it('drops the step when the saved notice carries trailing whitespace', () => {
+        const padded: AgentStep[] = [STEPS[0], { ...STEPS[1], detail: `${NOTICE}\n` }];
+        expect(dropErrorsEchoedInAnswer(padded, `${ESSAY}\n\n${NOTICE}\n\n`).steps).toHaveLength(1);
+    });
+
     it('does not call a partial answer an error reply', () => {
         expect(dropErrorsEchoedInAnswer(STEPS, `${ESSAY}\n\n${NOTICE}`).echoed).toBe(false);
         expect(dropErrorsEchoedInAnswer(STEPS, NOTICE).echoed).toBe(true);
