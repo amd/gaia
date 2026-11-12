@@ -167,6 +167,52 @@ describe('What GAIA knows about you', () => {
         expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument();
     });
 
+    it('says how many entries a forget removed, and undo restores every one', async () => {
+        // rc18 round 4: the note went with the fact, the banner named one row and Undo restored one.
+        const fact = row({ id: 'd1', content: 'My dog is called Biscuit', source: 'user' });
+        const note = row({ id: 'd2', category: 'note', content: 'My dog is called Biscuit (a beagle)', source: 'user' });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [fact, note, CALGARY], total: 3, offset: 0, limit: 200 });
+        mockedApi.deleteKnowledge.mockResolvedValue({
+            status: 'deleted', knowledge_id: 'd1', knowledge_ids: ['d1', 'd2'], sensitive: false,
+            copies: [{ content: note.content, category: 'note', domain: null, context: 'global', entity: null, due_at: null }],
+        });
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('My dog is called Biscuit')).getByRole('button', { name: /Forget/ }));
+
+        const forgotten = (await screen.findByText(/Forgotten:/)).closest('[role="status"]')!;
+        expect(forgotten).toHaveTextContent('My dog is called Biscuit');
+        expect(forgotten).toHaveTextContent('2 in all');
+
+        fireEvent.click(screen.getByRole('button', { name: /Undo/ }));
+
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalledTimes(2));
+        expect(mockedApi.createKnowledge).toHaveBeenNthCalledWith(1, expect.objectContaining(
+            { content: 'My dog is called Biscuit', category: 'fact', sensitive: false },
+        ));
+        expect(mockedApi.createKnowledge).toHaveBeenNthCalledWith(2, expect.objectContaining(
+            { content: 'My dog is called Biscuit (a beagle)', category: 'note', sensitive: false },
+        ));
+        await waitFor(() => expect(screen.queryByText(/Forgotten:/)).not.toBeInTheDocument());
+    });
+
+    it('says how many entries held a sensitive memory, without showing it', async () => {
+        const first = row({ id: 'b1', content: 'Takes 20mg of fluoxetine every morning', sensitive: true });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [first, CALGARY], total: 2, offset: 0, limit: 200 });
+        // Two of the three rows were on a page not loaded yet.
+        mockedApi.deleteKnowledge.mockResolvedValue({
+            status: 'deleted', knowledge_id: 'b1', knowledge_ids: ['b1', 'b2', 'b3'], sensitive: true,
+        });
+        await renderAbout();
+
+        fireEvent.click(screen.getByRole('button', { name: /^Forget: .*sensitive memory/i }));
+
+        const forgotten = (await screen.findByText(/Forgotten: a sensitive memory/)).closest('[role="status"]')!;
+        expect(forgotten).toHaveTextContent('saved in 3 entries');
+        expect(forgotten).not.toHaveTextContent('fluoxetine');
+        expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument();
+    });
+
     it('keeps a forgotten item gone when an older load lands afterwards', async () => {
         // The first About load answers at once; the second (from the page's
         // own reload) is held until after the forget, then returns the old list.

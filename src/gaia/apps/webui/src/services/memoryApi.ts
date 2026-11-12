@@ -120,6 +120,17 @@ export interface KnowledgeDeleteResult {
     knowledge_ids?: string[];
     /** One of the erased rows was sensitive. */
     sensitive?: boolean;
+    /** The other rows erased, to restore on Undo; absent when any was sensitive. */
+    copies?: ForgottenCopy[];
+}
+
+export interface ForgottenCopy {
+    content: string;
+    category: string;
+    domain?: string | null;
+    context?: string | null;
+    entity?: string | null;
+    due_at?: string | null;
 }
 
 export function deleteKnowledge(id: string) {

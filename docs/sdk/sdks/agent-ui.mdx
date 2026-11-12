@@ -1995,7 +1995,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
-    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the rows of its fact group, and the same fact about the same subject however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`, and `sensitive` says whether any erased row was sensitive. The Memory page drops every listed row and offers no **Undo** after a sensitive forget.
+    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the rows of its fact group, and the same fact about the same subject however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`, and `sensitive` says whether any erased row was sensitive. When none was, `copies` holds the other erased rows (`content`, `category`, `domain`, `context`, `entity`, `due_at`) so **Undo** can restore all of them. The Memory page drops every listed row, says how many went when more than one did, and offers no **Undo** after a sensitive forget.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">

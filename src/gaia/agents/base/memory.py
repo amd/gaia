@@ -64,7 +64,6 @@ from typing import (
     Sequence,
     Set,
     Tuple,
-    cast,
 )
 from uuid import uuid4
 
@@ -80,7 +79,6 @@ from gaia.agents.base.memory_store import (
     MAX_CONTENT_LENGTH,
     MAX_EXTRACTION_TURN_LENGTH,
     TURN_COVERED,
-    TURN_LINKED,
     VALID_CATEGORIES,
     MemoryContentError,
     MemoryScrubError,
@@ -3060,8 +3058,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                         context=target_context,
                         sensitive=bool(how),
                     )
-                    if how == TURN_LINKED:
-                        store.link(cast(str, kin), new_id)
                     applied.stored += 1
                     self._embed_and_index(new_id, op["content"], "extracted memory")
 
@@ -3100,8 +3096,6 @@ class MemoryMixin(ProceduralMemoryMixin):
                         # A reworded sensitive memory stays sensitive.
                         sensitive=bool(how) or bool((target or {}).get("sensitive")),
                     )
-                    if how == TURN_LINKED:
-                        store.link(cast(str, kin), new_id)
                     applied.updated += 1
                     # Only supersede when store() actually created a new row.
                     # Dedup can collapse near-identical content back into old_id,

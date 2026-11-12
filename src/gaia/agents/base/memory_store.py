@@ -416,10 +416,6 @@ def _mentions(text: set, memory: set) -> bool:
     )
 
 
-#: Content words a short restatement of a one-word memory may add ("diagnosed 2019").
-_SHORT_RESTATEMENT = 3
-
-
 _NEGATION_WORDS = frozenset("not no never none neither nor without".split())
 
 
@@ -549,28 +545,167 @@ def fact_key(text: str) -> frozenset:
     )
 
 
-def _numbers_conflict(a: set, b: set) -> bool:
-    """Whether both sets carry numbers and neither's are all in the other's."""
-    nums_a = {w for w in a if any(ch.isdigit() for ch in w)}
-    nums_b = {w for w in b if any(ch.isdigit() for ch in w)}
-    return bool(nums_a and nums_b) and not (nums_a <= nums_b or nums_b <= nums_a)
+#: Words that give a sentence its shape without saying what it is about:
+#: common verbs, time and frequency, amounts. "Takes ... every morning" fits
+#: fluoxetine and magnesium alike, so these never identify a fact. A word
+#: missing here only makes matching stricter.
+_FRAME_WORDS = frozenset("""
+    be am is are was were been being have has had having do does did doing done
+    get got gotten go goes went gone going take took taken make made see saw
+    seen use need want like love prefer hate enjoy work live stay keep kept
+    give gave given put say said tell told know knew known think thought feel
+    felt find found come came call name mean let try tried start begin began
+    stop finish end plan hope wait help ask look seem become became move run
+    ran bring brought buy bought pay paid meet met eat ate drink drank sleep
+    slept wake woke read write wrote play watch listen visit talk speak spoke
+    walk drive drove attend meeting appointment session
+    time day daily today tonight tomorrow yesterday week weekly weekday
+    weekend month monthly year yearly annual hour minute morning afternoon
+    evening night nightly noon midnight monday tuesday wednesday thursday
+    friday saturday sunday january february march april may june july august
+    september october november december spring summer autumn fall winter
+    always usually often sometimes rarely never once twice again still already
+    now currently recently lately soon later early late ago since before after
+    during until while every each per next last past first second third
+    one two three four five six seven eight nine ten dozen half couple few
+    several many much more most less least some lot number amount around
+    approximately roughly nearly almost over under only too very really quite
+    thing something anything everything nothing someone anyone everyone person
+    people way kind sort part new old good bad big small little long short own
+    same other another different current main sure able because out off down
+    near between through within myself mine yes
+""".split())
+
+#: Words for another person or a pet: whose fact a memory is.
+_RELATION_WORDS = frozenset("""
+    mother mom mum father dad parent sister brother sibling wife husband spouse
+    partner girlfriend boyfriend fiance fiancee son daughter child children kid
+    baby grandmother grandma grandfather grandpa aunt uncle cousin niece nephew
+    friend roommate neighbor neighbour boss manager coworker colleague dog cat
+    pet
+""".split())
+
+#: Two capitals that are not an acronym naming something ("MS", "IQ" are).
+_COMMON_CAPS = frozenset("AM PM OK TV ID IT US UK EU".split())
+
+_TERM_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
+_FIGURE_RE = re.compile(r"(?<![\w.,])\d{1,3}(?:[.,]\d{3})+(?![\w,])|(?<!\w)\d+(?!\w)")
 
 
-def _restates(a: set, b: set) -> bool:
-    """Whether two ``fact_key`` sets are one fact said twice.
+def _singular(word: str) -> str:
+    if len(word) > 4 and word.endswith(("oes", "ses", "xes", "ches", "shes")):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
 
-    Measured against the SHORTER wording, so detail added to either side
-    ("... so no mango lassi or mango dishes") does not hide the match. A
-    one-word fact matches only a short text, and different numbers
-    ("92,000" / "95,000") make different facts.
+
+def _in(words: frozenset, word: str) -> bool:
+    """Whether *word*, or the word it is a form of ("taking", "liked"), is in *words*."""
+    forms = {word, _singular(word)}
+    for ending in ("d", "ed", "ing", "ly"):
+        if word.endswith(ending):
+            forms |= {word[: -len(ending)], word[: -len(ending)] + "e"}
+    return not words.isdisjoint(forms)
+
+
+class _Terms(NamedTuple):
+    """What a memory's text says, for telling one sensitive fact from another."""
+
+    #: Every content word in order, cut to six letters so "allergic" meets
+    #: "allergy"; numbers whole.
+    order: Tuple[str, ...]
+    said: frozenset
+    #: The distinctive ones: what the fact is about ("fluoxetine").
+    key: frozenset
+    #: Exact figures of four or more digits ("92,000"), years and dates aside.
+    figures: frozenset
+    people: frozenset
+
+
+@lru_cache(maxsize=4096)
+def _fact_terms(text: str) -> _Terms:
+    plain = _ISO_DATE_RE.sub(" ", _without_sensitivity_notes(text))
+    figures = set()
+    for found in _FIGURE_RE.finditer(plain):
+        digits = re.sub(r"\D", "", found.group())
+        if len(digits) > 4 or (len(digits) == 4 and not 1900 <= int(digits) <= 2100):
+            figures.add(digits)
+    order, key, people = [], set(), set()
+    for raw in _TERM_RE.findall(plain):
+        word = re.sub(r"['’]s$", "", raw.lower())
+        if word[0].isdigit():
+            order.append(word)
+            continue
+        acronym = len(raw) == 2 and raw.isupper() and raw not in _COMMON_CAPS
+        if word in _STEM_STOPWORDS or (len(word) < 3 and not acronym):
+            continue
+        term = _singular(word)[:6]
+        order.append(term)
+        if _in(_RELATION_WORDS, word):
+            people.add(term)
+        elif not _in(_FRAME_WORDS, word):
+            key.add(term)
+    return _Terms(
+        tuple(order),
+        frozenset(order),
+        frozenset(key),
+        frozenset(figures),
+        frozenset(people),
+    )
+
+
+#: Words a row may add to a one-word fact and still be plainly about it.
+_SHORT_RESTATEMENT = 2
+
+
+def _split_by_another_word(row: _Terms, fact: _Terms) -> bool:
+    """Whether a distinctive word of the row's own sits inside the fact's
+    words wherever they appear: "allergic to green mango" is not "allergic
+    to mango"."""
+    spots = [i for i, term in enumerate(row.order) if term in fact.key]
+    for start in spots:
+        seen: set = set()
+        for end in range(start, len(row.order)):
+            term = row.order[end]
+            if term in fact.key:
+                seen.add(term)
+            elif term in row.key:
+                break
+            if seen == fact.key:
+                return False
+    return True
+
+
+def _states(row: _Terms, fact: _Terms, row_entity: Optional[str] = None) -> str:
+    """Whether a row with *row*'s words states the sensitive *fact*.
+
+    ``_COPY`` when it holds every distinctive word of the fact and its exact
+    figures; with the figures, half the words are enough ("earns 92,000
+    euros" is "salary is 92,000 euros"). A shared sentence shape is never
+    enough. Holding the words is still only ``_NEAR`` when the row may be
+    about something else: another distinctive word splits them ("allergic
+    to green mango"), or the fact has one word ("diabetes") and the row
+    neither stays short, shares a frame word with it, nor is tagged with it
+    ("writing a report on diabetes research").
     """
-    shared = a & b
-    small, large = sorted((a, b), key=len)
-    if not shared or _numbers_conflict(a, b):
-        return False
-    if len(small) == 1:
-        return len(large) <= _SHORT_RESTATEMENT
-    return len(shared) >= 2 and len(shared) / len(small) >= FORGOTTEN_MENTION_THRESHOLD
+    if not (fact.key or fact.figures) or not fact.figures <= row.figures:
+        return ""
+    held = fact.key & row.said
+    if held != fact.key:
+        figures = bool(fact.figures) and 2 * len(held) >= len(fact.key)
+        return _COPY if figures else ""
+    if fact.figures:
+        return _COPY
+    if _split_by_another_word(row, fact):
+        return _NEAR
+    if len(fact.key) > 1:
+        return _COPY
+    numbers = {term for term in row.said if term[0].isdigit()}
+    added = row.said - fact.said - numbers
+    frame = (row.said & fact.said) - fact.key - numbers
+    tagged = _fact_terms((row_entity or "").replace(":", " ")).said & fact.key
+    return _COPY if len(added) <= _SHORT_RESTATEMENT or frame or tagged else _NEAR
 
 
 def is_about_user(item: Dict) -> bool:
@@ -686,36 +821,110 @@ def _same_fact(new: str, existing: str) -> Optional[str]:
 
 
 #: ``MemoryStore.turn_kin`` verdicts: drop the restatement, store it flagged
-#: in the row's fact group, or store it flagged on its own.
+#: as a copy of the row's fact, or store it flagged on its own.
 TURN_COVERED, TURN_LINKED, TURN_FLAGGED = "covered", "linked", "flagged"
 
-#: How a new text relates to a stored one when either is sensitive.
-_SAME, _COPY, _KIN, _ECHO = "same", "copy", "kin", "echo"
+#: How two texts relate when at least one is sensitive.
+_SAME, _COPY, _NEAR = "same", "copy", "near"
 
 
-def _relation(new: str, existing: str) -> Tuple[str, Optional[str]]:
-    """How *new* relates to *existing*, and the content to keep for ``_SAME``.
+class _Relation(NamedTuple):
+    kind: str
+    #: The content to keep for ``_SAME``.
+    kept: Optional[str]
+    #: The first text states the second's fact, and the other way round.
+    first_states: bool
+    second_states: bool
+
+
+_UNRELATED = _Relation("", None, False, False)
+
+
+def _apart(a: str, b: str) -> bool:
+    """Whether two texts with shared words are still two facts: one denies
+    what the other says, or they are about different people."""
+    shared = fact_key(a) & fact_key(b)
+    return (
+        _negates(a, shared) != _negates(b, shared)
+        or _fact_terms(a).people != _fact_terms(b).people
+    )
+
+
+def _relate(
+    a: str,
+    b: str,
+    a_sensitive: bool,
+    b_sensitive: bool,
+    a_entity: Optional[str] = None,
+    b_entity: Optional[str] = None,
+) -> _Relation:
+    """How *a* relates to *b*; only a sensitive text is a fact to be a copy of.
 
     ``_SAME``: one fact, and one wording holds all the other says, so one row
-    is enough. ``_COPY``: one wording starts the other, but each adds detail.
-    ``_KIN``: a rewording (``_restates``). ``_ECHO``: the same words with the
-    opposite sense ("is not allergic"), another fact that still gives the
-    first away. "" when unrelated.
+    is enough. ``_COPY``: one states the other's fact (``_states``), or one
+    wording starts the other. ``_NEAR``: too close to leave readable, not
+    close enough to forget together: it denies the fact, is about another
+    person, may be about something else (``_states``), or says only part of
+    what the sensitive text says. A shared sentence shape is no relation,
+    and neither is anything between rows about different people
+    (``_same_subject``).
     """
-    new_key, old_key = fact_key(new), fact_key(existing)
-    new_words, old_words = _plain_fact_words(new), _plain_fact_words(existing)
-    shorter = min(len(new_words), len(old_words))
-    starts = bool(shorter) and new_words[:shorter] == old_words[:shorter]
-    if not starts and not _restates(new_key, old_key):
-        return "", None
-    shared = new_key & old_key
-    if _negates(new, shared) != _negates(existing, shared):
-        return _ECHO, None
-    if starts and new_key <= old_key:
-        return _SAME, existing
-    if starts and old_key <= new_key:
-        return _SAME, new
-    return (_COPY if starts else _KIN), None
+    if not _same_subject(a, a_entity, b, b_entity):
+        return _UNRELATED
+    a_terms, b_terms = _fact_terms(a), _fact_terms(b)
+    a_words, b_words = _plain_fact_words(a), _plain_fact_words(b)
+    shorter = min(len(a_words), len(b_words))
+    start = a_terms if len(a_words) <= len(b_words) else b_terms
+    starts = (
+        bool(shorter)
+        and a_words[:shorter] == b_words[:shorter]
+        and bool(start.key or start.figures)
+    )
+    a_states = _states(a_terms, b_terms, a_entity) if b_sensitive else ""
+    b_states = _states(b_terms, a_terms, b_entity) if a_sensitive else ""
+    if starts or _COPY in (a_states, b_states):
+        if _apart(a, b):
+            return _Relation(_NEAR, None, False, False)
+        a_key, b_key = fact_key(a), fact_key(b)
+        if starts and a_key <= b_key:
+            return _Relation(_SAME, b, True, True)
+        if starts and b_key <= a_key:
+            return _Relation(_SAME, a, True, True)
+        return _Relation(
+            _COPY, None, starts or a_states == _COPY, starts or b_states == _COPY
+        )
+    part = (b_sensitive and a_terms.key and a_terms.said <= b_terms.said) or (
+        a_sensitive and b_terms.key and b_terms.said <= a_terms.said
+    )
+    near = part or _NEAR in (a_states, b_states)
+    return _Relation(_NEAR, None, False, False) if near else _UNRELATED
+
+
+def _person_tag(entity: Optional[str]) -> Optional[str]:
+    """The name in a ``person:Sam`` tag; None for the user or any other tag."""
+    if not entity or _is_user_tag(entity):
+        return None
+    kind, _, name = entity.lower().partition(":")
+    return name.strip() or None if kind == "person" else None
+
+
+def _same_subject(
+    a: str, a_entity: Optional[str], b: str, b_entity: Optional[str]
+) -> bool:
+    """Whether two rows can be about the same one.
+
+    Only a ``person:`` tag naming someone else sets a row apart, and only
+    from a row that neither carries the tag nor names that person. Topic tags
+    (``medication:fluoxetine``, ``health``) say what, not who.
+    """
+    a_name, b_name = _person_tag(a_entity), _person_tag(b_entity)
+    if a_name == b_name:
+        return True
+    if a_name and b_name:
+        return False
+    name, text = (a_name, b) if a_name else (b_name, a)
+    words = set(re.findall(r"[a-z0-9]+", text.lower()))
+    return set(re.findall(r"[a-z0-9]+", cast(str, name))) <= words
 
 
 #: Names a ``type:name`` tag gives the user themselves ("person:user").
@@ -744,6 +953,13 @@ def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
 def _is_user_tag(entity: str) -> bool:
     kind, sep, name = entity.lower().partition(":")
     return not sep or kind == "user" or name.strip() in _USER_TAG_NAMES
+
+
+def _same_tag(a: Optional[str], b: Optional[str]) -> bool:
+    """``_same_subject_sql`` for two rows already read."""
+    if a is None or _is_user_tag(a):
+        return b is None or _is_user_tag(b)
+    return a == b
 
 
 # ============================================================================
@@ -1366,7 +1582,8 @@ class MemoryStore:
 
         if current_version < 9:
             # v8 -> v9: knowledge.fact_id, and flag the rows an older build
-            # stored plain although their own text says they are sensitive.
+            # stored plain although their own text says they are sensitive or
+            # they state a fact the user marked sensitive.
             try:
                 self._conn.execute("ALTER TABLE knowledge ADD COLUMN fact_id TEXT")
             except sqlite3.OperationalError as e:
@@ -1385,6 +1602,11 @@ class MemoryStore:
             self._conn.executemany(
                 "UPDATE knowledge SET sensitive = 1 WHERE id = ?", labelled
             )
+            for (kid,) in self._conn.execute(
+                "SELECT id FROM knowledge WHERE sensitive = 1 "
+                "AND superseded_by IS NULL ORDER BY created_at, rowid"
+            ).fetchall():
+                self._settle_sensitive_locked(kid)
             self._conn.execute(
                 "UPDATE schema_version SET version = 9, migrated_at = ?", (_now_iso(),)
             )
@@ -1814,8 +2036,8 @@ class MemoryStore:
                     # A memory that calls itself sensitive is never stored plain.
                     if category != "error" and says_sensitive(content):
                         sensitive = True
-                    match, sensitive, links = self._fold_sensitive_copies_locked(
-                        content, context, entity, sensitive, source, match
+                    match, sensitive, links = self._fold_same_locked(
+                        content, context, entity, sensitive, match
                     )
             except BaseException:
                 self._conn.rollback()
@@ -1868,6 +2090,7 @@ class MemoryStore:
                     # Update FTS5 index
                     self._update_knowledge_fts_locked(existing_id)
                     self._link_locked([existing_id, *links])
+                    self._settle_sensitive_locked(existing_id)
                     self._conn.commit()
                 except Exception:
                     self._conn.rollback()
@@ -1908,7 +2131,7 @@ class MemoryStore:
                     ),
                 )
                 self._insert_knowledge_fts_locked(knowledge_id)
-                self._link_locked([*links, knowledge_id])
+                self._settle_sensitive_locked(knowledge_id)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
@@ -1995,79 +2218,134 @@ class MemoryStore:
 
         return None
 
-    def _fold_sensitive_copies_locked(
+    def _fold_same_locked(
         self,
         content: str,
         context: str,
         entity: Optional[str],
         sensitive: bool,
-        source: str,
         match: Optional[Tuple[str, str]],
     ) -> Tuple[Optional[Tuple[str, str]], bool, List[str]]:
-        """Keep a sensitive fact to one fact group, with no unflagged row.
+        """Merge a write with the rows that say the same sensitive thing.
 
-        Returns the row to merge into, the flag to store, and the rows the
-        write joins as one fact (``_link_locked``). Whatever the category: a
-        write that says nothing more or less than a sensitive row in its
-        context merges with it (``_SAME``); any other restatement keeps its
-        row, takes the flag and joins the group; a sensitive write does the
-        same to the unflagged rows that restate it. A rewording joins only
-        when one of the two was picked up from a chat (``_REWORDING_SOURCES``):
-        saved on purpose, "takes 10mg lisinopril" and "takes 10mg
-        atorvastatin" are two facts unless one wording starts the other.
-        Same locking as ``_find_similar_locked``; writes without committing.
+        A write that says nothing more or less than a sensitive row in its
+        context (``_SAME``), or a sensitive write and such a plain row, is one
+        row whatever the category. Returns the row to merge into, the flag
+        to store, and the fact-group mates of any row folded away. Same
+        locking as ``_find_similar_locked``; writes without committing.
         """
-        same_subject, params = _same_subject_sql(entity)
         kinds = sorted(EXTRACTABLE_CATEGORIES)
         rows = self._conn.execute(
-            "SELECT k.id, k.content, k.context, k.sensitive, k.source "
-            f"FROM knowledge k WHERE {same_subject} AND k.superseded_by IS NULL "
-            f"AND k.category IN ({','.join('?' * len(kinds))})"
+            "SELECT id, content, sensitive, entity FROM knowledge "
+            "WHERE context = ? AND superseded_by IS NULL "
+            f"AND category IN ({','.join('?' * len(kinds))})"
             # Only a sensitive write needs the unflagged rows read too.
-            + ("" if sensitive else " AND k.sensitive = 1"),
-            (*params, *kinds),
+            + ("" if sensitive else " AND sensitive = 1"),
+            (context, *kinds),
         ).fetchall()
-        related = [(row, *_relation(content, row[1])) for row in rows]
-        related = [entry for entry in related if entry[1]]
-        if not related:
-            return match, sensitive, []
-        for (kid, _, _, flagged, _), _, _ in related:
-            if not flagged:
-                self._conn.execute(
-                    "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
-                )
         links: List[str] = []
-        for (kid, other, row_context, _, row_source), kind, kept in related:
-            if kind == _ECHO:
+        for kid, other, flagged, row_entity in rows:
+            found = _relate(
+                content, other, sensitive, bool(flagged), entity, row_entity
+            )
+            if found.kind != _SAME:
                 continue
-            if kind == _SAME and row_context == context:
-                if match is None:
-                    match = (kid, cast(str, kept))
-                elif kid != match[0]:
-                    # Dropped only when the kept wording holds all it says.
-                    again, fuller = _relation(match[1], other)
-                    if again != _SAME:
-                        links.append(kid)
-                        continue
-                    match = (match[0], cast(str, fuller))
-                    # Its group moves to the kept row.
-                    links += [
-                        r[0]
-                        for r in self._conn.execute(
-                            "SELECT id FROM knowledge WHERE id != ? AND fact_id = "
-                            "(SELECT fact_id FROM knowledge WHERE id = ?)",
-                            (kid, kid),
-                        )
-                    ]
-                    self._conn.execute(
-                        "DELETE FROM knowledge_fts WHERE rowid = "
-                        "(SELECT rowid FROM knowledge WHERE id = ?)",
-                        (kid,),
+            sensitive = True
+            if match is None:
+                match = (kid, cast(str, found.kept))
+            elif kid != match[0]:
+                # Dropped only when the kept wording holds all it says.
+                again = _relate(match[1], other, True, True)
+                if again.kind != _SAME:
+                    continue
+                match = (match[0], cast(str, again.kept))
+                # Its group moves to the kept row.
+                links += [
+                    r[0]
+                    for r in self._conn.execute(
+                        "SELECT id FROM knowledge WHERE id != ? AND fact_id = "
+                        "(SELECT fact_id FROM knowledge WHERE id = ?)",
+                        (kid, kid),
                     )
-                    self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
-            elif kind != _KIN or _REWORDING_SOURCES & {source, row_source}:
-                links.append(kid)
-        return match, True, links
+                ]
+                self._conn.execute(
+                    "DELETE FROM knowledge_fts WHERE rowid = "
+                    "(SELECT rowid FROM knowledge WHERE id = ?)",
+                    (kid,),
+                )
+                self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+        return match, sensitive, links
+
+    def _settle_sensitive_locked(self, knowledge_id: str, near: bool = True) -> None:
+        """Apply the sensitive-fact rule around one row; every write ends here.
+
+        A plain row that states a sensitive fact (``_relate``) is flagged and
+        joins that fact's group, and a sensitive row does the same to every
+        row that states it, whatever their entity tags or sources. A row
+        already in another fact's group is flagged but stays there, so two
+        facts one row happens to state are never made one. With *near*, a
+        ``_NEAR`` row is flagged and left out of the group. Must hold
+        self._lock; writes without committing.
+        """
+        cols = "id, content, sensitive, entity, fact_id"
+        row = self._conn.execute(
+            f"SELECT {cols}, category FROM knowledge "
+            "WHERE id = ? AND superseded_by IS NULL",
+            (knowledge_id,),
+        ).fetchone()
+        if row is None or row[5] not in EXTRACTABLE_CATEGORIES:
+            return
+        kid, content, flagged, entity, fact, category = row
+        flagged = bool(flagged) or (category != "error" and says_sensitive(content))
+
+        def others(only_sensitive: bool) -> List[tuple]:
+            kinds = sorted(EXTRACTABLE_CATEGORIES)
+            return self._conn.execute(
+                f"SELECT {cols} FROM knowledge WHERE id != ? "
+                "AND superseded_by IS NULL "
+                f"AND category IN ({','.join('?' * len(kinds))})"
+                + (" AND sensitive = 1" if only_sensitive else ""),
+                (kid, *kinds),
+            ).fetchall()
+
+        def join(member: str, of: str, group: Optional[str]) -> str:
+            """Put *member* in the group of the fact row *of*."""
+            group = group or of
+            self._conn.execute(
+                "UPDATE knowledge SET fact_id = ? WHERE id IN (?, ?)",
+                (group, member, of),
+            )
+            return group
+
+        def flag(row_id: str) -> None:
+            self._conn.execute(
+                "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (row_id,)
+            )
+
+        if not flagged:
+            close = False
+            for oid, other, _, tag, other_fact in others(only_sensitive=True):
+                kind = _relate(content, other, False, True, entity, tag).kind
+                if kind in (_SAME, _COPY):
+                    flagged = True
+                    fact = fact or join(kid, oid, other_fact)
+                close = close or kind == _NEAR
+            if not flagged:
+                if close and near:
+                    flag(kid)
+                return
+        flag(kid)
+        for oid, other, other_flagged, tag, other_fact in others(only_sensitive=False):
+            found = _relate(content, other, True, bool(other_flagged), entity, tag)
+            if found.kind in (_SAME, _COPY):
+                if found.second_states and other_fact is None:
+                    fact = join(oid, kid, fact)
+                elif found.first_states and other_flagged and fact is None:
+                    fact = join(kid, oid, other_fact)
+            elif not (found.kind == _NEAR and near):
+                continue
+            if not other_flagged:
+                flag(oid)
 
     def _link_locked(self, ids: Sequence[str]) -> None:
         """Make *ids* one fact: one ``fact_id``, and all sensitive if any is.
@@ -2133,40 +2411,40 @@ class MemoryStore:
     ) -> Tuple[Optional[str], str]:
         """The sensitive row among *ids* that *content* restates, and how.
 
-        *ids* are rows the user's turn saved or flagged, so a shared word is
-        evidence enough to flag: ``TURN_COVERED`` when *content* says nothing
-        the row doesn't, ``TURN_LINKED`` when it restates the row
-        (``_restates``), ``TURN_FLAGGED`` for any other shared word.
-        ``(None, "")`` when they share none or are about different subjects.
+        *ids* are rows the user's turn saved or flagged. ``TURN_COVERED``
+        when *content* says nothing the row doesn't, ``TURN_LINKED`` when it
+        states the row's fact (``_relate``), ``TURN_FLAGGED`` when it only
+        shares one of the row's distinctive words or figures: in the turn
+        that marked the fact, that is reason enough to hide it. ``(None, "")``
+        when it shares none (a shared sentence shape is not one) or is about
+        someone else.
         """
         if not ids:
             return None, ""
-        same_subject, params = _same_subject_sql(entity)
         with self._locked():
             rows = self._conn.execute(
-                "SELECT k.id, k.content FROM knowledge k WHERE k.sensitive = 1 "
-                f"AND k.superseded_by IS NULL AND {same_subject} "
-                f"AND k.id IN ({','.join('?' * len(ids))})",
-                (*params, *ids),
+                "SELECT id, content, entity FROM knowledge WHERE sensitive = 1 "
+                "AND superseded_by IS NULL "
+                f"AND id IN ({','.join('?' * len(ids))})",
+                tuple(ids),
             ).fetchall()
-        key = fact_key(content)
+        terms = _fact_terms(content)
         best: Tuple[int, int, Optional[str], str] = (0, 0, None, "")
-        for kid, other in rows:
-            other_key = fact_key(other)
-            shared = key & other_key
-            if not shared:
+        for kid, other, other_entity in rows:
+            if not _same_subject(content, entity, other, other_entity):
                 continue
-            apart = _numbers_conflict(key, other_key) or _negates(
-                content, shared
-            ) != _negates(other, shared)
-            if apart:
-                rank, how = 1, TURN_FLAGGED
-            elif key <= other_key:
+            theirs = _fact_terms(other)
+            shared = (terms.said & theirs.key) | (terms.figures & theirs.figures)
+            covered = terms.said <= theirs.said and not _apart(content, other)
+            kind = _relate(content, other, False, True, entity, other_entity).kind
+            if kind in (_SAME, _COPY):
+                rank, how = (3, TURN_COVERED) if covered else (2, TURN_LINKED)
+            elif covered and terms.key:
                 rank, how = 3, TURN_COVERED
-            elif _restates(key, other_key):
-                rank, how = 2, TURN_LINKED
-            else:
+            elif shared:
                 rank, how = 1, TURN_FLAGGED
+            else:
+                continue
             best = max(best, (rank, len(shared), kid, how))
         return best[2], best[3]
 
@@ -2563,9 +2841,11 @@ class MemoryStore:
         """Update an existing knowledge entry. Only provided fields are changed.
 
         Sets updated_at to now. Returns False if ID not found. Setting
-        *sensitive* flags every copy of the fact (``copies_of``); clearing it
-        clears the rows of its fact group. A row whose content calls itself
-        sensitive, or restates a sensitive row, stays flagged either way.
+        *sensitive* flags every row that states the fact
+        (``_settle_sensitive_locked``); clearing it clears the rows of its
+        fact group. A row whose content calls itself sensitive, or states a
+        sensitive fact, stays flagged either way. New *content* takes the row
+        out of its fact group unless it still states that fact.
 
         Args:
             superseded_by: ID of the newer knowledge item that replaces this one.
@@ -2672,6 +2952,12 @@ class MemoryStore:
                     knowledge_id, allow_privileged=allow_privileged, where="update"
                 )
                 rowcount = self._conn.execute(sql, tuple(params)).rowcount
+                if rowcount > 0 and content is not None:
+                    # Reworded, it is a copy only of what it still states.
+                    self._conn.execute(
+                        "UPDATE knowledge SET fact_id = NULL WHERE id = ?",
+                        (knowledge_id,),
+                    )
                 if rowcount > 0 and sensitive is not None:
                     self._conn.execute(
                         "UPDATE knowledge SET sensitive = ? WHERE fact_id = "
@@ -2679,7 +2965,7 @@ class MemoryStore:
                         (int(sensitive), knowledge_id),
                     )
                 if rowcount > 0 and (sensitive is not None or content is not None):
-                    self._flag_copies_locked(knowledge_id)
+                    self._after_edit_locked(knowledge_id, cleared=sensitive is False)
                 if rowcount > 0:
                     # Re-sync FTS if content/category/domain changed
                     if (
@@ -2830,30 +3116,27 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def _flag_copies_locked(self, knowledge_id: str) -> None:
-        """After an edit, restore what must hold: a row of the fact whose
-        text calls itself sensitive is flagged, and so is the whole fact if
-        any row or copy of it is. Must hold self._lock."""
-        row = self._conn.execute(
-            "SELECT category, fact_id FROM knowledge WHERE id = ?", (knowledge_id,)
-        ).fetchone()
-        if row is None or row[0] not in EXTRACTABLE_CATEGORIES:
-            return
-        for kid, content, category in self._conn.execute(
-            "SELECT id, content, category FROM knowledge WHERE id = ? OR fact_id = ?",
-            (knowledge_id, row[1]),
-        ).fetchall():
-            if category != "error" and says_sensitive(content):
-                self._conn.execute(
-                    "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
-                )
-        fact = [knowledge_id, *self._copies_locked(knowledge_id, None)]
-        if self._conn.execute(
-            "SELECT 1 FROM knowledge WHERE sensitive = 1 AND id IN "
-            f"({','.join('?' * len(fact))})",
-            fact,
-        ).fetchone():
-            self._link_locked(fact)
+    def _after_edit_locked(self, knowledge_id: str, cleared: bool) -> None:
+        """After an edit, restore what must hold (``_settle_sensitive_locked``).
+
+        *cleared*: the user just unmarked the row and its fact group. A row
+        of the group whose text calls itself sensitive is flagged again, and
+        the row is too if it still states a sensitive fact; one that was only
+        near a sensitive fact stays unmarked. Must hold self._lock.
+        """
+        if cleared:
+            for kid, content, category in self._conn.execute(
+                "SELECT id, content, category FROM knowledge WHERE fact_id = "
+                "(SELECT fact_id FROM knowledge WHERE id = ?)",
+                (knowledge_id,),
+            ).fetchall():
+                if category in EXTRACTABLE_CATEGORIES - {"error"} and says_sensitive(
+                    content
+                ):
+                    self._conn.execute(
+                        "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
+                    )
+        self._settle_sensitive_locked(knowledge_id, near=not cleared)
 
     def copies_of(
         self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
@@ -2861,13 +3144,14 @@ class MemoryStore:
         """Ids of other current rows that store the same fact as *knowledge_id*.
 
         Rows of its fact group (``fact_id``, set when they were written) are
-        copies whatever their wording or context. So is a row with the same
-        words bar filler, bracketed asides and sensitivity notes, about the
-        same subject (``_same_subject_sql``) in a chat-writable category; and,
-        when either row is sensitive, a restatement of it (``_relation``) that
-        does not deny it; a copy brings its own fact group. *contexts* limits
-        the wording match to those contexts; None searches all. Forgetting
-        one memory must take these with it.
+        copies whatever their wording or context. So is a row about the same
+        subject (``_same_subject``) in a chat-writable category with the same
+        words bar filler, bracketed asides and sensitivity notes; and, when
+        either row is sensitive, one that states the other's fact
+        (``_relate``). Each row is compared with *knowledge_id* itself, never
+        with another copy, so a row that states two facts does not join them.
+        *contexts* limits the wording match to those contexts; None searches
+        all. Forgetting one memory must take these with it.
         """
         with self._locked():
             return self._copies_locked(knowledge_id, contexts)
@@ -2875,64 +3159,40 @@ class MemoryStore:
     def _copies_locked(
         self, knowledge_id: str, contexts: Optional[Tuple[str, ...]]
     ) -> List[str]:
-        cols = "k.id, k.content, k.sensitive, k.source, k.fact_id, k.context"
+        cols = "id, content, sensitive, entity, fact_id, context"
         first = self._conn.execute(
-            f"SELECT {cols}, k.entity FROM knowledge k WHERE k.id = ?",
-            (knowledge_id,),
+            f"SELECT {cols} FROM knowledge WHERE id = ?", (knowledge_id,)
         ).fetchone()
         if first is None:
             return []
-        same_subject, params = _same_subject_sql(first[6])
+        _, content, flagged, entity, fact, _ = first
         kinds = sorted(EXTRACTABLE_CATEGORIES)
-        grouped = self._conn.execute(
-            f"SELECT {cols} FROM knowledge k WHERE k.id != ? "
-            "AND k.superseded_by IS NULL AND k.fact_id IS NOT NULL "
-            f"AND k.category IN ({','.join('?' * len(kinds))})",
+        rows = self._conn.execute(
+            f"SELECT {cols} FROM knowledge WHERE id != ? "
+            "AND superseded_by IS NULL "
+            f"AND category IN ({','.join('?' * len(kinds))})",
             (knowledge_id, *kinds),
         ).fetchall()
-        worded = self._conn.execute(
-            f"SELECT {cols} FROM knowledge k WHERE k.id != ? "
-            f"AND k.superseded_by IS NULL AND {same_subject} "
-            f"AND k.category IN ({','.join('?' * len(kinds))})",
-            (knowledge_id, *params, *kinds),
-        ).fetchall()
-        comparable = {row[0] for row in worded}
-        rows = list({row[0]: row for row in (*grouped, *worded)}.values())
-
-        def is_copy(row, other) -> bool:
-            if row[4] is not None and row[4] == other[4]:
-                return True
-            if other[0] not in comparable:
-                return False
-            if contexts is not None and other[5] not in contexts:
-                return False
-            words = _plain_fact_words(row[1])
-            if words and _plain_fact_words(other[1]) == words:
-                return True
-            if not (row[2] or other[2]):
-                return False
-            kind, _ = _relation(row[1], other[1])
-            return kind in (_SAME, _COPY) or (
-                kind == _KIN and bool(_REWORDING_SOURCES & {row[3], other[3]})
-            )
-
-        def grouped_with(row, other) -> bool:
-            return row[4] is not None and row[4] == other[4]
-
-        found: Dict[str, tuple] = {}
-        # Wording is compared with the row and its group only: a copy of a
-        # copy ("... mango" -> "... mango and peanuts" -> "... peanuts") drifts.
-        anchors = [first[:6]] + [r for r in rows if grouped_with(first, r)]
-        for anchor in anchors:
-            for other in rows:
-                if other[0] not in found and is_copy(anchor, other):
-                    found[other[0]] = other
-        for other in rows:
-            if other[0] not in found and any(
-                grouped_with(row, other) for row in list(found.values())
+        words = _plain_fact_words(content)
+        found: List[str] = []
+        for kid, other, other_flagged, other_entity, other_fact, context in rows:
+            if fact is not None and other_fact == fact:
+                found.append(kid)
+                continue
+            if contexts is not None and context not in contexts:
+                continue
+            # Word for word, a typed tag (app:slack) is still its own subject.
+            if (
+                words
+                and _plain_fact_words(other) == words
+                and _same_tag(entity, other_entity)
             ):
-                found[other[0]] = other
-        return list(found)
+                found.append(kid)
+            elif (flagged or other_flagged) and _relate(
+                content, other, bool(flagged), bool(other_flagged), entity, other_entity
+            ).kind in (_SAME, _COPY):
+                found.append(kid)
+        return found
 
     def forget_with_copies(
         self,
@@ -5842,6 +6102,8 @@ class MemoryStore:
             )
             self._insert_knowledge_fts_locked(n["id"])
             ids.append(n["id"])
+        for kid in ids:
+            self._settle_sensitive_locked(kid)
         return ids
 
     def _rebuild_knowledge_fts_locked(self):

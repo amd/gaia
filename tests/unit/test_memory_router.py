@@ -377,8 +377,10 @@ class TestKnowledgeCRUD:
         copy = test_store.store(
             category="fact", content="Allergic to mango.", context="personal"
         )
+        # Someone else's allergy. A topic tag (medication:, app:) no longer sets
+        # a row apart: extraction tags the user's own facts that way.
         apps = test_store.store(
-            category="fact", content="Allergic to mango", entity="app:slack"
+            category="fact", content="Allergic to mango", entity="person:Sam"
         )
         other = test_store.store(
             category="fact", content="User is allergic to green mango"

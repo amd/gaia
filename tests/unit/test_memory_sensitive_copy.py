@@ -447,19 +447,23 @@ def test_forgetting_a_sensitive_fact_keeps_its_negation(store):
     ],
 )
 @pytest.mark.parametrize("sensitive_first", [True, False])
-def test_one_shared_word_does_not_flag_an_unrelated_memory(
+def test_one_shared_word_does_not_forget_an_unrelated_memory(
     store, said, unrelated, sensitive_first
 ):
+    """Words can't tell "a report on diabetes research" from "fluoxetine
+    refill due Friday", which gives the fact away. So the row is hidden,
+    which can be undone, but never forgotten with the fact."""
     if sensitive_first:
-        store.store(category="fact", content=said, sensitive=True, source="tool")
+        kid = store.store(category="fact", content=said, sensitive=True, source="tool")
         store.store(category="note", content=unrelated)
     else:
         store.store(category="note", content=unrelated)
-        store.store(category="fact", content=said, sensitive=True, source="tool")
+        kid = store.store(category="fact", content=said, sensitive=True, source="tool")
 
     flags = {content: flag for _, content, flag, _ in _rows(store)}
-    assert flags[unrelated] == 0, flags
     assert flags[said] == 1
+    assert store.forget_with_copies(kid) == [kid]
+    assert [r[1] for r in _rows(store)] == [unrelated]
 
 
 @pytest.mark.parametrize(
