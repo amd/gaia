@@ -233,3 +233,101 @@ def test_the_file_named_beside_the_refused_folder_is_still_excused(tmp_path):
     found = " ".join(_gaps(ledger, claimed))
     assert "No successful write to `page.html`" not in found
     assert "No successful write to `notes.md`" in found
+
+
+def _refused_download(
+    tmp_path, request_text, folder, url="https://example.com/a.pdf", **args
+):
+    ledger = CompletionEvidence(request_text, str(tmp_path))
+    ledger.record(
+        "download_file",
+        {"url": url, **args},
+        {**NOT_EXECUTED, "status": "error", "error": f"Access denied: {folder}"},
+        False,
+        executed=False,
+    )
+    return ledger
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Save a summary of my Downloads folder to summary.md, and download "
+        "https://example.com/a.pdf.",
+        "Save a summary to summary.md in Downloads, and download "
+        "https://example.com/a.pdf.",
+        "Save the summary as summary.md in Downloads, and download "
+        "https://example.com/a.pdf.",
+    ],
+)
+def test_a_refused_download_does_not_excuse_a_different_file(tmp_path, request_text):
+    """Only the refused call's own file is excused, not a file beside its folder."""
+    ledger = _refused_download(tmp_path, request_text, "~/Downloads")
+    found = " ".join(_gaps(ledger, "I couldn't download the logo: access was denied."))
+    assert "No successful write to `summary.md`" in found
+
+
+def test_a_refused_download_does_not_excuse_a_save_with_no_path(tmp_path):
+    ledger = _refused_download(
+        tmp_path,
+        "Write notes.md listing what is in my Downloads folder, and download "
+        "https://example.com/a.pdf.",
+        "~/Downloads",
+    )
+    found = " ".join(_gaps(ledger, "I couldn't download the logo: access was denied."))
+    assert "requested output file has no recorded successful write" in found
+
+
+def test_the_refused_downloads_own_file_is_excused_and_its_neighbour_is_not(tmp_path):
+    folder = tmp_path / "out"
+    ledger = _refused_download(
+        tmp_path,
+        f"Download https://example.com/a.pdf and save it as report.pdf in {folder}, "
+        f"and save a summary as summary.md in {folder}.",
+        folder,
+        save_to=str(folder),
+        filename="report.pdf",
+    )
+    found = " ".join(_gaps(ledger, "I couldn't save the report: access denied."))
+    assert "`report.pdf`" not in found
+    assert "No successful write to `summary.md`" in found
+
+
+def test_the_url_file_of_a_refused_folder_download_is_excused(tmp_path):
+    folder = tmp_path / "out"
+    ledger = _refused_download(
+        tmp_path,
+        f"Download https://example.com/a.pdf and save it as a.pdf in {folder}.",
+        folder,
+        save_to=str(folder),
+    )
+    assert _gaps(ledger, "I couldn't save a.pdf: access denied.") == []
+
+
+def test_a_name_placed_in_the_folder_is_not_the_download_when_the_url_names_one(
+    tmp_path,
+):
+    folder = tmp_path / "out"
+    ledger = _refused_download(
+        tmp_path,
+        f"Download https://example.com/a.pdf and save it as a.pdf in {folder}, "
+        f"and save a summary as summary.md in {folder}.",
+        folder,
+        save_to=str(folder),
+    )
+    found = " ".join(_gaps(ledger, "I couldn't save a.pdf: access denied."))
+    assert "`a.pdf`" not in found
+    assert "No successful write to `summary.md`" in found
+
+
+def test_a_folder_name_inside_another_word_does_not_place_a_file(tmp_path):
+    ledger = _refused_download(
+        tmp_path,
+        f"Download https://example.com/ and save it as page.html into "
+        f"{tmp_path / '.sshkeys'}.",
+        tmp_path / ".ssh",
+        url="https://example.com/",
+        save_to=str(tmp_path / ".ssh"),
+    )
+    found = " ".join(_gaps(ledger, HONEST))
+    assert "No successful write to `page.html`" in found

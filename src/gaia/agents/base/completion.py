@@ -16,6 +16,7 @@ import stat
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import unquote, urlparse
 
 from gaia.agents.base.tool_outcome import tool_result_dict
 
@@ -481,24 +482,17 @@ def _normalize_key(path: str, base: str) -> str:
         return os.path.normcase(os.path.normpath(joined))
 
 
-# Where one request ends and another begins inside a user's message.
-_CLAUSE_BREAK = re.compile(r"(?:[.;!?](?:\s|$)|,\s|\n|\s(?:and|then|also)\s)", re.I)
-
-
-def _named_together(query: str, name: str, folder: str) -> bool:
-    """True when one clause of *query* names both *name* and *folder*.
-
-    A refused download with no file name says nothing about which requested
-    file it was for; the request says so only when it puts the two together.
-    """
+def _placed_in(query: str, name: str, folder: str) -> bool:
+    """True when *query* puts *name* straight into *folder* ("page.html in .ssh")."""
     leaf = os.path.basename(folder.rstrip("/\\"))
     if not leaf:
         return False
-    for clause in _CLAUSE_BREAK.split(query):
-        lowered = clause.lower()
-        if os.path.basename(name).lower() in lowered and leaf.lower() in lowered:
-            return True
-    return False
+    pattern = (
+        rf"(?<![\w.-]){re.escape(os.path.basename(name))}[`\"']?\s+"
+        r"(?:in|into|to|under|inside)\s+(?:the\s+|my\s+)?[`\"']?"
+        rf"(?:[^\s`\"']*[/\\])?{re.escape(leaf)}(?![\w-]|\.\w)"
+    )
+    return re.search(pattern, query, re.I) is not None
 
 
 class CompletionEvidence:
@@ -520,8 +514,10 @@ class CompletionEvidence:
         self.uninspectable: dict[str, str] = {}
         # Writes the permission boundary turned down: key -> what to tell the user.
         self.refused: dict[str, str] = {}
-        # Refused folders whose file was never named (a download's save_to).
-        self.refused_folders: set[str] = set()
+        # Refused download folders with no file name -> the URL's file name.
+        self.refused_folders: dict[str, str] = {}
+        # Refused downloads; they never excuse a save the request gave no path for.
+        self.refused_downloads: set[str] = set()
         self.query = query if isinstance(query, str) else ""
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
@@ -772,7 +768,11 @@ class CompletionEvidence:
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
         """Remember a write the user or the path allowlist turned down."""
         folder_only = False
+        url_name = ""
         if tool == _DOWNLOAD_TOOL:
+            url = args.get("url")
+            if isinstance(url, str):
+                url_name = unquote(urlparse(url).path.rsplit("/", 1)[-1])
             path = args.get("save_to") or "~/Downloads"
             name = args.get("filename")
             folder_only = not (isinstance(name, str) and name)
@@ -798,7 +798,9 @@ class CompletionEvidence:
         key = self.key(path, args.get("project_dir"))
         self.refused[key] = reason
         if folder_only:
-            self.refused_folders.add(key)
+            self.refused_folders[key] = url_name
+        if tool == _DOWNLOAD_TOOL:
+            self.refused_downloads.add(key)
 
     def read_by_framework(self, key: str) -> None:
         """The framework read this output in full after its latest write."""
@@ -1030,20 +1032,24 @@ class CompletionEvidence:
                     key == path
                     or _inside(key, path)
                     or (
-                        path in bare
-                        and (
-                            os.path.basename(key) == os.path.basename(path)
-                            # The file meant for a refused folder, named bare
-                            # beside it in the request.
-                            or (
-                                key in self.refused_folders
-                                and _named_together(self.query, path, key)
-                            )
-                        )
+                        path in bare and os.path.basename(key) == os.path.basename(path)
                     )
+                    or (key in self.refused_folders and folder_target(path, key))
                 ):
                     return reason
             return None
+
+        def folder_target(path: str, folder: str) -> bool:
+            """Whether *path* is the file a download refused at *folder* would write."""
+            url_name = self.refused_folders[folder]
+            if url_name:
+                # The URL names the file, so no other file was this download's.
+                return (path in bare or _inside(path, folder)) and os.path.normcase(
+                    os.path.basename(path)
+                ) == os.path.normcase(url_name)
+            return _inside(path, folder) or (
+                path in bare and _placed_in(self.query, path, folder)
+            )
 
         for path in sorted(required):
             if path in bare and (
@@ -1084,7 +1090,10 @@ class CompletionEvidence:
             not required
             and (
                 claim_without_path
-                or (self.save_requested and not (self.refused and admitted))
+                or (
+                    self.save_requested
+                    and not (admitted and set(self.refused) - self.refused_downloads)
+                )
             )
             and not any(
                 item.direct
