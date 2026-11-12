@@ -120,3 +120,28 @@ def test_a_command_that_started_and_refused_passes_the_walk(output):
 def test_the_walk_runs_in_the_smoke_test():
     source = (REPO / "installer" / "core" / "smoke_test.py").read_text(encoding="utf-8")
     assert "smoke.subcommands()" in source.split("def main(")[1]
+
+
+def test_a_child_that_already_exited_does_not_spare_the_rest(monkeypatch):
+    """The walk waits on the parent after this; a survivor would hang it."""
+    psutil = pytest.importorskip("psutil")
+    killed = []
+
+    class _Gone:
+        def kill(self):
+            raise psutil.NoSuchProcess(1)
+
+    class _Alive:
+        def __init__(self, name, children=()):
+            self.name, self._children = name, list(children)
+
+        def children(self, recursive=False):
+            return self._children
+
+        def kill(self):
+            killed.append(self.name)
+
+    parent = _Alive("parent", [_Gone(), _Alive("grandchild")])
+    monkeypatch.setattr(psutil, "Process", lambda _pid: parent)
+    smoke.Smoke._end_tree(1234)
+    assert killed == ["grandchild", "parent"]

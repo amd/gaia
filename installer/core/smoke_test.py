@@ -423,10 +423,15 @@ class Smoke:
 
         try:
             parent = psutil.Process(pid)
-            for proc in [*parent.children(recursive=True), parent]:
-                proc.kill()
-        except psutil.Error:
+            tree = [*parent.children(recursive=True), parent]
+        except psutil.NoSuchProcess:
             return
+        for proc in tree:
+            # One that already exited must not spare the rest of the tree.
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                continue
 
     def talk_audio(self) -> None:
         result = self.run("-c", TALK_AUDIO_CHECK)
