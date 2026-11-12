@@ -16,7 +16,8 @@ import typing as _typing
 _PRE_DOTENV_ENVIRON = dict(_os.environ)
 
 # Before anything can load numpy or faiss: their OpenBLAS sizes its pool at load.
-from gaia.blas_threads import cap_blas_threads as _cap_blas_threads
+# pylint: disable-next=wrong-import-position
+from gaia.blas_threads import cap_blas_threads as _cap_blas_threads  # noqa: E402
 
 _cap_blas_threads()
 

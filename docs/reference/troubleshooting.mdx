@@ -501,7 +501,10 @@ What GAIA does on a small PC:
   processes to run Windows out of memory. Document search and memory recall run
   on FAISS's own threads, so they keep their speed. To choose another number, set
   `OPENBLAS_NUM_THREADS` in the environment GAIA starts from; GAIA leaves it, and
-  `OMP_NUM_THREADS` or `GOTO_NUM_THREADS`, alone when you set them.
+  `OMP_NUM_THREADS` or `GOTO_NUM_THREADS`, alone when you set them. A value in a
+  `.env` file is read too late to count. Programs GAIA runs for you inherit the
+  2 threads too, so a numpy script started from a chat does its matrix math on
+  2 threads unless you set the variable yourself.
 
 On a graphics card, GAIA reads free memory only for an AMD card on Linux.
 Elsewhere a model that does not fit the card fails in Lemonade with its own
