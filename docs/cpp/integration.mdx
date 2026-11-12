@@ -16,7 +16,7 @@ icon: "puzzle-piece"
 
 ## Overview
 
-`gaia_core` is designed to drop into any C++ project with minimal friction. The library is self-contained — all dependencies (nlohmann/json, cpp-httplib, yaml-cpp) are resolved automatically, so you never install or manage them by hand. Your project only needs **CMake 3.14+** and a **C++17 compiler**.
+`gaia_core` is designed to drop into any C++ project with minimal friction. The library is self-contained — all dependencies (nlohmann/json, cpp-httplib, yaml-cpp, and FTXUI unless you pass `-DGAIA_BUILD_TUI=OFF`; SQLite is vendored) are resolved automatically, so you never install or manage them by hand. Your project only needs **CMake 3.14+** and a **C++17 compiler**.
 
 **The shortest path** — add three lines to your `CMakeLists.txt`:
 
@@ -68,10 +68,10 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
     </Note>
 
     <Note>
-    When consumed as a sub-project, `GAIA_BUILD_TESTS` and `GAIA_BUILD_EXAMPLES` default to `OFF`, so you only get the library -- no test binaries or demo executables in your build tree.
+    When consumed as a sub-project, `GAIA_BUILD_TESTS` and `GAIA_BUILD_EXAMPLES` default to `OFF`, so you only get the library -- no test binaries or demo executables in your build tree. `GAIA_BUILD_TUI` still defaults to `ON` and fetches FTXUI; pass `-DGAIA_BUILD_TUI=OFF` if you do not need the TUI console.
     </Note>
 
-    **That is it.** All transitive dependencies (nlohmann/json, cpp-httplib, yaml-cpp) are fetched automatically. Your `main.cpp` can `#include <gaia/agent.h>` and subclass `gaia::Agent` immediately.
+    **That is it.** All transitive dependencies (nlohmann/json, cpp-httplib, yaml-cpp, FTXUI unless `-DGAIA_BUILD_TUI=OFF`) are fetched automatically. Your `main.cpp` can `#include <gaia/agent.h>` and subclass `gaia::Agent` immediately.
   </Tab>
 
   <Tab title="Git Submodule">
@@ -298,7 +298,8 @@ The agent uses a single HTTP endpoint: `POST {baseUrl}/chat/completions`. It sen
 {
   "model": "...",          // from AgentConfig::modelId
   "messages": [...],       // system prompt + conversation history
-  "temperature": 0.7
+  "temperature": 0.7,
+  "max_tokens": 4096       // from AgentConfig::maxTokens
 }
 
 // Response (what the agent expects)
@@ -309,7 +310,7 @@ The agent uses a single HTTP endpoint: `POST {baseUrl}/chat/completions`. It sen
 }
 ```
 
-That is the entire API surface. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format and accepts unauthenticated requests works — local or remote, open-source or commercial.
+The agent also probes Lemonade's `/health` and `/load` once before the first query; on a non-Lemonade server that prints a "Could not ensure model loaded" warning and continues. With native tool calling the request also carries `tools` and `tool_choice`. No embeddings endpoint, no streaming (unless `cfg.streaming = true`), no fine-tuning API. Any server that handles this request/response format and accepts unauthenticated requests works — local or remote, open-source or commercial.
 
 ### Local Inference Servers
 
@@ -359,7 +360,7 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
 
     ```cpp
     gaia::AgentConfig cfg;
-    cfg.baseUrl = "http://localhost:13305/v1";
+    cfg.baseUrl = "http://localhost:8000/v1";
     cfg.modelId = "Qwen/Qwen3-4B";
     ```
   </Tab>
@@ -450,7 +451,7 @@ No manual annotation is needed in consumer code. Linking against the `gaia::gaia
 
 <AccordionGroup>
   <Accordion title="FetchContent is slow on first build">
-    The first configure downloads nlohmann/json, cpp-httplib, yaml-cpp, and (if tests are on) Google Test from GitHub. Subsequent builds use the CMake cache. To speed up repeated clean builds, consider using a local clone or a CMake dependency cache.
+    The first configure downloads nlohmann/json, cpp-httplib, yaml-cpp, FTXUI (unless `-DGAIA_BUILD_TUI=OFF`), and (if tests are on) Google Test from GitHub; SQLite is vendored. Subsequent builds use the CMake cache. To speed up repeated clean builds, consider using a local clone or a CMake dependency cache.
   </Accordion>
 
   <Accordion title="find_package cannot find gaia_core">

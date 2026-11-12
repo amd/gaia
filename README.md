@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/amd-gaia)](https://pypi.org/project/amd-gaia/)
 [![GitHub downloads](https://img.shields.io/github/downloads/amd/gaia/total.svg)](https://github.com/amd/gaia/releases)
 [![OS - Windows](https://img.shields.io/badge/OS-Windows-blue)](https://amd-gaia.ai/docs/quickstart "Windows installation")
+[![OS - macOS](https://img.shields.io/badge/OS-macOS-lightgrey)](https://amd-gaia.ai/docs/quickstart "macOS installation")
 [![OS - Linux](https://img.shields.io/badge/OS-Linux-green)](https://amd-gaia.ai/docs/quickstart "Linux installation")
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -34,9 +35,6 @@ The terminal UI also supports optional **Fireworks AI** and **AMD LLM Gateway** 
 [![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://amd-gaia.ai/#install)
 
 One download for users: on Windows, one installer offers the desktop app, the terminal, or both. See [Install GAIA](https://amd-gaia.ai/docs/guides/install) for every platform, and its [For developers](https://amd-gaia.ai/docs/guides/install#for-developers) section for script, `pip`/`uv` and source installs.
-
-> **Note (Email agent):** the Email agent installs with `gaia hub install email`, which fetches a binary sidecar into your GAIA agents directory — no PyPI wheel and no Node.js toolchain required. An npm client is also published for embedding the agent in a JS/TS app.
-
 ---
 
 ## Why GAIA?
@@ -46,7 +44,7 @@ One download for users: on Windows, one installer offers the desktop app, the te
 | **Local Inference** | Run models on your machine for sensitive workloads and air-gapped deployments |
 | **No Cloud Inference Fees** | Local models require no API subscription; optional cloud providers have their own pricing |
 | **Privacy-First** | HIPAA-compliant, GDPR-friendly—ideal for healthcare, finance, and enterprise |
-| **Ryzen AI Optimized** | Hardware-accelerated inference using NPU + iGPU on AMD Ryzen AI processors |
+| **Ryzen AI Optimized** | Hardware-accelerated inference on the Ryzen AI NPU (FastFlowLM) or GPU (Vulkan) |
 
 ---
 

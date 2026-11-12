@@ -179,7 +179,7 @@ The MCP bridge provides the following HTTP endpoints:
 
 ### Health Check
 - **GET** `/health` - Basic health check
-- Returns: `{"status": "healthy", "service": "GAIA MCP Bridge (HTTP)", "agents": 4, "tools": 5}`
+- Returns: `{"status": "healthy", "service": "GAIA MCP Bridge (HTTP)", "agents": 2, "tools": 2}`
 
 ### Status (Detailed)
 - **GET** `/status` - Comprehensive status with all agents, tools, and endpoints
@@ -248,8 +248,8 @@ See the [MCP integration guide](/integrations/mcp#json-rpc-methods) for the full
 {
   "status": "healthy",
   "service": "GAIA MCP Bridge (HTTP)",
-  "agents": 4,
-  "tools": 5
+  "agents": 2,
+  "tools": 2
 }
 ```
 
@@ -456,9 +456,9 @@ Each endpoint returns different data structures:
 
   <Tab title="POST Endpoints">
     **chat, llm**:
-    - Always include `success: true/false`
     - Main content in `result` field
-    - Additional info in `metadata` (optional)
+    - `/chat` failures return `success: false` with an `error` message
+    - A failed `/llm` call returns `{"error": ...}` with HTTP 500 and no `success` key
   </Tab>
 </Tabs>
 
@@ -594,7 +594,7 @@ Each endpoint returns different data structures:
 
 ## Advanced Configuration
 
-For custom ports and other advanced MCP server configuration options, see the [MCP Server Documentation](/integrations/mcp#configuration-optional).
+For custom ports and other advanced MCP server configuration options, see the [MCP Server Documentation](/integrations/mcp#starting-the-mcp-server).
 
 ## Security Considerations
 
@@ -604,7 +604,7 @@ For production deployments, always implement these security measures:
 
 <Steps>
   <Step title="Authentication">
-    Add API key authentication
+    Start the bridge with `--auth-token` (or `GAIA_MCP_AUTH_TOKEN`); n8n then sends `Authorization: Bearer <token>`
   </Step>
 
   <Step title="HTTPS">
@@ -626,7 +626,8 @@ For production deployments, always implement these security measures:
 
 ## Example Production Setup
 
-Using nginx reverse proxy:
+Run the bridge with `gaia mcp start --auth-token <token>`, and have n8n send
+`Authorization: Bearer <token>`. Put nginx in front for TLS:
 
 ```nginx
 server {
@@ -640,11 +641,7 @@ server {
         proxy_pass http://localhost:8765;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-
-        # API Key validation
-        if ($http_x_api_key != "your-secret-key") {
-            return 403;
-        }
+        proxy_set_header Authorization $http_authorization;
     }
 }
 ```

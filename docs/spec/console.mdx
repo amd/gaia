@@ -130,8 +130,8 @@ class OutputHandler(ABC):
     # === Status Messages (Required) ===
 
     @abstractmethod
-    def print_error(self, error_message: str):
-        """Print error message."""
+    def print_error(self, error_message: str, recoverable: bool = False):
+        """Print error message. recoverable=True when the agent loop is retrying past it."""
         ...
 
     @abstractmethod
@@ -165,6 +165,8 @@ class OutputHandler(ABC):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ):
         """Print final answer/result.
 
@@ -389,6 +391,8 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         total_tokens: Optional[int] = None,
         ttft_seconds: Optional[float] = None,
         tok_per_s: Optional[float] = None,
+        input_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ) -> None:
         """
         Print the final answer.
@@ -578,6 +582,36 @@ def stream_agent_execution(query: str):
 
 ---
 
+## Additional OutputHandler Members
+
+Optional hooks (no-ops by default) on `OutputHandler`:
+
+| Method | Purpose |
+|--------|---------|
+| `report_progress(message)` | A live line for long work that has nothing else to show yet |
+| `report_phase(phase, message, **counts)` | Name what the model is doing now; `phase` is a stable id a client can phrase for itself |
+| `restart_answer(message)` | The streamed reply was cut off and the step starts over; the front-end drops the partial reply and shows `message` |
+| `pause_progress()` / `resume_progress()` | Pause and resume the progress indicator |
+| `mark_turn_failed(failure=None)` | The next `print_final_answer` ends a turn a model failure cut short |
+| `print_turn_metrics(record)` | Receives the sealed per-turn performance record, just before `print_final_answer` |
+| `print_skill_use(name, loaded, how)` | A turn is running on skill `name`; `how` is `"model"`, `"auto"` or `"loaded"` |
+| `print_policy_alert(tool_name, decision, reason, rule_ids, policy_version, receipt_id=None)` | A policy decision blocked a tool call |
+
+Class attributes a handler sets to describe who is on the other end (all default to `False` except `edit_roots`):
+
+| Attribute | Meaning |
+|-----------|---------|
+| `supports_stdin_prompts` | A blocking `input()` on this process reaches the requester. Server-side handlers leave it `False`. |
+| `accept_edits` | File edits inside `edit_roots` run without asking; shell commands and everything outside the roots still ask |
+| `edit_roots` | Tuple of folders "accept edits" may write into |
+| `grants_paths` | Full access: grant an out-of-scope path without asking (honoured only with `answers_confirmations`) |
+| `answers_confirmations` | A person can answer a confirmation on this run even while tools are pre-approved |
+| `asks_past_preapproval` | Ask about calls marked as needing a person even while tools are pre-approved, and deny when nobody can answer |
+
+`AgentConsole` also provides `print_success(message)`, `print_image(image_path, caption=None, prompt_to_open=False)`, `print_file_created(filename, size=0, extension="")`, `print_file_modified(filename)`, `print_file_deleted(filename)`, `print_file_moved(src_filename, dest_filename)`, `print_download_start(model_name)` and `print_download_progress(...)`.
+
+---
+
 ## Testing Requirements
 
 ### Unit Tests
@@ -710,39 +744,19 @@ class Agent:
     def _create_console(self) -> OutputHandler:
         """Create appropriate console based on mode."""
         if self.silent_mode:
-            return SilentConsole()
+            # Silences the final answer too when output_dir is set
+            silence_final_answer = getattr(self, "output_dir", None) is not None
+            return SilentConsole(silence_final_answer=silence_final_answer)
         return AgentConsole()
 ```
 
 ### API Server Integration
 
-```python
-# In API server endpoint
-@app.post("/api/v1/agent/execute")
-async def execute_agent(request: AgentRequest):
-    sse_handler = SSEOutputHandler()
-    agent = Agent(output_handler=sse_handler)
-
-    # Execute and stream
-    async def event_generator():
-        # Run agent in background
-        thread = threading.Thread(
-            target=agent.process_query,
-            args=(request.query,)
-        )
-        thread.start()
-
-        # Stream events
-        while thread.is_alive() or sse_handler.has_events():
-            for event in sse_handler.get_events():
-                yield format_sse(event)
-            await asyncio.sleep(0.1)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream"
-    )
-```
+The OpenAI-compatible server in `src/gaia/api/openai_server.py` builds its agents
+with an `SSEOutputHandler` (`src/gaia/api/sse_handler.py`) passed as `output_handler`,
+reads it back from the agent, and streams its events as chat-completion chunks.
+There is no `/api/v1/agent/execute` endpoint; clients call `/v1/chat/completions`.
+Pass a concrete `Agent` subclass (an `Agent` itself is abstract).
 
 ---
 

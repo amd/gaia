@@ -15,7 +15,7 @@ title: "FileSearchToolsMixin"
 
 ## Overview
 
-FileSearchToolsMixin provides agent-agnostic file search and management operations shared across multiple agents (Chat, Code). Features intelligent multi-phase search, type-based file analysis, and grep-like content searching.
+FileSearchToolsMixin provides agent-agnostic file search and management operations shared across agents (the flagship GaiaAgent and ChatAgent). Features intelligent multi-phase search, type-based file analysis, and grep-like content searching.
 
 **Key Features:**
 - 3-phase intelligent file search (workspace → common locations → deep scan)
@@ -144,7 +144,9 @@ class FileSearchToolsMixin:
         pass
 
     @tool
-    def read_file(file_path: str) -> Dict[str, Any]:
+    def read_file(
+        file_path: str, offset: int = 0, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Read file with intelligent type-based analysis.
 
@@ -196,7 +198,8 @@ class FileSearchToolsMixin:
         pattern: str,
         directory: str = ".",
         file_pattern: str = None,
-        case_sensitive: bool = False
+        case_sensitive: bool = False,
+        context_lines: int = 0,
     ) -> Dict[str, Any]:
         """
         Grep-like file content search over every text file.
@@ -371,15 +374,20 @@ class FileSearchToolsMixin:
         List a directory's contents with file metadata.
 
         Args:
-            directory_path: Directory to list (default: current working dir)
+            directory_path: Directory to list (default: the user's home directory)
             show_hidden: Include dotfiles
-            sort_by: "name", "size", or "mtime"
+            sort_by: "name", "size", "modified", or "type"
 
         Returns:
             {"status": "success",
-             "directory": str,
-             "entries": List[{"name": str, "is_dir": bool,
-                              "size_bytes": int, "mtime": float}]}
+             "entries": List[{"name": str, "path": str,
+                              "type": "folder" | "file",
+                              "size_bytes": int, "size": str,
+                              "modified": str, "modified_ago": str,
+                              "extension": str}],
+             "current_path": str, "parent_path": str | None,
+             "total_files": int, "total_folders": int,
+             "total_entries": int, "entries_shown": int}
         """
         pass
 
@@ -391,7 +399,14 @@ class FileSearchToolsMixin:
         pass
 
     @tool
-    def analyze_data_file(file_path: str) -> Dict[str, Any]:
+    def analyze_data_file(
+        file_path: str,
+        analysis_type: str = "summary",
+        columns: str = None,
+        group_by: str = None,
+        date_range: str = None,
+        sheet: str = None,
+    ) -> Dict[str, Any]:
         """
         Summarise a data file (CSV, JSON, XLSX, log, …) with row/column counts,
         column names, sample rows, and inferred dtypes. Used when the agent
@@ -499,22 +514,29 @@ Key tests:
 ## Usage Examples
 
 ```python
+# Mixin tools are registered as closures: call them through the agent
 # Multi-phase file search
-result = agent.search_file("manual", file_types="pdf")
+result = agent._execute_tool("search_file", {"file_pattern": "manual", "file_types": "pdf"})
 print(f"Found {result['count']} files in {result['search_context']}")
 
 # Python file analysis
-result = agent.read_file("src/main.py")
+result = agent._execute_tool("read_file", {"file_path": "src/main.py"})
 for symbol in result['symbols']:
     print(f"{symbol['type']}: {symbol['name']} (line {symbol['line']})")
 
 # Content search
-result = agent.search_file_content("TODO", directory="src", file_pattern="*.py")
+result = agent._execute_tool(
+    "search_file_content",
+    {"pattern": "TODO", "directory": "src", "file_pattern": "*.py"},
+)
 for match in result['matches']:
     print(f"{match['file']}:{match['line']}: {match['content']}")
 
 # Write file
-result = agent.write_file("output/report.txt", "Report content", create_dirs=True)
+result = agent._execute_tool(
+    "write_file",
+    {"file_path": "output/report.txt", "content": "Report content", "create_dirs": True},
+)
 ```
 
 ---

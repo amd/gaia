@@ -21,7 +21,7 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
 - File event detection (create, modify, delete)
 - Callback-based architecture
 - File extension filtering
-- Pattern-based ignore rules
+- Custom filter function and directory-event skipping
 - Reports a file once it has finished being written, so a burst of events is one callback
 - Integration with watchdog library
 
@@ -38,9 +38,9 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
    - Optional: Detect file moves
 
 2. **Filtering**
-   - File extension filters
-   - Filename pattern matching
-   - Ignore patterns (e.g., temp files, hidden files)
+   - File extension filters (`None` = `DEFAULT_EXTENSIONS`, `[]` = every file)
+   - A custom `filter_func(path)` that takes precedence over extensions
+   - Directory events skipped by default (`ignore_directories=True`)
 
 3. **Settling**
    - Report a created or modified file once it has had no events, and no size or
@@ -49,10 +49,10 @@ FileChangeHandler provides a reusable file system watcher for GAIA agents. It mo
    - Run callbacks on a dispatch thread, off the observer thread
 
 4. **Callback System**
-   - `on_created(event)` callback
-   - `on_modified(event)` callback
-   - `on_deleted(event)` callback
-   - Pass file path and metadata
+   - `on_created(path)`, `on_modified(path)` and `on_deleted(path)` callbacks
+   - `on_moved(src_path, dest_path)` callback
+   - Callbacks receive the path as a `str`, not a watchdog event
+   - Telemetry counters (`telemetry`, `reset_telemetry()`)
 
 5. **Integration with watchdog**
    - Extends `FileSystemEventHandler`
@@ -89,115 +89,67 @@ src/gaia/utils/file_watcher.py
 ### Public Interface
 
 ```python
-from pathlib import Path
-from typing import Callable, Optional, Set, List
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
-import time
-import logging
-
-logger = logging.getLogger(__name__)
-
 class FileChangeHandler(FileSystemEventHandler):
     """
     Generic file system watcher with callback support.
 
-    Monitors directories for file changes and triggers callbacks.
-    Reports a created or modified file once it settles, off the observer thread.
+    Callbacks receive the file path as a str. A created or modified file is
+    reported once it settles, on a dispatch thread rather than the observer's.
 
     Usage:
-        def process_new_file(event):
-            print(f"New file: {event.src_path}")
+        def process_new_file(path: str):
+            print(f"New file: {path}")
 
         handler = FileChangeHandler(
             on_created=process_new_file,
-            extensions={'.pdf', '.png'},
-            debounce_seconds=1.0
+            extensions=[".pdf", ".png"],
         )
 
         from watchdog.observers import Observer
         observer = Observer()
         observer.schedule(handler, "/path/to/watch", recursive=False)
         observer.start()
-
-    Attributes:
-        on_created: Callback for file creation events
-        on_modified: Callback for file modification events
-        on_deleted: Callback for file deletion events
-        extensions: Set of file extensions to monitor (e.g., {'.pdf', '.txt'})
-        ignore_patterns: Patterns to ignore (e.g., {'.*', '~*'})
-        debounce_seconds: How long a created or modified file must go with no
-            events, and no change in size or mtime, before it is reported
     """
 
-    SUPPORTED_EXTENSIONS: Set[str] = {'.pdf', '.png', '.jpg', '.jpeg', '.txt', '.md', '.docx'}
-    DEFAULT_IGNORE_PATTERNS: Set[str] = {'.*', '~*', '*.tmp', '*.swp', '*.bak'}
+    DEFAULT_EXTENSIONS: List[str] = [".pdf", ".txt", ".md", ...]  # see source
 
     def __init__(
         self,
-        on_created: Optional[Callable[[FileSystemEvent], None]] = None,
-        on_modified: Optional[Callable[[FileSystemEvent], None]] = None,
-        on_deleted: Optional[Callable[[FileSystemEvent], None]] = None,
-        extensions: Optional[Set[str]] = None,
-        ignore_patterns: Optional[Set[str]] = None,
-        debounce_seconds: float = 1.0,
-    ):
-        """
-        Initialize file change handler.
+        on_created: Optional[Callable[[str], None]] = None,
+        on_modified: Optional[Callable[[str], None]] = None,
+        on_deleted: Optional[Callable[[str], None]] = None,
+        on_moved: Optional[Callable[[str, str], None]] = None,  # (src, dest)
+        extensions: Optional[List[str]] = None,  # None = DEFAULT_EXTENSIONS, [] = all files
+        filter_func: Optional[Callable[[str], bool]] = None,  # takes precedence over extensions
+        debounce_seconds: float = 2.0,  # quiet window before a file is reported
+        ignore_directories: bool = True,
+    ): ...
 
-        Args:
-            on_created: Callback when file is created
-            on_modified: Callback when file is modified
-            on_deleted: Callback when file is deleted
-            extensions: File extensions to monitor (default: all common types)
-            ignore_patterns: Patterns to ignore (default: temp/hidden files)
-            debounce_seconds: Quiet window before a created or modified file is
-                reported (default: 1.0)
-        """
-        super().__init__()
-        self._on_created = on_created
-        self._on_modified = on_modified
-        self._on_deleted = on_deleted
-        self._extensions = extensions or self.SUPPORTED_EXTENSIONS
-        self._ignore_patterns = ignore_patterns or self.DEFAULT_IGNORE_PATTERNS
-        self._debounce_seconds = debounce_seconds
-        # path -> [kind, due time, (size, mtime_ns)], drained by a dispatch
-        # thread so callbacks never run on the observer's thread.
-        self._pending: Dict[str, list] = {}
+    # Event handlers called by watchdog
+    def on_created(self, event: FileSystemEvent) -> None: ...
+    def on_modified(self, event: FileSystemEvent) -> None: ...
+    def on_deleted(self, event: FileSystemEvent) -> None: ...
+    def on_moved(self, event: FileSystemEvent) -> None: ...
 
-    def on_created(self, event: FileSystemEvent) -> None:
-        """Queue a created file; it is reported once it settles."""
-        if not event.is_directory and self._should_process(event):
-            self._schedule_settle("created", event.src_path)
+    def _should_process(self, file_path: str) -> bool: ...
 
-    def on_modified(self, event: FileSystemEvent) -> None:
-        """Queue a modified file; a burst of saves becomes one report."""
-        if not event.is_directory and self._should_process(event):
-            self._schedule_settle("modified", event.src_path)
-
-    def on_deleted(self, event: FileSystemEvent) -> None:
-        """Report a deletion in order, cancelling a pending report."""
-        if not event.is_directory and self._should_process(event):
-            self._pending.pop(event.src_path, None)
-            self._schedule_now("deleted", event.src_path)
-
-    def _should_process(self, event: FileSystemEvent) -> bool:
-        """Check if file should be processed based on filters."""
-        path = Path(event.src_path)
-
-        # Check extension
-        if self._extensions and path.suffix not in self._extensions:
-            return False
-
-        # Check ignore patterns
-        for pattern in self._ignore_patterns:
-            if path.match(pattern):
-                return False
-
-        return True
+    # Lifecycle and statistics
+    def wait_idle(self, timeout: Optional[float] = None) -> bool: ...
+    def close(self) -> None: ...
+    def reopen(self) -> None: ...
+    @property
+    def telemetry(self) -> Dict[str, Any]: ...
+    def reset_telemetry(self) -> None: ...
 
     # _schedule_settle / _schedule_now / the dispatch thread: see
     # "Settling Implementation" below.
 ```
+
+`FileWatcher` (a handler plus a watchdog `Observer`, with `start()`, `stop()`,
+`is_running`, `directory` and `telemetry`) and `FileWatcherMixin`
+(`watch_directory()`, `stop_all_watchers()`, `watchers`, `watching_directories`,
+`watcher_telemetry`) live in the same module. See the
+[FileWatcher guide](/sdk/utils/file-watcher) for their full API.
 
 ---
 
@@ -205,96 +157,15 @@ class FileChangeHandler(FileSystemEventHandler):
 
 ### Unit Tests
 
-**File:** `tests/unit/test_file_watcher.py`
+**Files:** `tests/unit/test_file_watcher.py`, `tests/unit/test_file_watcher_settle.py`
 
 ```python
-import pytest
-from pathlib import Path
 import time
-import tempfile
+from pathlib import Path
+
 from gaia import FileChangeHandler
 from watchdog.observers import Observer
-from watchdog.events import FileCreatedEvent, FileModifiedEvent
-
-def test_file_change_handler_can_be_imported():
-    """Verify FileChangeHandler can be imported from gaia."""
-    from gaia import FileChangeHandler
-    assert FileChangeHandler is not None
-
-def test_handler_creation():
-    """Test handler can be created."""
-    handler = FileChangeHandler()
-    assert handler is not None
-
-def test_handler_with_callbacks():
-    """Test handler with callbacks."""
-    created_files = []
-    modified_files = []
-
-    def on_create(event):
-        created_files.append(event.src_path)
-
-    def on_modify(event):
-        modified_files.append(event.src_path)
-
-    handler = FileChangeHandler(
-        on_created=on_create,
-        on_modified=on_modify
-    )
-
-    assert handler._on_created is not None
-    assert handler._on_modified is not None
-
-def test_extension_filtering():
-    """Test file extension filtering."""
-    processed_files = []
-
-    def on_create(event):
-        processed_files.append(event.src_path)
-
-    handler = FileChangeHandler(
-        on_created=on_create,
-        extensions={'.pdf', '.txt'}
-    )
-
-    # Simulate events
-    pdf_event = FileCreatedEvent("test.pdf")
-    txt_event = FileCreatedEvent("test.txt")
-    jpg_event = FileCreatedEvent("test.jpg")
-
-    handler.on_created(pdf_event)
-    handler.on_created(txt_event)
-    handler.on_created(jpg_event)
-
-    # Only .pdf and .txt should be processed
-    assert len(processed_files) == 2
-    assert "test.pdf" in processed_files[0]
-    assert "test.txt" in processed_files[1]
-
-def test_ignore_patterns():
-    """Test ignore patterns."""
-    processed_files = []
-
-    def on_create(event):
-        processed_files.append(event.src_path)
-
-    handler = FileChangeHandler(
-        on_created=on_create,
-        ignore_patterns={'.*', '~*'}
-    )
-
-    # Simulate events
-    normal_event = FileCreatedEvent("file.txt")
-    hidden_event = FileCreatedEvent(".hidden")
-    temp_event = FileCreatedEvent("~temp.txt")
-
-    handler.on_created(normal_event)
-    handler.on_created(hidden_event)
-    handler.on_created(temp_event)
-
-    # Only normal file should be processed
-    assert len(processed_files) == 1
-    assert "file.txt" in processed_files[0]
+from watchdog.events import FileCreatedEvent
 
 def test_a_burst_of_events_is_reported_once_after_it_settles(tmp_path):
     """Rapid events on one file give one callback, after the quiet window."""
@@ -317,12 +188,13 @@ def test_real_file_watching(tmp_path):
     """Test with real file system changes."""
     processed_files = []
 
-    def on_create(event):
-        processed_files.append(Path(event.src_path).name)
+    def on_create(path):
+        processed_files.append(Path(path).name)
 
     handler = FileChangeHandler(
         on_created=on_create,
-        extensions={'.txt'}
+        extensions=[".txt"],
+        debounce_seconds=0.2,
     )
 
     observer = Observer()
@@ -334,8 +206,9 @@ def test_real_file_watching(tmp_path):
         test_file = tmp_path / "test.txt"
         test_file.write_text("test content")
 
-        # Wait for event
+        # Let the event arrive, then wait for the file to settle and the callback to run
         time.sleep(0.5)
+        assert handler.wait_idle(5)
 
         # Verify callback was triggered
         assert "test.txt" in processed_files
@@ -343,17 +216,7 @@ def test_real_file_watching(tmp_path):
     finally:
         observer.stop()
         observer.join(timeout=5)
-
-def test_callback_error_handling():
-    """Test that callback errors don't crash handler."""
-    def bad_callback(event):
-        raise Exception("Callback error")
-
-    handler = FileChangeHandler(on_created=bad_callback)
-
-    # Should not raise
-    event = FileCreatedEvent("test.txt")
-    handler.on_created(event)  # Logs error but doesn't crash
+        handler.close()
 ```
 
 ---
@@ -381,15 +244,15 @@ class FormIntakeAgent(Agent):
 
     def _start_watching(self):
         """Start watching for new intake forms."""
-        def process_new_form(event):
-            print(f"New form detected: {event.src_path}")
+        def process_new_form(path):
+            print(f"New form detected: {path}")
             # Extract data from form
-            result = self._extract_form_data(event.src_path)
+            result = self._extract_form_data(path)
             print(f"Extracted: {result}")
 
         handler = FileChangeHandler(
             on_created=process_new_form,
-            extensions={'.pdf', '.png', '.jpg'},
+            extensions=[".pdf", ".png", ".jpg"],
             debounce_seconds=2.0
         )
 
@@ -402,7 +265,7 @@ class FormIntakeAgent(Agent):
         """Extract data from intake form."""
         path = Path(image_path)
         image_bytes = path.read_bytes()
-        extracted = self.vlm.extract_from_image(image_bytes, "Extract form fields")
+        extracted = self.vlm.extract_from_image(image_bytes, prompt="Extract form fields")
         return {"file": str(path), "data": extracted}
 
     def __del__(self):
@@ -429,14 +292,14 @@ class AutoIndexAgent(Agent):
 
     def _setup_watching(self, docs_dir: str):
         """Watch directory for new documents."""
-        def index_new_doc(event):
-            print(f"Indexing: {event.src_path}")
-            self.rag.index_document(event.src_path)
-            print(f"✅ Indexed: {Path(event.src_path).name}")
+        def index_new_doc(path):
+            print(f"Indexing: {path}")
+            self.rag.index_document(path)
+            print(f"✅ Indexed: {Path(path).name}")
 
         handler = FileChangeHandler(
             on_created=index_new_doc,
-            extensions={'.pdf', '.txt', '.md', '.docx'}
+            extensions=[".pdf", ".txt", ".md", ".docx"]
         )
 
         observer = Observer()
@@ -457,18 +320,7 @@ class AutoIndexAgent(Agent):
 from gaia.utils.file_watcher import FileChangeHandler
 ```
 
-The callback-based design decouples the handler from any specific agent:
-
-```python
-# Generic (callback-based) — current implementation
-class FileChangeHandler(FileSystemEventHandler):
-    def __init__(self, on_created=None, ...):
-        self._on_created = on_created  # ✅ Generic callback
-
-    def on_created(self, event):
-        if self._on_created:
-            self._on_created(event)  # ✅ Calls callback
-```
+The callback-based design decouples the handler from any specific agent: each callback receives the file path as a `str`, and the handler queues the path to settle before calling it.
 
 ### Settling Implementation
 
@@ -498,21 +350,21 @@ reported.
 ### Extension Filtering
 
 ```python
-def _should_process(self, event: FileSystemEvent) -> bool:
-    """Check if file should be processed."""
-    path = Path(event.src_path)
+def _should_process(self, file_path: str) -> bool:
+    """Check if file should be processed based on filters."""
+    # Custom filter takes precedence
+    if self._filter_func is not None:
+        return self._filter_func(file_path)
 
-    # Check extension
-    if self._extensions and path.suffix not in self._extensions:
-        return False
+    # Empty extensions list means watch all files
+    if not self._extensions:
+        return True
 
-    # Check ignore patterns
-    for pattern in self._ignore_patterns:
-        if path.match(pattern):
-            return False
-
-    return True
+    file_lower = file_path.lower()
+    return any(file_lower.endswith(ext) for ext in self._extensions)
 ```
+
+Extensions are normalized to lowercase with a leading dot. There are no ignore patterns; use `filter_func` to exclude files.
 
 ---
 
@@ -520,96 +372,20 @@ def _should_process(self, event: FileSystemEvent) -> bool:
 
 ### Required Packages
 
-```toml
-# pyproject.toml
-[project]
-dependencies = [
-    "watchdog>=3.0.0,<7",  # File system monitoring
-]
+`watchdog` is a core dependency of `amd-gaia` (`setup.py` `install_requires`):
+
 ```
-
-### Import Dependencies
-
-```python
-from pathlib import Path
-from typing import Callable, Optional, Set, Dict
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
-from watchdog.observers import Observer
-import time
-import logging
+watchdog>=2.1.0,<7
 ```
 
 ---
 
-## Documentation Updates Required
+## Status
 
-### docs/sdk/core/agent-system.mdx
-
-Add new section after Tool Mixins:
-
-```markdown
-## 10. File System Monitoring
-
-### FileChangeHandler
-
-**Import:** `from gaia import FileChangeHandler`
-
-**Purpose:** Monitor directories for file changes and trigger automatic processing.
-
-**When to use:**
-- Auto-process files dropped in a folder
-- Auto-index new documents
-- Watch for configuration changes
-- Trigger workflows on file events
-
-[Full documentation with examples]
-```
-
----
-
-## Implementation Checklist
-
-### Step 1: Create File
-- [ ] Create `src/gaia/utils/` directory
-- [ ] Create `src/gaia/utils/__init__.py`
-- [ ] Create `src/gaia/utils/file_watcher.py`
-- [ ] Add copyright header
-
-### Step 2: Implement Class
-- [ ] Extend `FileSystemEventHandler`
-- [ ] Implement `__init__` with callbacks
-- [ ] Implement `on_created()`
-- [ ] Implement `on_modified()`
-- [ ] Implement `on_deleted()`
-- [ ] Implement `_should_process()`
-- [ ] Implement settling (dispatch thread, size/mtime check)
-
-### Step 3: Add Features
-- [ ] Extension filtering
-- [ ] Ignore patterns
-- [ ] Settling
-- [ ] Error handling in callbacks
-- [ ] Logging
-
-### Step 4: Write Tests
-- [ ] Create `tests/unit/test_file_watcher.py`
-- [ ] Test imports
-- [ ] Test callbacks
-- [ ] Test filtering
-- [ ] Test settling (a file written in pieces is reported once, complete)
-- [ ] Test with real Observer
-- [ ] Test error handling
-
-### Step 5: Export & Document
-- [ ] Add to `src/gaia/__init__.py`
-- [ ] Add to `__all__` list
-- [ ] Update docs/sdk/core/agent-system.mdx
-- [ ] Add examples to docs/sdk/core/agent-system.mdx
-
-### Step 6: Validate
-- [ ] Can import: `from gaia import FileChangeHandler`
-- [ ] Example code works
-- [ ] All tests pass
+Shipped. `FileChangeHandler`, `FileWatcher` and `FileWatcherMixin` live in
+`src/gaia/utils/file_watcher.py` and are exported from `gaia`
+(`from gaia import FileChangeHandler`). The user-facing guide is
+[FileWatcher](/sdk/utils/file-watcher).
 
 ---
 

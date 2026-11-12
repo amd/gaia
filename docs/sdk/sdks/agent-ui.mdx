@@ -137,11 +137,11 @@ class ChatDatabase:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `create_session` | `(title?, model?, system_prompt?, document_ids?) -> Dict` | Create a new chat session |
+| `create_session` | `(title?, model?, system_prompt?, document_ids?, private=False, agent_type?, device?, mail_provider?, kind?) -> Dict` | Create a new chat session |
 | `get_session` | `(session_id) -> Optional[Dict]` | Get session by ID with message count and document IDs |
 | `list_sessions` | `(limit=50, offset=0) -> List[Dict]` | List sessions ordered by most recently updated |
 | `count_sessions` | `() -> int` | Count total sessions |
-| `update_session` | `(session_id, title?, system_prompt?) -> Optional[Dict]` | Update session title and/or system prompt |
+| `update_session` | `(session_id, title?, system_prompt?, document_ids?, private?, agent_type?, device?, model?, mail_provider?, title_is_custom?) -> Optional[Dict]` | Update any of these session fields |
 | `delete_session` | `(session_id) -> bool` | Delete a session and its messages (cascading) |
 
 **Example:**
@@ -169,7 +169,7 @@ for s in db.list_sessions(limit=10):
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_message` | `(session_id, role, content, rag_sources?, tokens_prompt?, tokens_completion?, model_messages?) -> int` | Add a message, returns message ID |
+| `add_message` | `(session_id, role, content, rag_sources?, agent_steps?, tokens_prompt?, tokens_completion?, inference_stats?, model_messages?, turn_summary?, library_notices?, ends_turn=False, stopped=False) -> int` | Add a message, returns message ID |
 | `get_messages` | `(session_id, limit=100, offset=0) -> List[Dict]` | Get messages oldest-first |
 | `count_messages` | `(session_id) -> int` | Count messages in a session |
 | `get_context_messages` | `(session_id) -> List[Dict]` | Read ordered model history, including tool evidence; separate from UI pagination |
@@ -229,7 +229,7 @@ for msg in messages:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash) |
+| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?, file_mtime?) -> Dict` | Add document to library (deduplicates by hash) |
 | `get_document` | `(doc_id) -> Optional[Dict]` | Get document by ID |
 | `list_documents` | `() -> List[Dict]` | List all documents |
 | `delete_document` | `(doc_id) -> bool` | Delete a document |
@@ -292,19 +292,22 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                  installed package (used by `gaia --ui-dist`).
 
     Returns:
-        Configured FastAPI application with all routers (agents, chat,
-        documents, files, mcp, sessions, system, tunnel) registered.
+        Configured FastAPI application with all routers registered
+        (see REST API Endpoints).
     """
 ```
 
-Shared state is stored on `app.state` and is accessible in tests:
+Shared state is stored on `app.state`. `db` exists as soon as `create_app()` returns; the rest is set when the app starts up, so enter the client first:
 
 ```python
+from fastapi.testclient import TestClient
+
 app = create_app(db_path=":memory:")
-db        = app.state.db               # ChatDatabase
-registry  = app.state.agent_registry   # AgentRegistry (see /spec/plugin-registry)
-dispatch  = app.state.dispatch_queue   # background job queue
-monitor   = app.state.document_monitor # watches the library for new files
+db = app.state.db                      # ChatDatabase, available immediately
+with TestClient(app, base_url="http://localhost", headers={"X-Gaia-UI": "1"}):
+    registry = app.state.agent_registry   # AgentRegistry (see /spec/plugin-registry)
+    dispatch = app.state.dispatch_queue   # background job queue
+    monitor  = app.state.document_monitor # watches the library for new files
 ```
 
 ---
@@ -327,9 +330,9 @@ class SystemStatus(BaseModel):
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
-    memory_available_gb: float = 0.0
+    memory_available_gb: Optional[float] = None
     initialized: bool = False
-    version: str = "0.1.0"
+    version: str = Field(default_factory=lambda: _gaia_version)  # installed GAIA version
 ```
 
 ### Sessions
@@ -453,7 +456,9 @@ class AttachDocumentRequest(BaseModel):
 
 ## REST API Endpoints
 
-Every other path serves the Agent UI page, except paths under `/api`: an unknown one returns a JSON **404** (`{"detail": "Not Found"}`), and a known one called with the wrong method returns **405**.
+Every other path serves the Agent UI page, except paths under `/api`: an unknown one returns a JSON **404** (`{"detail": "Not Found"}`), and a known one called with the wrong method returns **405**. A missing file under `assets/` also returns **404** rather than the page, so a stale script link fails visibly.
+
+`GET /api/files/uploads/{path}` is a static mount, not a router: it serves files attached to chats from the uploads folder, with headers that keep an uploaded `.html` or `.svg` from running as part of the app.
 
 ### System
 
@@ -472,7 +477,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "disk_space_gb": 128.5,
       "memory_available_gb": 12.3,
       "initialized": true,
-      "version": "0.1.0"
+      "version": "0.26.0"
     }
     ```
 
@@ -1128,7 +1133,18 @@ Deleting a chat deletes its copies.
     |------------|--------|-------------|
     | `chunk` | `content` (string) | Incremental text fragment of the response, streamed as the LLM generates tokens. Raw tool-call JSON is automatically filtered out. |
     | `answer` | `content` (string), `elapsed` (number), `steps` (int), `tools_used` (int), `tokens` (int, optional), `ttft` (number, optional) | Final complete answer from the agent. `elapsed` is wall-clock seconds. `steps` and `tools_used` are execution totals. `tokens` is the real output-token count and `ttft` the real time-to-first-token for the run, in seconds -- both omitted entirely (never a fake `0`) when no real value was recorded. Double-escaped newlines/tabs from LLM output are automatically corrected. |
-    | `agent_error` | `content` (string) | Error message from the agent. |
+    | `agent_error` | `content` (string), `fatal` (boolean, optional) | Error message from the agent. `fatal: true` marks a failure that ends the turn. |
+    | `error` | `content` (string) | Sent only when the stream itself fails outside the agent loop; most failures arrive as `agent_error`. |
+
+    **Interaction and Agent Events**
+
+    | Event type | Fields | Description |
+    |------------|--------|-------------|
+    | `needs_input` | `request_id` (string), `question` (string), `options` (array), `allow_free_text` (boolean), `sensitive` (boolean), `timeout_seconds` (number or null) | The agent paused to ask the user. Answer it through the mid-run input endpoint below. |
+    | `permission_request` | `tool` (string), `tool_label` (string), `args` (object), `confirm_id` (string), `call_args` (object, optional), `always_scope` (string, optional) | A tool needs approval before it runs. Answer through `POST /api/chat/confirm-tool`. |
+    | `tool_confirm_denied` | `tool` (string), `reason` (string), `message` (string) | A confirmation was refused without asking: `reason` is `"unattended"` for a background run, or `"scripted_user"` in an eval. |
+    | `skill_use` | `skill` (string), `how` (string), `loaded` (string[]) | The agent used a skill. `how` says how it was brought in; `loaded` lists the skills now loaded. |
+    | `agent_created` | `agent_id` (string) | The agent created a new agent. |
 
     **Stream Termination**
 
@@ -1412,6 +1428,7 @@ Deleting a chat deletes its copies.
     | Status | Condition |
     |--------|-----------|
     | `400` | Invalid path (empty or contains null bytes), path is a symbolic link, or `launch` was asked for a folder or a file type that could run |
+    | `403` | Path is outside the user's home folder, or the OS denies access |
     | `404` | Path does not exist |
     | `500` | Failed to launch the system file explorer |
   </Accordion>
@@ -1514,9 +1531,7 @@ To move custom agents between machines, use the `gaia agent export` and
 
 ### MCP
 
-The MCP router is read-only status for external MCP servers, plus lifecycle
-for GAIA's *own* MCP server (the one that exposes Agent UI tools to clients
-like Claude Code). Registering, enabling, and disabling an external MCP
+The MCP router is read-only status for external MCP servers. Registering, enabling, and disabling an external MCP
 server connector lives under [Connectors](#connectors) — `mcp_server` is one
 of that router's connector types.
 
@@ -1685,7 +1700,7 @@ agent at once, so they take effect on its next step.
 
 ### Tunnel
 
-Expose the local Agent UI over the internet via an ngrok/Cloudflare tunnel.
+Expose the local Agent UI over the internet via an ngrok tunnel.
 Used to reach the UI from a phone.
 
 <AccordionGroup>
@@ -1698,7 +1713,7 @@ Used to reach the UI from a phone.
   </Accordion>
 
   <Accordion title="GET /api/tunnel/status">
-    Current tunnel status — active/inactive, public URL, provider, uptime, and
+    Current tunnel status — `active`, `url`, `token`, `startedAt`, `publicIp`, `error`, and
     `device`: `{"name": "iPhone", "lastSeen": "..."}` for the latest
     authenticated request through the tunnel, or null. When ngrok is not
     installed, `reason` is `"ngrok_not_installed"` and `installCommands` lists
@@ -1894,7 +1909,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
         "overdue_count": 1
       },
       "embedding": {
-        "total": 142,
+        "total_items": 142,
         "with_embedding": 135,
         "without_embedding": 7,
         "coverage_pct": 95.1
@@ -3130,9 +3145,9 @@ these to install the GAIA agent when it is missing.
    or `/v1/*` must carry `X-Gaia-UI: 1`. A cross-origin page cannot set a
    custom header without triggering a CORS preflight, and the app's CORS
    policy only approves preflights from its own first-party dev origins.
-   Missing the header is a `403`. Three reads with side effects carry the same
-   requirement: `GET /api/setup/check`, `GET /api/providers` and
-   `GET /api/providers/active`.
+   Missing the header is a `403`. Some GET routes carry the same
+   requirement through a route-level `require_ui_header` dependency; each says
+   so in its entry.
 2. **Origin allowlist.** A mutating request whose `Origin` names anything
    other than this server, loopback, or the live tunnel is refused, so a CORS
    misconfiguration alone isn't enough to get through.
@@ -3163,7 +3178,7 @@ agent.
 
 ## Database Schema
 
-The Agent UI uses SQLite with four tables:
+The Agent UI uses SQLite. The core tables are below; `SCHEMA_SQL` in `src/gaia/ui/database.py` also creates `session_environment`, `scheduled_tasks`, `schedule_results` and `cloud_spend`, and `_migrate()` adds more columns than are shown here (for example `sessions.agent_type`, `pinned`, `unread`, `private`, `kind`, `messages.model_messages`, `turn_summary`, `library_notices`, `stopped`, and `documents.last_error`, `error_kind`).
 
 ```sql
 -- Global document library
@@ -3203,7 +3218,7 @@ CREATE TABLE session_documents (
 CREATE TABLE messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-    role TEXT CHECK(role IN ('user', 'assistant', 'system')) NOT NULL,
+    role TEXT CHECK(role IN ('user', 'assistant', 'system', 'autonomous')) NOT NULL,
     content TEXT NOT NULL,
     created_at TEXT,
     rag_sources TEXT,          -- JSON array of source citations
@@ -3216,7 +3231,7 @@ CREATE TABLE messages (
 -- Key/value user settings (e.g. custom_model override)
 CREATE TABLE settings (
     key TEXT PRIMARY KEY,
-    value TEXT
+    value TEXT NOT NULL
 );
 
 -- A chat or scheduled turn that has started and not yet saved its reply, one
@@ -3238,8 +3253,7 @@ CREATE TABLE unfinished_turns (
 
 <Note>
 The `indexing_status`, `file_mtime`, `indexing_owner`, `agent_steps`, and
-`inference_stats` columns (plus the `settings` table) are added via migrations for databases
-created before these existed. New databases include them in the initial schema.
+`inference_stats` columns (plus the `settings` table) are added by `_migrate()`, which runs for new and existing databases alike.
 </Note>
 
 ---
@@ -3257,7 +3271,8 @@ from gaia.ui.server import create_app
 def client():
     """Create test client with in-memory database."""
     app = create_app(db_path=":memory:")
-    return TestClient(app)
+    # The server refuses other Host values and mutating requests without the header.
+    return TestClient(app, base_url="http://localhost", headers={"X-Gaia-UI": "1"})
 
 def test_create_session(client):
     resp = client.post("/api/sessions", json={"title": "Test Chat"})
@@ -3340,7 +3355,9 @@ The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LL
 ```python
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
-# The server creates a ChatAgent instance per request. ChatAgent derives its
+# The server keeps one agent per chat between turns, built through
+# AgentRegistry.create_agent (the flagship is GaiaAgent, whose base is
+# ChatAgent). This example builds a ChatAgent directly. ChatAgent derives its
 # system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |
 # "web" | "full") — there is no `system_prompt` config field.
 config = ChatAgentConfig(
@@ -3394,6 +3411,8 @@ The npm package includes:
 |------|-------------|
 | `bin/gaia-ui.cjs` | CLI entry point (Node.js) |
 | `dist/` | Pre-built frontend (React SPA) |
+| `main.cjs`, `main-safety-net.cjs`, `preload.cjs`, `services/` | Electron shell |
+| `assets/`, `app.config.json` | Icons and app configuration |
 
 ### Release Management
 

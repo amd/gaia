@@ -140,11 +140,10 @@ config = RAGConfig(
 
 rag = RAGSDK(config)
 
-# Automatically rejects large files
-try:
-    rag.index_document("huge_file.pdf")  # 100MB
-except ValueError as e:
-    print(f"File too large: {e}")
+# Oversized files are rejected with an error result, not an exception
+stats = rag.index_document("huge_file.pdf")  # 100MB
+if not stats["success"]:
+    print(stats["error"])  # "File too large (...MB > ...MB)"
 ```
 
 ---

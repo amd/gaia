@@ -169,11 +169,12 @@ relaxes this.
 
 The SHA-256 check is the package's security boundary.
 
-- Downloaded bytes are hashed in memory and compared against the lock **before
-  anything is written to the cache path**.
-- On mismatch: `IntegrityError`, message naming expected vs actual, nothing left
-  on disk.
-- Writes go to `<path>.download.<pid>` and are `rename`d into place, so a crash
+- Downloaded bytes are streamed to `<path>.download.<pid>` and hashed as they
+  arrive; the hash is compared against the lock **before the file is renamed**
+  onto the cache path.
+- On mismatch: `IntegrityError`, message naming expected vs actual, and the temp
+  file is deleted.
+- The temp file is `rename`d into place only after that check, so a crash
   mid-write never leaves a partial file that a later run treats as verified.
 - A cache hit requires re-hashing the on-disk file and matching the lock.
   A cached file whose bytes drifted is re-downloaded, not reused.
@@ -285,6 +286,9 @@ the header.
 | `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
+The `/respond` body carries the answer in exactly one of `value` (preferred) or
+`response`, a deprecated spelling of `value`.
+
 #### `/query` request body
 
 The full, machine-readable contract — every field, type, and which are
@@ -298,7 +302,7 @@ missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
-`changes_turn_id`, `surface`) is optional.
+`changes_turn_id`, `surface`, `turns`, `reasoning`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
 is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
@@ -553,8 +557,9 @@ agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
 threads them together. A `session_id` must be 1–128 characters from
 `A-Z a-z 0-9 . _ -`, not only dots (a UUID works); any other value is a **400**
-naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass` and
-`/sessions/{session_id}/internet`.
+naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass`,
+`/sessions/{session_id}/internet`, `/sessions/{session_id}/grants` and
+`/sessions/{session_id}/tools`.
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
 
@@ -608,7 +613,7 @@ timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
 (`session_registry.py`). Eviction is idle-only: a conversation still in use is
 never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
-response stream's first event is a `{"type":"status","status":"warning",...}`
+response stream's first event is a `{"type":"status","message":"This session was reclaimed after being idle or crowded out…"}`
 telling the caller that per-turn state — most visibly any loaded skill — did
 not survive and should be reloaded.
 
@@ -818,7 +823,7 @@ follow-up, so a turn answering in a single step is covered too. The one
 exception is a turn already at its step limit: the message stays queued rather
 than being consumed into a context no model call will read.
 
-Because `/query` is stateless (§2.4) the host still owns the transcript: record
+Because `/query` is stateless (the caller pushes the transcript every turn) the host still owns the transcript: record
 a delivered follow-up in the `context` you push on the **next** turn, between
 that turn's question and its answer, or the conversation loses words the agent
 demonstrably saw.

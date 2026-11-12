@@ -4,14 +4,13 @@ description: "Complete technical specification for MCP client components"
 icon: "sitemap"
 ---
 
-<Warning>
-  **CLI update (#977):** `gaia mcp add` / `gaia mcp remove` referenced in this spec
-  were removed. MCP servers are now configured through the connectors framework
-  (`gaia connectors configure <id> --set KEY=VALUE`; the entry is persisted to
-  `~/.gaia/mcp_servers.json` with secrets in the OS keyring). `gaia mcp list` still
-  lists configured servers. Sections below using `gaia mcp add/remove` are pending a
-  rewrite — see issue #1339.
-</Warning>
+<Note>
+  `MCPConfig` is a read-only loader and `MCPClientManager` is an in-memory
+  runtime registry. Servers are written to `~/.gaia/mcp_servers.json` through the
+  connectors framework (`gaia connectors configure <id> --set KEY=VALUE`, secrets
+  in the OS keyring) or by editing the file by hand. `gaia mcp list`, `gaia mcp tools`
+  and `gaia mcp test-client` inspect them.
+</Note>
 
 <Note>
 🔧 **You are viewing:** API Specification - Complete technical reference
@@ -44,8 +43,8 @@ The MCP Client enables GAIA agents to connect to and use tools from external MCP
 - **Automatic Tool Registration**: MCP tools automatically appear in agent's tool registry
 - **Tool Namespacing**: Multiple servers with same tool names work without conflicts
 - **Stdio Transport**: Support for subprocess-based MCP servers
-- **Configuration Management**: Persistent server configurations
-- **CLI Integration**: Simple command-line interface for managing connections
+- **Configuration Loading**: Stacked, read-only `mcp_servers.json` loader
+- **CLI Integration**: `gaia mcp list`, `tools` and `test-client` inspect configured servers
 - **GAIA Response Wrapping**: Tool responses formatted with status/message/data fields
 
 **Architecture Overview:**
@@ -119,10 +118,10 @@ flowchart TB
    - Add server context to tool descriptions (`[MCP:servername]`)
    - Unregister tools when server disconnects
 
-5. **Configuration Management**
-   - Save server configurations to `~/.gaia/mcp_servers.json`
+5. **Configuration Loading**
+   - Read server configurations from `~/.gaia/mcp_servers.json` and a local `./mcp_servers.json`
    - Load servers on startup
-   - Support adding/removing servers via CLI and API
+   - Persist changes through `gaia.connectors.mcp_server.McpServerHandler` (`gaia connectors configure <id> --set KEY=VALUE`) or by editing the file
 
 ### Non-Functional Requirements
 
@@ -140,7 +139,7 @@ flowchart TB
 
 3. **Usability**
    - Simple mixin interface for agents
-   - Clear CLI commands (`gaia mcp add/list/tools/remove`)
+   - Clear CLI commands (`gaia mcp list/tools/test-client`)
    - Helpful error messages with schema context
    - Debug mode for troubleshooting
 
@@ -167,8 +166,9 @@ class MCPClientMixin:
 
     Usage:
         class MyAgent(Agent, MCPClientMixin):
-            def __init__(self, ...):
-                super().__init__(...)
+            def __init__(self, **kwargs):
+                Agent.__init__(self, **kwargs)
+                MCPClientMixin.__init__(self, auto_load_config=False)
                 self.connect_mcp_server("github", {
                     "command": "npx",
                     "args": ["-y", "@modelcontextprotocol/server-github"],
@@ -180,14 +180,22 @@ class MCPClientMixin:
 #### Constructor
 
 ```python
-def __init__(self, *args, **kwargs):
+def __init__(
+    self,
+    auto_load_config: bool = True,
+    debug: bool = False,
+    config_file: Optional[str] = None,
+):
     """Initialize the mixin.
 
-    Creates an MCPClientManager instance. Inherits debug mode from agent if available.
+    Creates an MCPClientManager. Call it explicitly after Agent.__init__
+    (Agent does not chain to the mixin); until then connect_mcp_server
+    returns False.
 
     Args:
-        *args: Passed to parent class
-        **kwargs: Passed to parent class (debug: bool checked for manager)
+        auto_load_config: Load servers from the stacked config files
+        debug: Debug logging (the agent's own `debug` wins when set)
+        config_file: Load only this file (no stacking); always loads
     """
 ```
 
@@ -337,6 +345,8 @@ def _unregister_mcp_tools(self, client: MCPClient) -> None:
 | `list_mcp_servers()` | List connected servers | `List[str]` |
 | `get_mcp_client(name)` | Get client by name | `MCPClient` |
 | `load_mcp_servers_from_config()` | Load from config file | `int` |
+| `get_mcp_status_report()` | Per-server status rows (delegates to the manager) | `List[Dict]` |
+| `get_mcp_client_system_prompt()` | System-prompt fragment describing connected MCP servers | `str` |
 
 ---
 
@@ -352,8 +362,10 @@ class MCPClient:
 
     Attributes:
         name (str): Friendly name for this server
+        prefix (str): Sanitised name used in `mcp_<prefix>_<tool>` tool names
         transport (MCPTransport): Transport implementation
         debug (bool): Debug logging enabled
+        last_error (Optional[str]): Reason the last connect or call failed
         server_info (Dict[str, Any]): Server information from initialize response
         protocol_version (Optional[str]): MCP revision the server agreed to
     """
@@ -398,15 +410,20 @@ def from_config(
         config (Dict[str, Any]): Server configuration dict with:
             - command (required): Base command to run (e.g., "npx", "uvx")
             - args (optional): List of arguments
-            - env (optional): Environment variables dict
-        timeout (int): Request timeout in seconds (default: 30)
+            - env (optional): Environment variables dict; a value of the form
+              {"$keyring": ...} is resolved from the OS keyring at spawn
+            - timeout (optional): Per-server request timeout in seconds
+              (positive, at most 600; overrides the argument below)
+        timeout (int): Default request timeout in seconds (default: 30)
         debug (bool): Enable debug logging (default: False)
 
     Returns:
         MCPClient: Configured client instance (not yet connected)
 
     Raises:
-        ValueError: If config is missing required 'command' field
+        ValueError: If config is missing required 'command' field, or its
+            'timeout' is not a positive number of at most 600 seconds
+        RuntimeError: If an env {"$keyring": ...} reference is dangling
 
     Example:
         >>> client = MCPClient.from_config(
@@ -598,8 +615,9 @@ The manager class for handling multiple MCP client connections.
 class MCPClientManager:
     """Manages multiple MCP client connections.
 
-    Handles configuration loading/saving, connection management, and
-    routing tool calls to the appropriate server.
+    An in-memory runtime registry: it reads configuration through MCPConfig
+    and tracks connections, but never writes configuration. Persistence goes
+    through gaia.connectors.mcp_server.McpServerHandler.
 
     Attributes:
         config (MCPConfig): Configuration manager instance
@@ -630,8 +648,7 @@ def add_server(self, name: str, config: Dict) -> MCPClient:
     This method:
     1. Creates an MCPClient from the config
     2. Connects to the server
-    3. Stores the client
-    4. Saves configuration to file
+    3. Stores the client (in memory only; nothing is written to disk)
 
     Args:
         name (str): Friendly name for the server
@@ -639,12 +656,14 @@ def add_server(self, name: str, config: Dict) -> MCPClient:
             - command (required): Base command to run
             - args (optional): List of arguments
             - env (optional): Environment variables dict
+            - type (optional): Transport type, "stdio" (default)
 
     Returns:
         MCPClient: Connected client instance
 
     Raises:
         ValueError: If server with this name already exists
+        ValueError: If config is not a dict, or its type is not "stdio"
         ValueError: If config is missing 'command' field
         RuntimeError: If connection fails
 
@@ -672,7 +691,9 @@ def remove_server(self, name: str) -> None:
     This method:
     1. Disconnects the client
     2. Removes from internal storage
-    3. Removes from configuration file
+
+    The configuration file is untouched; use McpServerHandler.disconnect
+    (or edit mcp_servers.json) to remove the entry.
 
     Args:
         name (str): Name of the server to remove
@@ -724,9 +745,13 @@ def disconnect_all(self) -> None:
 def load_from_config(self) -> None:
     """Load and connect to all servers from configuration.
 
-    Reads servers from configuration file and attempts to connect to each.
+    Reads servers from configuration and connects to them in parallel
+    (10 s deadline, raised to the largest per-server `timeout`).
     Skips servers that:
     - Are already connected
+    - Already failed (retried only after reload())
+    - Are marked `"disabled": true`
+    - Use a non-stdio `type`
     - Have no command specified
     - Fail to connect (logs warning/error)
 
@@ -735,15 +760,44 @@ def load_from_config(self) -> None:
     """
 ```
 
+#### servers_for_agent, tools_for_agent
+
+```python
+def servers_for_agent(self, agent_id: Optional[str]) -> List[str]: ...
+def tools_for_agent(self, agent_id: Optional[str]) -> Dict[str, List]: ...
+```
+
+Server names (and `{server: [MCPTool]}`) visible to an agent, filtered by
+per-agent activation. `agent_id=None` returns everything.
+
+#### get_status_report
+
+```python
+def get_status_report(self) -> List[Dict]:
+    """Rows of name, connected, tool_count, error for every known server,
+    including ones that failed to connect."""
+```
+
+#### reload
+
+```python
+def reload(self) -> None:
+    """Disconnect all, re-read mcp_servers.json, reconnect enabled servers."""
+```
+
 #### Quick Reference
 
 | Method | Description | Returns |
 |--------|-------------|---------|
-| `add_server(name, config)` | Add and connect server | `MCPClient` |
-| `remove_server(name)` | Remove and disconnect | `None` |
+| `add_server(name, config)` | Add and connect server (in memory) | `MCPClient` |
+| `remove_server(name)` | Remove and disconnect (in memory) | `None` |
 | `get_client(name)` | Get client | `Optional[MCPClient]` |
 | `list_servers()` | List server names | `List[str]` |
-| `load_from_config()` | Load from config file | `None` |
+| `servers_for_agent(agent_id)` | Servers visible to an agent | `List[str]` |
+| `tools_for_agent(agent_id)` | Tools visible to an agent | `Dict[str, List]` |
+| `get_status_report()` | Connection status rows | `List[Dict]` |
+| `reload()` | Re-read config and reconnect | `None` |
+| `load_from_config()` | Load from config | `None` |
 | `disconnect_all()` | Disconnect all servers | `None` |
 
 ---
@@ -756,11 +810,13 @@ Configuration manager for MCP servers.
 class MCPConfig:
     """Configuration manager for MCP servers.
 
-    Stores server configurations in a JSON file for persistence.
-    Auto-saves on modification.
+    A read-only loader for mcp_servers.json. It never writes; writes go
+    through gaia.connectors.mcp_server.McpServerHandler.configure / disconnect.
 
     Attributes:
-        config_file (Path): Path to configuration file
+        config_file (Path): The local file when one exists, else the global file
+        load_report (Dict[str, Any]): What was loaded (mode, global/local paths,
+            servers per file, overrides)
         _servers (Dict[str, Dict[str, Any]]): Server configurations
 
     File format (Anthropic-compatible):
@@ -785,40 +841,15 @@ def __init__(self, config_file: str = None):
     """Create config manager.
 
     Args:
-        config_file (str, optional): Path to configuration file.
-            Default: ~/.gaia/mcp_servers.json
+        config_file (str, optional): Explicit path; when set, only that file
+            is loaded. Default: stack <gaia_home>/mcp_servers.json with a local
+            ./mcp_servers.json (CWD, then the script's directory); the local
+            file wins on conflicts.
 
     Note:
-        Creates ~/.gaia directory if it doesn't exist.
-        Loads existing configuration on initialization.
-    """
-```
-
-#### add_server
-
-```python
-def add_server(self, name: str, config: Dict[str, Any]) -> None:
-    """Add or update a server configuration.
-
-    Auto-saves to file after modification.
-
-    Args:
-        name (str): Server name
-        config (Dict[str, Any]): Server configuration dictionary
-            Required keys: "command" (str)
-    """
-```
-
-#### remove_server
-
-```python
-def remove_server(self, name: str) -> None:
-    """Remove a server configuration.
-
-    Auto-saves to file after modification (if server existed).
-
-    Args:
-        name (str): Server name
+        The path is not expanded: pass an absolute path, not "~/...".
+        Creates the global config directory if it doesn't exist.
+        A corrupt file raises ConnectorsError.
     """
 ```
 
@@ -865,8 +896,6 @@ def server_exists(self, name: str) -> bool:
 
 | Method | Description | Returns |
 |--------|-------------|---------|
-| `add_server(name, config)` | Add/update server config | `None` |
-| `remove_server(name)` | Remove server config | `None` |
 | `get_server(name)` | Get server config | `Dict` |
 | `get_servers()` | Get all configs | `Dict` |
 | `server_exists(name)` | Check if exists | `bool` |
@@ -993,6 +1022,7 @@ def __init__(
     env: dict[str, str] | None = None,
     timeout: int = 30,
     debug: bool = False,
+    name: Optional[str] = None,
 ):
     """Create stdio transport.
 
@@ -1215,7 +1245,7 @@ def to_gaia_format(self, prefix: str, raw_server_name: Optional[str] = None) -> 
     - Name: "mcp_{prefix}_{tool_name}"
     - Description: "[MCP:{prefix}] {description}"
     - Parameters: Converted from JSON Schema to GAIA format
-    - Metadata: _mcp_server, requires_confirmation added
+    - Metadata: _mcp_server, _mcp_tool, requires_confirmation added
 
     Args:
         prefix (str): Sanitised server-name prefix (from MCPClient.prefix),
@@ -1238,7 +1268,8 @@ def to_gaia_format(self, prefix: str, raw_server_name: Optional[str] = None) -> 
                 "parameters": {...},
                 "atomic": True,
                 "requires_confirmation": True,
-                "_mcp_server": "filesystem"
+                "_mcp_server": "filesystem",
+                "_mcp_tool": "read_file"  # the server's own tool name
             }
     """
 ```
@@ -1326,9 +1357,21 @@ MCP tools are converted from JSON Schema format to GAIA's tool registry format:
     "function": <wrapper_callable>,
     "atomic": True,
     "requires_confirmation": True,
-    "_mcp_server": "filesystem"
+    "_mcp_server": "filesystem",
+    "_mcp_tool": "read_file"
 }
 ```
+
+### Helper Functions
+
+Defined in `gaia.mcp.client.mcp_client`:
+
+| Function | Purpose |
+|----------|---------|
+| `sanitise_server_name(raw)` | Normalises a server name into the `<prefix>` of `mcp_<prefix>_<tool>` |
+| `server_timeout(name, config, default)` | The server's own `timeout` from config, else `default`; `ValueError` if not a positive number |
+| `MAX_SERVER_TIMEOUT_S` | Longest allowed per-server timeout (600 s) |
+| `mcp_tool_error(result)` | The error text of a tool result, or `None` when it succeeded |
 
 ### Tool Namespacing
 
@@ -1440,7 +1483,7 @@ Your arguments:
 
 ### Configuration File
 
-Servers are saved to `~/.gaia/mcp_servers.json` using the Anthropic-compatible format:
+Servers are read from `~/.gaia/mcp_servers.json` (stacked with a local `./mcp_servers.json`, which wins) using the Anthropic-compatible format. `gaia connectors configure` writes entries here, keeping secrets in the keyring as `{"$keyring": ...}` references:
 
 ```json
 {
@@ -1501,27 +1544,19 @@ The `env` field passes variables directly to the subprocess without shell expans
 ## CLI Commands
 
 ```bash
-# Add server (command line - tokenized into the config format internally)
-gaia mcp add <name> "<command>"
-
-# Examples
-gaia mcp add time "uvx mcp-server-time"
-gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
-
-# List servers
-gaia mcp list
+# List configured servers
+gaia mcp list [--config PATH]
 
 # List tools from a server
-gaia mcp tools <name>
+gaia mcp tools <name> [--config PATH]
 
 # Test connection
 gaia mcp test-client <name>
-
-# Remove server
-gaia mcp remove <name>
 ```
 
-The CLI accepts a full command line for convenience and converts it to the config format internally. The command is tokenized, not run through a shell, so unquoted shell syntax (`;`, `|`, `&&`, `>`) — and a backtick anywhere in the string — is rejected rather than interpreted. Use the config format's `args` list for values that must contain those characters.
+`gaia mcp add` and `gaia mcp remove` were removed. Set up a catalog server with
+`gaia connectors configure <id> --set KEY=VALUE`, or add an entry to
+`~/.gaia/mcp_servers.json` for a server outside the catalog.
 
 See [CLI Reference](/reference/cli#mcp-client) for complete documentation.
 
@@ -1589,7 +1624,8 @@ from gaia.mcp import MCPClientMixin
 
 class MyAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Connect to filesystem MCP server
         self.connect_mcp_server("filesystem", {
@@ -1599,7 +1635,7 @@ class MyAgent(Agent, MCPClientMixin):
 
 # Use agent - MCP tools available immediately
 agent = MyAgent()
-result = agent.run("List all files in /tmp")
+result = agent.process_query("List all files in /tmp")
 # LLM can now use: mcp_filesystem_read_file, mcp_filesystem_write_file, etc.
 ```
 
@@ -1611,7 +1647,8 @@ from gaia.mcp import MCPClientMixin
 
 class MultiToolAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Connect to multiple MCP servers
         self.connect_mcp_server("filesystem", {
@@ -1627,7 +1664,7 @@ class MultiToolAgent(Agent, MCPClientMixin):
 
 # All tools from both servers are available
 agent = MultiToolAgent()
-response = agent.run("List files in /tmp, then create a GitHub issue about them")
+response = agent.process_query("List files in /tmp, then create a GitHub issue about them")
 ```
 
 ### Loading Servers from Configuration
@@ -1638,10 +1675,10 @@ from gaia.mcp import MCPClientMixin
 
 class ConfigAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # Load all servers from ~/.gaia/mcp_servers.json
-        count = self.load_mcp_servers_from_config()
+        Agent.__init__(self, **kwargs)
+        # Auto-loads the stacked mcp_servers.json files
+        MCPClientMixin.__init__(self, auto_load_config=True)
+        count = len(self.list_mcp_servers())
         print(f"Loaded {count} MCP servers")
 
 agent = ConfigAgent()
@@ -1689,8 +1726,8 @@ if client.connect():
 from gaia.mcp.client import MCPClientManager
 from gaia.mcp.client.config import MCPConfig
 
-# Create manager with config file
-config = MCPConfig("~/.gaia/mcp_servers.json")
+# Create manager with the default stacked config (global + local mcp_servers.json)
+config = MCPConfig()
 manager = MCPClientManager(config=config)
 
 # Add servers programmatically
@@ -1724,7 +1761,8 @@ from gaia.mcp import MCPClientMixin
 
 class SafeAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self, auto_load_config=False)
 
         # Check connection success
         success = self.connect_mcp_server("filesystem", {
@@ -1765,8 +1803,8 @@ manager = MCPClientManager(debug=True)
 # Via MCPClientMixin (in agent)
 class DebugAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        kwargs["debug"] = True  # Enables MCP debug logging
-        super().__init__(**kwargs)
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self, auto_load_config=False, debug=True)
         self.connect_mcp_server("server", {
             "command": "npx",
             "args": ["-y", "@mcp/server"]
@@ -1788,12 +1826,24 @@ class DebugAgent(Agent, MCPClientMixin):
 
 ### Custom Transport
 
-To implement a custom transport (e.g., HTTP, WebSocket):
+A streamable-HTTP transport ships as `gaia.mcp.client.transports.HTTPTransport(url, timeout=30, debug=False)`:
 
 ```python
+from gaia.mcp.client import MCPClient
+from gaia.mcp.client.transports import HTTPTransport
+
+client = MCPClient("remote", HTTPTransport("http://localhost:8080/mcp"))
+client.connect()
+```
+
+Config-driven connections (`from_config`, `MCPClientManager`) stay stdio-only.
+To implement another transport (e.g., WebSocket), subclass `MCPTransport`:
+
+```python
+from typing import Any, Dict, Optional
 from gaia.mcp.client.transports.base import MCPTransport
 
-class HttpTransport(MCPTransport):
+class WebSocketTransport(MCPTransport):
     def __init__(self, url: str, timeout: int = 30):
         self.url = url
         self.timeout = timeout
@@ -1807,8 +1857,10 @@ class HttpTransport(MCPTransport):
     def disconnect(self) -> None:
         self._connected = False
 
-    def send_request(self, method: str, params: Dict = None) -> Dict:
-        # Implement HTTP request
+    def send_request(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        # Implement the request
         pass
 
     def send_notification(self, method: str, params: Dict = None) -> None:
@@ -1829,7 +1881,7 @@ class CustomAgent(Agent, MCPClientMixin):
     def _register_mcp_tools(self, client: MCPClient) -> None:
         tools = client.list_tools()
         for tool in tools:
-            gaia_tool = tool.to_gaia_format(client.name)
+            gaia_tool = tool.to_gaia_format(client.prefix, client.name)
 
             # Custom wrapper with additional logic
             def custom_wrapper(tool=tool, **kwargs):

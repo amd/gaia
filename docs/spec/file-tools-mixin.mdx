@@ -146,9 +146,11 @@ class FileToolsMixin:
 ```python
 def add_watch_directory(directory: str) -> Dict[str, Any]:
     try:
-        # Validate path with PathValidator (handles user prompting)
-        if not self.path_validator.is_path_allowed(directory):
-            return {"status": "error", "error": f"Access denied: {directory}"}
+        # Resolve against the workspace and validate with PathValidator
+        directory = str(_workspace_target(self, directory))
+        is_allowed, reason = self.path_validator.validate_read(directory)
+        if not is_allowed:
+            return {**NOT_EXECUTED, "status": "error", "error": reason}
 
         # Check if directory exists
         if not os.path.exists(directory):
@@ -173,7 +175,7 @@ def add_watch_directory(directory: str) -> Dict[str, Any]:
 
             for pdf_file in pdf_files:
                 try:
-                    if self.rag.index_document(str(pdf_file)):
+                    if self.rag.index_document(str(pdf_file)).get("success"):
                         self.indexed_files.add(str(pdf_file))
                         indexed_count += 1
                         if hasattr(self, "debug") and self.debug:
@@ -394,12 +396,13 @@ if not os.path.exists(directory):
     }
 
 # Access denied
-if not self.path_validator.is_path_allowed(directory):
-    return {"status": "error", "error": f"Access denied: {directory}"}
+is_allowed, reason = self.path_validator.validate_read(directory)
+if not is_allowed:
+    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
 # Indexing failure (individual file)
 try:
-    if self.rag.index_document(str(pdf_file)):
+    if self.rag.index_document(str(pdf_file)).get("success"):
         self.indexed_files.add(str(pdf_file))
         indexed_count += 1
 except Exception as e:
@@ -426,13 +429,15 @@ except Exception as e:
 ### Example 1: Adding Watch Directory
 
 ```python
-from gaia_agent.chat_agent import ChatAgent
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Create Chat Agent
-agent = ChatAgent(model="Qwen3-0.6B-GGUF")
+agent = ChatAgent(ChatAgentConfig(model_id="Qwen3-0.6B-GGUF"))
 
-# Add directory to watch list
-result = agent.add_watch_directory("/home/user/Documents/medical")
+# Add directory to watch list (mixin tools are closures: call them via the agent)
+result = agent._execute_tool(
+    "add_watch_directory", {"directory": "/home/user/Documents/medical"}
+)
 
 if result["status"] == "success":
     print(f"✅ {result['message']}")
@@ -453,7 +458,7 @@ directories = [
 ]
 
 for directory in directories:
-    result = agent.add_watch_directory(directory)
+    result = agent._execute_tool("add_watch_directory", {"directory": directory})
     if result["status"] == "success":
         print(f"✓ Watching {directory}")
         print(f"  Indexed {result['files_indexed']}/{result['total_files_found']} files")
@@ -463,7 +468,7 @@ for directory in directories:
 
 ```python
 # User asks agent to monitor a directory
-agent.chat("Please watch my Documents/medical folder for new PDFs")
+agent.process_query("Please watch my Documents/medical folder for new PDFs")
 
 # Agent will:
 # 1. Validate the path
@@ -489,10 +494,7 @@ FileToolsMixin requires a PathValidator instance for security:
 # In ChatAgent.__init__()
 from gaia.security import PathValidator
 
-self.path_validator = PathValidator(
-    session_manager=self.session_manager,
-    console=self.console
-)
+self.path_validator = PathValidator(allowed_paths=["/home/user/Documents"])
 ```
 
 ### RAG System Integration
@@ -500,8 +502,8 @@ self.path_validator = PathValidator(
 The mixin delegates document indexing to the RAG system:
 
 ```python
-# RAG.index_document() must return success/failure
-if self.rag.index_document(str(pdf_file)):
+# RAG.index_document() returns a dict with a "success" key
+if self.rag.index_document(str(pdf_file)).get("success"):
     self.indexed_files.add(str(pdf_file))
     indexed_count += 1
 ```

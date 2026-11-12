@@ -333,7 +333,7 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings. A PDF or PowerPoint indexed while the vision model was unavailable records how many pages had images it couldn't read, and the index result says so (`unread_image_pages`, `unread_images_note`). Once the vision model answers, the next index of that file re-extracts it, so those images are read without clearing the cache.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` also stores embeddings (`vectors_<hash>.npy`), keyed on the embedding model and the exact chunk text, so changing `embedding_model` re-embeds without clearing the cache. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings. A PDF or PowerPoint indexed while the vision model was unavailable records how many pages had images it couldn't read, and the index result says so (`unread_image_pages`, `unread_images_note`). Once the vision model answers, the next index of that file re-extracts it, so those images are read without clearing the cache.
 </Note>
 
 ### Indexing JSON records
@@ -425,10 +425,10 @@ for meta in response.chunk_metadata:
     # Every file holding this exact text, when the same document was indexed twice
     print(meta["source_files"])
 
-# Stats (if available)
+# Stats (only with RAGConfig(show_stats=True))
 if response.stats:
     print(f"Tokens used: {response.stats['total_tokens']}")
-    print(f"Latency: {response.stats['latency_ms']}ms")
+    print(f"Speed: {response.stats['tokens_per_second']} tokens/s")
 ```
 
 ### Interpreting Relevance Scores
@@ -556,7 +556,8 @@ from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Create an agent with RAG capability
 config = ChatAgentConfig(
-    rag_documents=["quarterly_reports/", "policies/", "meeting_notes/"]
+    rag_documents=["quarterly_reports/q1.pdf", "policies/handbook.pdf"],
+    watch_directories=["meeting_notes/"],
 )
 
 agent = ChatAgent(config)
@@ -875,7 +876,7 @@ def triangulated_search(query: str, min_sources: int = 2) -> dict:
         response.chunk_scores,
         response.chunk_metadata
     ):
-        source = meta.get("source", "unknown")
+        source = meta.get("source_file", "unknown")
         if source not in sources:
             sources[source] = []
         sources[source].append({"chunk": chunk, "score": score})
@@ -1037,6 +1038,38 @@ response = rag.query("What are the termination conditions?")
 
 ---
 
+## Reference: Indexing Callbacks, Helpers and Errors
+
+`index_document(file_path, progress_callback=None, wait_callback=None, heartbeat=None, display_name=None)`:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `progress_callback` | Called with `(done, total)` as embedding proceeds |
+| `wait_callback` | Called periodically with the seconds waited while the embedder is slow to answer |
+| `heartbeat` | Called once per extracted PDF page; raise `IndexingStopped` from it to stop |
+| `display_name` | The name the user knows the file by, when `file_path` is a copy; used in the result's `file_name` and `error` |
+
+Methods and functions in `gaia.rag.sdk`:
+
+| Name | What it does |
+|------|--------------|
+| `RAGSDK.document_scripts(file_path)` | Writing systems that make up at least 10% of an indexed file's letters |
+| `RAGSDK.unread_images_readable(file_path)` | Whether indexing the file again would read images it left unread |
+| `text_scripts(text)` | Writing systems that make up at least 10% of the text's letters, largest first |
+| `folder_index_skip_reason(file_path)` | Why a folder walk skips the file, or `None` when it is indexable |
+| `split_for_embedding(text, max_chars=EMBED_MAX_CHARS)` | Split text into pieces of at most `max_chars` |
+| `name_file_for_user(text, file_path, display_name)` | Replace every spelling of a copy's path in a message with the user's file name |
+
+Exceptions in `gaia.rag.sdk`:
+
+| Exception | Raised when |
+|-----------|-------------|
+| `IndexingStopped` | A callback stops indexing; the document is not indexed and any cache is kept |
+| `EmbeddingUnavailableError` | The embedding model could not run; `unreachable` and `busy` say why |
+| `VisionModelFailedError` | The vision model kept failing before it read any image (`error_type = "vision_model_failed"`) |
+| `SpreadsheetReadError` | An Excel workbook can't be read; `status` is its error kind |
+| `PDFExtractionError` | Base of the PDF failures; subclasses such as `EncryptedPDFError`, `CorruptedPDFError` and `EmptyPDFError` set `status` (`"encrypted"`, `"corrupted"`, `"empty"`) |
+
 ## Security: Restricting Document Access
 
 RAG can be restricted to specific directories for security:
@@ -1058,10 +1091,9 @@ rag = RAGSDK(config)
 rag.index_document("/home/user/documents/report.pdf")
 
 # This is BLOCKED - outside allowed paths
-try:
-    rag.index_document("/etc/passwd")  # Raises PermissionError
-except PermissionError as e:
-    print(f"Blocked: {e}")
+result = rag.index_document("/etc/passwd")
+if not result.get("success"):
+    print(f"Blocked: {result['error']}")  # error_type == "file_unreadable"
 ```
 
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
@@ -1296,7 +1328,7 @@ print(f"Indexed {stats['indexed_files']} files with {stats['total_chunks']} chun
 
 ## Deep Dive: How Vector Similarity Works
 
-<Accordion title="Understanding Embeddings and Cosine Similarity">
+<Accordion title="Understanding Embeddings and Similarity Scores">
 
 **What are embeddings?**
 
@@ -1311,18 +1343,17 @@ Embeddings convert text into vectors (lists of numbers) where similar meanings a
 
 **How similarity is calculated:**
 
-FAISS uses **cosine similarity**—measuring the angle between vectors:
+FAISS ranks by L2 distance between vectors; GAIA reports `1 / (1 + distance)`, so 1.0 is identical and values fall toward 0:
 
 ```
-Vectors pointing same direction    = Similar meaning (score ~1.0)
-Vectors pointing different ways    = Different meaning (score ~0.0)
-Vectors pointing opposite          = Opposite meaning (score ~-1.0)
+Vectors close together     = Similar meaning (score near 1.0)
+Vectors far apart          = Different meaning (score near 0.0)
 
 "system requirements" ←→ "hardware needed"
-     Cosine similarity: 0.92 (very similar!)
+     Close together (high score)
 
 "system requirements" ←→ "vacation policy"
-     Cosine similarity: 0.15 (very different)
+     Far apart (low score)
 ```
 
 **Why this works for search:**

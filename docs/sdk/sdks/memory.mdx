@@ -25,7 +25,7 @@ The memory system has three layers:
 | Layer | Class | File | Purpose |
 |-------|-------|------|---------|
 | **Agent integration** | `MemoryMixin` | `memory.py` | Hooks memory into the Agent lifecycle — embedding pipeline, FAISS index, hybrid search orchestration, Mem0-style LLM extraction, consolidation, reconciliation |
-| **Data layer** | `MemoryStore` | `memory_store.py` | Pure SQLite + FTS5 storage with schema v2 (embedding BLOB, `superseded_by`, `consolidated_at`), vector data retrieval, temporal filtering, consolidation queries, reconciliation queries. No agent dependencies. |
+| **Data layer** | `MemoryStore` | `memory_store.py` | Pure SQLite + FTS5 storage with schema version 8 (embedding BLOB, `superseded_by`, `consolidated_at`), vector data retrieval, temporal filtering, consolidation queries, reconciliation queries. No agent dependencies. |
 | **Bootstrap** | `SystemDiscovery` | `discovery.py` | Local system scanner for day-zero onboarding. Returns facts for user review. |
 
 ```
@@ -61,8 +61,7 @@ class MyAgent(MemoryMixin, Agent):
         super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
-        self.register_memory_tools()    # Exposes 5 tools to the LLM
+        self.register_memory_tools()    # Exposes 6 tools to the LLM
 ```
 
 <Warning>
@@ -77,19 +76,25 @@ Initialize the memory subsystem. Call this **before** `super().__init__()`.
 def init_memory(
     self,
     db_path: Optional[Path] = None,
-    context: str = "global"
+    context: str = "global",
+    embedding_model: Optional[str] = None,
+    incognito: bool = False,
+    session_id: Optional[str] = None,
 ) -> None:
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `embedding_model` | `str` | `EMBEDDING_MODEL` | Embedder model id. The embedding dimension comes from the live embedder |
+| `incognito` | `bool` | `False` | Start the session with memory off; the embedder loads only when memory is used |
+| `session_id` | `str` | random UUID | Id to file this session's conversation turns under (the Agent UI passes its chat id) |
 | `db_path` | `Path` | `GAIA_MEMORY_DB`, then `$GAIA_HOME/memory.db`, then `~/.gaia/memory.db` | Path to the SQLite database file. A blank override, or one naming a directory, raises instead of falling back to the real store |
 | `context` | `str` | `"global"` | Active context scope (e.g., `"work"`, `"personal"`, `"global"`) |
 
 **v2 startup sequence:**
 
 1. Open/create DB, apply schema migrations (v1 → v2: adds `embedding BLOB`, `superseded_by TEXT`, `consolidated_at TEXT`)
-2. Validate Lemonade embedding service connectivity — raises `RuntimeError` if unreachable
+2. Validate Lemonade embedding service connectivity — if unreachable, memory is disabled for the session (no raise)
 3. Backfill embeddings for items missing them (up to 100 per startup)
 4. Rebuild FAISS index from stored embeddings
 5. `apply_confidence_decay()` — 30-day decay
@@ -97,7 +102,7 @@ def init_memory(
 7. `consolidate_old_sessions()` — max 5 sessions, windowed (see [Consolidation](#consolidation))
 8. `start_skill_synthesis()` — distill repeated workflows into procedural memory, on a background thread
 9. `prune()` — 90-day hard delete. Runs after consolidation; queued sessions are held only until their turns reach 180 days
-9. Generate session UUID
+10. Generate session UUID
 
 Reconciliation, consolidation, and skill synthesis need the LLM, so they run on the first query rather than inside `init_memory()`. Pruning follows them there so eligible conversations get a chance to be distilled before deletion.
 
@@ -228,7 +233,7 @@ The model is not asked to maintain `reminded_at` and should not — prompt-based
 
 ### register_memory_tools()
 
-Registers the 5 LLM-facing memory tools with the agent's tool registry. Call this from your agent's `_register_tools()` method.
+Registers the 6 LLM-facing memory tools with the agent's tool registry. Call this from your agent's `_register_tools()` method.
 
 ```python
 def register_memory_tools(self) -> None
@@ -354,6 +359,7 @@ def _hybrid_search(
     top_k: int = 5,
     time_from: str = None,
     time_to: str = None,
+    count_as_use: bool = True,
 ) -> List[Dict]:
 ```
 
@@ -387,8 +393,8 @@ Adapts retrieval depth based on query complexity. Returns an adaptive `top_k` va
 
 | Complexity | Heuristic Signals | top_k |
 |---|---|---|
-| **Simple** | < 8 words, single entity, no comparison words | 3 |
-| **Medium** | 8–20 words, or contains "how", "why", "explain", "describe", "summarize", or "what happened" | 5 |
+| **Simple** | ≤ 8 words, single entity, no comparison words | 3 |
+| **Medium** | 9–20 words, or contains "how", "why", "explain", "describe", "summarize", or "what happened" | 5 |
 | **Complex** | > 20 words, or contains "compare", "across", "all", "history", "everything", "between", "throughout" | 10 |
 
 ### Mem0-Style LLM Extraction
@@ -564,9 +570,9 @@ class MemoryStore:
         Uses WAL mode. Thread-safe."""
 ```
 
-### Database Schema (v2)
+### Database Schema (version 8)
 
-Three tables in a single SQLite file. Schema version 2 adds vector embedding support and fact lineage tracking.
+One SQLite file. The core tables are `conversations`, `knowledge` and `tool_history`; `meta`, `procedures`, `skill_deltas`, `synthesis_marks`, `forgotten` and `deleted_sessions` support skill synthesis and forgetting. Vector embeddings and fact lineage arrived in version 2.
 
 - **`conversations`** -- every conversation turn, persistent across sessions, with FTS5 index. v2 adds `consolidated_at TEXT` column for tracking which turns have been distilled to knowledge.
 - **`knowledge`** -- persistent facts, preferences, errors, skills with FTS5 index, confidence scoring, context scoping, entity linking, temporal fields (`due_at`, `reminded_at`). v2 adds `embedding BLOB` (768-dim float32 vector) and `superseded_by TEXT` (fact lineage — ID of newer item that replaced this one).
@@ -596,6 +602,7 @@ def store(
     context: str = "global",    # Context scope
     sensitive: bool = False,    # Exclude from system prompt if True
     entity: str = None,         # Entity reference (e.g., 'person:sarah_chen')
+    allow_privileged: bool = False,  # Opt in to system/profile/permission categories
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
 
@@ -620,6 +627,7 @@ def search(
     top_k: int = 5,                 # Max results
     time_from: str = None,          # ISO 8601 lower bound on created_at
     time_to: str = None,            # ISO 8601 upper bound on created_at
+    count_as_use: bool = True,      # Bump use_count on returned items
 ) -> List[Dict]:
 ```
 
@@ -638,6 +646,7 @@ def get_by_category(
     self,
     category: str,
     context: str = None,
+    domain: str | None = None,
     limit: int = 10,
 ) -> List[Dict]:
 ```
@@ -665,6 +674,7 @@ def get_upcoming(
     include_overdue: bool = True,
     context: str = None,
     limit: int = 10,
+    include_sensitive: bool = False,
 ) -> List[Dict]:
 ```
 
@@ -765,7 +775,8 @@ Delete all knowledge entries with a given source (e.g., `"discovery"`). Returns 
 
 ```python
 def store_turn(self, session_id: str, role: str, content: str,
-               context: str = "global") -> None
+               context: str = "global", *, preserve_full: bool = False,
+               erase_count: int | None = None) -> None
 
 def get_history(self, session_id: str = None, context: str = None,
                 limit: int = 20) -> List[Dict]
@@ -783,7 +794,8 @@ def get_recent_conversations(self, days: int = 7, context: str = None,
 def log_tool_call(self, session_id: str, tool_name: str,
                   args: dict, result_summary: str,
                   success: bool, error: str = None,
-                  duration_ms: int = None) -> None
+                  duration_ms: int = None, executed: bool = True,
+                  erase_count: int | None = None) -> None
 
 def get_tool_errors(self, tool_name: str = None,
                     limit: int = 10) -> List[Dict]
@@ -800,14 +812,16 @@ Aggregate queries for the Memory Dashboard UI:
 def get_stats(self) -> Dict
     # Returns counts by category, context, entity, conversations, tools, temporal
 
-def get_all_knowledge(self, category=None, context=None, entity=None,
+def get_all_knowledge(self, category=None,  # str or list of str
+                      context=None, entity=None,
                       sensitive=None, search=None, sort_by="updated_at",
                       order="desc", offset=0, limit=50,
-                      include_superseded=False) -> Dict
+                      include_superseded=False, time_from=None,
+                      time_to=None, about_user=False) -> Dict
     # Returns: {"items": [...], "total": 142, "offset": 0, "limit": 50}
     # When include_superseded=False (default), filters on superseded_by IS NULL
 
-def get_tool_summary(self) -> List[Dict]
+def get_tool_summary(self, limit: int = 200) -> List[Dict]
     # Per-tool stats: total_calls, success_rate, avg_duration_ms, last_error
 
 def get_activity_timeline(self, days: int = 30) -> List[Dict]
@@ -849,6 +863,7 @@ def get_items_with_embeddings(
     top_k: int = 100,
     time_from: str = None,          # ISO 8601 lower bound on created_at
     time_to: str = None,            # ISO 8601 upper bound on created_at
+    ids: Sequence[str] | None = None,  # Exactly these items (top_k ignored)
 ) -> List[Dict]
     # Returns knowledge items that have embeddings (embedding IS NOT NULL,
     # superseded_by IS NULL). Includes the embedding BLOB in each dict.
@@ -940,6 +955,18 @@ for source_name, items in results.items():
 | `scan_browser_bookmarks()` | Chrome/Edge/Chromium/Firefox bookmark files, every profile (incl. Snap and Flatpak installs on Linux); Safari on macOS | Categorized sites and interests |
 | `scan_browser_history(days)` | Browser history DBs, every profile (URLs only, no page content); Safari on macOS | Top domains (all flagged sensitive) |
 | `scan_email_accounts()` | Windows credential store; macOS Keychain attributes + Apple Mail; Thunderbird everywhere; Evolution on Linux -- addresses only, never passwords | Email addresses (all flagged sensitive) |
+| `scan_git_identity()` | `~/.gitconfig` | Name, email, employer |
+| `scan_shell_config()` | Shell config files | Tools, aliases, habits |
+| `scan_project_manifests()` | Project manifest files | What the user builds |
+| `scan_ssh_config()` | `~/.ssh/config` | Servers and work context |
+| `scan_home_structure()` | Top-level home directory names | Context from folder layout |
+| `scan_personal_files()` | File metadata only (name, path, size, date, extension) | Configs, documents, creative work, data |
+| `scan_windows_userassist()` | Windows UserAssist registry | Frequency of apps actually launched |
+| `scan_recent_file_types()` | Recent-files lists on each platform | Recently opened file types |
+| `scan_gaming_and_media()` | Steam, Epic, Xbox libraries, local media | Gaming and media habits |
+| `scan_macos_app_usage()` | macOS Application Support directories | Frequently used apps |
+
+`scan_all(sources=None, paths=None, history_days=30)` runs the sources named in `sources` (default: all). `paths` overrides the scan paths for `file_system` and `git_repos`; `history_days` sets how much browser history to read.
 
 <Note>
 Discovery never reports an unsupported OS as "nothing found". Every source run
@@ -988,13 +1015,12 @@ class RememberBot(MemoryMixin, Agent):
 
     def __init__(self):
         self.init_memory(context="global")
-        super().__init__(
-            name="RememberBot",
-            system_prompt="You are a helpful assistant with persistent memory.",
-        )
+        super().__init__()
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant with persistent memory."
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 
 
@@ -1011,10 +1037,12 @@ result = agent.process_query("My name is Alex and I prefer concise answers")
 class WorkPersonalAgent(MemoryMixin, Agent):
     def __init__(self, context="work"):
         self.init_memory(context=context)
-        super().__init__(name="DualContext")
+        super().__init__()
+
+    def _get_system_prompt(self) -> str:
+        return "You are a helpful assistant with work and personal memory."
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 
 
@@ -1075,10 +1103,12 @@ class TestAgent(MemoryMixin, Agent):
             db_path=Path("./test_memory.db"),
             context="testing",
         )
-        super().__init__(name="TestAgent")
+        super().__init__()
+
+    def _get_system_prompt(self) -> str:
+        return "You are a test assistant with persistent memory."
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_memory_tools()
 ```
 
@@ -1098,7 +1128,7 @@ These 6 tools are registered by `register_memory_tools()` and exposed to the LLM
   </Card>
 
   <Card title="update_memory" icon="pen">
-    Modify an existing entry by ID. Only non-empty fields change. Use `reminded_at="now"` after mentioning time-sensitive items.
+    Modify an existing entry by ID. Only non-empty fields change. `reminded_at` is maintained by the agent loop; do not set it.
   </Card>
 
   <Card title="forget" icon="trash">
@@ -1141,10 +1171,10 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 
 | Method | Description |
 |--------|-------------|
-| `init_memory(db_path, context)` | Initialize memory subsystem (v2: includes embedding validation, FAISS rebuild, reconciliation, consolidation) |
+| `init_memory(db_path, context, embedding_model, incognito, session_id)` | Initialize memory subsystem (v2: includes embedding validation, FAISS rebuild, reconciliation, consolidation) |
 | `get_memory_system_prompt()` | Stable frozen prefix for system prompt (includes Skills section) |
 | `get_memory_dynamic_context()` | Per-turn time + upcoming items |
-| `register_memory_tools()` | Register 5 LLM-facing tools |
+| `register_memory_tools()` | Register 6 LLM-facing tools |
 | `run_bootstrap_conversation(prompt_fn, output_fn)` | Adaptive day-zero onboarding; stores approved answers as `source="user"` |
 | `set_memory_context(context)` | Switch active context |
 | `reset_memory_session()` | New session ID + confidence decay |
@@ -1156,6 +1186,8 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `_extract_via_llm(user_input, assistant_response, existing_items, tool_record, user_forgot)` | Mem0-style extraction: ADD/UPDATE/DELETE/NOOP |
 | `consolidate_old_sessions(max_sessions)` | Distill old sessions to durable knowledge |
 | `reconcile_memory(max_pairs)` | Detect and resolve contradictory/reinforcing facts |
+| `start_skill_synthesis(...)` | Start skill synthesis on a background thread (`procedural_memory.py`) |
+| `wait_for_skill_synthesis(timeout)` | Join the background synthesis pass; returns whether it finished |
 
 ### MemoryStore Methods
 
@@ -1170,6 +1202,15 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `delete(knowledge_id)` | Delete entry |
 | `forget(knowledge_id)` | Delete an entry the user asked to forget, and record that they did |
 | `get_forgotten(said_before)` / `is_forgotten(content, said_before)` | What was forgotten, and whether content repeats it |
+| `forget_with_copies(knowledge_id, ...)` / `copies_of(knowledge_id, contexts)` | Forget an entry together with other current rows that store the same fact / list those rows |
+| `mentions_forgotten(text, said_before)` | Whether text mentions something that was forgotten |
+| `is_current(...)` / `changed_since(content, since, context)` | Whether a memory is still current / whether a newer one replaced it after `since` |
+| `get_item(knowledge_id)` / `count_use(items)` | Fetch one entry / bump use counts on returned items |
+| `seed_bulk(items)` | Bulk-insert rows without dedup (eval helper for seeding a known memory state) |
+| `clear_all()` / `delete_session(session_id)` | Permanently delete all knowledge, tool history and conversations / one session's data |
+| `erase_count()` / `erased_since(erase_count)` | Counter of erasures, and whether any happened since a stored count |
+| `record_skill_outcome(skill_ids, success, ...)` / `disable_skill(skill_id)` | Record a procedure's outcome / disable it |
+| `reset_synthesis_progress()` | Re-open history that skill synthesis already consumed |
 | `replace_by_source(source, items)` | Replace every row from a source in one transaction |
 | `apply_confidence_decay(...)` | Decay unused knowledge |
 | `update_confidence(knowledge_id, delta)` | Adjust confidence by delta, clamped to [0.0, 1.0] |
@@ -1192,7 +1233,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_all_knowledge(...)` | Paginated knowledge browser (v2: adds `include_superseded` parameter) |
 | `get_entities(limit)` | List all unique entities with counts |
 | `get_contexts(limit)` | List all contexts with counts |
-| `get_tool_summary()` | Per-tool stats for dashboard |
+| `get_tool_summary(limit)` | Per-tool stats for dashboard |
 | `get_tool_history(tool_name, limit)` | Recent call history for one tool |
 | `get_sessions(limit)` | List conversation sessions with previews |
 | `get_activity_timeline(days)` | Daily activity counts |

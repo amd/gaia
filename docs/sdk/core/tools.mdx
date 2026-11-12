@@ -64,7 +64,7 @@ def get_weather(city: str, units: str = "fahrenheit") -> dict:
 ```
 
 The decorator registers an entry in the `_TOOL_REGISTRY` dictionary. Today the
-registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
+registry entry looks like this (source: `src/gaia/agents/base/tools.py`, the `destination[tool_name] = {...}` block in `tool()`):
 
 ```python
 {
@@ -80,9 +80,12 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "atomic": False,
     "display_label": None,  # optional user-facing label for UI progress strips
     "timeout": None,        # optional per-tool timeout (seconds); None = global default
+    "timeout_arg": None,    # optional name of the parameter that sets the call's timeout
     "preflight": None,      # optional check run before the confirmation prompt
 }
 ```
+
+A parameter entry can also carry `"items"` (the element type of an array) and `"enum"` (the values of a `Literal[...]`).
 
 <Note>
 **What's actually captured:** The function name, the docstring **without its
@@ -105,7 +108,7 @@ billed on each step of each turn. Two caps, defined in
 
 | Field | Budget |
 |-------|--------|
-| `description` (the docstring, minus `Args:`) | 400 characters |
+| `description` (the docstring, minus `Args:`) | 500 characters (`run_shell_command` 600, `remember_skill_lesson` 450) |
 | Each parameter description (one `Args:` entry) | 160 characters |
 
 `python util/lint.py --tool-descriptions` fails the build when a tool exceeds
@@ -685,21 +688,18 @@ def search_logs(query: str) -> dict:
 
 **Cause:** Tool is defined but not registered with the agent.
 
-**Solution:** Make sure tool is inside `_register_tools()`:
+**Solution:** Define the tool inside `_register_tools()`:
 
 ```python
 class MyAgent(Agent):
     def _register_tools(self):
-        # ✅ Tool is registered
+        # ✅ Belongs to this agent and can use self
         @tool
         def my_tool():
             ...
-
-# ❌ Tool outside agent - won't be registered!
-@tool
-def orphan_tool():
-    ...
 ```
+
+A module-level `@tool` registers globally at import and is visible to every agent that reads the global registry. Define tools inside `_register_tools()` when they need `self` or should belong to one agent.
 </Accordion>
 
 <Accordion title="Pitfall 5: Tool with side effects runs unexpectedly">
@@ -947,6 +947,7 @@ def tool(func=None, *, atomic: bool = False, display_label: str | None = None,
             "atomic": atomic,
             "display_label": display_label,
             "timeout": timeout,
+            "timeout_arg": timeout_arg,
             "preflight": preflight,
         }
         return f
@@ -968,8 +969,8 @@ Notable implementation details:
   `Dict[str, Any]` → `object`, and `Optional[X]` / `X | None` resolves to `X`'s
   type. An unannotated parameter (or a union of two real types) stays
   `"unknown"`.
-- `@tool(atomic=True)` marks a tool as non-decomposable so the planner will not
-  try to split it further.
+- `@tool(atomic=True)` is stored on the registry entry as metadata; the agent
+  loop does not act on it.
 - `@tool(display_label=...)` sets a user-facing label for UI progress strips, and
   `@tool(timeout=...)` overrides the global per-tool execution limit (seconds).
   Both default to `None` and are stored on the registry entry.
@@ -1061,3 +1062,17 @@ name of the mixin that defines the tool (`rag`, `file_io`, `shell`, ...),
 (`<skill>/<tool>`), or `agent` for one the agent class defines itself. The
 Agent UI's Agent info panel is built from it
 (`GET /api/sessions/{session_id}/capabilities`).
+
+## Registry helpers
+
+`gaia.agents.base.tools` exposes accessors so callers need not import the private `_TOOL_REGISTRY` dict:
+
+| Function | Returns |
+|----------|---------|
+| `get_tool_metadata(tool_name)` | The full registry entry, or `None` if not found. The public accessor for the registry. |
+| `get_tool_display_name(tool_name)` | The display name; MCP tools keep their original name and server, e.g. `read_file (myserver)`. |
+| `get_tool_display_label(tool_name)` | The tool's `display_label` for UI progress strips, or `None`. |
+| `bare_tool_name(tool_name)` | The name without its `<skill-name>/` namespace; core and MCP names come back unchanged. |
+| `tool_category(tool_name, entry)` | Where a tool comes from: `"mcp"`, `"skill"`, a `KNOWN_TOOLS` mixin name, else `"agent"`. |
+| `describe_registry(registry)` | `{"name", "description", "category"}` for every tool in a registry. |
+| `tool_build()` | Context manager that scopes one agent's registration, so a name collision inside it raises. |

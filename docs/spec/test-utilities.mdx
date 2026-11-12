@@ -77,314 +77,142 @@ Test Utilities provide fixtures, mocks, and helper functions for testing GAIA ag
 ### File Locations
 
 ```
-src/gaia/testing/__init__.py
-src/gaia/testing/fixtures.py
-src/gaia/testing/assertions.py
+src/gaia/testing/__init__.py     # re-exports everything below
+src/gaia/testing/mocks.py        # MockLLMProvider, MockVLMClient, MockToolExecutor
+src/gaia/testing/fixtures.py     # create_test_agent, AgentTestContext, temp_directory, temp_file
+src/gaia/testing/assertions.py   # assert_* helpers
 ```
 
+Import everything from `gaia.testing`; nothing is exported from `src/gaia/__init__.py`.
+
 ### Public Interface
+
+#### mocks.py
+
+```python
+class MockLLMProvider:
+    def __init__(
+        self,
+        responses: Optional[List[str]] = None,    # returned in sequence, cycling
+        tool_responses: Optional[Dict[str, Any]] = None,  # tool name -> mock result
+        default_response: str = "Mock LLM response",  # used when responses is empty
+    ): ...
+
+    def generate(self, prompt, system_prompt=None, temperature=0.7, max_tokens=None, **kwargs) -> str: ...
+    def chat(self, messages, **kwargs) -> str: ...   # records the last user message as the prompt
+    def stream(self, prompt, **kwargs) -> Iterator[str]: ...  # yields the whole reply as one chunk
+    def complete(self, prompt, **kwargs) -> str: ...  # alias for generate()
+    def get_tool_response(self, tool_name) -> Any: ...  # tool_responses entry, else {"status": "success"}
+
+    call_history: List[Dict[str, Any]]
+    was_called: bool       # property
+    call_count: int        # property
+    last_prompt: Optional[str]  # property
+
+    def reset(self) -> None: ...                       # clear history and response index
+    def set_responses(self, responses: List[str]) -> None: ...
+
+class MockVLMClient:
+    def __init__(
+        self,
+        extracted_text: str = "Mock extracted text",
+        extraction_results: Optional[List[str]] = None,  # returned in sequence, cycling
+        is_available: bool = True,                       # check_availability() result
+    ): ...
+
+    def check_availability(self) -> bool: ...
+    def extract_from_image(self, image_bytes, prompt=None, **kwargs) -> str: ...
+    def extract_from_file(self, file_path, prompt=None, **kwargs) -> str: ...
+    def describe_image(self, image_bytes, prompt=None, **kwargs) -> str: ...
+
+    call_history: List[Dict[str, Any]]
+    was_called: bool       # property
+    call_count: int        # property
+    last_prompt: Optional[str]  # property
+
+    def reset(self) -> None: ...
+    def set_extracted_text(self, text: str) -> None: ...
+
+class MockToolExecutor:
+    def __init__(
+        self,
+        results: Optional[Dict[str, Any]] = None,         # tool name -> result
+        default_result: Optional[Dict[str, Any]] = None,  # default {"status": "success"}
+    ): ...
+
+    def execute(self, tool_name: str, args: Dict[str, Any]) -> Any: ...
+    def was_tool_called(self, tool_name: str) -> bool: ...
+    def get_tool_calls(self, tool_name: str) -> List[Dict[str, Any]]: ...
+    def get_tool_args(self, tool_name: str, call_index: int = 0) -> Optional[Dict]: ...
+
+    call_history: List[Dict[str, Any]]
+    tool_names_called: List[str]   # property
+
+    def reset(self) -> None: ...
+```
 
 #### fixtures.py
 
 ```python
-from typing import List, Dict, Any, Optional, Callable
-from contextlib import contextmanager
-import tempfile
-from pathlib import Path
-
-class MockLLMProvider:
-    """
-    Mock LLM provider for testing agents.
-
-    Returns pre-configured responses instead of calling real LLM.
-    Tracks all calls for test assertions.
-
-    Usage:
-        mock_llm = MockLLMProvider(
-            responses=["First response", "Second response"]
-        )
-
-        # Inject into agent
-        agent = MyAgent()
-        agent.llm_provider = mock_llm
-
-        # Test
-        result = agent.process_query("Test")
-
-        # Verify
-        assert len(mock_llm.call_history) == 1
-    """
-
-    def __init__(self, responses: Optional[List[str]] = None):
-        """
-        Initialize mock LLM provider.
-
-        Args:
-            responses: List of responses to return in sequence
-                      (cycles if more calls than responses)
-        """
-        self.responses = responses or ["Mock response"]
-        self.call_history: List[Dict] = []
-        self._response_index = 0
-
-    def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Generate mock response.
-
-        Args:
-            prompt: Input prompt (recorded but not used)
-            **kwargs: Additional parameters (recorded)
-
-        Returns:
-            Next response from response list
-        """
-        self.call_history.append({
-            "prompt": prompt,
-            "kwargs": kwargs,
-            "timestamp": time.time(),
-        })
-
-        response = self.responses[self._response_index % len(self.responses)]
-        self._response_index += 1
-
-        return response
-
-    def complete(self, prompt: str, **kwargs) -> str:
-        """Alias for generate() for compatibility."""
-        return self.generate(prompt, **kwargs)
-
-    def reset(self) -> None:
-        """Reset call history and response index."""
-        self.call_history = []
-        self._response_index = 0
-
-class MockVLMClient:
-    """
-    Mock VLM client for testing image processing.
-
-    Returns pre-configured text instead of processing images.
-
-    Usage:
-        mock_vlm = MockVLMClient(
-            extracted_text='{"name": "John", "dob": "1990-01-01"}'
-        )
-
-        # Inject into agent
-        agent = MyAgent()
-        agent.vlm = mock_vlm
-
-        # Test
-        result = agent.extract_form("test.png")
-
-        # Verify
-        assert mock_vlm.was_called
-    """
-
-    def __init__(self, extracted_text: str = "Mock extracted text"):
-        """
-        Initialize mock VLM.
-
-        Args:
-            extracted_text: Text to return from extract_from_image()
-        """
-        self.extracted_text = extracted_text
-        self.call_history: List[Dict] = []
-
-    def check_availability(self) -> bool:
-        """Always return True for testing."""
-        return True
-
-    def extract_from_image(
-        self,
-        image_bytes: bytes,
-        prompt: Optional[str] = None
-    ) -> str:
-        """
-        Mock image extraction.
-
-        Args:
-            image_bytes: Image data (recorded but not processed)
-            prompt: Extraction prompt (recorded)
-
-        Returns:
-            Pre-configured extracted text
-        """
-        self.call_history.append({
-            "image_size": len(image_bytes),
-            "prompt": prompt,
-            "timestamp": time.time(),
-        })
-
-        return self.extracted_text
-
-    @property
-    def was_called(self) -> bool:
-        """Check if extract_from_image was called."""
-        return len(self.call_history) > 0
-
-    def reset(self) -> None:
-        """Reset call history."""
-        self.call_history = []
-
 def create_test_agent(
-    agent_class: Type,
+    agent_class: Type[AgentT],
     mock_responses: Optional[List[str]] = None,
-    **agent_kwargs
-):
+    mock_vlm_text: Optional[str] = None,   # attach a MockVLMClient returning this text
+    inject_mocks: bool = True,             # False: build the agent without mocks
+    **agent_kwargs,
+) -> AgentT:
+    """Create an agent with skip_lemonade=True and silent_mode=True (both overridable).
+
+    With inject_mocks=True the MockLLMProvider is stored on agent._mock_llm (and
+    on agent.chat when the agent has one); the MockVLMClient on agent._mock_vlm
+    (and agent.vlm when the agent has one).
     """
-    Create agent instance with mocked LLM for testing.
+```
 
-    Args:
-        agent_class: Agent class to instantiate
-        mock_responses: Responses for mock LLM
-        **agent_kwargs: Additional arguments for agent constructor
+`create_test_agent` replaces `agent.chat` with a `MockLLMProvider`, which has no
+`send_messages()` — the method the agent loop calls — so it builds agents for
+construction and tool tests but cannot drive `process_query()` end to end. To test
+the loop, patch `gaia.agents.base.agent.AgentSDK` as shown in the
+[SDK testing guide](/sdk/testing).
 
-    Returns:
-        Agent instance with mocked LLM
+```python
+class AgentTestContext:
+    """Context manager: temp directory, mock providers, agent, and cleanup.
 
-    Usage:
-        agent = create_test_agent(
-            MyAgent,
-            mock_responses=["I'll use the search tool"],
-            custom_param="value"
-        )
-
-        result = agent.process_query("Test")
-        # Uses mock LLM instead of real one
+    Attributes: agent, mock_llm, mock_vlm, temp_dir
+    Methods: create_file(...), create_directory(name),
+             set_llm_responses(responses), set_vlm_text(text)
     """
-    # Create mock LLM
-    mock_llm = MockLLMProvider(responses=mock_responses)
-
-    # Create agent with silent mode
-    agent = agent_class(silent_mode=True, **agent_kwargs)
-
-    # Inject mock LLM
-    # Note: This requires agent to have llm_provider attribute
-    # or similar. Adjust based on actual Agent implementation.
-    if hasattr(agent, 'chat'):
-        agent.chat = mock_llm
-    elif hasattr(agent, 'llm_provider'):
-        agent.llm_provider = mock_llm
-
-    return agent
-
-@contextmanager
-def temp_db(schema: Optional[str] = None):
-    """
-    Create a temporary SQLite database for testing.
-
-    Auto-deletes after the context exits.
-
-    Args:
-        schema: Optional SQL to execute on the database (CREATE TABLE, etc.)
-
-    Yields:
-        str: Path to the temporary database file
-
-    Usage:
-        with temp_db("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)") as db_path:
-            agent = MyAgent(skip_lemonade=True)
-            agent.init_db(db_path)
-            agent.insert("users", {"name": "Test"})
-
-        # Database automatically deleted
-    """
-    ...  # See src/gaia/database/testing.py
+    def __init__(self, agent_class, mock_responses=None, mock_vlm_text=None, **agent_kwargs): ...
 
 @contextmanager
 def temp_directory():
-    """
-    Create temporary directory for testing.
+    """Yield a Path to a temporary directory, deleted on exit."""
 
-    Auto-deletes after test completes.
+@contextmanager
+def temp_file(content: str = "", suffix: str = ".txt", prefix: str = "test_"):
+    """Yield a Path to a temporary file with the given content, deleted on exit."""
 
-    Yields:
-        Path to temporary directory
-
-    Usage:
-        with temp_directory() as tmp_dir:
-            # Create test files
-            (tmp_dir / "test.txt").write_text("content")
-
-            # Test agent
-            agent = MyAgent(data_dir=str(tmp_dir))
-
-        # Directory automatically deleted
-    """
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        yield Path(tmp_dir)
+@contextmanager
+def temp_db(schema: Optional[str] = None):
+    """Yield the path to a temporary SQLite database (defined in src/gaia/database/testing.py)."""
 ```
 
 #### assertions.py
 
-```python
-from typing import Any, Dict
-import logging
+| Function | Checks |
+|----------|--------|
+| `assert_llm_called(mock_llm, times=None, min_times=None, max_times=None)` | The mock LLM was called (exactly `times`, or within the bounds) |
+| `assert_llm_prompt_contains(mock_llm, text, call_index=-1)` | A recorded LLM prompt contains `text` |
+| `assert_vlm_called(mock_vlm, times=None)` | The mock VLM was called |
+| `assert_tool_called(executor, tool_name, times=None)` | A `MockToolExecutor` ran the tool (exactly `times` if given) |
+| `assert_tool_args(executor, tool_name, expected_args, call_index=0)` | A tool call received the expected arguments |
+| `assert_result_has_keys(result, keys)` | A result dict has every key in `keys` |
+| `assert_result_value(result, key, expected)` | `result[key] == expected` |
+| `assert_agent_completed(result, has_answer=True)` | A `process_query()` result is not an error and has an `answer`, `response` or `result` key |
+| `assert_no_errors(result)` | A result dict carries no error indicators |
 
-logger = logging.getLogger(__name__)
-
-def assert_tool_called(agent, tool_name: str, times: int = 1) -> None:
-    """
-    Assert that a tool was called specific number of times.
-
-    Args:
-        agent: Agent instance
-        tool_name: Name of the tool
-        times: Expected call count
-
-    Raises:
-        AssertionError: If tool was not called expected times
-
-    Usage:
-        agent = create_test_agent(MyAgent)
-        agent.process_query("Search for data")
-
-        assert_tool_called(agent, "search_data", times=1)
-    """
-    # Implementation depends on how agents track tool calls
-    # This is a placeholder showing the intended API
-    pass
-
-def assert_tool_result(result: Dict, expected_keys: List[str]) -> None:
-    """
-    Assert that tool result has expected structure.
-
-    Args:
-        result: Tool result dictionary
-        expected_keys: Keys that must be present
-
-    Raises:
-        AssertionError: If keys missing or result invalid
-
-    Usage:
-        # Call the registered tool function directly — Agent has no public
-        # `execute_tool()`; see gaia.agents.base.tools._TOOL_REGISTRY
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-        result = _TOOL_REGISTRY["search"]["function"](query="test")
-        assert_tool_result(result, ["results", "count"])
-    """
-    assert isinstance(result, dict), f"Result must be dict, got {type(result)}"
-
-    for key in expected_keys:
-        assert key in result, f"Missing expected key: '{key}'"
-
-def assert_agent_completed(result: Dict) -> None:
-    """
-    Assert that agent completed successfully.
-
-    Args:
-        result: Agent process_query result
-
-    Raises:
-        AssertionError: If agent did not complete
-
-    Usage:
-        result = agent.process_query("Test")
-        assert_agent_completed(result)
-    """
-    assert isinstance(result, dict), "Agent should return dict"
-    # Add more assertions based on Agent result structure
-```
+`process_query()` returns its answer under `"result"`, not `"answer"`.
 
 ---
 
@@ -486,9 +314,6 @@ def test_create_test_agent():
     """Test create_test_agent helper."""
     class TestAgent(Agent):
         def _get_system_prompt(self): return "Test"
-        def _create_console(self):
-            from gaia.agents.base.console import SilentConsole
-            return SilentConsole()
         def _register_tools(self): pass
 
     agent = create_test_agent(
@@ -524,9 +349,13 @@ def test_agent_processes_query():
 
     result = agent.process_query("Find test data")
 
-    assert "answer" in result
+    assert "result" in result
     # LLM mock was used instead of real API
 ```
+
+<Note>
+`MockLLMProvider` has no `send_messages()`, which the agent loop calls, so this flow does not drive the real loop. Use it to construct agents and test tools; to test `process_query()` patch `gaia.agents.base.agent.AgentSDK` (see [SDK testing](/sdk/testing)).
+</Note>
 
 ### Example 2: Testing Database Agent
 
@@ -657,40 +486,6 @@ def tmp_dir():
 
 ---
 
-## Documentation Updates Required
-
-### docs/sdk/core/agent-system.mdx
-
-Add new section:
-
-```markdown
-## 11. Testing
-
-### Testing Your Agents
-
-**Import:** `from gaia.testing import MockLLMProvider, temp_db, create_test_agent`
-
-**Purpose:** Test agents without real LLMs, databases, or network calls.
-
-#### Mock LLM Provider
-
-```python
-from gaia.testing import create_test_agent
-
-agent = create_test_agent(
-    MyAgent,
-    mock_responses=["I'll search for that", "Here are the results"]
-)
-
-result = agent.process_query("Find data")
-# Uses mocked responses instead of real LLM
-```
-
-[Full documentation with more examples]
-```
-
----
-
 ## Dependencies
 
 ```toml
@@ -704,54 +499,10 @@ dev = [
 
 ---
 
-## Implementation Checklist
+## Status
 
-### Step 1: Create Files
-- [ ] Create `src/gaia/testing/` directory
-- [ ] Create `src/gaia/testing/__init__.py`
-- [ ] Create `src/gaia/testing/fixtures.py`
-- [ ] Create `src/gaia/testing/assertions.py`
-
-### Step 2: Implement Mocks
-- [ ] `MockLLMProvider` class
-- [ ] `MockVLMClient` class
-- [ ] Response cycling logic
-- [ ] Call history tracking
-
-### Step 3: Implement Fixtures
-- [ ] `create_test_agent()` function
-- [ ] `temp_db()` context manager
-- [ ] `temp_directory()` context manager
-- [ ] Schema loading for temp DB
-
-### Step 4: Implement Assertions
-- [ ] `assert_tool_called()`
-- [ ] `assert_tool_result()`
-- [ ] `assert_agent_completed()`
-
-### Step 5: Write Tests
-- [ ] Create `tests/unit/test_testing_utilities.py`
-- [ ] Test MockLLMProvider
-- [ ] Test MockVLMClient
-- [ ] Test temp_db
-- [ ] Test temp_directory
-- [ ] Test create_test_agent
-
-### Step 6: Export
-- [ ] Export from `src/gaia/testing/__init__.py`
-- [ ] Export from `src/gaia/__init__.py`
-- [ ] Add to `__all__`
-
-### Step 7: Document
-- [ ] Add section to docs/sdk/core/agent-system.mdx
-- [ ] Add usage examples
-- [ ] Update agent testing guide
-
-### Step 8: Validate
-- [ ] Can import: `from gaia.testing import MockLLMProvider`
-- [ ] Example tests work
-- [ ] All tests pass
-- [ ] External agents can use it
+Shipped. The mocks, fixtures and assertions live in `src/gaia/testing/` and are
+imported from `gaia.testing`. Tests: `tests/unit/test_testing_utilities.py`.
 
 ---
 

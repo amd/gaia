@@ -65,19 +65,20 @@ from gaia.chat.sdk import AgentResponse
 def test_with_mocked_llm():
     """Test agent with a mocked AgentSDK.
 
-    The AgentSDK exposes `send()` (and `send_stream()`), not `.complete()`.
-    Return an AgentResponse whose `text` contains the JSON the planner
-    expects — the agent will parse it and invoke the referenced tool.
+    The agent imports `AgentSDK` into `gaia.agents.base.agent` and calls
+    `send_messages()` (or `send_messages_stream()` when streaming), so patch
+    it there. Return an AgentResponse whose `text` contains the JSON the
+    planner expects — the agent will parse it and invoke the referenced tool.
     """
-    with patch("gaia.chat.sdk.AgentSDK") as mock_chat:
-        mock_chat.return_value.send.return_value = AgentResponse(
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_chat:
+        mock_chat.return_value.send_messages.return_value = AgentResponse(
             text='{"tool": "my_tool", "tool_args": {"param": "value"}}',
         )
 
-        agent = MyAgent()
+        agent = MyAgent(skip_lemonade=True)
         agent.process_query("Test")
 
-        assert mock_chat.return_value.send.called
+        assert mock_chat.return_value.send_messages.called
 ```
 
 <Tip>

@@ -27,7 +27,7 @@ TalkSDK provides a unified interface for integrating GAIA's voice and text chat 
 - Speech-to-text (STT) input via Whisper
 - RAG (Retrieval-Augmented Generation) support
 - Multiple modes: text-only, voice-only, voice-and-text
-- Support for local models and cloud APIs (Claude, ChatGPT)
+- Support for local models and the Claude API
 
 ---
 
@@ -62,7 +62,7 @@ TalkSDK provides a unified interface for integrating GAIA's voice and text chat 
 
 5. **Configuration**
    - Dynamic configuration updates
-   - Model selection (local/Claude/ChatGPT)
+   - Model selection (local or Claude)
    - Audio device configuration
    - TTS enable/disable
    - System prompt customization
@@ -581,6 +581,8 @@ await talk.voice_chat()  # Starts interactive session
 
 ### Unit Tests
 
+Real coverage lives in `tests/unit/test_talk_config.py`, `test_talk_playback_mute.py`, `test_talk_rag_startup.py` and `test_talk_voice_commands.py`. A sketch:
+
 ```python
 import pytest
 from gaia.talk.sdk import TalkSDK, TalkConfig, SimpleTalk, TalkMode
@@ -727,30 +729,6 @@ def enable_rag(self, documents: Optional[list] = None):
     except Exception as e:
         self.log.error(f"Failed to enable RAG: {e}")
         return False
-```
-
----
-
-## Documentation Updates Required
-
-### docs/guides/talk.mdx
-
-Add comprehensive TalkSDK documentation:
-
-```markdown
-### TalkSDK
-
-**Import:** `from gaia.talk.sdk import TalkSDK, TalkConfig`
-
-**Purpose:** Unified voice and text chat interface for applications.
-
-**Key Features:**
-- Text chat with conversation history
-- Voice chat with TTS/STT
-- RAG support for document Q&A
-- Simple and full-featured APIs
-
-[Full documentation with examples]
 ```
 
 ---

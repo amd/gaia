@@ -9,7 +9,7 @@ questions based on indexed documents. Perfect for private, HIPAA-compliant
 document search with 100% local execution.
 
 Requirements:
-- Python 3.12+
+- Python 3.10+
 - Lemonade server running for LLM reasoning
 - Documents to index (PDF, TXT, MD, etc.)
 - GAIA installed with RAG extras: `uv pip install -e ".[rag]"`
@@ -63,7 +63,7 @@ class DocAgent(Agent):
         # Initialize the shared RAG SDK with the same model so that both the
         # agent's reasoning and the RAG SDK's internal answer-synthesis call
         # use the same loaded Lemonade model.  Without this the RAG path
-        # silently tries to load the framework default (Gemma-4-E4B-it-GGUF, or Qwen3.6-35B-A3B-GGUF where it fits).
+        # loads its own default (Gemma-4-E4B-it-GGUF).
         self.rag = RAGSDK(
             RAGConfig(
                 model=kwargs["model_id"],

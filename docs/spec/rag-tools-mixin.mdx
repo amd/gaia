@@ -29,7 +29,7 @@ RAGToolsMixin provides comprehensive document retrieval and query capabilities f
 1. Semantic embeddings search with multiple query reformulations
 2. Keyword boost for exact term matches
 3. Hash-based deduplication
-4. Adaptive max chunks (5-25) based on document size
+4. Adaptive max chunks (5-25) based on document size: 5 by default, 10 above 50 chunks, 20 above 100, 25 above 200
 5. Page number extraction with lookback for citation
 
 ---
@@ -111,7 +111,7 @@ analysis.
 3. **Text Search (search_indexed_chunks)**
    - Exact text pattern matching in RAG chunks
    - Case-insensitive search
-   - Limited to 100 matches for performance
+   - Returns at most 10 matches
 
 All three searches check each file they cover with `RAGSDK.freshness` before
 searching, so an edited document is never served from its old text. An edited
@@ -290,7 +290,7 @@ class RAGToolsMixin:
                 "pattern": str,
                 "matches": List[str],  # Chunk texts
                 "count": int,
-                "showing": int,  # May be limited to 50
+                "showing": int,  # At most 10
                 "message": str,
                 "debug_info": {...}  # If debug mode
             }
@@ -415,7 +415,7 @@ class RAGToolsMixin:
 
         Args:
             file_name: Name/path of indexed document
-            output_path: Output path (default: .gaia/{filename}.md)
+            output_path: Output path (default: <rag.config.cache_dir>/<stem>_extracted.md)
 
         Returns:
             {
@@ -479,7 +479,8 @@ class RAGToolsMixin:
 def extract_page_from_chunk(
     chunk_text: str,
     chunk_index: int = -1,
-    all_chunks: List[str] = None
+    all_chunks: List[str] = None,
+    chunk_to_file: Dict[int, str] = None
 ) -> int | None:
     """
     Extract page number from chunk text or nearby chunks.
@@ -507,10 +508,10 @@ def extract_page_from_chunk(
 ### Hybrid Search Architecture
 
 ```python
-# 1. Semantic search with multiple keys
+# 1. Semantic search with multiple keys, skipping chunks only left-out files own
 search_keys = self._generate_search_keys(query)
 for search_key in search_keys:
-    chunks, scores = self.rag._retrieve_chunks(search_key)
+    chunks, scores = _search_without(self.rag, search_key, left_out)
     all_chunks.extend(chunks)
     all_scores.extend(scores)
 
@@ -535,11 +536,17 @@ if total_chunks > 200:
     adaptive_max = min(25, self.max_chunks * 5)
 elif total_chunks > 100:
     adaptive_max = min(20, self.max_chunks * 4)
+elif total_chunks > 50:
+    adaptive_max = min(10, self.max_chunks * 2)
 else:
     adaptive_max = self.max_chunks
 ```
 
 ### Iterative Summarization
+
+`_summary_text(chat, prompt)` sends one prompt with no history and raises if the
+reply was cut off at the output-token limit, so a summary never silently stops
+short of the document.
 
 ```python
 # For documents > max_words_per_section
@@ -552,11 +559,11 @@ for page in pages:
 
 # Summarize each section
 for section_text in sections:
-    summary = self.rag.chat.send(section_prompt).text
+    summary = _summary_text(self.rag.chat, section_prompt)
     section_summaries.append(summary)
 
 # Synthesize final summary
-final_summary = self.rag.chat.send(synthesis_prompt).text
+final_summary = _summary_text(self.rag.chat, synthesis_prompt)
 ```
 
 ---
@@ -603,9 +610,10 @@ from gaia.agents.base.tools import tool
 ### Example 1: Query Documents with Debug
 
 ```python
-result = agent.query_documents(
-    "What are the contraindications?",
-    debug=True
+# Tools are registered by register_rag_tools(), so call them by name
+result = agent._execute_tool(
+    "query_documents",
+    {"query": "What are the contraindications?", "debug": True},
 )
 
 print(f"Found {result['num_chunks']} chunks")
@@ -619,10 +627,13 @@ for chunk in result['chunks']:
 ### Example 2: Summarize Large Document
 
 ```python
-result = agent.summarize_document(
-    "medical_manual.pdf",
-    summary_type="detailed",
-    max_words_per_section=20000
+result = agent._execute_tool(
+    "summarize_document",
+    {
+        "file_path": "medical_manual.pdf",
+        "summary_type": "detailed",
+        "max_words_per_section": 20000,
+    },
 )
 
 print(result['summary'])  # Structured markdown with metadata
@@ -632,9 +643,12 @@ print(f"Processed {result['sections_processed']} sections")
 ### Example 3: Targeted File Search
 
 ```python
-result = agent.query_specific_file(
-    "patient_guide.pdf",
-    "What is the recommended dosage?"
+result = agent._execute_tool(
+    "query_specific_file",
+    {
+        "file_path": "patient_guide.pdf",
+        "query": "What is the recommended dosage?",
+    },
 )
 
 print(f"Found {len(result['chunks'])} chunks in patient_guide.pdf")

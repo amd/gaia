@@ -10,7 +10,7 @@ icon: "code"
 </Note>
 
 <Info>
-Every pattern below mirrors a production agent in `src/gaia/agents/`. When in doubt, open the referenced file and read the real implementation — it is the source of truth.
+Every pattern below mirrors a shipped agent in `hub/agents/<id>/python/` or the reference package in `tests/fixtures/agents/hello-world/`. When in doubt, open the real implementation — it is the source of truth.
 </Info>
 
 ---
@@ -24,13 +24,11 @@ The shortest agent that exercises every required surface area: class attrs, syst
 # SPDX-License-Identifier: MIT
 """HelloAgent — minimal GAIA agent example."""
 
-import os
 from dataclasses import dataclass
 from typing import Optional
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.tools import tool
 
 
 @dataclass
@@ -54,8 +52,7 @@ class HelloAgent(Agent):
     def __init__(self, config: Optional[HelloAgentConfig] = None):
         config = config or HelloAgentConfig()
         super().__init__(
-            base_url=config.base_url
-            or os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1"),
+            base_url=config.base_url,  # None lets Agent resolve the Lemonade URL
             model_id=config.model_id or "Qwen3-0.6B-GGUF",
             max_steps=config.max_steps,
             streaming=config.streaming,
@@ -65,26 +62,23 @@ class HelloAgent(Agent):
             output_dir=config.output_dir,
         )
 
-    def _create_console(self) -> AgentConsole:
-        return AgentConsole()
-
     def _get_system_prompt(self) -> str:
         return "You are a friendly greeter. Use the `now` tool to tell the user the current time."
 
     def _register_tools(self) -> None:
-        _TOOL_REGISTRY.clear()
-
         @tool
         def now() -> str:
             """Return the current local time as ISO-8601."""
             from datetime import datetime
             return datetime.now().isoformat(timespec="seconds")
+
+        self._snapshot_tools()
 ```
 
 **Why every line is there:**
-- `_TOOL_REGISTRY.clear()` — resets state when the agent is re-instantiated (leaks are silent otherwise)
-- `@tool` inside `_register_tools` — the decorator needs `self` scope; module-top-level registration drops the binding
-- `os.getenv("LEMONADE_BASE_URL", ...)` — lets Docker/CI override without changing code
+- `self._snapshot_tools()` last — freezes this agent's tool set so other agents in the process don't change it
+- `@tool` inside `_register_tools` — scopes the tool to this agent and lets it close over `self`
+- `base_url=config.base_url` — `None` lets `Agent` resolve the URL from `LEMONADE_BASE_URL`, else GAIA's own server; a hard-coded URL cannot see GAIA's embedded server
 - Config dataclass separate from `__init__` — eval harness and CLI use `dataclasses.fields` to filter kwargs
 
 ---
@@ -97,7 +91,7 @@ class HelloAgent(Agent):
 from pathlib import Path
 
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.base.tools import tool
 from gaia.mcp.client.config import MCPConfig
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 from gaia.mcp.mixin import MCPClientMixin
@@ -118,15 +112,13 @@ class WeatherAgent(Agent, MCPClientMixin):
         return "You are a weather assistant. Use the MCP tools to answer."
 
     def _register_tools(self) -> None:
-        _TOOL_REGISTRY.clear()
-
         @tool
         def convert_units(value_f: float) -> float:
             """Convert Fahrenheit to Celsius."""
             return round((value_f - 32) * 5 / 9, 1)
 
-        # Load MCP tools LAST — they must survive the clear() above.
         self.load_mcp_servers_from_config()
+        self._snapshot_tools()  # last, so the MCP tools are included
 ```
 
 Companion `mcp_servers.json`:
@@ -146,7 +138,7 @@ Companion `mcp_servers.json`:
 
 ## Pattern 3: Composing tool mixins
 
-Pull in reusable capabilities instead of duplicating them. GAIA convention: **`Agent` goes first** in the base list, mixins follow. This matches `ChatAgent` and `GaiaAgent`.
+Pull in reusable capabilities instead of duplicating them. A simple convention: **`Agent` goes first** in the base list, mixins follow. (`ChatAgent` puts `MemoryMixin` ahead of `Agent`; either order works.)
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -164,10 +156,9 @@ class DocEditorAgent(Agent, RAGToolsMixin, FileIOToolsMixin):
         return "Search docs with RAG, then edit with file_io tools."
 
     def _register_tools(self) -> None:
-        from gaia.agents.base.tools import _TOOL_REGISTRY
-        _TOOL_REGISTRY.clear()
         self.register_rag_tools()
         self.register_file_io_tools()
+        self._snapshot_tools()
 ```
 
 The convention is `register_<tool_name>_tools()`. Keep it consistent if you add a new mixin so existing agents can opt in by inheritance and a single method call.
@@ -180,9 +171,6 @@ Inside `_register_tools`, the `@tool` decorator captures `self` via closure. The
 
 ```python
 def _register_tools(self) -> None:
-    from gaia.agents.base.tools import _TOOL_REGISTRY
-    _TOOL_REGISTRY.clear()
-
     @tool
     def lookup_user(user_id: str, fields: list = None) -> dict:
         """Fetch a user record from the company directory.
@@ -284,9 +272,9 @@ python -m pytest tests/test_hello_agent.py -xvs
 
 | Don't | Why |
 |-------|-----|
-| Skip `_TOOL_REGISTRY.clear()` | Tools from a previous instance leak in silently. |
-| Register `@tool` at module scope | The decorator needs `self`; top-level loses the binding. |
-| Hard-code `http://localhost:13305` | Breaks Docker/CI where Lemonade runs elsewhere. |
+| Call `_TOOL_REGISTRY.clear()` | It wipes the tools of every other live agent still reading the global registry. Register, then call `self._snapshot_tools()` last. |
+| Register `@tool` at module scope for a one-agent tool | It registers globally at import and is visible to every agent that reads the global registry, and it cannot use `self`. |
+| Hard-code `http://localhost:13305` | Misses GAIA's embedded server and breaks Docker/CI where Lemonade runs elsewhere. Pass `base_url=None`. |
 | Mix `time.sleep` into the reasoning loop | Blocks SSE streaming in the UI backend. |
 | Add a mixin without a `KNOWN_TOOLS` entry | Other agents can't compose it by name, and `util/check_agent_conventions.py` never verifies it imports. |
 | Write `.mdx` docs without updating `docs/docs.json` | Mintlify returns 404 for the page. |

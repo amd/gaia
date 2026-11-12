@@ -37,11 +37,6 @@ The package is **ESM-only** (`"type": "module"`) and needs **Node 18+** for the
 built-in `fetch`. Use `import`, not `require`; from CommonJS use
 `await import("@amd-gaia/gaia")`.
 
-> `@amd-gaia/gaia` **publishes with this release** — it is not on npm yet. Until
-> the release tag lands, `npx @amd-gaia/gaia` will not resolve. Run the agent from
-> a source checkout in the meantime (see
-> [the guide](https://amd-gaia.ai/docs/guides/gaia)).
-
 ## 2. What `npx @amd-gaia/gaia` actually does
 
 1. Resolves the host platform key (`` `${process.platform}-${process.arch}` ``).
@@ -90,9 +85,10 @@ Two things follow from that, and both bite if you assume otherwise:
 The SHA-256 check is this package's security boundary, and there is no flag,
 env var, or option that relaxes it.
 
-- Bytes are hashed **in memory and compared before anything is written** to the
+- Bytes are streamed to `<path>.download.<pid>` and hashed as they arrive; the
+  hash is **compared against the lock before the file is renamed** onto the
   cache path. A mismatch raises `IntegrityError` naming expected vs actual and
-  leaves nothing on disk.
+  deletes the temp file, leaving nothing at the cache path.
 - A **placeholder hash blocks the fetch before any network call** — a value
   that is all zeros or contains `PENDING` (case-insensitive) is treated as a
   placeholder. A published package always carries real hashes, so you only meet
@@ -540,7 +536,7 @@ data: {"type":"final","answer":"I stopped before running 'write_file' because it
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt
 nobody will ever see reads as a hang. So a one-shot integration cannot run those
-nine tools — pass a `session_id` and answer, or perform the mutation from your
+thirteen tools — pass a `session_id` and answer, or perform the mutation from your
 own code and let the agent do the reading and reasoning.
 
 ## 9. File-access scope
@@ -641,7 +637,7 @@ uncommenting two blocks; no code change.
 So today there is nothing for `GAIA_SKILL_SET` to select — leave it unset; any
 value stops the agent at startup (the sidecar exits non-zero before binding its
 port). Once a release declares sets, `GAIA_SKILL_SET` is the selection channel
-for the packaged sidecar (its CLI accepts only `--host` and `--port`), and an
+for the packaged sidecar (its HTTP CLI accepts only `--serve`, `--host` and `--port`), and an
 undeclared name stops startup naming the valid sets rather than falling back to
 a default. Beyond
 `gaia-voice`, do not design around a skill being on by default.
@@ -668,7 +664,7 @@ Two consequences an integrator needs to plan for:
   `GAIA_PROJECT_MAP_AUTO_INDEX=1` builds it in the background at task start
   instead.
 
-The sidecar's CLI accepts only `--host` and `--port`, so pointing the map at a
+The sidecar's HTTP CLI accepts only `--serve`, `--host` and `--port`, so pointing the map at a
 specific project means `GAIA_PROJECT_ROOT=/path/to/repo` in its environment, or
 `GaiaAgentConfig(project_root=...)` when embedding. A directory that is neither
 a VCS checkout nor holds a recognised manifest gets **no map** — that is the
@@ -709,10 +705,11 @@ interface.
   belongs to the TUI once exec'd, and to machine-readable JSON for `fetch` /
   `version` — never write diagnostics there.
 
-Every failure throws a typed error extending `GaiaError`, so
-`instanceof GaiaError` catches any of ours: `IntegrityError`, `PlatformError`,
-`HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `HttpError`.
-There is no silent null.
+Integrity, platform, health, version, port and probe failures throw a typed error
+extending `GaiaError` (`IntegrityError`, `PlatformError`, `HealthTimeoutError`,
+`VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`,
+`SidecarExitedError`, `HttpError`, `MalformedResponseError`); a failed download
+throws a plain `Error` naming the URL and HTTP status. There is no silent null.
 
 ## Gotchas — read before debugging
 
@@ -727,9 +724,9 @@ There is no silent null.
   never checked. Show it to the user; do not read it as an error, and do not
   strip it from the `context` you replay. A turn that was confirmed, or needed no
   check, has no such line.
-- **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
-  The nine gated tools are unreachable **over `/query`** — the agent itself can
-  run them on a transport that can prompt (SPEC §5.5).
+- **`needs_confirmation` ends the run only when nobody can answer it** (no
+  `session_id`, or `can_answer_questions: false`). With a session, answer it via
+  `/tool_decision` — see §8.
 - **A placeholder hash in `binaries.lock.json` blocks the fetch before any
   network call.** Neither a published package nor the lock on `main` carries
   one, so it means the lock was edited by hand — it is not a broken download,
@@ -774,9 +771,9 @@ npx @amd-gaia/gaia fetch            # JSON: one entry per binary with its sha256
 npx @amd-gaia/gaia serve --port 8141
 ```
 
-Against a lock that still carries `PENDING-…` hashes, `fetch` is *expected* to
-fail with a `PlatformError` before any download — that is the gate working, not a
-broken install. Only a published release has real hashes.
+A lock edited by hand to carry a `PENDING-…` hash makes `fetch` fail with a
+`PlatformError` before any download. Neither the lock on `main` nor a published
+package carries one.
 
 Then, in another terminal:
 

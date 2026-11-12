@@ -8,6 +8,10 @@ icon: "folder-tree"
 **Tracking issue:** [#1102](https://github.com/amd/gaia/issues/1102) · **Milestone:** v0.22.0 — Agent Hub Platform [OSS] · **Status:** Superseded by the agent collapse
 </Note>
 
+<Warning>
+**Historical.** Everything below the table is the original 2026 plan and no longer describes the repo. Paths such as `hub/agents/python/chat/`, `src/gaia/agents/builder/`, the `amd-gaia[agents]` extra and the `gaia-agent-chat`/`-jira`/`-code` wheels were never built. What exists today: agents live at `hub/agents/<id>/python/` (only `gaia` and `email`), the flagship `ChatAgent` is folded into `hub/agents/gaia/python/gaia_agent/chat_agent.py`, the `gaia` wheel registers `gaia = "gaia_agent:build_gaia"`, and `src/gaia/agents/` holds only the framework (`base/`, `tools/`, `registry.py`). Per-task agents became skills under `hub/skills/` (see [Skill Format](/plans/skill-format)); the registry is described in [Agent Registry](/spec/plugin-registry).
+</Warning>
+
 ## Migration status
 
 This restructure moved production agents from `src/gaia/agents/` into
@@ -19,13 +23,14 @@ surface, driven by a `SKILL.md` under `hub/skills/`.
 
 | Agent(s) | Status |
 |----------|--------|
-| `chat`, `email` | Migrated to `hub/agents/<id>/python/` — the pattern below still describes them |
-| `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, composing `chat` as its base class |
+| `email` | Migrated to `hub/agents/email/python/` |
+| `chat` | Folded into the flagship package (`gaia_agent.chat_agent`); the id `chat` aliases to `gaia` |
+| `gaia` (the flagship) | Ships as `hub/agents/gaia/python/`, with `ChatAgent` as its base class |
 | `code`, `analyst`, `browser`, `fileio`, `docqa`, `doc-search`, `summarize`, `jira`, `docker`, `blender`, `sd`, `emr`, `routing` | **Deleted.** Capability moved to flagship skills in `hub/skills/` — see [Skill Format](/plans/skill-format) |
 | `hello-world`, `word-count`, `connectors-demo` | **Deleted.** `hello-world` survives as the one reference package `gaia agent init` mirrors, at `tests/fixtures/agents/hello-world/` |
 
 The package format below (`gaia-agent.yaml`, `pyproject.toml`, entry-point
-discovery) is still how `chat`, `email`, and `gaia` ship, and still the
+discovery) is the original design for how `email` and `gaia` ship, and the
 pattern a third-party contributor follows to add a **new** agent. It is no
 longer the destination for GAIA's own per-task capabilities — those are
 skills now, not agents.

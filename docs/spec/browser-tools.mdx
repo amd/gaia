@@ -8,7 +8,7 @@ icon: "globe"
 
 > **Branch:** `feature/chat-agent-file-navigation`
 > **Date:** 2026-03-10
-> **Status:** Draft v2 — post architecture review
+> **Status:** Implemented — `BrowserToolsMixin` in `src/gaia/agents/tools/browser_tools.py`, `WebClient` in `src/gaia/web/client.py`, tests in `tests/unit/test_browser_tools.py`. The sections below keep the original design rationale; where the code differs, the code and the notes marked "Shipped" win.
 > **Owner:** GAIA Team
 
 ---
@@ -112,7 +112,7 @@ flagged rather than returned as if it were the content.
 - `text` — Strip HTML tags, return readable text with headings preserved. Uses BeautifulSoup `get_text()` with separator formatting.
 - `html` — Return raw HTML (truncated). Useful when user needs to see page structure.
 - `links` — Extract all `<a href>` links with their text. Returns formatted list.
-- `tables` — Extract HTML `<table>` elements and format as readable text tables.
+- `tables` — Extract HTML `<table>` elements and return them as JSON.
 
 **Output format (text mode):**
 ```
@@ -143,7 +143,7 @@ Search the web and return results.
 def search_web(
     query: str,
     num_results: int = 5,
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Search the web and return results with titles, URLs, and snippets.
 
     Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
@@ -159,12 +159,7 @@ def search_web(
     """
 ```
 
-**Search backend options (in priority order):**
-1. **DuckDuckGo HTML** — No API key needed, parse search results page
-2. **Google Custom Search API** — If user has configured API key
-3. **Bing Search API** — If user has configured API key
-
-Default: DuckDuckGo (free, no key required).
+**Search backend:** DuckDuckGo HTML (no API key needed), via `WebClient.search_duckduckgo`. Google and Bing backends were never built. The only other search path is the `mcp-tavily` connector (`src/gaia/web/tavily.py`), described in section 11 (DuckDuckGo search implementation).
 
 **Output format:**
 ```
@@ -215,7 +210,7 @@ def download_file(
     url: str,
     save_to: str = "~/Downloads",
     filename: str = None,
-) -> str:
+) -> Union[str, Dict[str, Any]]:
     """Download a file from a URL to the local filesystem.
 
     Downloads the file and saves it locally. Useful for getting documents,
@@ -269,7 +264,7 @@ Use read_file or index_document to process this file.
 ```
 ChatAgent
   |
-  +-- BrowserToolsMixin (NEW - 3 tools)
+  +-- BrowserToolsMixin (3 tools)
   |     +-- fetch_page()           # Read web content (text/links/tables)
   |     +-- search_web()           # Web search
   |     +-- download_file()        # Download files to local disk
@@ -302,15 +297,19 @@ class WebClient:
     """
 
     DEFAULT_TIMEOUT = 30  # seconds
-    DEFAULT_MAX_SIZE = 10 * 1024 * 1024  # 10 MB response limit
-    MIN_REQUEST_INTERVAL = 1.0  # seconds between requests (rate limit)
+    DEFAULT_MAX_RESPONSE_SIZE = 10 * 1024 * 1024   # 10 MB response limit
+    DEFAULT_MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024  # 100 MB download limit
+    MIN_REQUEST_INTERVAL = 1.0  # seconds between requests to the same domain
     DEFAULT_USER_AGENT = "GAIA-Agent/0.15 (https://github.com/amd/gaia)"
 
-    def __init__(self, timeout=None, max_size=None, user_agent=None):
+    def __init__(self, timeout=None, max_response_size=None, max_download_size=None,
+                 user_agent=None, rate_limit=None, fetch_deadline=None,
+                 download_deadline=None):
         self._timeout = timeout or self.DEFAULT_TIMEOUT
-        self._max_size = max_size or self.DEFAULT_MAX_SIZE
+        self._max_response_size = max_response_size or self.DEFAULT_MAX_RESPONSE_SIZE
+        self._max_download_size = max_download_size or self.DEFAULT_MAX_DOWNLOAD_SIZE
         self._user_agent = user_agent or self.DEFAULT_USER_AGENT
-        self._last_request_time = 0  # For rate limiting
+        # Rate limiting is tracked per domain (_domain_last_request)
         self._session = requests.Session()
         self._session.headers.update({
             "User-Agent": self._user_agent,
@@ -318,8 +317,8 @@ class WebClient:
             "Accept-Language": "en-US,en;q=0.5",
         })
 
-    def get(self, url: str, stream: bool = False) -> requests.Response:
-        """HTTP GET with rate limiting, timeout, and size checking."""
+    def get(self, url: str, **kwargs) -> requests.Response:
+        """HTTP GET with SSRF validation, rate limiting, manual redirect following."""
 
     def parse_html(self, html: str) -> BeautifulSoup:
         """Parse HTML content."""
@@ -354,15 +353,25 @@ src/gaia/agents/tools/
 
 ### 6.1 MRO Update
 
+`ChatAgent` (`hub/agents/gaia/python/gaia_agent/chat_agent.py`) is declared as:
+
 ```python
 class ChatAgent(
+    MemoryMixin,
     Agent,
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
-    BrowserToolsMixin,         # NEW
+    BrowserToolsMixin,
+    BrowserUseToolsMixin,
+    FileSearchToolsMixin,
+    FileIOToolsMixin,
+    VLMToolsMixin,
+    ScreenshotToolsMixin,
+    # ... more mixins
 ):
 ```
 
@@ -374,11 +383,10 @@ class ChatAgentConfig:
     # ... existing fields ...
 
     # Browser settings
-    enable_browser: bool = True  # Enable web browsing tools
+    enable_browser: bool = False  # True on the flagship GaiaAgent config
     browser_timeout: int = 30  # HTTP request timeout in seconds
     browser_max_download_size: int = 100 * 1024 * 1024  # 100 MB max download
-    browser_user_agent: str = "GAIA-Agent/0.15"
-    browser_rate_limit: float = 1.0  # Seconds between requests
+    browser_rate_limit: float = 1.0  # Seconds between requests per domain
 ```
 
 ### 6.3 Tool Registration
@@ -390,12 +398,14 @@ def _register_tools(self) -> None:
     self.register_shell_tools()
     self.register_filesystem_tools()
     self.register_scratchpad_tools()
-    self.register_browser_tools()  # NEW
+    self.register_browser_tools()
 ```
 
-### 6.4 Total Tool Count
+The real `_register_tools` registers each group only when its config flag is on.
 
-After adding browser tools, the ChatAgent will have:
+### 6.4 Tool Count (original design)
+
+At design time the ChatAgent had these tools. The RAG mixin has since grown to 10 tools and the shell mixin to 4, so the total is higher today:
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -407,7 +417,7 @@ After adding browser tools, the ChatAgent will have:
 | Shell | run_shell_command | 1 |
 | **Total** | | **22** |
 
-22 tools is manageable for Qwen3-Coder-30B. Tool names are intentionally distinct across categories to minimize selection confusion. Reduced from 4 to 3 browser tools by merging `extract_page_data` into `fetch_page(extract="tables")`.
+Tool names are intentionally distinct across categories to minimize selection confusion. Reduced from 4 to 3 browser tools by merging `extract_page_data` into `fetch_page(extract="tables")`.
 
 ---
 
@@ -460,7 +470,7 @@ Agent:
 User: "Scrape the pricing from these three SaaS competitors and compare"
 
 Agent:
-1. extract_page_data("https://competitor1.com/pricing")
+1. fetch_page("https://competitor1.com/pricing", extract="tables")
    → JSON table of plans
 
 2. create_table("competitor_pricing",
@@ -490,7 +500,7 @@ from urllib.parse import urlparse
 ALLOWED_SCHEMES = {"http", "https"}
 BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}  # SSH, SMTP, DB ports
 
-def _validate_url(url: str) -> str:
+def validate_url(url: str) -> str:  # WebClient.validate_url in src/gaia/web/client.py
     """Validate URL is safe to fetch. Returns normalized URL or raises ValueError.
 
     1. Parse URL and validate scheme (http/https only)
@@ -581,7 +591,7 @@ Downloaded files must pass two checks:
 | Package | Usage | Status |
 |---------|-------|--------|
 | `requests` | HTTP client | Already in GAIA deps |
-| `beautifulsoup4` | HTML parsing | Already in GAIA eval extras |
+| `beautifulsoup4` | HTML parsing | Core GAIA dependency |
 
 ### 9.2 Optional
 
@@ -595,25 +605,12 @@ Downloaded files must pass two checks:
 
 ## 10. Implementation Plan
 
-Single phase — this is a focused, self-contained feature.
+All of it shipped:
 
-- [ ] Create `src/gaia/agents/tools/browser_tools.py`:
-  - `WebClient` utility class (rate limiting, timeouts, extraction)
-  - `BrowserToolsMixin` with `register_browser_tools()` containing 4 tools
-- [ ] Update `src/gaia/agents/tools/__init__.py` to export `BrowserToolsMixin`
-- [ ] Update `hub/agents/gaia/python/gaia_agent/chat_agent.py`:
-  - Add `BrowserToolsMixin` to class MRO
-  - Add `enable_browser` + config fields to `ChatAgentConfig`
-  - Initialize `WebClient` in `__init__`
-  - Call `register_browser_tools()` in `_register_tools()`
-  - Update system prompt with browser tool guidance
-- [ ] Add unit tests: `tests/unit/test_browser_tools.py`
-  - Mock HTTP responses with `responses` library (already in dev deps)
-  - Test URL validation (SSRF prevention)
-  - Test content extraction (text, links, tables)
-  - Test rate limiting
-  - Test download with size limits
-- [ ] Format with black + isort
+- `src/gaia/agents/tools/browser_tools.py`: `BrowserToolsMixin` with `register_browser_tools()` and 3 tools.
+- `src/gaia/web/client.py`: the `WebClient` utility class (rate limiting, timeouts, extraction).
+- `hub/agents/gaia/python/gaia_agent/chat_agent.py`: `BrowserToolsMixin` in the MRO, browser fields in `ChatAgentConfig`, `register_browser_tools()` called from `_register_tools()`.
+- `tests/unit/test_browser_tools.py`: URL validation (SSRF), content extraction, rate limiting and download size limits.
 
 ---
 
@@ -622,7 +619,8 @@ Single phase — this is a focused, self-contained feature.
 Since we want no API keys required, the default search uses DuckDuckGo's HTML search:
 
 ```python
-def _search_duckduckgo(self, query: str, num_results: int = 5) -> list[dict]:
+def search_duckduckgo(self, query: str, num_results: int = 5,
+                      max_attempts: int = 3, should_stop=None) -> list:  # WebClient method
     """Search DuckDuckGo and parse results from HTML.
 
     Uses the HTML-only version (html.duckduckgo.com) which doesn't
@@ -630,9 +628,9 @@ def _search_duckduckgo(self, query: str, num_results: int = 5) -> list[dict]:
 
     Returns list of {"title": str, "url": str, "snippet": str}.
     """
-    response = self.get(
+    response = self.post(
         "https://html.duckduckgo.com/html/",
-        params={"q": query},
+        data={"q": query, "b": ""},
     )
     soup = self.parse_html(response.text)
     results = []

@@ -123,13 +123,13 @@ Local CLI help/version checks found Claude Code 2.1.271 and app-bundled Codex 0.
 | `src/gaia/version.py`, flagship `packaging/freeze.py` | Extend build-time identity into frozen harness; do not identify it by runtime cwd |
 | `src/gaia/daemon/lock.py`, `paths.py` | Reuse/extract advisory-lock and atomic-write patterns, not daemon startup |
 
-Proposed source organization: `src/gaia/engineering/` containing `models.py`, `store.py`, `evidence.py`, `repository.py`, and `handoff.py`; `src/gaia/mcp/servers/engineering_mcp.py` as a thin adapter. Add a small preview module only for functionality the native app/existing GAIA tools cannot provide reliably. Avoid separate duplicate implementations of these operations in each UI.
+Source organization: `src/gaia/engineering/` contains `cli.py`, `handoff.py`, `identity.py`, `repository.py`, `service.py` and `store.py`; `src/gaia/mcp/servers/engineering_mcp.py` is a thin adapter over `EngineeringService`. Keep these operations in one place rather than duplicating them in each UI.
 
 ## 6. Developer-mode skill and startup
 
 The skill ships at `hub/agents/gaia/python/gaia_agent/skills/gaia-harness-engineering/SKILL.md`; the host loads it only in developer mode.
 
-- Resolve explicit developer mode before the first interactive turn. Proposed flag: `--developer-mode`; existing `--dev`/`--debug` retain logging semantics.
+- Resolve explicit developer mode before the first interactive turn. The flag is `--developer-mode` (`gaia mcp engineering`, the TUI, and `GaiaAgentConfig.developer_mode`); existing `--dev`/`--debug` retain logging semantics.
 - Load the skill exactly once and keep it resident in that enabled session despite semantic skill filtering. Do not add it to unconditional `skills:` or the global default skill set.
 - Normal mode excludes its body, discovery, manual loading, skill-set overrides and restored activation. Host code enforces capability checks; a user skill or model assertion cannot enable the mode.
 - Record the bundled skill digest. Missing/invalid instructions make engineering visibly unavailable, while ordinary chat remains available. Learned overlays must not change consent or publication rules.
@@ -161,16 +161,12 @@ The native coding workflow reviews all public code, fixtures, commit history, is
 Use small versioned JSON records with atomic writes, per-job locks, expected revisions and idempotent operation IDs. SQLite, a streaming event service and a publication outbox are unnecessary for this MVP.
 
 ```text
-~/.gaia/engineering/jobs/<id>/job.json
-~/.gaia/engineering/jobs/<id>/evidence/      # approved snapshots, outside Git
-~/.gaia/engineering/jobs/<id>/revisions/    # checks, feedback, preview identities
-~/.gaia/engineering/jobs/<id>/recovery/     # preserved work/patches
+~/.gaia/engineering/jobs/<id>/job.json      # holds evidence and previews as lists
 ~/.gaia/cache/engineering/repos/gaia.git
 ~/.gaia/cache/engineering/worktrees/<id>/
-~/.gaia/cache/engineering/previews/<id>/
 ```
 
-Resolve paths through GAIA's configured storage root. IDs are generated safe segments; no model-provided absolute evidence paths. Cleanup preserves active/retained worktrees, recovery files, and published references. Corrupt records fail visibly instead of being replaced with empty jobs.
+The jobs root can be moved with `GAIA_ENGINEERING_HOME`. Evidence and preview records live inside `job.json` (`src/gaia/engineering/store.py`); there are no separate evidence, revision, recovery or preview directories. Resolve paths through GAIA's configured storage root. IDs are generated safe segments; no model-provided absolute evidence paths. Cleanup preserves active/retained worktrees, recovery files, and published references. Corrupt records fail visibly instead of being replaced with empty jobs.
 
 | Record | Required information |
 |---|---|
@@ -180,16 +176,17 @@ Resolve paths through GAIA's configured storage root. IDs are generated safe seg
 | `BuildIdentity` | Component/version, full source commit or explicit unknown, artifact identity, dirty/composite metadata, protocol |
 | `PreviewRevision` | Source/tree and build digests, target, process/control identity, state root, checks, feedback/acceptance |
 
-Proposed MCP tools:
+MCP tools (`src/gaia/mcp/servers/engineering_mcp.py`):
 
 | Tool | Behavior and boundary |
 |---|---|
-| `get_context(job_id, after_seq)` | Approved messages/feedback/metadata since cursor; same grant checks for resources and tools |
+| `connection_status()` | Verify pairing with GAIA without reading any private job |
+| `get_context(job_id, after_seq=0)` | Approved messages/feedback/metadata since cursor; same grant checks for resources and tools |
 | `get_evidence(job_id, evidence_id)` | Bounded approved trace/file content; no arbitrary filesystem read |
 | `report_diagnosis(job_id, report)` | Record reproduction/experiments and recommendation; cannot mint code-change approval |
 | `prepare_worktree(job_id, operation_id, expected_revision)` | Require recorded accepted code scope; return worktree/branch pinned to a valid base |
-| `register_preview(job_id, revision)` | Validate registered worktree/build identity and job-owned process endpoint before exposing preview controls |
-| `report_result(job_id, result)` | Store check/artifact/PR references as reported claims, not automatically verified success |
+| `register_preview(job_id, target, commit, instructions)` | Record the native app's claim about an isolated preview and how to try it; it neither launches nor validates a process |
+| `report_result(job_id, report)` | Store check/artifact/PR references as reported claims, not automatically verified success |
 
 Preview start/stop/read tools can wrap existing control helpers if required; accept only a registered target/recipe, not arbitrary privileged shell strings. No bridge tool approves its own disclosure, publishes, merges, or installs a candidate. Approval is recorded through GAIA's user decision surface; contributor actions remain in the native app.
 
@@ -217,7 +214,7 @@ class CodingAppAdapter(Protocol):
     def open(self, request: HandoffRequest) -> HandoffResult: ...
 ```
 
-This is a proposed interface, not runtime code. Internal GAIA coding in v2 can consume the same job/evidence/worktree operations through a different executor. Do not equate an opened window with a started or completed task.
+This is a proposed interface, not runtime code. What exists in `src/gaia/engineering/handoff.py` is `detect_apps()`, `connection_config(backend, python, root, client_token)` and `open_app(backend, job_id, working_directory)`. Internal GAIA coding in v2 can consume the same job/evidence/worktree operations through a different executor. Do not equate an opened window with a started or completed task.
 
 ## 9. Diagnosis, provenance and source handling
 

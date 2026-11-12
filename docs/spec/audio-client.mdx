@@ -98,7 +98,7 @@ class AudioClient:
             logging_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             use_claude: Use Claude API for LLM
             system_prompt: Default system prompt for LLM
-            model: Model ID for the local/OpenAI provider (None = provider default)
+            model: Model ID for the Lemonade provider (None = provider default)
             claude_model: Claude model ID, used when use_claude=True
             base_url: Lemonade server URL (None = LEMONADE_BASE_URL or default)
         """
@@ -264,6 +264,82 @@ class KokoroTTS:
         """
         pass
 ```
+
+---
+
+## Lemonade Speech, Transcripts and Media Helpers
+
+### LemonadeASRClient (`gaia.audio.lemonade_asr`)
+
+Speech-to-text against a running Lemonade Server.
+
+| Member | What it does |
+|--------|--------------|
+| `transcribe(wav_path, language=None, require_timestamps=True, ...)` | Transcribe a 16 kHz mono WAV file; returns a `Transcript` |
+| `available_models()` | Transcription models downloaded on this server, ready to use now |
+| `ensure_model(say=None)` | Make the transcription model servable, pulling it if it is not yet |
+
+Results are dataclasses:
+
+| Type | Fields |
+|------|--------|
+| `Word` | `word`, `start`, `end`, `probability` |
+| `Segment` | `start`, `end`, `text`, `avg_logprob`, `words`, `speaker` (set later by diarization) |
+| `LowConfidenceSpan` | `text`, `context`, `start`, `end`, `min_probability`, `words`, `segment_index` |
+| `Transcript` | `segments`, `language`, `duration`, `model`, `raw_text`, `unclear_spans`; properties `text`, `words`; method `low_confidence_spans(threshold, context_words)` |
+
+`LemonadeASRError` is raised when Lemonade cannot produce a transcript.
+`whisper_model_for(size)` in `gaia.audio.whisper_asr` maps a `--whisper-model-size` value to a Lemonade model id.
+
+### LemonadeTTSClient (`gaia.audio.lemonade_tts`)
+
+Text-to-speech against a running Lemonade Server; failures raise `LemonadeTTSError`.
+
+| Member | What it does |
+|--------|--------------|
+| `synthesize(text, voice=DEFAULT_VOICE, speed=1.0)` | Returns `(float32 samples in -1..1, sample_rate)` |
+| `synthesize_to_wav(text, output_path, voice, speed)` | Write a 16-bit mono WAV; returns its duration in seconds |
+| `synthesize_long(text, voice, speed, limit=1800)` | Synthesize long text in sentence-sized chunks and join the PCM |
+| `synthesize_to_wav_long(text, output_path, voice, speed, limit=1800)` | The same, written to one WAV |
+| `ensure_model(say=None)` / `check_model_available()` | Pull the speech model now, or check it is downloaded without pulling |
+| `voice_catalog()` (module function) | Every Kokoro voice as `id`, `name`, `accent`, `gender`, `quality` |
+| `write_wav(path, samples, rate)` (module function) | Write float samples as a 16-bit mono WAV |
+
+`KokoroTTS.preprocess_text(text)` removes asterisks and adds pause markers to improve speech flow.
+
+### AudioRecorder (`gaia.audio.audio_recorder`)
+
+Microphone capture. Methods: `start_recording(duration=None)`, `stop_recording()`,
+`pause_recording()`, `resume_recording()`, `list_audio_devices()`, `get_device_name()`.
+`is_recording` is true only while the capture thread is alive; `capture_failed` is
+true when capture stopped on a device error rather than on request.
+
+### Media decoding (`gaia.audio.media`, `gaia.audio.media_url`)
+
+| Function | What it does |
+|----------|--------------|
+| `to_wav16k_mono(src, dest=None, progress_callback=None)` | Decode any ffmpeg-readable media to a 16 kHz mono WAV |
+| `probe_duration(src)` | Duration in seconds, via ffprobe |
+| `find_ffmpeg()` | The ffmpeg path if present, else `None`; never installs anything |
+| `ensure_ffmpeg()` | An ffmpeg path, installing it via the platform package manager if needed |
+| `is_url(text)` | Whether text is a link rather than a local path |
+| `fetch_media(url, root, progress)` | Download a link's audio under `root`, or reuse an earlier download; returns `DownloadedMedia(path, url, reused)` |
+
+`MediaError` and `MediaUrlError` are raised when decoding or a fetch cannot complete.
+
+### Transcript analysis (`gaia.audio.transcript_analysis`)
+
+| Function | What it does |
+|----------|--------------|
+| `build_windows(segments, max_chars, overlap_chars, embed=None)` | Cut timed segments into overlapping windows |
+| `analyze_segments(segments, request, fields, complete, ...)` | Answer a request across a whole timed transcript; returns an `Analysis` |
+| `render_analysis(analysis, recording, source)` | The analysis as a Markdown document |
+| `to_srt(segments)` / `to_vtt(segments)` | SubRip or WebVTT subtitles for a timed transcript |
+
+### Diarization (`gaia.audio.diarize`)
+
+`SpeakerSpan(start, end, speaker)` is a stretch of audio attributed to one voice.
+`DiarizationError` is raised when diarization cannot run; its message says what to do.
 
 ---
 

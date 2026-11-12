@@ -288,9 +288,12 @@ unchecked. It appears only then; a confirmed or purely conversational turn has
 no such line. It is part of `final.answer`, so show it to the user rather than
 trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
-Every failure throws a typed error (`IntegrityError`, `PlatformError`,
-`HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
-that names what failed and what to do about it.
+Integrity, platform, health, version, port and probe failures throw a typed error
+extending `GaiaError` (`IntegrityError`, `PlatformError`, `HealthTimeoutError`,
+`VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`,
+`SidecarExitedError`, `HttpError`, `MalformedResponseError`); a failed download
+throws a plain `Error` naming the URL and HTTP status. Messages name what failed
+and what to do about it.
 
 ## Where the binaries come from
 

@@ -116,9 +116,10 @@ Without an override, each model gets its own window. GPU/CPU models default to
 keep their own default, and a registered model that declares its native maximum
 and its KV-cache cost per token is sized to this machine's memory: the largest
 8,192-token step whose KV cache fits beside the weights, the embedder (on shared
-memory) and 10% headroom, up to that maximum and never below its default. NPU
-(FLM) models are capped at 32,768 tokens with a warning; `default_device = npu`
-does not cap a GPU model. Invalid nonempty values fail with an actionable error;
+memory) and 10% headroom, up to that maximum and never below its default. FLM
+(NPU) models size the same way against system RAM; 32,768 tokens is only the
+starting window for an FLM build with no memory figures, and `GAIA_CTX_SIZE`
+applies on any device. Invalid nonempty values fail with an actionable error;
 unset or blank values use the default.
 
 That window is then checked against the memory free right now, for a model GAIA
@@ -256,11 +257,13 @@ busy Lemonade, even while a check of the server is still waiting for its answer.
 ```python
 import os
 
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
+
 # Read configuration
-base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+base_url = resolve_lemonade_base_url()  # LEMONADE_BASE_URL, else GAIA's own server
 debug = os.getenv("GAIA_API_DEBUG") == "1"  # matches how gaia api reads it
 
-# Use in agent
+# Use in agent (omitting base_url lets Agent resolve it the same way)
 agent = MyAgent(
     base_url=base_url,
     debug_prompts=debug

@@ -74,7 +74,6 @@ class MyAgent(Agent, FileToolsMixin):
     """Agent that can watch directories for new files."""
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_file_tools()
         # Registers: add_watch_directory(directory: str) -> dict
 ```
@@ -89,27 +88,29 @@ class MyAgent(Agent, FileToolsMixin):
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.tools.rag_tools import RAGToolsMixin
+from gaia.rag import RAGConfig, RAGSDK
 
 class MyAgent(Agent, RAGToolsMixin):
     """Agent with document Q&A tools."""
 
     def __init__(self, documents_path: str = "./docs", **kwargs):
         self.documents_path = documents_path
+        self.rag = RAGSDK(RAGConfig())  # bind before super().__init__()
         super().__init__(**kwargs)
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_rag_tools()
         # Registers:
-        # - query_documents(query, max_chunks=...)
-        # - query_specific_file(file_path, query, max_chunks=...)
-        # - search_indexed_chunks(query, limit=...)
+        # - query_documents(query, debug=False)
+        # - query_specific_file(file_path, query)
+        # - search_indexed_chunks(pattern)
         # - index_document(file_path)            # singular — one file per call
-        # - index_directory(directory_path)
+        # - index_directory(directory_path, recursive=False)
         # - list_indexed_documents()
-        # - summarize_document(file_path, summary_type="detailed")
-        # - dump_document(file_path)
-        # - evaluate_retrieval(query)
+        # - summarize_document(file_path, summary_type="detailed",
+        #                      max_words_per_section=20000)
+        # - dump_document(file_name, output_path=None)
+        # - evaluate_retrieval(question, retrieved_info)
         # - rag_status()
 ```
 
@@ -128,7 +129,6 @@ class MyAgent(Agent, ShellToolsMixin):
     """Agent that can execute shell commands."""
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_shell_tools()
         # Registers:
         # - run_shell_command(command, working_directory=None, timeout=None)
@@ -137,6 +137,8 @@ class MyAgent(Agent, ShellToolsMixin):
         #     everything else 30s
         # - wait_for_condition(command, working_directory=None,
         #                      timeout=120, poll_interval=5)
+        # - get_shell_state()
+        # - reset_shell_session()
 ```
 
 ---
@@ -157,14 +159,15 @@ class MyAgent(Agent, FileSearchToolsMixin):
     """Agent with generic file I/O and search capabilities."""
 
     def _register_tools(self):
-        super()._register_tools()
         self.register_file_search_tools()
         # Registers:
-        # - search_file(filename, directory=".")
-        # - search_directory(pattern, directory=".")
-        # - search_file_content(pattern, directory=".", file_pattern="*")
-        # - read_file(file_path, start_line=None, end_line=None)
-        # - write_file(file_path, content, append=False)
+        # - search_file(file_pattern, directory=None, deep_search=False, file_types=None)
+        # - search_directory(directory_name, search_root=None, max_depth=4)
+        # - search_file_content(pattern, directory=".", file_pattern=None,
+        #                       case_sensitive=False, context_lines=0)
+        # - read_file(file_path, offset=0, limit=None)
+        # - write_file(file_path, content, create_dirs=True)
+        # - edit_file(file_path, old_content, new_content)
         # - browse_directory(directory_path=None, show_hidden=False, sort_by="name")
         # - get_file_info(file_path)
         # - analyze_data_file(file_path, ...)
@@ -223,7 +226,7 @@ GAIA does not silently download it.
 
 To opt into image variations, initialize the mixin with
 `enable_variation_tools=True`. This adds
-`create_image_variation(image_path, model="Flux-2-Klein-4B", size=None, n=1)`,
+`create_image_variation(image_path, model=None, size=None, n=1)` (`None` resolves to Flux-2-Klein-4B),
 which sends a local PNG to Lemonade's `/v1/images/variations` endpoint (no
 prompt) and saves each of the `n` (1-10) results as its own PNG next to
 generated images. The source image must be inside the agent's allowed folders,
@@ -282,6 +285,130 @@ result = agent.process_query("analyze this image: photo.jpg")
 Need something the mixin doesn't cover — image captioning, storytelling, structured
 extraction? Register your own `@tool` that calls `self.vlm_client` directly; see
 [`examples/sd_agent_example.py`](https://github.com/amd/gaia/tree/main/examples/sd_agent_example.py).
+
+---
+
+## 9.7 Other registry mixins
+
+Tool lists for the remaining `KNOWN_TOOLS` mixins, read from `src/gaia/agents/tools/`. Call the mixin's register method from `_register_tools()`; tools run through `agent._execute_tool(name, args)`. The `email` mixin is not covered here.
+
+### `cli_setup` — `CliSetupToolsMixin`
+
+Register with `register_cli_setup_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `check_cli_setup(binary: str)` | Check whether a skill's CLI is installed and signed in |
+| `install_cli(binary: str, command: str)` | Install a skill's CLI with this machine's package manager |
+| `sign_in_cli(binary: str, command: str)` | Sign a CLI in to the user's account through their browser |
+
+### `screenshot` — `ScreenshotToolsMixin`
+
+Register with `register_screenshot_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `take_screenshot(output_path: str = "")` | Capture the screen and save it to a file |
+
+### `filesystem` — `FileSystemToolsMixin`
+
+Register with `register_filesystem_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `browse_directory(path=".", show_hidden=False, sort_by="name", filter_type=None, max_items=50)` | List a directory with metadata |
+| `tree(path=".", max_depth=3, show_sizes=False, include_pattern=None, exclude_pattern=None, dirs_only=False)` | Show a directory tree |
+| `file_info(path: str)` | Detailed information about a file or directory |
+| `find_files(query, search_type="auto", scope="smart", file_types=None, size_range=None, date_range=None, max_results=25, sort_by="relevance")` | Search for files by name, content or metadata |
+| `read_file(file_path, lines=100, encoding="auto", mode="full", offset=0, limit=None)` | Read a file with type-based analysis |
+| `bookmark(action="list", path=None, label=None)` | Save, list or remove bookmarks |
+
+### `scratchpad` — `ScratchpadToolsMixin`
+
+Register with `register_scratchpad_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `create_table(table_name: str, columns: str)` | Create a table for extracted data |
+| `insert_data(table_name: str, data: str)` | Insert rows into a table |
+| `query_data(sql: str)` | Run a SQL `SELECT` against the scratchpad database |
+| `list_tables()` | List tables with schemas and row counts |
+| `drop_table(table_name: str)` | Remove a table when analysis is done |
+
+### `browser_use` — `BrowserUseToolsMixin`
+
+Register with `register_browser_use_tools()`. Drives a real browser; see the [browser-use plan](/plans/browser-use).
+
+| Tool | Purpose |
+|------|---------|
+| `browser_open(url: str)` | Open a URL and list its interactive elements |
+| `browser_snapshot()` | Re-read the current page's interactive elements |
+| `browser_click(ref: str)` | Click an element |
+| `browser_type(ref: str, text: str, press_enter: bool = False)` | Type into a field or choose a dropdown option |
+| `browser_login(url: str)` | Ask the user to sign in, then save the session |
+| `browser_back()` | Go back, or close a tab and return to its opener |
+| `browser_find(text: str)` | Search the page for text and return the surroundings |
+| `browser_sessions()` | List sites with a saved sign-in |
+
+### `skills` — `SkillLibraryToolsMixin`
+
+Register with `register_skill_library_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `list_skills()` | List installed skills, loaded or not |
+| `search_skill_hub(query: str = "")` | Search the skill hub for skills to install |
+| `install_skill(name: str, version: str = "*")` | Download a skill into `~/.gaia/skills` |
+| `capture_skill(source: str, name: str = "")` | Capture a skill from pasted `SKILL.md` text, a URL or a local path |
+| `remove_skill(name: str)` | Delete an installed skill |
+| `load_skill(name: str)` | Activate a skill and show its instructions |
+| `unload_skill(name: str)` | Deregister a loaded skill's tools and instructions |
+| `skill_status()` | Report which skills are loaded and what they cost |
+
+### `skill_learning` — `SkillLearningToolsMixin`
+
+Register with `register_skill_learning_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `remember_skill_lesson(skill, section, corrected_text, replaces="", reason="")` | Change a loaded skill's instructions to match what the user wants |
+
+### `audio` — `AudioToolsMixin`
+
+Register with `register_audio_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `transcribe_media(file_path, language="", model="", output_path="", speakers=0)` | Transcribe an audio or video file and save it to a text file |
+| `refine_transcript(transcript_path, output_path="")` | Label speakers and add timestamps to a raw transcript |
+| `analyze_transcript(transcript_path, request, fields=None, output_path="")` | Find every matching item in a recording, with timestamps |
+| `export_transcript(transcript_path, format="srt", output_path="")` | Write subtitles or text with timestamps |
+
+### `audio_generation` — `AudioGenerationToolsMixin`
+
+Call `init_audio_generation(output_dir=None)`; it registers the tools. Output goes to `<gaia home>/cache/audio/generations` by default.
+
+| Tool | Purpose |
+|------|---------|
+| `list_audio_generation_models()` | List downloaded music and sound-effect generators |
+| `generate_music(prompt, model="ACE-Step-Music", lyrics=None, vocal_language=None, duration=None, steps=None, seed=None)` | Generate WAV music; empty lyrics mean instrumental |
+| `generate_sound_effect(prompt, model="ThinkSound-SFX", duration=None, steps=None, cfg=None, seed=None)` | Generate a WAV sound effect |
+
+### `wait` — `WaitToolsMixin`
+
+Register with `register_wait_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `sleep(seconds: float, reason: str = "")` | Wait up to 300 s, e.g. until a rate limit resets; ends early on Stop |
+
+### `reasoning_effort` — `ReasoningEffortToolsMixin`
+
+Register with `register_reasoning_effort_tools()`.
+
+| Tool | Purpose |
+|------|---------|
+| `set_reasoning_effort(level: str, reason: str = "")` | Set `low`, `medium` or `high` reasoning for the rest of the request, on models that grade reasoning |
 
 ---
 

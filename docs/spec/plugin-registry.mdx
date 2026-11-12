@@ -1,6 +1,6 @@
 ---
 title: "Agent Registry"
-description: "How GAIA discovers and instantiates agents from built-in modules and ~/.gaia/agents/"
+description: "How GAIA discovers and instantiates agents from ~/.gaia/agents/, installed agent wheels and native agents"
 icon: "list"
 ---
 
@@ -25,7 +25,7 @@ is populated at server startup by `AgentRegistry.discover()`, which:
    contain an `agent.py` defining a subclass of `Agent`. The registry imports
    the module via `importlib`, finds the `Agent` subclass with `AGENT_ID` and
    `AGENT_NAME` class attributes, and registers it.
-2. Discovers **installed agent wheels** (e.g. `gaia`, `chat`) through the
+2. Discovers **installed agent wheels** (e.g. `gaia`) through the
    `gaia.agent` entry-point group, then **native agents** from
    `agent-manifest.json`.
 
@@ -67,8 +67,14 @@ KNOWN_TOOLS = {
     "screenshot":  ("gaia.agents.tools.screenshot_tools","ScreenshotToolsMixin"),
     "sd":          ("gaia.sd.mixin",                     "SDToolsMixin"),
     "vlm":         ("gaia.vlm.mixin",                    "VLMToolsMixin"),
+    # ... 13 more
 }
 ```
+
+The map has 21 keys. The rest are `file_monitor`, `cli_setup`, `filesystem`,
+`scratchpad`, `browser`, `browser_use`, `email`, `skills`, `skill_learning`,
+`audio`, `audio_generation`, `wait` and `reasoning_effort`. See the
+[tool mixins reference](/sdk/mixins/tool-mixins) for each mixin's tools.
 
 ### `AgentRegistration`
 
@@ -80,12 +86,14 @@ class AgentRegistration:
     id: str
     name: str
     description: str
-    source: Literal["builtin", "custom_python"]
+    source: Literal["builtin", "custom_python", "native", "installed"]
     conversation_starters: List[str]
     factory: Callable[..., Any]           # returns an Agent instance
     agent_dir: Optional[Path]
     models: List[str]                     # ordered preference list
     hidden: bool = False                  # excluded from UI agent selector when True
+    # ... plus min_memory_gb, required_connections, consumes_mcp_servers,
+    # namespaced_agent_id and display metadata (see source)
 ```
 
 ---
@@ -99,10 +107,10 @@ class AgentRegistration:
 from gaia.agents.registry import AgentRegistry
 
 registry = AgentRegistry()
-registry.discover()                       # scans built-ins + ~/.gaia/agents/
+registry.discover()                       # scans ~/.gaia/agents/, installed wheels, native agents
 
 # Introspect
-entry = registry.get("chat")              # AgentRegistration
+entry = registry.get("gaia")              # AgentRegistration
 agent = entry.factory(**init_kwargs)      # create an Agent instance
 ```
 
@@ -115,8 +123,7 @@ Useful methods (see source for the full surface):
 | `list()` | Enumerate registered agents as a list of `AgentRegistration`. |
 
 The factory signature is deliberately free-form (`**kwargs`) — the caller
-filters to valid `AgentConfig` fields per agent (see `chat_factory` in the
-source for the common pattern using `dataclasses.fields(...)`).
+filters to valid config fields per agent, typically with `dataclasses.fields(...)`.
 
 ---
 

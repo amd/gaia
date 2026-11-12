@@ -23,8 +23,11 @@ uv pip install -e '.[rag]'
 FAISS and numpy live under the `[rag]` extras. If they're missing the SDK raises:
 
 ```
-code_index dependencies missing. Install with: pip install -e '.[rag]'
+code_index dependencies missing. <install hint for this install>
 ```
+
+The hint is install-specific: the install command for this interpreter from
+source, or a note that the extra isn't bundled in a packaged build.
 
 ## CodeIndexConfig
 
@@ -34,6 +37,7 @@ from gaia.code_index.sdk import CodeIndexConfig
 config = CodeIndexConfig(
     repo_path=".",
     max_files=5000,
+    max_walk_entries=200_000,
     max_file_size_mb=1.0,
     chunk_overlap=50,
     embedding_model="user.embeddinggemma-300m-GGUF",
@@ -46,6 +50,7 @@ config = CodeIndexConfig(
 |-------|------|---------|-------------|
 | `repo_path` | `str` | — | Repository root (required) |
 | `max_files` | `int` | `5000` | Max files to scan |
+| `max_walk_entries` | `int` | `200_000` | Max directory entries the discovery walk may enumerate, so walking a huge non-repo root can't burn the tool timeout |
 | `max_file_size_mb` | `float` | `1.0` | Skip files larger than this |
 | `chunk_overlap` | `int` | `50` | Token overlap between chunks |
 | `embedding_model` | `str` | `"user.embeddinggemma-300m-GGUF"` | Lemonade embedding model |
@@ -94,6 +99,12 @@ for r in results:
 | `top_k` | `int` | `10` | Number of results |
 
 L2 distance is converted to a similarity score in `[0, 1]` via `1 / (1 + dist)`.
+
+### `is_indexed() -> bool`
+
+Whether a usable index is on disk for this repository. It checks presence only and
+does not read the metadata, so it is cheap; use `get_status()` for the version or
+chunk counts.
 
 ### `get_status() -> Dict`
 
@@ -156,6 +167,7 @@ sdk.clear_index()
 | `files_indexed` | `int` | Files newly parsed in this run |
 | `chunks_created` | `int` | Total chunks in the resulting index (reused + new) |
 | `duration_seconds` | `float` | Wall-clock time for the run |
+| `chunks_dropped` | `int` | Chunks whose embedding failed and were left out of the index (default `0`); their files are left un-hashed so the next index retries them |
 
 ## Parsers
 

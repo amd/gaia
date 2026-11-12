@@ -7,11 +7,14 @@ icon: "arrow-right-arrow-left"
 
 <Badge text="development" color="orange" />
 
-## From Internal Agent to External Package
+## From a Local Agent Class to an External Package
 
-**Before** (internal GAIA agent):
+`src/gaia/agents/` holds only the framework; shipped agents are packages under
+`hub/agents/<id>/python/`. Your own agent belongs in its own package.
+
+**Before** (an agent class inside your application):
 ```python
-# src/gaia/agents/my_agent/agent.py
+# my_app/agent.py
 from gaia.agents.base.agent import Agent
 
 class MyAgent(Agent):

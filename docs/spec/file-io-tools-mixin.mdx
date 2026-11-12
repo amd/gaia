@@ -98,6 +98,9 @@ see [Read before edit](#read-before-edit).
 
 **Parameters:**
 - `file_path` (str, required): Path to the file to read
+- `offset` (int, optional): Character offset to start from (default: `0`)
+- `limit` (int, optional): Maximum characters to return
+- `start_line` / `end_line` (int, optional): Read a line range
 
 **Returns:**
 ```python
@@ -441,7 +444,9 @@ Used by agents that generate READMEs, spec documents, or reports.
 {
     "status": "success",
     "file_path": str,
-    "size_bytes": int,
+    "bytes_written": int,
+    "line_count": int,
+    "backup_path": str,  # only when a backup was made
 }
 ```
 
@@ -455,7 +460,7 @@ what they are building.
 - `project_root` (str, optional): Project root directory (default: `"."`)
 - `project_name` (str, optional): Display name to write into the file
 - `description` (str, optional): Short project description
-- `structure` (str or dict, optional): Formatted directory structure
+- `structure` (dict, optional): Formatted directory structure
 - `instructions` (str, optional): Agent-facing instructions section
 
 Runs the same write guardrails as `write_file`: allowlist, blocked
@@ -486,15 +491,24 @@ auto-approve it.
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.security import PathValidator
 
 class MyAgent(Agent, FileIOToolsMixin):
+    def __init__(self, **kwargs):
+        # The mixin reads self.path_validator; set it before Agent.__init__
+        self.path_validator = PathValidator(allowed_paths=["."])
+        super().__init__(**kwargs)
+
+    def _get_system_prompt(self) -> str:
+        return "You edit files."
+
     def _register_tools(self):
-        super()._register_tools()
         self.register_file_io_tools()
 
 agent = MyAgent()
 
-result = agent.read_file("calculator.py")
+# Mixin tools are registered as closures, so call them through the agent
+result = agent._execute_tool("read_file", {"file_path": "calculator.py"})
 
 if result["file_type"] == "python":
     print(f"Valid Python: {result['is_valid']}")
@@ -512,12 +526,12 @@ def calculate_sum(a: int, b: int) -> int:
     return a + b
 '''
 
-result = agent.write_python_file(
-    file_path="src/calculator.py",
-    content=code,
-    validate=True,
-    create_dirs=True
-)
+result = agent._execute_tool("write_python_file", {
+    "file_path": "src/calculator.py",
+    "content": code,
+    "validate": True,
+    "create_dirs": True,
+})
 
 if result["status"] == "success":
     print(f"Wrote {result['bytes_written']} bytes to {result['file_path']}")
@@ -526,12 +540,12 @@ if result["status"] == "success":
 ### Example 3: Edit File with Diff
 
 ```python
-result = agent.edit_python_file(
-    file_path="src/calculator.py",
-    old_content="return a + b",
-    new_content="return int(a) + int(b)  # Ensure integers",
-    backup=True
-)
+result = agent._execute_tool("edit_python_file", {
+    "file_path": "src/calculator.py",
+    "old_content": "return a + b",
+    "new_content": "return int(a) + int(b)  # Ensure integers",
+    "backup": True,
+})
 
 print("Changes:")
 print(result["diff"])
@@ -540,12 +554,12 @@ print(result["diff"])
 ### Example 4: Search Codebase
 
 ```python
-result = agent.search_code(
-    directory="src",
-    pattern="TODO",
-    file_extension=".py",
-    max_results=50
-)
+result = agent._execute_tool("search_code", {
+    "directory": "src",
+    "pattern": "TODO",
+    "file_extension": ".py",
+    "max_results": 50,
+})
 
 print(f"Found {result['files_with_matches']} files with TODOs:")
 for file_result in result["results"]:
@@ -558,18 +572,18 @@ for file_result in result["results"]:
 
 ```python
 # Write TypeScript without validation
-result = agent.write_file(
-    file_path="src/components/Button.tsx",
-    content=tsx_code,
-    create_dirs=True
-)
+result = agent._execute_tool("write_file", {
+    "file_path": "src/components/Button.tsx",
+    "content": tsx_code,
+    "create_dirs": True,
+})
 
 # Edit TypeScript file
-result = agent.edit_file(
-    file_path="src/components/Button.tsx",
-    old_content="export default Button",
-    new_content="export { Button }"
-)
+result = agent._execute_tool("edit_file", {
+    "file_path": "src/components/Button.tsx",
+    "old_content": "export default Button",
+    "new_content": "export { Button }",
+})
 ```
 
 ---

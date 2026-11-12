@@ -35,7 +35,7 @@ class AgentConfig:
     logging_level: str = "INFO"
     use_claude: bool = False       # Use Claude API
     use_local_llm: bool = True     # Use local LLM
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None # Lemonade server URL
     assistant_name: str = "gaia"
 ```
@@ -309,9 +309,11 @@ print(response.text)
 
 <CardGroup cols={2}>
   <Card title="Messaging" icon="message">
-    - `send(message: str) -> AgentResponse`
+    - `send(message: str, *, no_history=False) -> AgentResponse`
     - `send_stream(message: str)`
-    - `send_messages(messages, system_prompt) -> AgentResponse`
+    - `send_messages(messages, system_prompt=None, tools=None, cancel=None) -> AgentResponse`
+    - `send_messages_stream(messages, system_prompt=None, tools=None)`
+    - `set_system_prompt(system_prompt)` / `get_system_prompt()`
   </Card>
 
   <Card title="History" icon="clock-rotate-left">
@@ -334,6 +336,17 @@ print(response.text)
     - `start_interactive_session()`
   </Card>
 </CardGroup>
+
+`send(..., no_history=True)` bypasses the stored history and sends only that
+prompt. Pass a `threading.Event` as `cancel=` to `send_messages` and set it to
+abandon the call; the SDK then raises `LLMCallCancelled` (from `gaia.chat.sdk`)
+and returns nothing it produced.
+
+Other members the agent loop uses: `effective_model` (the model id actually
+sent, which is `claude_model` when `use_claude` is set), the `side_request()`
+context manager (keeps a background call such as memory extraction out of the
+turn's metrics), and the `turn_recorder`, `turn_step` and `llm_call_sink`
+attributes the loop sets per turn to record each model request.
 
 ### SimpleChat Methods
 

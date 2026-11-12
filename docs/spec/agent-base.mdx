@@ -37,7 +37,7 @@ The `Agent` class is the foundational base class for all GAIA agents. It provide
 - Foundation for building any AI agent
 - Handles complex reasoning patterns (planning, execution, error recovery)
 - Provides tool registration and execution framework
-- Supports multiple LLM backends (local, Claude, ChatGPT)
+- Supports local Lemonade, Claude, and gateway models served through Lemonade
 - Built-in debugging and tracing capabilities
 
 ---
@@ -93,7 +93,7 @@ class Agent(ABC):
 def __init__(
     self,
     use_claude: bool = False,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-5",
     base_url: Optional[str] = None,
     model_id: str = None,
     max_steps: Optional[int] = None,
@@ -104,14 +104,20 @@ def __init__(
     show_stats: bool = False,
     silent_mode: bool = False,
     debug: bool = False,
-    output_handler = None,
+    output_handler=None,
     max_plan_iterations: int = 3,
     max_consecutive_repeats: int = 4,
-    min_context_size: int = 32768,
+    min_context_size: Optional[int] = None,
     skip_lemonade: bool = False,
     device: Optional[str] = None,
+    skill_set: Optional[str] = None,
     resend_reasoning_across_requests: bool = False,
     max_output_tokens: Optional[int] = None,
+    context_eviction: str = "off",
+    context_eviction_threshold_tokens: int = DEFAULT_EVICT_THRESHOLD_TOKENS,  # 60000
+    context_eviction_keep_steps: int = DEFAULT_EVICT_KEEP_STEPS,  # 8
+    context_eviction_min_batch_tokens: int = DEFAULT_EVICT_MIN_BATCH_TOKENS,  # 30000
+    tool_scope: Optional[Sequence[str]] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -119,7 +125,7 @@ def __init__(
     Args:
         use_claude: Use Claude API instead of local LLM
         claude_model: Model to use when use_claude=True
-        base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
+        base_url: Local LLM server URL (default: None, which resolves through resolve_lemonade_base_url(): LEMONADE_BASE_URL, else GAIA's own server)
         model_id: Model ID for local LLM (default: None — resolve_default_chat_model(): config default_model, which gaia init sets from the hardware, else DEFAULT_MODEL_NAME, Gemma-4-E4B-it-GGUF)
         max_steps: Maximum reasoning iterations (default: None — resolves to the
             global default via default_max_steps(), i.e. GAIA_AGENT_MAX_STEPS or DEFAULT_MAX_STEPS)
@@ -138,43 +144,54 @@ def __init__(
             a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
             more model call with no tool calls allowed and answers from those results; repeats that
             errored or were refused report the failure instead.
-        min_context_size: Minimum context size required for this agent (default: 32768)
+        min_context_size: Context floor the Lemonade manager enforces (default: None — the device profile's)
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
         device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected
             hardware at startup; an unavailable device fails loudly (default: None = no check)
+        skill_set: Explicit skill set to activate; an undeclared name fails loudly
+            (default: None)
         resend_reasoning_across_requests: Send the model's stored reasoning from earlier
             user requests back to it. Within one request, each step's reasoning is always
             sent back on its assistant message as `reasoning_content` (default: False)
         max_output_tokens: Output-token cap per LLM reply, thinking included (default: None —
             32768 for a Lemonade cloud model such as fireworks.*, 8192 otherwise)
+        context_eviction: "off" (default), "on" or "auto". Evicts tool results older
+            than context_eviction_keep_steps from the context sent to the model once the
+            prompt passes context_eviction_threshold_tokens (60000) and the evictable
+            results total at least context_eviction_min_batch_tokens (30000).
+        tool_scope: Fixed set of tool names allowed to execute (default: None —
+            unrestricted; an empty sequence permits no tools)
     """
 ```
 
-### Abstract Methods (Must Implement)
+### Required and Optional Methods
+
+One method is required: `_register_tools()`. `_get_system_prompt()` and
+`_create_console()` are optional overrides.
 
 ```python
-@abstractmethod
 def _get_system_prompt(self) -> str:
     """
-    Return the system prompt for the agent.
+    Return agent-specific system prompt additions.
 
-    This defines the agent's role, capabilities, and behavior.
-    Must be implemented by all subclasses.
+    Optional. The default returns "" (only mixin prompts are used).
 
     Returns:
         System prompt string
     """
-    pass
+    return ""
 
-@abstractmethod
 def _create_console(self):
     """
     Create and return the console output handler.
 
+    Optional. The default returns SilentConsole when silent_mode is set,
+    otherwise AgentConsole. Overriding it to always return AgentConsole()
+    defeats silent_mode=True.
+
     Returns:
         AgentConsole, SilentConsole, or custom output handler
     """
-    pass
 
 @abstractmethod
 def _register_tools(self) -> None:
@@ -228,6 +245,16 @@ def process_query(
                                      # reply recovered from is kept with
                                      # "recovered": True and does not make the
                                      # status "failed"
+            "cached_tokens": int,    # Input tokens served from the prompt cache
+            "tool_schema": ...,      # Tool schema sent to the model this turn
+            "completion_gaps": ...,  # Gaps found by the completion check
+            "model_retries": dict,   # {"request_retries", "step_retries"}
+            "model_unreachable": bool,  # Model stayed unreachable (status is "failed")
+            "model_server_down": bool,
+            "model_failed": bool,    # A model call failure ended the turn
+            "extraction_sources": list,  # Sorted names of extraction results
+            "verification": dict,    # verification_state() for this turn
+            "model_messages": ...,   # Messages exchanged with the model
             # "output_file": str     # Present only when trace=True
         }
     """
@@ -251,8 +278,8 @@ def _execute_tool(self, tool_name: str, tool_args: dict) -> Any:
     Returns:
         Tool execution result
 
-    Raises:
-        ValueError: If tool_name not registered
+    Returns an error dict for an unknown name; it does not raise:
+        {"status": "error", "error": "Unknown tool name. ...", ...}
     """
     pass
 
@@ -299,6 +326,35 @@ def _format_tools_for_prompt(self) -> str:
     """
     pass
 ```
+
+### Other Public Methods
+
+| Method | Purpose |
+|--------|---------|
+| `queue_followup(text) -> bool` | Hand the running turn something the user typed after it started. Returns `False` when no run is in flight, so the caller must say so rather than drop the message. |
+| `finalize_answer(answer, _conversation) -> str` | Hook that runs before the final answer is emitted; identity by default, override to post-process. |
+| `get_tools_info() -> dict` / `get_tools() -> list` | Registered tools (name-keyed dict / list), limited to `tool_scope` when one is set. |
+| `describe_skills() -> list` | `[{"name", "how"}]` for each loaded skill; `how` is `"model"`, `"auto"` or `"always"`. |
+| `verification_state() -> dict` | This turn's check results as data. |
+| `get_error_history() -> list` | Every error the instance has recorded across all queries (a query's result carries only its own). |
+
+`tool_scope` limits which tool names may execute: `None` is unrestricted, an empty
+sequence permits none.
+
+### Hardware requirement
+
+A subclass can declare the hardware it needs with the `REQUIRED_HARDWARE` class attribute:
+
+```python
+from gaia.agents.base.agent import Agent, HardwareRequirement
+
+class NpuAgent(Agent):
+    REQUIRED_HARDWARE = HardwareRequirement(
+        min_device="amd_npu", reason="Needs the Ryzen AI NPU"
+    )
+```
+
+`min_device` is one of `"cpu"`, `"amd_igpu"`, `"amd_npu"`, `"amd_dgpu"`; `reason` is shown in the error when the check fails.
 
 ### State Management Properties
 
@@ -455,7 +511,6 @@ The agent automatically handles:
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.agents.base.console import AgentConsole
 
 class WeatherAgent(Agent):
     """Simple weather information agent."""
@@ -464,9 +519,6 @@ class WeatherAgent(Agent):
         return """You are a weather assistant.
         Use get_weather to fetch current conditions.
         Always include temperature and conditions in your response."""
-
-    def _create_console(self):
-        return AgentConsole()
 
     def _register_tools(self):
         @tool
@@ -513,10 +565,6 @@ class CustomerAgent(Agent):
         You can search for customers, create new records, and update information.
         Always confirm actions with the user before executing."""
 
-    def _create_console(self):
-        from gaia.agents.base.console import AgentConsole
-        return AgentConsole()
-
     def _register_tools(self):
         @tool
         def search_customer(name: str) -> dict:
@@ -559,7 +607,6 @@ result = agent.process_query(
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import SilentConsole
 
 class APIAgent(Agent):
     """Agent for JSON-only API usage."""
@@ -570,9 +617,6 @@ class APIAgent(Agent):
 
     def _get_system_prompt(self) -> str:
         return "You are a helpful assistant."
-
-    def _create_console(self):
-        return SilentConsole()
 
     def _register_tools(self):
         # Register tools...
@@ -595,16 +639,12 @@ return result
 import pytest
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.agents.base.console import SilentConsole
 
 class TestAgent(Agent):
     """Test agent implementation."""
 
     def _get_system_prompt(self):
         return "You are a test assistant."
-
-    def _create_console(self):
-        return SilentConsole()
 
     def _register_tools(self):
         @tool
@@ -732,11 +772,11 @@ dependencies = [
 
 ### Token Usage
 
-- Default context window: 4096 tokens
+- Default context window: `GPU_CTX_SIZE` (65536) on GPU, `NPU_CTX_SIZE` (32768) on the NPU; models that declare memory figures get the largest window that fits
 - Tool descriptions consume ~100-500 tokens
 - Monitor token usage with `show_stats=True`
 - Use smaller models for simple tasks (Qwen3-0.6B)
-- Use larger models for complex reasoning (Qwen3.5-35B)
+- Use larger models for complex reasoning (Qwen3.6-35B-A3B-GGUF)
 
 ### Latency
 

@@ -35,7 +35,7 @@ The return value on LLM failure:
 }
 ```
 
-Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
+Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30 s connect, 900 s (15 min) read for chat completions.
 
 ## Tool Calling Protocols
 
@@ -73,8 +73,9 @@ cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
 cfg.toolChoice = "auto";  // or "required"
 ```
 
-`Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
-table in `src/gaia/llm/lemonade_client.py`. **An unrecognised model id resolves to
+`Auto` consults `gaia::isToolCallingModel(modelId)`, a hand-maintained subset of
+the Python `MODELS` table in `src/gaia/llm/lemonade_client.py` (see
+`cpp/src/model_registry.cpp` for the ids it knows). **An unrecognised model id resolves to
 `false`** — the C++ framework targets any OpenAI-compatible server, where an
 unknown id says nothing about tool-calling support, so it keeps the fallback that
 works everywhere. Running a tool-calling model this build does not know? Set
@@ -197,9 +198,9 @@ Only tools registered via `registerTool()` or discovered from a connected MCP se
 
 ### Tool Callback Responsibility
 
-The framework **does not validate tool arguments** before passing them to your callback. Each tool is responsible for:
+When a tool declares `ToolParameter`s and sets no custom `validateArgs`, `executeTool()` checks the arguments against that schema first (required parameters present, types match, no unknown parameters) and returns an error without calling your callback. The framework does not check ranges, formats or paths. Each tool is responsible for:
 
-- Validating its input parameters (types, ranges, formats)
+- Validating its input parameters (ranges, formats)
 - Sanitizing paths and shell arguments
 - Rejecting unexpected or dangerous inputs
 
@@ -296,7 +297,7 @@ Consumers use `find_package(gaia_core)` to link against the installed SDK.
 
 ### Runtime Configuration
 
-The LLM endpoint can be configured at runtime via environment variable — no recompilation needed:
+Settings can be overridden at runtime via environment variables — no recompilation needed:
 
 ```bash
 # Override the default LLM server URL
@@ -304,7 +305,49 @@ set LEMONADE_BASE_URL=http://my-server:8080/api/v1
 my_agent.exe
 ```
 
-All other `AgentConfig` fields are set at construction time. For dynamic configuration, read from a config file or registry in your `makeConfig()` function.
+`LEMONADE_BASE_URL` sets the default of `AgentConfig::baseUrl`. The `Agent` constructor then applies the variables below on top of the config you pass, so **they take precedence over values set in code**. An invalid or non-positive number prints a warning and is ignored.
+
+| Variable | Overrides | Notes |
+|----------|-----------|-------|
+| `GAIA_BASE_URL` | `baseUrl` | Deprecated alias: `GAIA_CPP_BASE_URL` |
+| `GAIA_MODEL_ID` | `modelId` | |
+| `GAIA_MAX_STEPS` | `maxSteps` | Must be > 0 |
+| `GAIA_CONTEXT_SIZE` | `contextSize` | Must be > 0. Deprecated alias: `GAIA_CPP_CTX_SIZE` |
+| `GAIA_MAX_TOKENS` | `maxTokens` | Must be > 0 |
+| `GAIA_STREAMING` | default of `streaming` | `1` enables streaming; anything else disables it. Read when the config is constructed, so code can still override it |
+
+For other fields, read a config file in your `makeConfig()` function, or use `AgentConfig::fromJsonFile()`.
+
+### AgentConfig Fields
+
+Fields not covered elsewhere in these docs (defaults in parentheses):
+
+| Field | Meaning |
+|-------|---------|
+| `maxTokens` (4096) | Max tokens in each LLM response |
+| `structuredEvents` (false) | Always emit structured events (thought, goal, answer), even while streaming. Used by `JsonEventOutputHandler` |
+| `responseMode`, `nativeToolCalls`, `toolChoice` | Tool-calling protocol — see [Tool Calling Protocols](#tool-calling-protocols) |
+| `skillSet`, `skillManifest` | Skill-set selection and manifest path — see [Skill sets](#skill-sets-gaiaskillsets) |
+
+Helpers on `AgentConfig` (`cpp/include/gaia/types.h`):
+
+| Method | Purpose |
+|--------|---------|
+| `validate()` | Throws `std::invalid_argument` on an out-of-range field |
+| `fromJson(json)` / `fromJsonFile(path)` | Build a config from JSON; missing fields keep their defaults |
+| `toJson()` | Serialize every field (round-trips through `fromJson`) |
+| `useNativeToolCalls()` | Resolve the `Auto` policy against `modelId` |
+
+### CMake Options
+
+| Option | Default | Builds |
+|--------|---------|--------|
+| `GAIA_BUILD_TESTS` | ON top-level, OFF as a sub-project | `gaia_core` unit tests |
+| `GAIA_BUILD_EXAMPLES` | ON top-level, OFF as a sub-project | Example agents (the health, WiFi and process agents only on Windows) |
+| `GAIA_BUILD_INTEGRATION_TESTS` | OFF | LLM integration tests; need a running Lemonade server |
+| `GAIA_BUILD_BENCHMARKS` | OFF | Performance benchmarks |
+| `GAIA_BUILD_TUI` | ON | FTXUI-based TUI console; fetches FTXUI v6.1.9 unless `find_package(ftxui)` finds it |
+| `GAIA_BUILD_BASH_AGENT` | ON | The `gaia-bash` coding agent |
 
 ### HTTPS Support
 
@@ -345,6 +388,7 @@ public:
     // server proves them read-only — see /cpp/security.
     bool connectMcpServer(const std::string& name, const json& config);
     bool connectMcpServerById(const std::string& id);  // resolves via MCPRegistry
+    bool connectMcpServerById(const std::string& id, const MCPRegistry& registry);  // explicit registry
     void disconnectMcpServer(const std::string& name);
     void disconnectAllMcp();
 
@@ -359,6 +403,32 @@ public:
     // System prompt
     std::string systemPrompt() const;
     void rebuildSystemPrompt();  // call after adding tools dynamically
+
+    // Conversation history
+    void clearHistory();                          // start a fresh topic
+    std::vector<Message> history() const;         // snapshot copy, for session persistence
+    void setHistory(std::vector<Message> history);  // session resume; not while processQuery() runs
+
+    // Cancellation — requestCancel() is safe from any thread; the flag resets
+    // at the start of the next processQuery()
+    void requestCancel();
+    bool isCancelled() const;
+
+    // Lemonade client (explicit model loading at startup)
+    LemonadeClient& lemonade();
+
+    // Dynamic reconfiguration — takes effect on the next processQuery()
+    AgentConfig config() const;                   // thread-safe copy
+    void setConfig(const AgentConfig& newConfig); // validates; throws std::invalid_argument
+    void setModel(const std::string& modelId);
+    void setMaxSteps(int maxSteps);
+    void setMaxTokens(int maxTokens);
+    void setTemperature(double temperature);
+    void setDebug(bool debug);
+
+    // Tool security — see /cpp/security
+    void setToolConfirmCallback(ToolConfirmCallback cb);
+    void setDefaultPolicy(ToolPolicy policy);
 
     // Skill sets — see the Skill sets section below
     const SkillSets& skillSets() const;
@@ -435,18 +505,36 @@ implementation of `SkillLoader` is installed via `setSkillLoader()`,
 ```cpp
 class ToolRegistry {
 public:
+    void registerTool(ToolInfo info);  // throws std::runtime_error on a duplicate name
     void registerTool(const std::string& name, const std::string& description,
                       ToolCallback callback, std::vector<ToolParameter> params = {},
                       bool atomic = false,
                       std::optional<ToolPolicy> policy = std::nullopt);
 
+    // Enforces policy, argument-schema validation and confirmation, then calls the tool
     json executeTool(const std::string& name, const json& args);
+    static std::string validateArgsAgainstSchema(const std::vector<ToolParameter>& params,
+                                                 const json& args);  // "" on success
 
     const ToolInfo* findTool(const std::string& name) const;
+    std::string resolveName(const std::string& name) const;  // fixes unprefixed / mis-cased names
     bool hasTool(const std::string& name) const;
     bool removeTool(const std::string& name);
+    const std::map<std::string, ToolInfo>& allTools() const;
     size_t size() const;
     void clear();
+
+    std::string formatForPrompt() const;   // enabled tools, for the system prompt
+    json buildOpenAiToolSchemas() const;   // enabled tools, for the `tools` request field
+
+    bool setEnabled(const std::string& name, bool enabled);  // call Agent::rebuildSystemPrompt() after
+    bool isEnabled(const std::string& name) const;
+    std::vector<std::string> enabledTools() const;
+
+    void setConfirmCallback(ToolConfirmCallback cb);
+    void setDefaultPolicy(ToolPolicy policy);
+    ToolPolicy defaultPolicy() const;
+    void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
 };
 ```
 
@@ -970,6 +1058,28 @@ struct GaiaMetadata {
   the field, the rule, and a doc link, and nothing partial is returned. Name must
   equal the directory name; a mismatch is refused.
 - **BOM and CRLF tolerant**, so a skill authored on Windows parses unchanged.
+
+---
+
+## Other Public Headers
+
+These headers ship with `gaia_core` (`cpp/include/gaia/`) and are not covered in detail here. Read the header comments for usage.
+
+| Header | Provides |
+|--------|----------|
+| `lemonade_client.h` | `LemonadeClient`, `LemonadeClientConfig`, `LemonadeHealth`, `LemonadeStatus` — the Lemonade Server client the agent uses |
+| `process.h` | `ProcessRunner`, `ShellSession`, `ProcessResult` — run commands and keep a shell session |
+| `file_tools.h` | `FileIOTools`, `FileStateTracker` — file read/write/edit tools |
+| `git_tools.h` | `GitTools` — git tools |
+| `ignore.h` | `globMatch`, `GitignoreMatcher` — glob and `.gitignore` matching |
+| `session.h` | `SessionStore`, `SessionInfo` — conversation persistence |
+| `repl.h` | `ReplRunner` — interactive read-eval loop |
+| `json_event_handler.h` | `JsonEventOutputHandler` — structured JSON event output for UIs |
+| `sse_parser.h` | `SseParser` — server-sent-events parsing |
+| `chunking.h` | `splitTextIntoChunks`, `extractFile`, `chunkFile`, `registerExtractor` — text extraction and chunking |
+| `json_utils.h` | `extractJsonFromResponse`, `parseLlmResponse` — recover JSON from LLM replies |
+| `model_registry.h` | `knownModels`, `isToolCallingModel` — models the build knows |
+| `tui_app.h`, `tui_markdown.h`, `tui_transcript.h` | `TuiApp`, `TuiConfirmBroker`, `renderMarkdown`, `TuiTranscript` — the FTXUI console (`GAIA_BUILD_TUI`) |
 
 ---
 

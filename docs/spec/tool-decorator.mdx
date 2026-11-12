@@ -79,7 +79,10 @@ def tool(
     atomic: bool = False,
     display_label: str | None = None,
     timeout: float | None = None,
+    timeout_arg: str | None = None,
     preflight: Callable[[dict], dict | None] | None = None,
+    registry: dict[str, dict] | None = None,
+    override: bool = False,
 ) -> Callable:
     """
     Decorator to register a function as an agent tool.
@@ -92,16 +95,23 @@ def tool(
 
     Args:
         func: Function to register (when used as @tool)
-        atomic: If True, marks this tool as suitable for direct execution
-                without multi-step planning. Use for simple, self-contained
-                operations (default: False)
+        atomic: Stored on the registry entry as metadata; the agent loop does
+                not act on it (default: False)
         display_label: Optional user-facing label for UI progress strips
         timeout: Per-tool execution limit in seconds, or ``None`` for the
                  global default
+        timeout_arg: Name of the tool's own parameter that sets how long the
+                 call may run; the agent waits at least that long plus a
+                 grace period. A name that is not a parameter raises
+                 ``TypeError``
         preflight: Called with the call's arguments before the confirmation
                    prompt; returns the refusal the call has already earned,
                    or ``None``. The tool body must enforce the same rule,
                    since state can change while a prompt waits
+        registry: Explicit instance-local destination mapping. When omitted,
+                  the tool registers globally
+        override: Replace a different tool already registered under this name;
+                  without it that raises ``DuplicateToolError``
 
     Returns:
         Original function, unchanged
@@ -124,7 +134,8 @@ def tool(
 
 Unsupported keyword arguments raise ``TypeError`` when the function is
 decorated. The error names the tool, the invalid argument, and the accepted
-arguments (``atomic``, ``display_label``, ``timeout``, and ``preflight``).
+arguments (``atomic``, ``display_label``, ``timeout``, ``timeout_arg``,
+``preflight``, ``registry``, and ``override``).
 
 ### Tool Registry
 
@@ -141,12 +152,16 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {}
             "param_name": {
                 "type": str,      # "string", "integer", "number", "boolean", "array", "object", "unknown"
                 "required": bool, # True if no default value
+                "description": str,  # From the Args: entry (key absent when there is none)
+                "items": dict,    # Arrays only, e.g. {"type": "string"}
+                "enum": list,     # Literal[...] only
             }
         },
         "function": Callable,     # Original function
-        "atomic": bool,           # True if marked as atomic (direct execution)
+        "atomic": bool,           # Metadata only; the agent loop does not act on it
         "display_label": str | None,
         "timeout": float | None,
+        "timeout_arg": str | None,
         "preflight": Callable | None  # checked before the confirmation prompt
     }
 }
@@ -160,11 +175,16 @@ str → "string"
 int → "integer"
 float → "number"
 bool → "boolean"
-tuple → "array"
+list, tuple, set, frozenset → "array"
 dict → "object"
-Dict → "object"
-(no annotation) → "unknown"
+Optional[X], X | None → the type of X
+List[str] → {"type": "array", "items": {"type": "string"}}
+Dict[...] → "object"
+Literal["a", "b"] → "string" with "enum": ["a", "b"]
+(no annotation, or a union of two real types) → "unknown"
 ```
+
+The mapping is `_ANNOTATION_TYPES` plus `_infer_param_type` in `src/gaia/agents/base/tools.py`.
 
 ---
 
@@ -194,14 +214,20 @@ def calculate(expression: str) -> float:
 {
     "calculate": {
         "name": "calculate",
-        "description": "Calculate a mathematical expression...",
+        "description": "Calculate a mathematical expression.\n\nReturns:\n    Calculated result",
         "parameters": {
             "expression": {
                 "type": "string",
-                "required": True
+                "required": True,
+                "description": "Math expression to evaluate (e.g., \"2 + 2\")"
             }
         },
-        "function": <function calculate>
+        "function": <function calculate>,
+        "atomic": False,
+        "display_label": None,
+        "timeout": None,
+        "timeout_arg": None,
+        "preflight": None
     }
 }
 ```
@@ -214,8 +240,7 @@ def get_system_info() -> dict:
     """
     Get current system information.
 
-    This is a simple, self-contained operation suitable for direct
-    execution without multi-step planning.
+    This is a simple, self-contained operation.
 
     Returns:
         Dictionary with system info (platform, CPU, memory)
@@ -229,14 +254,18 @@ def get_system_info() -> dict:
         "memory_gb": psutil.virtual_memory().total / (1024**3)
     }
 
-# Registry entry includes atomic flag:
+# Registry entry stores the atomic flag (metadata only; the agent loop does not act on it):
 {
     "get_system_info": {
         "name": "get_system_info",
         "description": "Get current system information...",
         "parameters": {},
         "function": <function get_system_info>,
-        "atomic": True  # Marked as atomic
+        "atomic": True,
+        "display_label": None,
+        "timeout": None,
+        "timeout_arg": None,
+        "preflight": None
     }
 }
 ```
@@ -270,9 +299,12 @@ def search_users(
         "name": "search_users",
         "description": "Search for users in the database...",
         "parameters": {
-            "query": {"type": "string", "required": True},
-            "limit": {"type": "integer", "required": False},
-            "include_inactive": {"type": "boolean", "required": False}
+            "query": {"type": "string", "required": True,
+                      "description": "Search query string"},
+            "limit": {"type": "integer", "required": False,
+                      "description": "Maximum number of results (default: 10)"},
+            "include_inactive": {"type": "boolean", "required": False,
+                                 "description": "Include inactive users (default: False)"}
         },
         "function": <function search_users>
     }
@@ -309,9 +341,12 @@ def batch_process(
         "name": "batch_process",
         "description": "Process multiple items...",
         "parameters": {
-            "items": {"type": "array", "required": True},
-            "config": {"type": "object", "required": True},
-            "dry_run": {"type": "boolean", "required": False}
+            "items": {"type": "array", "required": True,
+                      "description": "List of items to process"},
+            "config": {"type": "object", "required": True,
+                       "description": "Configuration dictionary"},
+            "dry_run": {"type": "boolean", "required": False,
+                        "description": "Run without making changes"}
         },
         "function": <function batch_process>
     }
@@ -390,60 +425,36 @@ def another_tool(param: str) -> dict:
 
 ### Type Inference
 
-```python
-def decorator(f: Callable) -> Callable:
-    sig = inspect.signature(f)
-    params = {}
-
-    for name, param in sig.parameters.items():
-        param_info = {
-            "type": "unknown",
-            "required": param.default == inspect.Parameter.empty
-        }
-
-        # Infer type from annotation
-        if param.annotation != inspect.Parameter.empty:
-            if param.annotation == str:
-                param_info["type"] = "string"
-            elif param.annotation == int:
-                param_info["type"] = "integer"
-            elif param.annotation == float:
-                param_info["type"] = "number"
-            elif param.annotation == bool:
-                param_info["type"] = "boolean"
-            elif param.annotation == tuple:
-                param_info["type"] = "array"
-            elif param.annotation == dict or param.annotation == Dict:
-                param_info["type"] = "object"
-
-        params[name] = param_info
-
-    return params
-```
+Each parameter's type comes from `_ANNOTATION_TYPES` and `_infer_param_type`
+(`src/gaia/agents/base/tools.py`), which unwrap `Optional[X]` / `X | None`, map
+`list`, `tuple`, `set` and `frozenset` to `array` (with `items` for `List[str]`),
+and turn `Literal[...]` into a `string` with an `enum`. `required` is `True` when
+the parameter has no default.
 
 ### Docstring Parsing
 
-```python
-# Extracts entire docstring as-is
-description = f.__doc__ or ""
-
-# No special parsing of Args/Returns sections
-# LLM reads the full docstring
-```
+`_schema_description` removes the `Args:` block from the docstring to build
+`description`, and `_parse_arg_descriptions` puts each `Args:` entry on its own
+parameter as `description`. Sections after `Args:` (`Returns:`, `Raises:`, ...)
+stay in `description`.
 
 ### Registry Management
 
-```python
-# Global registry (cleared when agent reinitializes)
-_TOOL_REGISTRY = {}
+The global `_TOOL_REGISTRY` is written at decoration time and is not cleared when
+an agent is constructed. A tool decorated with `registry=...` goes only to that
+mapping. An agent isolates its tool set with `self._snapshot_tools()`.
 
-# Tools registered at decoration time
+```python
 _TOOL_REGISTRY[tool_name] = {
     "name": tool_name,
-    "description": f.__doc__ or "",
+    "description": _schema_description(f.__doc__),
     "parameters": params,
     "function": f,
-    "atomic": atomic  # Defaults to False
+    "atomic": atomic,
+    "display_label": display_label,
+    "timeout": timeout,
+    "timeout_arg": timeout_arg,
+    "preflight": preflight,
 }
 ```
 
@@ -452,6 +463,8 @@ _TOOL_REGISTRY[tool_name] = {
 ## Testing Requirements
 
 ### Unit Tests
+
+The shipped tests are in `tests/unit/test_tool_decorator.py`. A sketch:
 
 ```python
 import pytest
@@ -637,20 +650,17 @@ def create_user(name: str) -> dict:
 
 ## Limitations
 
-### No Advanced Type Hints
+### Unions of Two Real Types
 
 ```python
-# Not supported: Union types
+# Supported: Optional[str] is "string"; List[str] is {"type": "array", "items": {"type": "string"}}
+def process(data: Optional[str], items: List[str]) -> dict: ...
+
+# Not supported: a union of two real types stays "unknown"
 def process(data: Union[str, int]) -> dict:  # type becomes "unknown"
 
-# Not supported: Optional
-def process(data: Optional[str]) -> dict:  # type becomes "unknown"
-
-# Not supported: List[str]
-def process(items: List[str]) -> dict:  # type is "array" but not List[str]
-
-# Workaround: Use simpler types
-def process(data: str) -> dict:  # Documented in docstring
+# Workaround: use one type and describe the rest in the docstring
+def process(data: str) -> dict:
 ```
 
 ### No Parameter Validation
@@ -675,9 +685,7 @@ def divide(a: int, b: int) -> dict:
 
 ## Future Enhancements
 
-- [ ] Support for Union types
-- [ ] Support for Optional types
-- [ ] Support for List[Type], Dict[Key, Value]
+- [ ] Support for Union types of two real types
 - [ ] Pydantic model integration
 - [ ] Parameter validation decorators
 - [ ] Tool categories/tags

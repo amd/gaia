@@ -390,9 +390,9 @@ class LLMClient(ABC):
         """
         raise NotSupportedError(self.provider_name, "load_model")
 
-    def unload_model(self) -> None:
+    def unload_model(self, model_name: Optional[str] = None) -> None:
         """
-        Unload the current model.
+        Unload a model (the current one when model_name is None).
 
         Raises:
             NotSupportedError: If provider doesn't support model unloading
@@ -434,6 +434,8 @@ class LemonadeProvider(LLMClient):
         host: Optional[str] = None,
         port: Optional[int] = None,
         system_prompt: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model_metadata: Optional[Iterable[Dict[str, Any]]] = None,
         **kwargs,
     ):
         """
@@ -447,13 +449,15 @@ class LemonadeProvider(LLMClient):
             system_prompt: Default system prompt for chat
             api_key: API key for an authenticated Lemonade server
                      (overrides LEMONADE_API_KEY env var; None for unauthenticated)
-            **kwargs: Additional arguments passed to LemonadeClient
+            model_metadata: `/models` entries the caller already read, so
+                            `cloud_model_provider` needs no extra catalog request
+            **kwargs: Passed to LemonadeClient: `verbose`, `keep_alive`,
+                      `ctx_size_override`, `model_lease_priority`
 
         Environment:
             LEMONADE_BASE_URL: Default base URL (http://localhost:13305/api/v1)
             LEMONADE_API_KEY: API key for authenticated remote Lemonade
                               (sent as Authorization: Bearer header on every request)
-            LEMONADE_MODEL: Default model name if not specified
 
         Note:
             Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
@@ -642,7 +646,12 @@ argument fragment cannot execute as a complete call. The agent turns results bac
 into the corresponding tool messages for the next model request.
 
 Provider usage is available through `get_last_usage()` when the backend reports
-it. Missing usage is not proof of zero tokens or zero cost. Per-turn timing and
+it. Missing usage is not proof of zero tokens or zero cost. The base client has
+four more per-call accessors, each `None` when the provider does not report it:
+`get_last_reasoning()` (reasoning kept apart from the answer),
+`get_last_finish_reason()` (`"stop"`, `"length"`, `"tool_calls"`),
+`get_last_ttft_seconds()` (time to first token of a streamed call) and
+`get_last_retry_count()` (retries after a transient failure). Per-turn timing and
 usage records are owned by `agents/base/turn_metrics.py`.
 
 ### Error boundaries
@@ -788,8 +797,8 @@ model initialization.
 - `unit/test_lemonade_client_http.py`: supported Lemonade operations and their
   request shapes, against mocked HTTP.
 - `test_lemonade_client.py`: the same operations against a live Lemonade Server.
-- `test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
-- `test_parallel_tool_calls.py`: preservation and execution of native calls.
+- `unit/test_lemonade_cloud_models.py`: local/cloud lifecycle separation.
+- `unit/agents/test_parallel_tool_calls.py`: preservation and execution of native calls.
 
 The unit workflow triggers for changes to shared source and the packaged chat
 agent. Tests must exercise the retained route as well as migration failures.
@@ -833,18 +842,15 @@ def test_integration_lemonade_performance_stats():
 
 ### Required Packages
 
-```toml
-# pyproject.toml
-[project]
-dependencies = [
-    "openai>=1.0.0",      # OpenAI-compatible HTTP client used by LemonadeClient
-    "httpx>=0.24.0",      # HTTP client with timeout support
-    "requests>=2.31.0",   # For performance stats/control endpoints
-    "python-dotenv>=1.0.0",  # Environment variable management
-]
+Core dependencies in `setup.py` (no extra is needed for the Claude provider):
 
-[project.optional-dependencies]
-claude = ["anthropic>=0.18.0"]  # Claude API support
+```python
+install_requires=[
+    "openai>=1.58.0",             # OpenAI-compatible HTTP client used by LemonadeClient
+    "requests>=2.32.3",           # Performance stats/control endpoints
+    "httpx>=0.27.0,<1.0",         # HTTP client with timeout support
+    "anthropic>=0.49.0,<3.0.0",   # Claude provider
+]
 ```
 
 ### Import Dependencies
@@ -1066,9 +1072,9 @@ GAIA sends inference requests in the OpenAI-compatible shapes below.
 
 <CardGroup cols={2}>
   <Card title="Completions Endpoint" icon="code">
-    **Default:** `POST /v1/completions`
+    `POST /v1/completions`
 
-    Used for pre-formatted prompts
+    Reached only through `LemonadeClient.completions()`; `create_client().generate()` sends chat completions
   </Card>
 
   <Card title="Chat Completions Endpoint" icon="comments">
@@ -1308,49 +1314,6 @@ for chunk in client.generate("Tell me a story", stream=True):
        ```
   </Accordion>
 </AccordionGroup>
-
----
-
-## Documentation Updates Required
-
-### docs/sdk/sdks/llm.mdx
-
-Add to LLM Section:
-
-```markdown
-### LLM Client
-
-**Import:** `from gaia.llm import create_client, LLMClient, NotSupportedError`
-
-**Purpose:** Provider-based LLM client with factory pattern for local and cloud backends.
-
-**Features:**
-- Factory-based client creation with `create_client()`
-- Two providers: Lemonade (local), Claude
-- Abstract base class for type safety
-- `NotSupportedError` for unsupported features
-- Streaming and non-streaming generation
-- Backward-compatible flags
-
-**Quick Start:**
-```python
-from gaia.llm import create_client
-
-# Local LLM (default)
-client = create_client()
-response = client.generate("Hello world")
-
-# Streaming
-for chunk in client.generate("Tell me a story", stream=True):
-    print(chunk, end="")
-
-# Claude API
-claude = create_client(provider="claude", api_key="sk-ant-...")
-response = claude.generate("Explain Python decorators")
-
-# Backward-compatible
-client = create_client(use_claude=True)
-```
 
 ---
 

@@ -28,7 +28,6 @@ The Agent UI Server is a FastAPI-based backend that powers the GAIA Chat desktop
 - **FastAPI** for automatic OpenAPI docs and Pydantic validation
 - **SSE** (Server-Sent Events) for streaming chat responses
 - **Hybrid document model** -- global library with per-session attachment
-- **Shared database** between CLI and desktop app
 
 ---
 
@@ -53,22 +52,24 @@ src/gaia/ui/
 
 ### Routers (`src/gaia/ui/routers/`)
 
-As of v0.17.x the HTTP surface is split into focused router modules. Every route
-is registered under the `/api` prefix (e.g. the `chat` router serves
+The HTTP surface is split into focused router modules. Almost every route is
+registered under the `/api` prefix (e.g. the `chat` router serves
 `POST /api/chat/send`); the **Mount** column below names the surface, not the
-literal path prefix. Additional routers exist beyond the core set below
-(`connectors`, `goals`, `hub`, `memory`, `schedules`).
+literal path prefix. The exception is `/v1/connections` (`connectors.py`). Additional routers exist beyond the core set below
+(`changes`, `connectors`, `environment`, `goals`, `gpu_memory`, `hub`,
+`lemonade`, `logs`, `memory`, `onboarding`, `providers`, `resources`,
+`schedules`, `setup`, `skills`, `speech`, `spending`).
 
 | Module | Mount | Purpose |
 |---|---|---|
-| `agents.py` | `/agents` | List + inspect registered agents (from [`AgentRegistry`](/spec/plugin-registry)). |
-| `chat.py` | `/chat`, `/chat/stream` | Send messages, stream agent events via SSE. |
+| `agents.py` | `/agents` | List registered agents (from [`AgentRegistry`](/spec/plugin-registry)). |
+| `chat.py` | `/chat` | Send messages (`POST /api/chat/send`) and re-attach to a running turn (`GET /api/chat/attach`), streaming agent events via SSE. |
 | `sessions.py` | `/sessions` | Create/list/delete chat sessions. |
 | `documents.py` | `/documents` | Document library CRUD, metadata, per-session attachment. |
 | `files.py` | `/files` | Raw file uploads and attachments for chat. |
-| `mcp.py` | `/mcp` | Configure and inspect MCP servers used by agents. |
+| `mcp.py` | `/mcp` | Read-only status of the configured MCP servers and their tools. |
 | `system.py` | `/system` | Health, version, model status, diagnostics. |
-| `tunnel.py` | `/tunnel` | Ngrok/Cloudflared tunnel lifecycle. |
+| `tunnel.py` | `/tunnel` | Ngrok tunnel lifecycle. |
 
 ---
 
@@ -98,19 +99,24 @@ dependency helpers in `dependencies.py`. Database objects remain accessible via
 
 ### Streaming Implementation
 
-Chat streaming uses a thread-based producer/consumer pattern:
+Chat streaming uses a thread-based producer/consumer pattern (`_chat_helpers.py`):
 
-1. A background thread calls `AgentSDK.send_stream()` synchronously
-2. Chunks are placed into a `queue.Queue`
-3. The async generator polls the queue and yields SSE events
+1. A background thread runs `agent.process_query(query)` on the chat's agent, built through the agent registry
+2. The agent's output goes to `SSEOutputHandler` (`sse_handler.py`), which puts events on its `event_queue`
+3. The async generator drains the queue and yields SSE events
 4. On completion, the full response is saved to the database
+
+Background runs (`run_manager.py`) outlive the HTTP connection: a client re-attaches with `GET /api/chat/attach` and lists running turns with `GET /api/chat/active`.
 
 ```python
 # SSE event format
 data: {"type": "chunk", "content": "partial text"}
 data: {"type": "done", "message_id": 42, "content": "full response"}
-data: {"type": "error", "content": "error description"}
+data: {"type": "agent_error", "content": "error description", "fatal": true}
+data: {"type": "error", "content": "error description"}  # outer exception only
 ```
+
+The full event list is in the [Agent UI SDK reference](/sdk/sdks/agent-ui).
 
 ### Helper Functions
 
@@ -203,7 +209,7 @@ When a server-owned document is deleted (`DELETE /api/documents/{id}`), the on-d
 
 ## Models (`models.py`)
 
-All 14 Pydantic models:
+Core Pydantic models (`models.py` defines more):
 
 | Model | Type | Used By |
 |-------|------|---------|
@@ -235,13 +241,13 @@ All 14 Pydantic models:
 | `uvicorn` | ASGI server |
 | `pydantic` | Request/response validation |
 | `httpx` | Async HTTP client (Lemonade health checks) |
+| `psutil` | Memory checks in system status; imported by the tunnel manager at startup |
 
 ### Optional
 
 | Package | Purpose |
 |---------|---------|
-| `psutil` | Memory availability check in system status |
-| `gaia.chat.sdk` | LLM communication (AgentSDK) |
+| Agent registry / flagship agent package | LLM communication and tool execution |
 | `gaia.rag.sdk` | Document indexing (RAGSDK) |
 
 ---

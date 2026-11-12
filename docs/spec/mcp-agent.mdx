@@ -385,6 +385,9 @@ class HybridAgent(MCPAgent, ApiAgent, Agent):
 
 ### Unit Tests
 
+Related tests: `tests/mcp/test_agent_mcp_server.py` and
+`tests/mcp/test_agent_mcp_server_stdio.py`.
+
 ```python
 import pytest
 from gaia.agents.base import Agent, MCPAgent
@@ -798,45 +801,6 @@ class CodeAnalyzerAgent(MCPAgent, ApiAgent, Agent):
 # 1. MCP: VSCode extension -> execute_mcp_tool("analyze-code", ...)
 # 2. API: POST /v1/chat/completions with model="code-analyzer"
 #    (after registering it in AGENT_MODELS — see spec/api-server)
-```
-
----
-
-## Documentation Updates Required
-
-### docs/sdk/core/agent-system.mdx
-
-Add to Agent Section:
-
-```markdown
-### MCPAgent Base Class
-
-**Import:** `from gaia.agents.base import MCPAgent`
-
-**Purpose:** Base class for agents exposed via Model Context Protocol (MCP).
-
-**Features:**
-- Tool definition and execution
-- Optional prompts and resources
-- Server metadata
-- VSCode integration
-
-**Quick Start:**
-```python
-from gaia.agents.base import Agent, MCPAgent
-
-class MyAgent(MCPAgent, Agent):
-    def get_mcp_tool_definitions(self):
-        return [{
-            "name": "my-tool",
-            "description": "Does something",
-            "inputSchema": {...}
-        }]
-
-    def execute_mcp_tool(self, tool_name, arguments):
-        if tool_name == "my-tool":
-            return {"result": ...}
-        raise ValueError(f"Unknown tool: {tool_name}")
 ```
 
 ---

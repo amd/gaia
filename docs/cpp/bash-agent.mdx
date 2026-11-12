@@ -44,7 +44,7 @@ icon: "terminal"
     gaia daemon start
     ```
 
-    Ensure the default model is loaded (override with `--model` or `LEMONADE_MODEL`):
+    Ensure the default model is loaded (override with `--model` or `GAIA_MODEL_ID`):
     ```bash
     gaia init
     ```
@@ -323,7 +323,7 @@ Execute a specific tool directly (bypass the LLM):
 ```bash
 curl http://localhost:8200/v1/tools/bash_execute \
   -H "Content-Type: application/json" \
-  -d '{"command": "df -h", "timeoutMs": 5000}'
+  -d '{"command": "df -h", "timeout_ms": 5000}'
 
 curl http://localhost:8200/v1/tools/file_read \
   -H "Content-Type: application/json" \
@@ -375,8 +375,8 @@ Add to `~/.claude/settings.json`:
 Now Claude Code can use bash agent tools:
 
 ```
-> Use gaia-bash to run shellcheck on my deploy.sh script
-> Use gaia-bash to write a BATS test for my backup.sh
+> Use gaia-bash to show disk usage with df -h
+> Use gaia-bash to write a backup.sh script that tars my notes folder
 ```
 
 ### Configure in OpenCode
@@ -437,56 +437,40 @@ A quick demo showing the key features of `gaia-bash`:
     done
 
   Using tool: file_write → compress_old_logs.sh
-  Using tool: script_lint → 0 warnings
 ```
 
-### 2. Review the Script
+### 2. Run the Script
 
 ```
-> /review compress_old_logs.sh
+> Run it on ./logs with a 30-day threshold
 
-  ## Code Review: compress_old_logs.sh
-
-  Correctness:  Handles filenames with spaces/newlines via -print0
-  Security:     No injection risks, all variables quoted
-  Portability:  gzip --best is GNU-specific (use gzip -9 for broader compat)
-  Performance:  Streaming via pipe, no temp files
-  Style:        ShellCheck clean, well-quoted
+  Using tool: bash_execute → bash compress_old_logs.sh ./logs 30
 ```
 
-### 3. Generate Tests
+Or skip the LLM and run a command directly with `/run`:
 
 ```
-> /test compress_old_logs.sh
-
-  Running: bats test_compress_old_logs.bats
-
-  4/4 tests passed
-    compresses .log files older than 30 days
-    skips .log files newer than threshold
-    handles filenames with spaces
-    respects custom directory argument
+> /run ls ./logs
 ```
 
-### 4. Use via API
+### 3. Use via API
 
 ```bash
-# From another terminal
-curl -s http://localhost:8200/v1/tools/script_lint \
-  -d '{"path":"compress_old_logs.sh"}' | jq .
+# From another terminal (gaia-bash --serve)
+curl -s http://localhost:8200/v1/tools/bash_execute \
+  -H "Content-Type: application/json" \
+  -d '{"command":"bash compress_old_logs.sh ./logs 30"}' | jq .
 ```
 
-### 5. Use via MCP from Claude Code
+### 4. Use via MCP from Claude Code
 
 ```
-Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
-
-  gaia-bash: Running POSIX compliance check on deploy.sh...
-  Found 3 bashisms in #!/bin/sh script:
-    Line 12: [[ ]] → use [ ] for POSIX
-    Line 25: ${var,,} → use tr '[:upper:]' '[:lower:]'
-    Line 41: arrays → use positional parameters or files
+Claude Code> Use gaia-bash to write a backup script and run it
 ```
+
+<Note>
+Linting (`script_lint`), BATS test generation (`script_test`) and the `/lint`, `/test` and `/review` commands are planned and not yet available. See [Slash Commands](#slash-commands) and [Built-in Tools](#built-in-tools).
+</Note>
 
 ---
 
@@ -497,8 +481,8 @@ Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
 | Variable | Default | Description |
 |---|---|---|
 | `LEMONADE_BASE_URL` | `http://localhost:13305/api/v1` | Lemonade Server URL |
-| `LEMONADE_MODEL` | `Gemma-4-E4B-it-GGUF` | Model to load (honored by `LemonadeClient`) |
-| `GAIA_CPP_CTX_SIZE` | `16384` | Context window size (tokens) |
+| `GAIA_MODEL_ID` | `Gemma-4-E4B-it-GGUF` | Model to load (same as `--model`) |
+| `GAIA_CONTEXT_SIZE` | `32768` | Context window size (tokens) |
 | `GAIA_STREAMING` | `0` | Enable streaming (`1` = on) |
 
 ### CLI Flags
@@ -510,7 +494,7 @@ Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
 | `--print` | Pipe-friendly output (no TUI) |
 | `--no-tui` | Force CleanConsole even on interactive terminal |
 | `--tui` | Force the interactive TUI (terminals like MSYS/mintty report stdin as a pipe) |
-| `--query <text>` | Run a single query and exit (same as a positional query argument) |
+| `--query <text>` | With `--json-events`: run one query and exit. Without it the flag is ignored — pass the query positionally |
 | `--resume <id>` | Resume a saved session |
 | `--list-sessions` | List saved sessions and exit |
 | `--model <name>` | Override the LLM model |
@@ -555,6 +539,8 @@ ctest --output-on-failure
 | `GAIA_BUILD_TESTS` | `ON` | Build unit tests |
 | `GAIA_BUILD_EXAMPLES` | `ON` | Build example agents |
 | `GAIA_BUILD_INTEGRATION_TESTS` | `OFF` | Build LLM integration tests |
+| `GAIA_BUILD_BASH_AGENT` | `ON` | Build the `gaia-bash` coding agent |
+| `GAIA_BUILD_BENCHMARKS` | `OFF` | Build performance benchmarks |
 
 ---
 

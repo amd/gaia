@@ -25,7 +25,7 @@ Example:
         result = agent.process_query("Find data")
 
         assert_llm_called(agent._mock_llm)
-        assert "results" in result["answer"].lower()
+        assert "results" in result["result"].lower()
 """
 
 # Assertions

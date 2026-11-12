@@ -15,7 +15,7 @@ title: "Prompts Class"
 
 ## Overview
 
-Prompts class provides model-specific prompt formatting for 14+ LLM families. Each model has unique conversation format requirements (chat templates), and Prompts handles the conversion automatically.
+Prompts class provides model-specific prompt formatting for 10 LLM families plus a generic default. Each model has unique conversation format requirements (chat templates), and Prompts handles the conversion automatically.
 
 **Supported Models:**
 - Llama 3 / 3.2
@@ -129,7 +129,7 @@ from gaia.chat.prompts import Prompts
 # Conversation history
 chat_history = [
     "user: Hello, how are you?",
-    "assistant: I'm doing well! How can I help?",
+    "gaia: I'm doing well! How can I help?",
     "user: What's the weather like?",
 ]
 
@@ -142,20 +142,12 @@ formatted = Prompts.format_chat_history(
 )
 
 print(formatted)
-# Output:
-# <|im_start|>system
-# You are gaia (Qwen), a helpful AI assistant...
-# <|im_end|>
-# <|im_start|>user
-# Hello, how are you?
-# <|im_end|>
-# <|im_start|>assistant
-# I'm doing well! How can I help?
-# <|im_end|>
-# <|im_start|>user
-# What's the weather like?
-# <|im_end|>
-# <|im_start|>assistant
+# Output (one unbroken string; wrapped here for reading):
+# <|im_start|>system\nYou are gaia (Qwen), a helpful AI assistant named gaia. ...<|im_end|>
+# <|im_start|>user\nHello, how are you?<|im_end|>
+# <|im_start|>assistant\nI'm doing well! How can I help?<|im_end|>
+# <|im_start|>user\nWhat's the weather like?<|im_end|>
+# <|im_start|>assistant\n
 ```
 
 ### Example 2: Custom System Prompt

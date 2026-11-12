@@ -124,7 +124,7 @@ it to the whole string, so that step runs as argv on Windows too, and gives up
 1. **Safe Command Execution**
    - Read-only list: ls, cat, grep, find, git status, etc.
    - Everything else asks the user first (rm, chmod, git commit, etc.)
-   - Git global options that can run code (`-c`, `--config-env`, `--exec-path`) are refused
+   - Git global options that can run code (`-c`, `--config-env`, `--exec-path`) need one-time approval (`TIER_CONFIRM_ONCE`)
    - Working directory support
    - Timeout protection, scaled to the kind of command (see below)
 
@@ -398,6 +398,8 @@ Every block carries a `tier`. Only `TIER_CONFIRM` reaches the confirmation
 prompt; a block with no tier is refused, so a guard that forgets to say fails
 closed.
 
+An excerpt of `ALLOWED_COMMANDS` (the full set in `shell_tools.py` is larger and also has system-info tools such as `lscpu`, `free`, `systeminfo`, `tasklist`, plus `which`, `basename`, `echo` and more):
+
 ```python
 ALLOWED_COMMANDS = {
     # File listing (READ-ONLY)
@@ -573,10 +575,19 @@ for arg in cmd_parts[1:]:
 
 ## Testing Requirements
 
+`run_shell_command` is a closure registered by `register_shell_tools`, not a method, so it is called through `agent._execute_tool`. The snippets below use this helper:
+
+```python
+def run(agent, command, **kwargs):
+    return agent._execute_tool("run_shell_command", {"command": command, **kwargs})
+```
+
+The real tests are under `tests/unit/` (`test_shell_guardrails.py`, `test_shell_compound_commands.py`, `test_shell_adaptive_timeouts.py`).
+
 ```python
 def test_run_shell_command_success(agent):
     """Test successful command execution."""
-    result = agent.run_shell_command("ls -la")
+    result = run(agent, "ls -la")
     assert result["status"] == "success"
     assert result["return_code"] == 0
 
@@ -584,11 +595,11 @@ def test_run_shell_command_rate_limit_burst(agent):
     """Test burst rate limiting (3 per 10 seconds)."""
     # Execute 3 commands quickly
     for i in range(3):
-        result = agent.run_shell_command("pwd")
+        result = run(agent, "pwd")
         assert result["status"] == "success"
 
     # The 4th waits out the burst window, then runs
-    result = agent.run_shell_command("pwd")
+    result = run(agent, "pwd")
     assert result["status"] == "success"
     assert result["waited_seconds"] > 0
 
@@ -596,7 +607,7 @@ def test_run_shell_command_rate_limit_cap(agent):
     """A wait past max_rate_limit_wait_seconds is refused, not paced."""
     agent.max_rate_limit_wait_seconds = 1
     for i in range(4):
-        result = agent.run_shell_command("pwd")
+        result = run(agent, "pwd")
     assert result["rate_limited"] is True
 
 def test_run_shell_command_rate_limit_sustained(agent):
@@ -613,14 +624,14 @@ def test_a_write_is_confirmable_not_refused():
         parts = cmd.split()
         assert ShellToolsMixin._validate_command(parts[0], parts, cmd)["tier"] == TIER_CONFIRM
 
-def test_an_undescribable_invocation_is_refused():
+def test_an_uninspectable_invocation_is_asked_about_once():
     cmd = "git -c core.pager=x status"
     parts = cmd.split()
-    assert ShellToolsMixin._validate_command(parts[0], parts, cmd)["tier"] == TIER_REFUSE
+    assert ShellToolsMixin._validate_command(parts[0], parts, cmd)["tier"] == TIER_CONFIRM_ONCE
 
 def test_run_shell_command_git_read_allowed(agent):
     """Test git read operations are allowed."""
-    result = agent.run_shell_command("git status")
+    result = run(agent, "git status")
     assert result["status"] == "success" or "not a git repository" in result["error"]
 
 def test_run_shell_command_path_traversal_blocked(agent, monkeypatch):
@@ -631,20 +642,20 @@ def test_run_shell_command_path_traversal_blocked(agent, monkeypatch):
 
     monkeypatch.setattr(agent.path_validator, "is_path_allowed", mock_denied)
 
-    result = agent.run_shell_command("cat ../secret.txt")
+    result = run(agent, "cat ../secret.txt")
     assert result["status"] == "error"
     assert "denied" in result["error"].lower()
 
 def test_run_shell_command_timeout(agent):
     """Test command timeout handling."""
-    result = agent.run_shell_command("sleep 100", timeout=1)
+    result = run(agent, "sleep 100", timeout=1)
     assert result["status"] == "error"
     assert result["timed_out"] is True
 
 def test_run_shell_command_output_truncation(agent):
     """Test large output truncation."""
     # Command that produces >10,000 chars
-    result = agent.run_shell_command("yes | head -n 1000")
+    result = run(agent, "yes | head -n 1000")
     assert result["output_truncated"] is True
     assert len(result["stdout"]) <= 10100  # 10,000 + truncation message
 ```
@@ -669,19 +680,21 @@ from typing import Any, Dict, Optional
 
 ## Usage Examples
 
+The examples write `run(agent, ...)` as shorthand for `agent._execute_tool("run_shell_command", {"command": ...})`, since mixin tools are registered closures.
+
 ### Example 1: Safe File Operations
 
 ```python
 # List directory
-result = agent.run_shell_command("ls -la /home/user/Documents")
+result = run(agent, "ls -la /home/user/Documents")
 print(result["stdout"])
 
 # Search for files
-result = agent.run_shell_command("find . -name '*.pdf'")
+result = run(agent, "find . -name '*.pdf'")
 files = result["stdout"].splitlines()
 
 # Read file
-result = agent.run_shell_command("cat README.md")
+result = run(agent, "cat README.md")
 content = result["stdout"]
 ```
 
@@ -689,11 +702,11 @@ content = result["stdout"]
 
 ```python
 # Allowed: git status
-result = agent.run_shell_command("git status")
+result = run(agent, "git status")
 print(result["stdout"])
 
 # Allowed: git log
-result = agent.run_shell_command("git log --oneline -10")
+result = run(agent, "git log --oneline -10")
 
 # Asks first: git commit is TIER_CONFIRM — shown to the user, runs if approved
 # (and refused under GAIA_AUTO_APPROVE_TOOLS alone)
@@ -706,7 +719,7 @@ result = agent.run_shell_command("git log --oneline -10")
 # waits for the window and then runs, so the caller writes no retry loop. The
 # wait is sliced and stops early if the agent cancels the call.
 for i in range(5):
-    result = agent.run_shell_command("pwd")
+    result = run(agent, "pwd")
     if result.get("waited_seconds"):
         print(f"Paced {result['waited_seconds']:.1f}s before running")
 

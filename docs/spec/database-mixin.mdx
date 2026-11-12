@@ -40,7 +40,7 @@ All methods are instance methods on any class that mixes in `DatabaseMixin`.
 ### Connection lifecycle
 
 ```python
-def init_db(self, path: str = ":memory:") -> None
+def init_db(self, path: str = ":memory:", *, quiet: bool = False) -> None
 def close_db(self) -> None
 @property
 def db_ready(self) -> bool
@@ -214,7 +214,6 @@ class TodoAgent(Agent, DatabaseMixin):
             )
 
     def _register_tools(self):
-        super()._register_tools()
 
         @tool
         def add_todo(title: str) -> dict:

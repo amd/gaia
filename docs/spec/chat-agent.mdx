@@ -9,7 +9,7 @@ title: "ChatAgent"
 <Note>
 **Component:** ChatAgent - Reference Conversational AI Implementation
 **Module:** `gaia_agent.chat_agent`
-**Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
+**Inherits:** MemoryMixin, Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, CliSetupToolsMixin, FileSystemToolsMixin, ScratchpadToolsMixin, BrowserToolsMixin, BrowserUseToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, AudioToolsMixin, AudioGenerationToolsMixin, WaitToolsMixin, ReasoningEffortToolsMixin, MCPClientMixin
 
 > **Status:** ChatAgent is the base class [GaiaAgent](/guides/gaia) extends, not an agent you pick. It ships in the flagship package (`gaia-agent-gaia`). Its old `chat` / `doc` / `file` ids resolve to the flagship `gaia` agent, so stored sessions reopen on it. The `gaia_agent_chat` re-export shim was removed in v0.26.0; import from `gaia_agent.chat_agent`. New work should target the flagship.
 </Note>
@@ -88,11 +88,16 @@ ChatAgent is GAIA's reference implementation for conversational AI with document
 ```python
 @dataclass
 class ChatAgentConfig:
-    """Configuration for ChatAgent."""
+    """Configuration for ChatAgent (an excerpt: the dataclass also carries
+    skip_lemonade, device, min_context_size, max_output_tokens, context_eviction*,
+    resend_reasoning_across_requests, output_handler, working_directory,
+    enable_filesystem, enable_scratchpad, filesystem_*, scratchpad_db_path,
+    enable_browser, browser_*, surface, enable_audio_generation_tools and
+    mcp_tool_limit; see gaia_agent/chat_agent.py)."""
 
     # LLM settings
     use_claude: bool = False
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-5"
     # None = fall back to LEMONADE_BASE_URL env var, then the default
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = config default_model, else Gemma-4-E4B-it-GGUF
@@ -131,15 +136,25 @@ class ChatAgentConfig:
 
 ```python
 class ChatAgent(
+    MemoryMixin,
     Agent,
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    CliSetupToolsMixin,
+    FileSystemToolsMixin,
+    ScratchpadToolsMixin,
+    BrowserToolsMixin,
+    BrowserUseToolsMixin,
     FileSearchToolsMixin,
     FileIOToolsMixin,
     VLMToolsMixin,
     ScreenshotToolsMixin,
     SDToolsMixin,
+    AudioToolsMixin,
+    AudioGenerationToolsMixin,
+    WaitToolsMixin,
+    ReasoningEffortToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -178,7 +193,7 @@ class ChatAgent(
 **RAG Tools (from RAGToolsMixin):**
 ```python
 @tool
-def query_documents(query: str, max_chunks: int = 5) -> Dict[str, Any]:
+def query_documents(query: str, debug: bool = False) -> Dict[str, Any]:
     """Search all indexed documents for relevant content."""
     pass
 
@@ -191,7 +206,12 @@ def index_document(file_path: str) -> Dict[str, Any]:
 **File Tools (from FileSearchToolsMixin):**
 ```python
 @tool
-def search_file(file_pattern: str, directory: str = None) -> Dict[str, Any]:
+def search_file(
+    file_pattern: str,
+    directory: str = None,
+    deep_search: bool = False,
+    file_types: str = None,
+) -> Dict[str, Any]:
     """
     Search for files matching pattern across drives.
     Phase 1: Common locations (Documents, Downloads, Desktop)
@@ -200,7 +220,9 @@ def search_file(file_pattern: str, directory: str = None) -> Dict[str, Any]:
     pass
 
 @tool
-def read_file(file_path: str) -> Dict[str, Any]:
+def read_file(
+    file_path: str, offset: int = 0, limit: Optional[int] = None
+) -> Dict[str, Any]:
     """Read file content with security validation."""
     pass
 ```
@@ -208,8 +230,12 @@ def read_file(file_path: str) -> Dict[str, Any]:
 **Shell Tools (from ShellToolsMixin):**
 ```python
 @tool
-def run_shell_command(command: str, timeout: int = 30) -> Dict[str, Any]:
-    """Execute shell command and return output."""
+def run_shell_command(
+    command: str, working_directory: Optional[str] = None, timeout: int = None
+) -> Dict[str, Any]:
+    """Execute shell command and return output.
+
+    timeout defaults by command class, from 30 s up to 1800 s."""
     pass
 ```
 
@@ -395,18 +421,10 @@ def test_session_persistence(tmp_path):
 
 ## Dependencies
 
-```toml
-[project.optional-dependencies]
-rag = [
-    "faiss-cpu>=1.7.0",
-    "pypdf>=3.0.0",
-]
-
-chat = [
-    "watchdog>=2.1.0,<7",  # File monitoring
-    "aiohttp>=3.8.0",   # Async HTTP
-]
-```
+Document retrieval needs the `rag` extra of the core package
+(`faiss-cpu`, `numpy`, `pypdfium2`, `pypdf`, `python-pptx`, `python-docx`,
+`openpyxl`, `reportlab`); see the [RAG SDK spec](/spec/rag-sdk). There is no
+separate `chat` extra.
 
 ---
 

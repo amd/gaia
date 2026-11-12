@@ -11,7 +11,7 @@ icon: "server"
 <Note>
 **Components:** OpenAI-compatible API Server, Schemas, Endpoints, SSE Streaming
 **Module:** `gaia.api`
-**Import:** `from gaia.api import app, schemas, agent_registry`
+**Import:** `from gaia.api.openai_server import app` and `from gaia.api import schemas, agent_registry`
 </Note>
 
 ---
@@ -23,8 +23,8 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
 **Key Features:**
 - OpenAI-compatible endpoints (/v1/chat/completions, /v1/models)
 - Server-Sent Events (SSE) streaming
-- Dynamic agent registry
-- Workspace root extraction from GitHub Copilot
+- Static `AGENT_MODELS` registry (one entry, `gaia`); a fresh agent per request
+- Daemon relay for `/v1/<agent>/*` routes
 - Debug modes (logging, prompts, streaming)
 - CORS support
 - Health checks
@@ -52,22 +52,27 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
    - Model metadata (tokens, description)
 
 3. **GET /health**
-   - Reports API, Lemonade LLM, and RAG component status
+   - Reports `components.api` and `components.llm` status
    - Returns 200 OK while the API process is serving
    - Uses top-level `degraded` when Lemonade is unavailable or no LLM is loaded
 
 #### Agent Registry
 
 1. **Agent Registration**
-   - Dynamic agent discovery
-   - Model ID mapping
-   - Agent instantiation
-   - Workspace configuration
+   - Static `AGENT_MODELS` dict in `agent_registry.py`; the key is the model ID
+   - One entry ships: `gaia`, mapped to `gaia_agent.agent.GaiaAgent`
 
 2. **Agent Management**
-   - Singleton instances per agent type
+   - A fresh agent is built for every request
    - Silent mode operation
-   - Workspace root injection
+
+#### Daemon Relay
+
+`agent_proxy.py` adds `POST /v1/{agent_id}/query`,
+`POST /v1/{agent_id}/query/{run_id}/cancel` and
+`GET|POST|PUT|PATCH|DELETE /v1/{agent_id}/{subpath}`, which forward to the GAIA
+daemon. See [SDK → API Server](/sdk/infrastructure/api-server#routes) for the
+auth, status-code and streaming behavior.
 
 #### Request Processing
 
@@ -204,6 +209,8 @@ class ModelInfo(BaseModel):
     description: Optional[str] = None
     max_input_tokens: Optional[int] = None
     max_output_tokens: Optional[int] = None
+    # extra="allow" lets custom get_model_info() fields through
+    model_config = ConfigDict(extra="allow")
 
 class ModelListResponse(BaseModel):
     """GET /v1/models response."""
@@ -384,7 +391,7 @@ AGENT_MODELS: Dict[str, Dict[str, Any]] = {
     },
     # "your-agent-id": {
     #     "class_name": "my_package.my_agent.MyAPIAgent",
-    #     "init_params": {"api_mode": True, "silent_mode": True},
+    #     "init_params": {"silent_mode": True, "streaming": False},
     #     "description": "...",
     # },
 }
@@ -498,18 +505,27 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
     else:
         # Non-streaming response
-        response_text = agent.process_query(user_message)
+        # process_query returns a dict; run it off the event loop
+        # (_run_query_then_close runs process_query, then closes the agent)
+        result = await asyncio.to_thread(_run_query_then_close, agent, user_message)
+        response_text = result.get("result", str(result))
 
-        # Token counting
+        # Surface refused-tool reasons that the one-way response would hide
+        response_text = _prepend_tool_denials(agent, response_text)
+
+        # Token counting over system text, history and the query
+        prompt_text = "\n".join(
+            [system_text, *(m["content"] for m in history), user_message]
+        )
         if isinstance(agent, ApiAgent):
-            prompt_tokens = agent.estimate_tokens(user_message)
+            prompt_tokens = agent.estimate_tokens(prompt_text)
             completion_tokens = agent.estimate_tokens(response_text)
         else:
-            prompt_tokens = len(user_message) // 4
+            prompt_tokens = len(prompt_text) // 4
             completion_tokens = len(response_text) // 4
 
         return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+            id=f"chatcmpl-{uuid.uuid4().hex[:24]}",
             object="chat.completion",
             created=int(time.time()),
             model=request.model,
@@ -545,14 +561,15 @@ async def log_raw_requests(request: Request, call_next):
         logger.debug("=" * 80)
         logger.debug(f"Path: {request.url.path}")
         logger.debug(f"Method: {request.method}")
-        logger.debug("Headers:")
-        for name, value in request.headers.items():
-            logger.debug(f"  {name}: {value}")
+        # Header names and value lengths only; values are redacted
+        _log_header_summary(request.headers)
 
-        # Don't read body for streaming endpoints
-        if request.url.path != "/v1/chat/completions":
+        # Never read the body of a streaming POST (/v1/chat/completions,
+        # POST /v1/<agent>/query); other bodies are logged as length + [redacted]
+        if not is_streaming_post:  # computed from request.method and path
             body_bytes = await request.body()
-            logger.debug(f"Body: {body_bytes.decode('utf-8')}")
+            logger.debug(f"Body (raw bytes length): {len(body_bytes)}")
+            logger.debug("Body (decoded UTF-8): [redacted]")
 
         logger.debug("=" * 80)
 
@@ -834,8 +851,8 @@ def stop_server(port: int = 8080):
     """
     pass
 
-def check_status():
-    """Check if API server is running."""
+def check_status(host: str = "localhost", port: int = 8080) -> None:
+    """Query /health; exit 1 unless it answers with service == "gaia-api"."""
     pass
 ```
 

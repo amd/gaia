@@ -11,7 +11,7 @@ kinds of connectors:
 - **OAuth (type `oauth_pkce`)** — user-authorized flows (Google, etc.).
   Stores refresh tokens in the OS keyring.
 - **MCP server (type `mcp_server`)** — API-key-based connections to
-  third-party MCP servers (GitHub, Brave Search, etc.). Stores keys in
+  third-party MCP servers (GitHub, Tavily, etc.). Stores keys in
   the OS keyring as `$keyring` references.
 
 Three caller surfaces share the same keyring and grants file:
@@ -20,22 +20,28 @@ Three caller surfaces share the same keyring and grants file:
 
 ## Catalog
 
-The catalog is populated at import time by `gaia.connectors.catalog`.
-Every connector is a `ConnectorSpec`:
+The catalog is populated when `gaia.connectors.catalog` is imported; entry
+points must import it before reading the registry. Every connector is a
+`ConnectorSpec`:
 
 ```python
+import gaia.connectors.catalog  # registers the built-in connectors
 from gaia.connectors.registry import REGISTRY
 
 for spec in REGISTRY.all():
     print(spec.id, spec.type, spec.display_name)
-# google         oauth_pkce   Google
-# github         mcp_server   GitHub
-# brave          mcp_server   Brave Search
+# google          oauth_pkce   Google
+# microsoft       oauth_pkce   Microsoft Personal
+# microsoft_work  oauth_pkce   Microsoft Work or School
+# mcp-github      mcp_server   GitHub
+# mcp-tavily      mcp_server   Tavily
 # ...
 ```
 
-Catalog entries cover 23 connectors across `core`, `productivity`,
-`dev`, and `search` tiers.
+The catalog has 9 connectors: `google`, `microsoft`, `microsoft_work`,
+`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`, `mcp-slack` and
+`mcp-discord`. Each has a `category` (`productivity`, `dev-tools`,
+`communication` or `context`) and an integer `tier` (1 or 2).
 
 ## SDK use — OAuth
 
@@ -81,7 +87,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`get_access_token` raises `AuthRequiredError` on four failure modes:
+`get_access_token` raises `AuthRequiredError` on five failure modes:
 
 | Reason | Cause |
 |---|---|
@@ -89,6 +95,7 @@ asyncio.run(main())
 | `AGENT_NOT_GRANTED` | This agent has no per-agent scope grant. |
 | `CONNECTION_MISSING_SCOPES` | Grant exists but covers fewer scopes. |
 | `REAUTH_REQUIRED` | OAuth client ID was rotated. |
+| `TENANT_MISMATCH` | The stored connection was minted under a different Microsoft tenant; use the other Microsoft connector. |
 
 `AGENT_NOT_GRANTED` with `agent_id=None` is a distinct case: the call came from
 inside an agent turn that carries no identity, so no grant could be checked and
@@ -108,6 +115,36 @@ at that moment (`list_connections()`, `get_connection()`, or
 `GET /v1/connections[/{provider}]`) still returns the row, with
 `"error": "busy"` and empty `scopes`. Don't base a scope decision on that row;
 ask again shortly.
+
+## SDK use — device-code flow
+
+A connector whose spec sets `supports_device_code` (the two Microsoft
+connectors) can sign in with RFC 8628's device-code flow: the user enters a
+short code at a URL, so no browser redirect or local callback is needed.
+
+```python
+import gaia.connectors as conn
+
+MAIL_READ = "https://graph.microsoft.com/Mail.Read"
+
+info = await conn.start_device_flow("microsoft", scopes=[MAIL_READ])
+print(info["message"])  # shows info["user_code"] and info["verification_uri"]
+
+state = await conn.poll_device_flow(
+    "microsoft",
+    info["device_code"],
+    scopes=[MAIL_READ],
+    interval=info["interval"],
+    expires_in=info["expires_in"],
+    grant_agents={"installed:gaia": [MAIL_READ]},  # optional: grant in the same step
+)
+```
+
+`poll_device_flow` waits through `authorization_pending`, widens its interval
+on `slow_down`, saves the connection on approval, and raises
+`FlowTimeoutError` or `ConsentDeniedError` otherwise. A provider with no
+device-code endpoint raises `ConnectorsError` from `start_device_flow`. The CLI
+equivalent is `gaia connectors connect <id> --device`.
 
 ## Forwarded connections (no re-auth)
 
@@ -225,13 +262,14 @@ from gaia.connectors.handler import configure, get_credential
 # Configure — stores the key in the OS keyring.
 await configure("mcp-github", {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."})
 
-# Retrieve — used by the MCP bridge to launch the server.
+# Retrieve the configured environment.
 creds = await get_credential("mcp-github")
 # {"env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}, "command": "npx", "args": [...]}
 ```
 
-The MCP bridge injects these credentials as environment variables when
-it launches the MCP server process.
+`configure` writes `$keyring` references into `<gaia_home>/mcp_servers.json`.
+GAIA's MCP client (`MCPClient.from_config`) resolves them from the keyring and
+passes them to the server process as environment variables when it starts it.
 
 ## CLI use
 
@@ -242,13 +280,13 @@ gaia connectors connect google \
 
 # MCP: supply API key(s)
 gaia connectors configure mcp-github --set GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…
-gaia connectors configure brave  --set BRAVE_API_KEY=BSA…
+gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tvly-…
 
 # Check status of all connectors
 gaia connectors status
 #  google                          [oauth_pkce]  configured (you@gmail.com)
-#  github                          [mcp_server]  configured
-#  brave                           [mcp_server]  not configured
+#  mcp-github                      [mcp_server]  configured
+#  mcp-tavily                      [mcp_server]  not configured
 
 # Test a configured connector. An MCP server is started once; GitHub checks
 # its token only when a tool runs, so a bad token still passes here.
@@ -275,10 +313,10 @@ gaia connectors grants revoke google installed:gaia
 # Per-agent activations — gate which agents see this MCP server's tools.
 # Activations apply to mcp_server connectors only; OAuth connectors are
 # rejected with exit 3 (use per-scope grants above instead).
-gaia connectors activations activate mcp-github builtin:chat \
+gaia connectors activations activate mcp-github installed:gaia \
     --scopes use   # --scopes is only consulted when no prior grant exists
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 
 # Disconnect
 gaia connectors disconnect google
@@ -453,16 +491,16 @@ from gaia.connectors import activate, deactivate
 # Activate (auto-grants if no prior grant exists). mcp-github is the
 # catalog id for the GitHub MCP server; activations only accept
 # mcp_server connectors.
-activate("mcp-github", "builtin:chat", scopes_for_grant=["use"])
+activate("mcp-github", "installed:gaia", scopes_for_grant=["use"])
 
 # Deactivate (preserves grant — re-activate is one click)
-deactivate("mcp-github", "builtin:chat")
+deactivate("mcp-github", "installed:gaia")
 ```
 
 ```bash
-gaia connectors activations activate mcp-github builtin:chat --scopes use
+gaia connectors activations activate mcp-github installed:gaia --scopes use
 gaia connectors activations list mcp-github
-gaia connectors activations deactivate mcp-github builtin:chat
+gaia connectors activations deactivate mcp-github installed:gaia
 ```
 
 ### Which agents appear in the "Active for" panel
@@ -473,7 +511,8 @@ For an `mcp_server` connector the panel lists agents from **two** sources:
 2. Agents that set `CONSUMES_MCP_SERVERS = True` — they load MCP servers
    dynamically at runtime (from `~/.gaia/mcp_servers.json`) and gate the
    tools through this same activation ledger, so they can use **any** MCP
-   connector once activated. `builtin:chat` is the canonical example.
+   connector once activated. The flagship (`installed:gaia`, which inherits
+   the flag from `ChatAgent`) is the canonical example.
 
 Category (2) agents declare no scopes of their own, so one-click activation
 auto-grants the canonical `use` scope. The registry surfaces the flag on
@@ -504,11 +543,49 @@ Disconnecting a connector wipes both grants **and** activations for that
 connector — re-adding the same `connector_id` must not silently inherit
 the previous user's tool-visibility decisions.
 
+## API reference
+
+Names below import from `gaia.connectors` unless noted.
+
+| Area | Names |
+|---|---|
+| OAuth flows | `start_authorization`, `complete_authorization`, `start_device_flow`, `poll_device_flow`, `cancel_flow(flow_id)` |
+| Tokens | `get_access_token`, `get_access_token_sync`, `get_access_token_with_expiry` (returns `(token, expires_at)`), `get_access_token_with_expiry_sync` |
+| Connections | `list_connections`, `get_connection`, `revoke_connection`, `revoke_connection_async`, `connected_mailbox_providers`, `import_forwarded_connection`, `tripwire_check` (sweeps every stored connection at startup) |
+| Grants | `grant_agent`, `revoke_agent_grant`, `list_agent_grants`, `load_grants`, `resolve_declared_scopes` (an agent's `REQUIRED_CONNECTORS` scopes for a connector) |
+| Activations | `activate`, `deactivate`, `activate_agent`, `deactivate_agent`, `is_agent_active`, `list_agent_activations`, `load_activations` |
+| Identity and events | `current_agent_id`, `agent_runtime_active`, `EventEmitter`, `set_emitter` |
+| Catalog | `REGISTRY` and `ConnectorRegistry` (`register`, `get`, `all`, `freeze`, `clear`, `in`, `len`, iteration); `ConnectorSpec.scope_ceiling()` is the most a grant may carry |
+
+The handler layer (`gaia.connectors.handler`) dispatches by connector type:
+`configure`, `get_credential`, `disconnect`, `health_check`, and
+`register_handler(connector_type, handler)` for a new type. A handler
+implements the `ConnectorHandler` protocol.
+
+Errors, all subclasses of `ConnectorsError`:
+
+| Error | Raised when |
+|---|---|
+| `ConnectionRevokedError` | The grant was revoked or rotated remotely; reconnect. |
+| `RateLimitedError` | A provider rate-limited a request and every retry failed. |
+| `OAuthProviderError` | A provider's OAuth endpoint rejected a request, with its structured reason. |
+| `FlowTimeoutError` | The sign-in window lapsed before the callback. |
+| `ConsentDeniedError` | The user denied consent. |
+| `FlowInProgressError` | Another OAuth flow is already pending; only one runs at a time. |
+| `UnknownAgentError` | A requested agent id isn't in the agent registry. |
+| `NoDeclaredScopesError` | An agent declares no `REQUIRED_CONNECTORS` scopes for the connector. |
+| `GrantAfterConnectError` | The connection was saved but the agent grant that should follow it failed. |
+
+CLI flags beyond the examples above: `connect --grant-agent <agent_id>` (grant
+in the same step; scopes default to the agent's declared ones) and `--device`;
+`configure --client-id` / `--client-secret` (OAuth client credentials) and
+`--json '{...}'` (config as a JSON object instead of `--set`).
+
 ## Where things live
 
 | Path | Contents |
 |------|----------|
-| `~/.gaia/connectors/state.json` | Non-secret connector metadata (configured, account_id, scopes). Mode 0600. |
+| `~/.gaia/mcp_servers.json` (or `$GAIA_HOME/mcp_servers.json`) | MCP server entries, with `$keyring` references in place of secrets. OAuth connection metadata lives in the keyring blob. |
 | `~/.gaia/connectors/grants.json` | Per-agent scope grants. Mode 0600. |
 | `~/.gaia/connectors/activations.json` | Per-agent tool-visibility activations. Mode 0600. |
 | OS keychain `gaia.connections` | Encrypted refresh tokens + MCP API keys. |
@@ -551,5 +628,5 @@ _MY_SERVICE = ConnectorSpec(
 )
 ```
 
-The MCP bridge will inject `MY_SERVICE_API_KEY` from the keyring as an
-environment variable when launching the server process.
+GAIA's MCP client resolves `MY_SERVICE_API_KEY` from the keyring and sets it as
+an environment variable when it starts the server process.

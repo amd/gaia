@@ -90,15 +90,40 @@ Browser requests from an origin outside the CORS allowlist are refused with
 **403** before the agent runs, whether or not a key is set.
 
 The `/v1/<agent>/*` relay is stricter: it is disabled (**503**) until
-`GAIA_API_KEY` is set.
+`GAIA_API_KEY` is set (a wrong key gets **401**).
+
+### Routes
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI-compatible chat (streaming or not) |
+| `GET /v1/models` | Lists the `AGENT_MODELS` keys |
+| `GET /health` | `components.api` and `components.llm` status; always public |
+| `POST /v1/{agent_id}/query` | Relays an agent run to the GAIA daemon (SSE) |
+| `POST /v1/{agent_id}/query/{run_id}/cancel` | Cancels a relayed run |
+| `GET`/`POST`/`PUT`/`PATCH`/`DELETE /v1/{agent_id}/{subpath}` | Relays an agent's own routes to the daemon |
+
+The relay routes (`src/gaia/api/agent_proxy.py`) behave as follows:
+
+- The ids `chat` and `models` are reserved and return 404.
+- **503** means the daemon can't be reached or started; **502** means it
+  dropped the connection. The error says to check `gaia daemon status`.
+- Server-sent events are relayed unbuffered. If the daemon dies mid-stream, the
+  stream ends with `{"type": "error", "detail": "...", "source": "gaia_api"}`.
+
+`gaia api status [--host H] [--port P]` exits 1 unless `/health` answers
+from a GAIA API server. A frozen install can't run the agent in-process, so
+`gaia api start` refuses there and points to `gaia -p` or the Agent UI
+(`src/gaia/api/flagship.py`).
 
 Agents served with `--api` through the framework's generic server
 (`gaia.agents.base.server.AgentServer`) apply the same policy to every route
 except `/health`.
 
 <Note>
-The VSCode extension sends a fixed key (`Bearer gaia`). It keeps working while
-`GAIA_API_KEY` is unset; once you set a key, the extension's requests get 401.
+In the VSCode extension, run **GAIA: Set API Key** and enter the server's
+`GAIA_API_KEY`. With no saved key it sends `Bearer gaia`, which only works
+while the server has no key.
 </Note>
 
 ### High-risk tools are refused
@@ -159,7 +184,7 @@ class MyAPIAgent(ApiAgent):
     """Agent exposed via OpenAI-compatible API."""
 
     def get_model_id(self) -> str:
-        # Model ID shown in /v1/models
+        # Used by AgentServer (--api); on `gaia api` the id is the AGENT_MODELS key
         return "my-custom-agent"
 
     def get_model_info(self) -> dict:
@@ -193,7 +218,7 @@ AGENT_MODELS = {
     # 👇 New entry
     "my-agent": {
         "class_name": "my_package.my_agent.MyAPIAgent",
-        "init_params": {"api_mode": True, "silent_mode": True},
+        "init_params": {"silent_mode": True, "streaming": False},
         "description": "Custom agent for data analysis",
     },
 }
@@ -232,18 +257,21 @@ result = agent.process_query("Generate code")
 
 ### Events emitted
 
-The API-layer `SSEOutputHandler` emits a strict subset used for OpenAI-style
-chat completions: `chunk` (streamed token deltas) and `answer` (final message).
-The Agent UI uses a richer handler in `src/gaia/ui/sse_handler.py` that emits
-additional events — `tool_start`, `tool_end`, `tool_result`, `thinking`,
-`processing`, `error`. When wiring SSE through the Agent UI routers you will see
-both surfaces.
+The API-layer `SSEOutputHandler` turns agent progress events into OpenAI-style
+chat completion chunks. It receives many event types (`processing_start`,
+`step_header`, `state`, `thought`, `plan`, `tool_usage`, `tool_complete`,
+`error`, `warning`, `final_answer`, `completion` and others), but only a subset
+(`should_stream_as_content` in `src/gaia/api/sse_handler.py`) is relayed to the
+client as `delta.content` text. Errors stay internal unless debug mode is on.
+
+The Agent UI uses a separate handler in `src/gaia/ui/sse_handler.py` that emits
+flat JSON events keyed by `type`:
 
 ```json
 // Example payloads emitted by src/gaia/ui/sse_handler.py
-{"event": "tool_start", "data": {"name": "generate_code", "args": {...}}}
-{"event": "tool_result", "data": {"name": "generate_code", "result": {...}}}
-{"event": "answer", "data": {"text": "Here's the code..."}}
+{"type": "tool_start", "tool": "generate_code", "detail": "...", "narration": "..."}
+{"type": "tool_result", "title": "...", "summary": "...", "success": true}
+{"type": "answer", "content": "Here's the code...", "elapsed": 4.2, "steps": 3, "tools_used": 1}
 ```
 
 ### Disconnects and failures

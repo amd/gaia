@@ -28,7 +28,7 @@ uv pip install -e .
 ```python
 # Check imports use installed package paths
 from gaia.agents.base.agent import Agent  # ✅ Correct
-from gaia import Agent  # ❌ Won't work unless exported in __init__.py
+from gaia import Agent  # ✅ Also works: gaia re-exports Agent, MCPAgent, tool, DatabaseAgent, DatabaseMixin and the file-watcher classes
 ```
 
 ---
@@ -42,10 +42,9 @@ def _register_tools(self):
     def my_tool():
         pass
 
-# Not at class level
-@tool  # ❌ Wrong - won't be registered
-def my_tool():
-    pass
+# A module-level @tool registers globally at import and is visible to every
+# agent that reads the global registry. Define tools inside _register_tools()
+# when they need self or should belong to one agent.
 ```
 
 ---

@@ -164,12 +164,12 @@ All four are `@runtime_checkable` Protocols — no inheritance required.
 
 ## Audit log
 
-`JsonlReceiptService` writes one JSON object per line to a path you choose
-(`receipts.jsonl` by default). The log survives process exit and is trivially
-`grep`-able:
+`JsonlReceiptService(path)` writes one JSON object per line to a path you choose
+(`GaiaGovernanceAdapter.default()` uses `receipts.jsonl`). The log survives process exit and is easy to
+filter with `jq`:
 
 ```bash
-grep '"decision":"BLOCK"' receipts.jsonl | jq .
+jq 'select(.decision=="BLOCK")' receipts.jsonl
 ```
 
 For multi-process deployments, replace `JsonlReceiptService` with a dedicated log

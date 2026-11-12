@@ -15,7 +15,7 @@ title: "ApiAgent"
 
 ## Overview
 
-ApiAgent is an optional mixin class for GAIA agents that want to be exposed via the OpenAI-compatible API with custom behavior. It provides methods for model metadata, token estimation, and response formatting. Agents can inherit from ApiAgent to customize their API representation while maintaining full agent functionality.
+ApiAgent is an optional mixin class for GAIA agents that want to be exposed via the OpenAI-compatible API with custom behavior. It provides methods for model metadata and token estimation. Agents can inherit from ApiAgent to customize their API representation while maintaining full agent functionality.
 
 **Key Features:**
 - OpenAI-compatible model ID generation
@@ -91,7 +91,6 @@ class ApiAgent(Agent):
     Agents that inherit from ApiAgent can customize:
     - Model ID and metadata (get_model_id, get_model_info)
     - Token counting (estimate_tokens)
-    - Response formatting (format_for_api) [future]
 
     The API server can work with ANY Agent subclass via process_query().
     ApiAgent is only needed for customization beyond the defaults.
@@ -136,8 +135,9 @@ class ApiAgent(Agent):
         Note:
             Model IDs should be lowercase with hyphens, following OpenAI convention.
         """
-        # All agents follow *Agent naming convention, strip "Agent" suffix
-        class_name = self.__class__.__name__[:-5].lower()  # Remove "Agent"
+        # Strip a trailing "Agent" suffix when present
+        name = self.__class__.__name__
+        class_name = name[:-5].lower() if name.endswith("Agent") else name.lower()
         return f"gaia-{class_name}"
 
     def get_model_info(self) -> Dict[str, Any]:
@@ -228,7 +228,8 @@ def get_model_id(self) -> str:
     #   WeatherAgent -> weather
     #   SearchAgent -> search
     #   TranslateAgent -> translate
-    class_name = self.__class__.__name__[:-5].lower()
+    name = self.__class__.__name__
+    class_name = name[:-5].lower() if name.endswith("Agent") else name.lower()
     return f"gaia-{class_name}"
 ```
 
@@ -534,8 +535,9 @@ class MyAgent(ApiAgent, Agent):
             """Say hello."""
             return f"Hello, {name}!"
 
-# Agent automatically gets model ID: gaia-my
-# Can be called via API: POST /v1/chat/completions with model="gaia-my"
+# Default get_model_id() returns gaia-my. To serve it from `gaia api`, add an
+# AGENT_MODELS entry in src/gaia/api/agent_registry.py; the entry's key is the
+# model ID clients send.
 ```
 
 ### Example 2: Custom Model ID and Metadata
@@ -571,9 +573,9 @@ class WeatherAgent(ApiAgent, Agent):
             "supports_streaming": True,
         }
 
-# Usage via API:
+# Usage via API (after adding an AGENT_MODELS entry; its key is the model ID):
 # POST /v1/chat/completions
-# {"model": "gaia-weather-agent", "messages": [...]}
+# {"model": "<AGENT_MODELS key>", "messages": [...]}
 ```
 
 ### Example 3: Custom Token Estimation
@@ -657,7 +659,7 @@ class SearchAgent(MCPAgent, ApiAgent, Agent):
 
 # Can be used via:
 # 1. MCP: VSCode extension
-# 2. API: POST /v1/chat/completions
+# 2. API: POST /v1/chat/completions, once the class has an AGENT_MODELS entry
 ```
 
 ### Example 5: Agent Without API Customization
@@ -679,49 +681,11 @@ class SimpleAgent(ApiAgent, Agent):
     def _register_tools(self):
         pass
 
-# Gets automatic model ID: gaia-simple
+# Default get_model_id() returns gaia-simple (used by AgentServer; on
+# `gaia api` the model ID is the AGENT_MODELS key)
 # Uses default token limits: 8192 input, 4096 output
 # Uses char/4 token estimation
 # No custom behavior needed!
-```
-
----
-
-## Documentation Updates Required
-
-### docs/sdk/core/agent-system.mdx
-
-Add to Agent Section:
-
-```markdown
-### ApiAgent Mixin
-
-**Purpose:** Optional mixin for exposing agents via OpenAI-compatible API.
-
-**Features:**
-- Automatic model ID generation
-- Customizable model metadata
-- Token counting interface
-- Works with any Agent
-
-**Quick Start:**
-```python
-from gaia.agents.base import Agent
-from gaia.agents.base.api_agent import ApiAgent
-
-class MyAgent(ApiAgent, Agent):
-    def _get_system_prompt(self):
-        return "My agent"
-
-    def get_model_id(self):
-        return "gaia-my-agent"
-
-    def get_model_info(self):
-        return {
-            "max_input_tokens": 32768,
-            "max_output_tokens": 8192,
-            "description": "My custom agent"
-        }
 ```
 
 ---

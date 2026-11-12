@@ -46,8 +46,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
    - Progress logging
 
 3. **Image Format Support**
-   - PNG images (base64 encoded)
-   - JPEG images (base64 encoded)
+   - PNG, JPEG, GIF, WebP and BMP images (base64 encoded; the MIME type is detected from the bytes with `detect_image_mime_type()`)
    - Automatic image optimization (handled by caller)
    - Size and dimension tracking
 
@@ -67,7 +66,7 @@ VLMClient provides Vision-Language Model capabilities for extracting text from i
    - 300-second timeout for VLM image extraction (5 minutes for complex forms)
    - Model loads use LemonadeClient's load timeout, not the extraction timeout
    - Low temperature (0.1) for accuracy
-   - Up to 2048 tokens per extraction
+   - Up to 4096 tokens per extraction
    - Progress logging for user feedback
 
 2. **Reliability**
@@ -123,6 +122,7 @@ class VLMClient:
         vlm_model: str = "Gemma-4-E4B-it-GGUF",
         base_url: Optional[str] = None,
         auto_load: bool = True,
+        api_key: Optional[str] = None,
     ):
         """
         Initialize VLM client.
@@ -321,6 +321,7 @@ def extract_from_image(
 ) -> str:
     # Encode image as base64
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    mime_type = detect_image_mime_type(image_bytes)
 
     # Default OCR prompt
     if not prompt:
@@ -344,7 +345,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
                 {"type": "text", "text": prompt},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                    "image_url": {"url": f"data:{mime_type};base64,{image_b64}"},
                 },
             ],
         }
@@ -363,8 +364,8 @@ Output format: Clean markdown with the ACTUAL text from the image."""
             model=self.vlm_model,
             messages=messages,
             temperature=0.1,  # Low temp for accurate extraction
-            max_completion_tokens=2048,  # Allow detailed extraction
-            timeout=60,  # VLM may be slower than text models
+            max_completion_tokens=4096,  # Allow detailed extraction
+            timeout=300,  # VLM may be slower than text models
             auto_download=self.auto_load,  # load an available model under the lease
         )
 
@@ -413,20 +414,23 @@ except VLMExtractionError as e:
     log.warning("Skipping page %s: %s", e.page_num, e)
 ```
 
-### Server URL Parsing
+### Image MIME detection
+
+`detect_image_mime_type(image_bytes)` in `gaia.llm.vlm_client` reads the leading
+bytes against `IMAGE_SIGNATURES` (PNG, JPEG, GIF, WebP, BMP) and returns the MIME
+type, defaulting to `image/png` when none match.
+
+### Server URL Handling
+
+The configured URL is passed to `LemonadeClient` whole, so `https`, a
+reverse-proxy path prefix and a remote host are all kept.
 
 ```python
-from urllib.parse import urlparse
+base_url = resolve_lemonade_base_url(base_url)
+self.client = LemonadeClient(model=vlm_model, base_url=base_url, api_key=api_key)
 
-# Parse base_url to extract host and port for LemonadeClient
-parsed = urlparse(base_url)
-host = parsed.hostname or "localhost"
-port = parsed.port or 8000
-
-# Get base server URL (without /api/v1) for user-facing messages
-self.server_url = f"http://{host}:{port}"
-
-self.client = LemonadeClient(model=vlm_model, host=host, port=port)
+# Base server URL (without /api/vN) for user-facing messages
+self.server_url = self.client.base_url.rsplit("/api/", 1)[0]
 ```
 
 ---
@@ -434,6 +438,8 @@ self.client = LemonadeClient(model=vlm_model, host=host, port=port)
 ## Testing Requirements
 
 ### Unit Tests
+
+Real coverage lives in `tests/unit/test_vlm_extraction_failures.py` and `tests/unit/test_structured_vlm_extraction.py`. A sketch:
 
 ```python
 import pytest
@@ -449,20 +455,20 @@ def test_vlm_client_can_be_imported():
 
 def test_initialize_vlm_client():
     """Test VLM client initialization."""
-    with patch('gaia.llm.vlm_client.LemonadeClient'):
+    with patch('gaia.llm.lemonade_client.LemonadeClient'):
         vlm = VLMClient()
         assert vlm.vlm_model == "Gemma-4-E4B-it-GGUF"
         assert vlm.auto_load is True
 
 def test_initialize_with_custom_model():
     """Test initialization with custom model."""
-    with patch('gaia.llm.vlm_client.LemonadeClient'):
+    with patch('gaia.llm.lemonade_client.LemonadeClient'):
         vlm = VLMClient(vlm_model="Custom-VLM-Model")
         assert vlm.vlm_model == "Custom-VLM-Model"
 
 def test_initialize_with_base_url():
     """Test initialization with custom base URL."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient(base_url="http://remote:9000/api/v1")
         assert vlm.base_url == "http://remote:9000/api/v1"
         assert vlm.server_url == "http://remote:9000"
@@ -471,7 +477,7 @@ def test_initialize_with_base_url():
 
 def test_check_availability_success():
     """Test model availability check - model found."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
         vlm.client.list_models = Mock(return_value={
             "data": [
@@ -484,7 +490,7 @@ def test_check_availability_success():
 
 def test_check_availability_not_found():
     """Test model availability check - model not found."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
         vlm.client.list_models = Mock(return_value={
             "data": [
@@ -496,7 +502,7 @@ def test_check_availability_not_found():
 
 def test_extract_from_image_success():
     """Test successful image extraction."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
 
         # Mock successful extraction
@@ -516,7 +522,7 @@ def test_extract_from_image_success():
 
 def test_extract_from_image_load_failure():
     """A load failure surfaces its real error text."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
         vlm.client.chat_completions = Mock(
             side_effect=LemonadeClientError("Failed to load model: out of memory")
@@ -527,7 +533,7 @@ def test_extract_from_image_load_failure():
 
 def test_extract_from_image_extraction_error():
     """Test extraction failure."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
 
         # Mock extraction error
@@ -539,7 +545,7 @@ def test_extract_from_image_extraction_error():
 
 def test_extract_from_image_with_custom_prompt():
     """Test extraction with custom prompt."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
 
         vlm.client.chat_completions = Mock(return_value={
@@ -556,7 +562,7 @@ def test_extract_from_image_with_custom_prompt():
 
 def test_extract_from_page_images():
     """Test batch extraction from page."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
 
         vlm.client.chat_completions = Mock(return_value={
@@ -579,7 +585,7 @@ def test_extract_from_page_images():
 
 def test_context_manager():
     """The context manager does not pre-load; the first request loads."""
-    with patch('gaia.llm.vlm_client.LemonadeClient') as mock_client:
+    with patch('gaia.llm.lemonade_client.LemonadeClient') as mock_client:
         vlm = VLMClient()
 
         with vlm as v:
@@ -648,14 +654,13 @@ dependencies = [
 ```python
 import base64
 import logging
-import os
 from typing import Optional
 
-from dotenv import load_dotenv
-from urllib.parse import urlparse
-
-from gaia.llm.lemonade_client import LemonadeClient
+from gaia.daemon.broker_client import LeaseWaitCancelled
+from gaia.env import load_env
 ```
+
+`LemonadeClient` and `resolve_lemonade_base_url` are imported inside `__init__`.
 
 ---
 
@@ -767,7 +772,7 @@ vlm.cleanup()
 ### Example 6: Error Handling
 
 ```python
-from gaia.llm import VLMClient
+from gaia.llm import VLMClient, VLMExtractionError
 
 vlm = VLMClient()
 
@@ -787,41 +792,6 @@ except Exception as e:
     print(f"Error: {e}")
 finally:
     vlm.cleanup()
-```
-
----
-
-## Documentation Updates Required
-
-### docs/sdk/sdks/vlm.mdx
-
-Add to Vision Section:
-
-```markdown
-### VLMClient
-
-**Purpose:** Vision-Language Model client for extracting text from images.
-
-**Features:**
-- Image-to-text OCR extraction
-- Automatic model loading
-- Batch processing
-- Context manager support
-
-**Quick Start:**
-```python
-from gaia.llm import VLMClient
-
-# Basic extraction
-with VLMClient() as vlm:
-    with open("image.png", "rb") as f:
-        text = vlm.extract_from_image(f.read())
-    print(text)
-
-# Batch processing
-images = [...]  # List of image dicts
-with VLMClient() as vlm:
-    results = vlm.extract_from_page_images(images, page_num=1)
 ```
 
 ---

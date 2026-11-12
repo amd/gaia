@@ -35,7 +35,7 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 
 ### Features
 
-- **Pluggable agent models**: Any agent registered in `AGENT_MODELS` (`src/gaia/api/agent_registry.py`) shows up as a selectable model — none are registered by default
+- **Pluggable agent models**: Any agent registered in `AGENT_MODELS` (`src/gaia/api/agent_registry.py`) shows up as a selectable model — `gaia`, the flagship agent, ships registered
 - **Seamless Integration**: Works with VSCode's built-in model picker and Copilot Chat
 - **Local Processing**: All inference runs locally on your AMD hardware via GAIA
 
@@ -167,18 +167,17 @@ Follow these steps in order:
 
 ### Configuration
 
-The extension currently **does not expose VSCode settings** (no
-`configuration` contribution in `src/vscode/gaia/package.json`). The API URL
-is read from the extension internals and defaults to `http://localhost:8080`;
-to point at a different server, either run `gaia api start --host ... --port
-...` on a port the extension is configured for, or patch the extension
-source in `src/vscode/gaia/`. Configurable settings are on the roadmap.
+The extension has no VSCode settings (no `configuration` contribution in
+`src/vscode/gaia/package.json`). It keeps the server URL and API key in VSCode's
+secret storage, and you set them with two commands. The URL defaults to
+`http://localhost:8080`.
 
 ### Commands
 
 The extension provides the following commands via the Command Palette:
 
-- **GAIA: Manage API Server**: Shows information about GAIA, configuration, and links to documentation
+- **GAIA: Manage API Server**: Prompts for the server URL and saves it (`gaia.serverUrl`). Leave it blank to reset to `http://localhost:8080`.
+- **GAIA: Set API Key**: Prompts for the server's `GAIA_API_KEY` and saves it. Leave it blank to clear it. With no saved key the extension sends `Bearer gaia`, which only works while the server has no key.
 
 ### Architecture
 
@@ -203,11 +202,10 @@ The extension implements VSCode's `LanguageModelChatProvider` API to register GA
 
 ### Usage Examples
 
-No agent is registered in `AGENT_MODELS` by default, so the model picker shows
-nothing until you add one (see [Adding New Agents](/reference/api-spec#adding-new-agents)).
-Once an agent is registered under an id (for example `my-agent`), select it
-from the model picker and chat with it the same way you would with any other
-VSCode language model provider.
+The model picker lists `gaia`, the flagship agent. Add entries to
+`AGENT_MODELS` to expose more (see [Adding New Agents](/reference/api-spec#adding-new-agents)).
+Select a model from the picker and chat with it the same way you would with any
+other VSCode language model provider.
 
 ### Troubleshooting
 
@@ -217,7 +215,8 @@ VSCode language model provider.
 
     **Solutions**:
     - Ensure the API server is running: `gaia api start`
-    - Check the server URL in settings matches where the server is running
+    - Run **GAIA: Manage API Server** and check the saved URL matches where the server is running
+    - If the server has `GAIA_API_KEY` set, run **GAIA: Set API Key** and enter it
     - Verify the server is healthy: `curl http://localhost:8080/health`
   </Accordion>
 
@@ -228,7 +227,6 @@ VSCode language model provider.
     - The picker should list `gaia`. If it is empty, check that the `gaia-agent-gaia` package is installed — the server logs the import error it hit
     - Check the model server is up: `gaia daemon status`. If no daemon is running, `gaia daemon start`
     - The API server needs to be running before selecting models
-    - Check the GAIA output channel for error messages (View > Output > GAIA)
     - Try restarting VSCode
   </Accordion>
 
@@ -236,8 +234,8 @@ VSCode language model provider.
     **Symptoms**: Custom host/port not working
 
     **Solutions**:
-    - Run `gaia api start` on the host/port the extension expects (default `http://localhost:8080`).
-    - Restart the API server on the configured address.
+    - Run **GAIA: Manage API Server** and enter the host and port the API server is on (default `http://localhost:8080`).
+    - Restart the API server on that address.
     - Ensure firewall allows connections to the configured port.
   </Accordion>
 </AccordionGroup>
@@ -423,7 +421,7 @@ src/vscode/gaia/
     In the Extension Development Host window:
 
     1. Open Command Palette (`Ctrl+Shift+P`)
-    2. Run "GAIA: Manage API Server" to see the About dialog
+    2. Run "GAIA: Manage API Server" to set the server URL (and "GAIA: Set API Key" if the server has a key)
     3. Open any chat feature (e.g., Copilot Chat if available)
     4. Click the model picker
     5. Select a GAIA model (models are configured in `AGENT_MODELS`, `src/gaia/api/agent_registry.py`)
@@ -438,8 +436,7 @@ src/vscode/gaia/
     **extension.ts**
 
     - Registers the GAIA LanguageModelChatProvider
-    - Implements management command for About dialog
-    - Creates output channel for logging
+    - Implements the **GAIA: Manage API Server** (server URL) and **GAIA: Set API Key** commands, both backed by VSCode secret storage
   </Tab>
 
   <Tab title="Provider Implementation">
@@ -456,7 +453,7 @@ src/vscode/gaia/
     **package.json**
 
     - Declares `languageModelChatProviders` contribution
-    - Registers commands and settings
+    - Registers the two commands (`gaia.manage`, `gaia.setApiKey`); there are no settings
     - Specifies activation events
   </Tab>
 </Tabs>
@@ -498,20 +495,15 @@ Sends chat requests. Supports streaming via Server-Sent Events (SSE).
 
 ### Debugging
 
-<Tip>
-The extension logs to the "GAIA" output channel. View it via:
-View > Output > Select "GAIA" from dropdown
-</Tip>
-
 <AccordionGroup>
   <Accordion title="Common Development Issues">
     1. **"Failed to connect to GAIA API server" during development**
        - Check API server is running: `curl http://localhost:8080/health`
-       - Verify the URL the extension is targeting (hardcoded to `http://localhost:8080` today) matches your running API server.
+       - Verify the URL saved with **GAIA: Manage API Server** (default `http://localhost:8080`) matches your running API server.
 
     2. **Models not appearing in picker**
        - Ensure API server returns models: `curl http://localhost:8080/v1/models`
-       - Check VSCode output channel for errors
+       - Check the Extension Development Host's developer tools console for errors
        - Restart Extension Development Host
 
     3. **Streaming not working**
@@ -577,10 +569,9 @@ Before submitting changes:
 - [ ] Models appear in model picker
 - [ ] Chat completions work (non-streaming)
 - [ ] Streaming responses work
-- [ ] About dialog displays correctly
-- [ ] Settings are respected
+- [ ] **GAIA: Manage API Server** saves the server URL
+- [ ] **GAIA: Set API Key** saves the key and requests are accepted by a keyed server
 - [ ] Error messages are clear and helpful
-- [ ] Output channel shows useful logs
 
 ### Contributing
 

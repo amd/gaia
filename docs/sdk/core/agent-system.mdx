@@ -117,15 +117,18 @@ During processing, agents transition through different states:
 You can check the current state in your tools if you need conditional behavior:
 
 ```python
-@tool
-def my_tool(self) -> dict:
-    """A tool that behaves differently during error recovery."""
-    if self.execution_state == self.STATE_ERROR_RECOVERY:
-        # Be more conservative during error recovery
-        return {"status": "skipped", "reason": "In recovery mode"}
-    # Normal execution
-    return {"status": "success", "data": "..."}
+def _register_tools(self):
+    @tool
+    def my_tool() -> dict:
+        """A tool that behaves differently during error recovery."""
+        if self.execution_state == self.STATE_ERROR_RECOVERY:
+            # Be more conservative during error recovery
+            return {"status": "skipped", "reason": "In recovery mode"}
+        # Normal execution
+        return {"status": "success", "data": "..."}
 ```
+
+Define the tool inside `_register_tools()` and close over `self`. Every parameter in a tool's signature becomes a tool argument the model must supply, so a `self` parameter would be one of them.
 
 ---
 
@@ -135,14 +138,13 @@ Let's build an agent step by step, starting simple and adding features progressi
 
 ### Step 1: The Minimal Agent
 
-Every agent needs three things:
-1. **A system prompt** - Tells the LLM who it is
-2. **A console** - Handles output display
-3. **Tools** - What the agent can do
+One method is required: `_register_tools()`. Two more are optional overrides:
+1. **`_register_tools()`** (required) - What the agent can do
+2. **`_get_system_prompt()`** (default `""`) - Tells the LLM who it is
+3. **`_create_console()`** (default picks `SilentConsole` or `AgentConsole` by `silent_mode`) - Handles output display
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
 
 class MinimalAgent(Agent):
     """The simplest possible GAIA agent."""
@@ -150,10 +152,6 @@ class MinimalAgent(Agent):
     def _get_system_prompt(self) -> str:
         # This is what the LLM "believes" about itself
         return "You are a helpful assistant."
-
-    def _create_console(self):
-        # AgentConsole provides colorful CLI output
-        return AgentConsole()
 
     def _register_tools(self):
         # No tools yet - agent can only chat
@@ -182,7 +180,6 @@ Let's give the agent the ability to tell time:
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.agents.base.console import AgentConsole
 from datetime import datetime
 
 class TimeAgent(Agent):
@@ -191,9 +188,6 @@ class TimeAgent(Agent):
     def _get_system_prompt(self) -> str:
         return """You are a helpful assistant that can tell the time.
         When users ask about time, use the get_current_time tool."""
-
-    def _create_console(self):
-        return AgentConsole()
 
     def _register_tools(self):
         @tool
@@ -239,7 +233,6 @@ Now let's build something more practical—an agent that can fetch weather data:
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.agents.base.console import AgentConsole
 import requests
 import os
 
@@ -262,9 +255,6 @@ class WeatherAgent(Agent):
 
         Be helpful and proactive - if someone asks about weather for travel,
         mention if they should bring an umbrella or jacket."""
-
-    def _create_console(self):
-        return AgentConsole()
 
     def _register_tools(self):
         @tool
@@ -357,7 +347,7 @@ agent = MyAgent(
     model_id="Gemma-4-E4B-it-GGUF",  # Model to use
 
     # === Cloud LLM Settings ===
-    claude_model="claude-sonnet-4-20250514",  # Claude model version
+    claude_model="claude-sonnet-5",  # Claude model version
     # API key is read from environment: ANTHROPIC_API_KEY
 
     # === Agent Behavior ===
@@ -413,7 +403,7 @@ export ANTHROPIC_API_KEY="your-key-here"
 ```python
 agent = MyAgent(
     use_claude=True,
-    claude_model="claude-sonnet-4-20250514"
+    claude_model="claude-sonnet-5"
 )
 ```
 
@@ -720,7 +710,6 @@ Create an agent that can:
 ```python
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
-from gaia.agents.base.console import AgentConsole
 import os
 
 class FileExplorerAgent(Agent):
@@ -739,9 +728,6 @@ class FileExplorerAgent(Agent):
         1. Start by listing the directory
         2. Read specific files when asked
         3. Search when looking for specific content"""
-
-    def _create_console(self):
-        return AgentConsole()
 
     def _register_tools(self):
         @tool
@@ -1276,6 +1262,24 @@ so the caller sees it, per GAIA's no-silent-fallbacks rule (see
 [`docs/reference/dev`](https://amd-gaia.ai/docs/reference/dev)).
 </Warning>
 
+### Goals and tasks: `GoalStore`
+
+`gaia.agents.base` also exports `Goal`, `Task` and `GoalStore` (`goal_store.py`), the SQLite work queue (`~/.gaia/goals.db`) behind proposals. Use it to act on a parked proposal:
+
+| Method | What it does |
+|--------|--------------|
+| `list_goals(status=None, source=None, approved_only=False, include_tasks=True)` | Goals matching the filters, ordered by priority then age |
+| `get_pending_approval()` | Goals waiting for the user |
+| `approve_goal(goal_id)` | `pending_approval` to `queued`; `None` if the goal doesn't exist |
+| `reject_goal(goal_id)` | `pending_approval` to `rejected` |
+| `cancel_goal(goal_id)` | Cancel a queued or in-progress goal |
+
+An invalid transition raises `GoalTransitionError`; a rejected, cancelled or finished goal is never re-queued.
+
+### Error helpers
+
+`gaia.agents.base.errors` provides `format_user_error(exception, context_lines=2)` (shows the failing line of your code, framework frames filtered out), `format_execution_trace(exception, query=None, plan_step=None, total_steps=None, tool_name=None, tool_args=None, context_lines=5)` (full trace with the query and tool call), `require_host_attr(host, attr_name, mixin_name, hint, doc_anchor)` (raises `MissingHostAttributeError` when a mixin's host attribute is unbound), and `exit_error(what, code, stderr="")` (message for a process that exited non-zero).
+
 ---
 
 ## Key Takeaways
@@ -1284,8 +1288,8 @@ so the caller sees it, per GAIA's no-silent-fallbacks rule (see
 <Card title="Agents = LLM + Tools + Memory" icon="brain">
 Agents can plan, act, observe, and reason—not just generate text.
 </Card>
-<Card title="Three Required Methods" icon="code">
-Every agent needs: `_get_system_prompt()`, `_create_console()`, `_register_tools()`
+<Card title="One Required Method" icon="code">
+Every agent needs `_register_tools()`; `_get_system_prompt()` and `_create_console()` are optional overrides
 </Card>
 <Card title="Docstrings Teach the LLM" icon="book">
 The LLM only sees your docstring—make it clear when to use each tool.
