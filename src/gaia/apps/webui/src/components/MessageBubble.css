@@ -159,6 +159,13 @@
 .msg-stopped.is-unconfirmed {
     color: var(--accent-yellow);
 }
+/* Continue and Try again sit beside the chip, centred on it. */
+.msg-stopped:has(+ .msg-try-again),
+.msg-stopped ~ .msg-try-again {
+    margin-top: 8px;
+    vertical-align: middle;
+}
+.msg-stopped + .msg-try-again { margin-inline-start: 8px; }
 
 .msg-cut-off {
     margin: 8px 0 0;
