@@ -3034,12 +3034,16 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
-def _declined_call(event: dict) -> bool:
-    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+def _denial(event: dict) -> Optional[str]:
+    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+
+    A relayed result nests its status in ``data``.
+    """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    status = event.get("status", data.get("status"))
+    if event.get("status", data.get("status")) != "denied":
+        return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return status == "denied" and not timed_out
+    return "timedOut" if timed_out else "declined"
 
 
 def _needed_model(event: dict) -> Optional[str]:
@@ -5077,8 +5081,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
-                        if _declined_call(event):
-                            tool_step["declined"] = True
+                        denial = _denial(event)
+                        if denial:
+                            tool_step[denial] = True
                         # Kept so a reopened chat still offers the download.
                         if _needed_model(event):
                             tool_step["needsModel"] = _needed_model(event)
