@@ -42,6 +42,7 @@ import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -856,11 +857,12 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{line}</span>
+                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
-                    {failure && <span className="flow-tool-failure">{failure}</span>}
+                    {failure && <span className="flow-tool-failure" dir="auto">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
                     {timing && <span className="flow-tool-latency">{timing}</span>}
@@ -869,6 +871,15 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     </span>
                 </div>
             </button>
+
+            {step.needsModel === 'vision' && !step.active && (
+                <div className="flow-tool-offer">
+                    <span>{t('activity.visionNeeded')}</span>
+                    <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                        {t('activity.getVisionModel')}
+                    </button>
+                </div>
+            )}
 
             {isExpanded && (
                 <div className="flow-tool-detail">

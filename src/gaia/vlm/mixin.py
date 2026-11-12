@@ -29,11 +29,32 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from gaia.agents.tools.path_access import read_access_error
+from gaia.llm.vlm_client import VisionModelMissingError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
 DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
+
+#: Put on a call that found no vision model, so the model stops instead of reading the pixels with code.
+VISION_MISSING_HINT = (
+    "Reading images needs the vision model, which isn't downloaded. Do not try "
+    "to read the image another way (code, a script, the file's bytes). Tell the "
+    "user GAIA needs the vision model to see images and that the app offers to "
+    "download it, then stop."
+)
+
+
+def _vision_model_missing(error: VisionModelMissingError, path: Path) -> Dict[str, Any]:
+    """The tool result for an image no vision model can read yet; the UI offers the download."""
+    return {
+        "status": "error",
+        "error": str(error),
+        "image_path": str(path),
+        "needs_model": "vision",
+        "hint": VISION_MISSING_HINT,
+    }
+
 
 # Subject-specific asks (text, faces, objects) go to answer_question_about_image.
 _FOCUS_PROMPTS = {
@@ -207,6 +228,8 @@ class VLMToolsMixin:
                 "model": self.vlm_client.vlm_model,
             }
 
+        except VisionModelMissingError as e:
+            return _vision_model_missing(e, path)
         except Exception as e:
             logger.error(f"Image analysis failed: {e}", exc_info=True)
             return {
@@ -254,6 +277,8 @@ class VLMToolsMixin:
                 "model": self.vlm_client.vlm_model,
             }
 
+        except VisionModelMissingError as e:
+            return _vision_model_missing(e, path)
         except Exception as e:
             logger.error(f"Question answering failed: {e}", exc_info=True)
             return {

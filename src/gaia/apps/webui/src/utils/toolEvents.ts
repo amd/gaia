@@ -131,5 +131,8 @@ export function toolResultUpdates(event: StreamEvent): Partial<AgentStep> {
                 (event.result_data as any).files.length,
         };
     }
+    // A relayed result carries it inside `data`.
+    const relayed = event.data && typeof event.data === 'object' ? (event.data as { needs_model?: unknown }).needs_model : undefined;
+    if ((event.needs_model ?? relayed) === 'vision') updates.needsModel = 'vision';
     return updates;
 }

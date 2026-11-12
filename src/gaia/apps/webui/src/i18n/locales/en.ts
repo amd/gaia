@@ -458,6 +458,8 @@ export const enMessages = {
     'activity.copyOutput': 'Copy output',
     'activity.copyOutputAria': 'Copy command output',
     'activity.noOutput': 'No output',
+    'activity.visionNeeded': 'Reading images needs the vision model, which isn\'t on this PC yet.',
+    'activity.getVisionModel': 'Get the vision model',
     'activity.openPath': 'Open: {path}',
     'tool.failed': '{label} failed',
     'tool.unfinished': '{label} didn\'t finish',

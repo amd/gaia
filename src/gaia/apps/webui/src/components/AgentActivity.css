@@ -300,6 +300,18 @@
     min-width: 0;
 }
 
+/* A step that needs a model offers it right under the row. */
+.flow-tool-offer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-block: 2px 6px;
+    margin-inline-start: 20px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
 .flow-tool-raw {
     display: flex;
     align-items: center;

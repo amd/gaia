@@ -923,6 +923,9 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A model the call needed and didn't find, so the UI can offer it.
+        if isinstance(data, dict) and isinstance(data.get("needs_model"), str):
+            event["needs_model"] = data["needs_model"]
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False

@@ -458,6 +458,8 @@ const messages: Messages = {
     'activity.copyOutput': 'نسخ المخرجات',
     'activity.copyOutputAria': 'نسخ مخرجات الأمر',
     'activity.noOutput': 'لا توجد مخرجات',
+    'activity.visionNeeded': 'تحتاج قراءة الصور إلى نموذج الرؤية، وهو غير موجود على هذا الجهاز بعد.',
+    'activity.getVisionModel': 'تنزيل نموذج الرؤية',
     'activity.openPath': 'فتح: {path}',
     'tool.failed': 'تعذّر: {label}',
     'tool.unfinished': 'لم يكتمل: {label}',

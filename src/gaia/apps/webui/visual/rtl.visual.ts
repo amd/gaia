@@ -2659,6 +2659,28 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const NO_VISION_MODEL = [
+    { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
+    { type: 'tool_result', success: false, needs_model: 'vision', summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded (about 6 GB)" },
+    { type: 'tool_end', success: false },
+    { type: 'thinking', content: 'Tell the user the vision model is needed.' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`an image step with no vision model offers it (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, NO_VISION_MODEL);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('what colour is the picture?');
+        await page.keyboard.press('Enter');
+        const offer = page.locator('.flow-tool-offer');
+        await expect(offer).toBeVisible();
+        await expect(offer.getByRole('button')).toContainText(locale === 'ar' ? 'تنزيل نموذج الرؤية' : 'Get the vision model');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.flow-tool-offer', 'bdi, code')).toEqual([]);
+        await shot(page, `vision-offer-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },

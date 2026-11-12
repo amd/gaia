@@ -561,6 +561,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return false;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
+            // Asked now: a queued send skips the check below, and the image would reach a turn that can't see it.
+            if (hasImage && !modelKnownReady('vision') && !(await ensureModel('vision'))) return false;
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             const queued = takeDraft();
             setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
