@@ -41,6 +41,9 @@ type Model struct {
 	// Downloaded is whether the server already has it; nil from a gaia too old
 	// to say.
 	Downloaded *bool `json:"downloaded"`
+	// Kind is why a load failed: "memory", "stuck", "answer", "window", or
+	// "broken" (the file itself). Empty from a gaia too old to say.
+	Kind string `json:"kind"`
 }
 
 // Missing is the models the server does not have yet. A model whose state was
@@ -61,6 +64,35 @@ type Status struct {
 	Stage   string   `json:"stage"`
 	Reasons []string `json:"reasons"`
 	Models  []Model  `json:"models"`
+	// AgentMissing is the GAIA agent being one of the things setup still has
+	// to install; false from a gaia too old to say.
+	AgentMissing bool `json:"agent_missing"`
+	// Warnings are true but no setup step, e.g. no GAIA agent build for this PC.
+	Warnings []string `json:"warnings"`
+	// NoAgentBuild is the hub having no GAIA agent build for this PC: setup
+	// finishes without it, so chat cannot run here.
+	NoAgentBuild bool `json:"no_agent_build"`
+}
+
+// AgentReasonPrefix starts the reason `gaia init --check` gives for a missing
+// GAIA agent.
+const AgentReasonPrefix = "The GAIA agent is not installed"
+
+// OtherReasons is every reason but the missing agent's.
+func (s Status) OtherReasons() []string {
+	var out []string
+	for _, r := range s.Reasons {
+		if !strings.HasPrefix(r, AgentReasonPrefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// AgentOnly reports that the GAIA agent is all setup still has to install:
+// every model it described is already on the server.
+func (s Status) AgentOnly() bool {
+	return s.AgentMissing && len(s.Missing()) == 0
 }
 
 // Chat returns the chat model, if the probe named one.

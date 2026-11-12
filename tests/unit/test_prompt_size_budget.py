@@ -1,9 +1,9 @@
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-pytest.importorskip("gaia_agent_chat")
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099).
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent  # noqa: E402
 
 
 def test_system_prompt_size_under_limit():

@@ -9,13 +9,13 @@ Phase 1 contract, declare only permissions this phase can honor, and name only
 tools that actually exist in the registry. A skill that parses but cannot run is
 worse than a missing one.
 
-Every test that can be parametrized iterates the hub's skills lane
-(``hub/skills/``) rather than a hardcoded list, so a newly added skill is covered
-automatically. The lane is currently the starter pack exactly, so these guards
-apply to all of it — including
-:func:`test_starter_skill_declares_starter_pack_provenance`. A skill added to the
-lane from some other source needs that assertion narrowed first; it will fail
-loudly rather than skip.
+Every generic guard iterates the hub's skills lane (``hub/skills/``) rather than
+a hardcoded list, so a newly added skill — AMD's or a contributor's — is covered
+automatically. Only the guards about AMD's own pack (starter-pack provenance and
+the MIT license) are scoped to :data:`STARTER_PACK`, an explicit list rather than
+"skills that declare provenance": a starter skill that lost its provenance block
+would otherwise drop out of the check instead of failing it, and an outside skill
+cannot claim the pack just by adding the block.
 
 All roots are ``tmp_path``-scoped and every CLI subprocess runs with ``HOME``
 and ``GAIA_CONFIG_DIR`` redirected, so nothing here reads or writes the
@@ -48,6 +48,34 @@ STARTER_ROOT = REPO_ROOT / "hub" / "skills"
 #: Marks every skill in the pack, so consumers can group them (issue #893).
 PROVENANCE_SOURCE = "starter-pack"
 
+#: AMD's starter pack. Adding a skill to the pack means adding it here.
+STARTER_PACK = frozenset(
+    {
+        "analyze-recording",
+        "calculators",
+        "calendar",
+        "check-in",
+        "coding",
+        "daily-brief",
+        "data-explore",
+        "document-brief",
+        "file-ops",
+        "github-triage",
+        "guides",
+        "image-gen",
+        "inbox-triage",
+        "music-gen",
+        "price-watch",
+        "recommendations",
+        "research-report",
+        "rss-digest",
+        "send-email",
+        "source-watch",
+        "summarize",
+        "transcribe-meeting",
+    }
+)
+
 
 def _starter_dirs() -> list[Path]:
     """Every skill directory in the pack, sorted."""
@@ -59,6 +87,7 @@ def _ids(paths: list[Path]) -> list[str]:
 
 
 STARTER_DIRS = _starter_dirs()
+PACK_DIRS = [d for d in STARTER_DIRS if d.name in STARTER_PACK]
 
 
 def test_the_starter_pack_is_not_empty():
@@ -87,23 +116,39 @@ def test_starter_skill_round_trips_byte_identical(skill_dir: Path):
     assert parse_skill(skill.to_markdown()) == skill
 
 
+def test_every_starter_pack_skill_is_in_the_lane():
+    """A pack name with no directory would leave its pack checks silently unrun."""
+    missing = sorted(STARTER_PACK - {d.name for d in STARTER_DIRS})
+    assert not missing, f"STARTER_PACK names skills not in {STARTER_ROOT}: {missing}"
+
+
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
-def test_starter_skill_declares_starter_pack_provenance(skill_dir: Path):
-    """Every skill is attributable to the pack (issue #893)."""
+def test_skill_provenance_matches_the_starter_pack_list(skill_dir: Path):
+    """Pack skills are attributable to it (issue #893); no other skill claims it."""
     skill = parse_skill_file(skill_dir)
-    provenance = skill.gaia.extra.get("provenance")
+    provenance = skill.gaia.extra.get("provenance") or {}
 
-    assert provenance is not None, f"{skill.name} is missing metadata.gaia.provenance"
-    assert provenance.get("source") == PROVENANCE_SOURCE
+    if skill_dir.name in STARTER_PACK:
+        assert provenance, f"{skill.name} is missing metadata.gaia.provenance"
+        assert provenance.get("source") == PROVENANCE_SOURCE
+    else:
+        assert provenance.get("source") != PROVENANCE_SOURCE, (
+            f"{skill.name} claims provenance.source {PROVENANCE_SOURCE!r} but is "
+            "not in STARTER_PACK; drop the claim (only AMD's pack carries it)"
+        )
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
-def test_starter_skill_is_publishable(skill_dir: Path):
-    """Versioned and MIT-licensed — the repo's publishing floor."""
+def test_skill_has_a_publishable_version(skill_dir: Path):
+    """Release publishing refuses a missing or ``0.0.0`` version."""
     skill = parse_skill_file(skill_dir)
 
     assert skill.version and skill.version != "0.0.0"
-    assert skill.license == "MIT"
+
+
+@pytest.mark.parametrize("skill_dir", PACK_DIRS, ids=_ids(PACK_DIRS))
+def test_starter_pack_skill_is_mit_licensed(skill_dir: Path):
+    assert parse_skill_file(skill_dir).license == "MIT"
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
@@ -231,11 +276,11 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     every non-``chat`` profile runs, so a skill that has to ask the user a
     question before acting can legitimately declare it.
     """
-    # Ships with the standalone gaia-agent-chat wheel, which the core-only test
+    # Ships with the flagship gaia-agent-gaia wheel, which the core-only test
     # job does not install; skip rather than judge the list against nothing.
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+    gaia_agent = pytest.importorskip("gaia_agent")
 
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     inline = {"execute_python_file", "run_python", "list_files", "request_user_input"}
@@ -275,6 +320,17 @@ def test_starter_skill_tools_required_are_real_tools(
         f"{skill.name} declares tools_required that no mixin registers: "
         f"{', '.join(unknown)}"
     )
+
+
+def test_no_two_starter_skills_claim_the_same_loads_with_tool():
+    """A tool that loads a skill must say which one; shared, it can't."""
+    claims: dict[str, list[str]] = {}
+    for skill_dir in STARTER_DIRS:
+        for tool in parse_skill_file(skill_dir).gaia.loads_with:
+            claims.setdefault(tool, []).append(skill_dir.name)
+
+    shared = {tool: names for tool, names in claims.items() if len(names) > 1}
+    assert not shared, f"loads_with tools claimed by more than one skill: {shared}"
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
@@ -433,6 +489,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _pin_skill_body = Agent._pin_skill_body
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
+        _drop_skill_tools = Agent._drop_skill_tools
         get_skills_system_prompt = Agent.get_skills_system_prompt
 
         def rebuild_system_prompt(self):
@@ -680,13 +737,13 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     """#4252: daily-brief and the guide once said TTS doesn't exist — it does.
 
     ``text_to_speech`` is a real, always-registered ChatAgent tool
-    (``gaia_agent_chat/agent.py``), so a doc listing it as a missing capability
+    (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
     missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
     must stay.
     """
-    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
-    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+    gaia_agent = pytest.importorskip("gaia_agent")
+    source = (Path(gaia_agent.__file__).parent / "chat_agent.py").read_text(
         encoding="utf-8"
     )
     assert "def text_to_speech(" in source
@@ -723,7 +780,7 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     followed by ``process_query``. Renaming any of those would leave the guide
     quietly wrong, which is worse than no guide at all.
     """
-    chat_agent = pytest.importorskip("gaia_agent_chat.agent")
+    chat_agent = pytest.importorskip("gaia_agent.chat_agent")
 
     assert hasattr(chat_agent.ChatAgent, "load_skill")
     assert hasattr(chat_agent.ChatAgent, "unload_skill")
@@ -735,6 +792,70 @@ def test_the_guides_run_a_skill_snippet_still_type_checks():
     # The guide claims the default profile is the one that registers the web,
     # RAG, scratchpad, and memory tools these skills consume.
     assert chat_agent.ChatAgentConfig().prompt_profile == "full"
+
+
+# ----------------------------------------------------------------------
+# An outside skill — the building-skills guide's example — clears the
+# generic guards, so the guide's "run this test" step is passable.
+# ----------------------------------------------------------------------
+
+_GUIDE_EXAMPLE = re.compile(
+    r"```yaml\n(---\nname: csv-quality-report\n.*?)```", re.DOTALL
+)
+
+
+@pytest.fixture
+def guide_example_skill(tmp_path: Path) -> Path:
+    guide = (REPO_ROOT / "docs" / "guides" / "building-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    match = _GUIDE_EXAMPLE.search(guide)
+    assert match, "building-skills.mdx no longer shows the csv-quality-report SKILL.md"
+    skill_dir = tmp_path / "csv-quality-report"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(match.group(1), encoding="utf-8")
+    return skill_dir
+
+
+def test_an_outside_skill_passes_the_generic_guards(guide_example_skill: Path):
+    assert guide_example_skill.name not in STARTER_PACK
+    for check in (
+        test_starter_skill_parses_and_validates,
+        test_starter_skill_round_trips_byte_identical,
+        test_skill_provenance_matches_the_starter_pack_list,
+        test_skill_has_a_publishable_version,
+        test_starter_skill_declares_no_refused_permission,
+        test_starter_skill_permissions_resolve_against_the_real_catalog,
+        test_starter_skill_with_a_shell_grant_declares_run_shell_command,
+        test_starter_skill_body_mentions_the_tools_it_declares,
+        test_starter_skill_uses_only_real_memory_categories,
+        test_starter_skill_scratchpad_sql_uses_the_table_prefix,
+    ):
+        check(guide_example_skill)
+
+
+def test_an_outside_skill_names_only_real_tools(
+    guide_example_skill: Path, registry_tool_names
+):
+    test_starter_skill_tools_required_are_real_tools(
+        guide_example_skill, registry_tool_names
+    )
+
+
+def test_an_outside_skill_cannot_claim_the_starter_pack(guide_example_skill: Path):
+    manifest = guide_example_skill / "SKILL.md"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "  gaia:\n",
+            "  gaia:\n    provenance:\n      source: starter-pack\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    assert parse_skill_file(guide_example_skill).gaia.extra["provenance"]
+
+    with pytest.raises(AssertionError, match="not in STARTER_PACK"):
+        test_skill_provenance_matches_the_starter_pack_list(guide_example_skill)
 
 
 # ----------------------------------------------------------------------

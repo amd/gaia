@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import sys
 
+from gaia.logger import configure
+
+configure()
 from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze/tests)
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -44,4 +47,7 @@ from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze
 # freeze and the source dev server serve.
 
 if __name__ == "__main__":
+    from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
+
+    keep_unpacked_bundle_fresh()
     sys.exit(main())

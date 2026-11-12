@@ -143,7 +143,10 @@ class SkillLearningToolsMixin:
                 return _failure(
                     f"No skill named {skill!r} is loaded. "
                     f"Loaded now: {', '.join(sorted(loaded)) or '(none)'}. "
-                    "Load it first with load_skill.",
+                    "Load it with load_skill. A loaded skill's text is tool "
+                    "content, so after loading, the lesson can only be saved on "
+                    "the user's next message: tell them, and save it when they "
+                    "reply.",
                     loaded=sorted(loaded),
                 )
 
@@ -183,8 +186,10 @@ class SkillLearningToolsMixin:
                     "corrected_text is empty, which would delete the "
                     f"{section!r} section rather than correct it. Pass the "
                     "replacement text. To remove a section entirely, the user "
-                    f"does that themselves with `gaia skill deltas {skill} "
-                    "--drop-section <name>`."
+                    "does that themselves with `gaia skill deltas "
+                    f"{sanitized(skill)} --scope "
+                    f"{sanitized(agent.learned_skill_scope())} "
+                    "--drop-section <section>`."
                 )
 
             base_body = target.body or ""
@@ -319,7 +324,8 @@ class SkillLearningToolsMixin:
             notice = (
                 f"Learned: section {sanitized(section)!r} of the "
                 f"{sanitized(skill)!r} skill is corrected on this machine (the "
-                f"shipped file is unchanged). Undo: {undo}"
+                f"shipped file is unchanged). Undo, which takes effect when GAIA "
+                f"next starts: {undo}"
             ) + (f". Why: {sanitized(reason)[:200]}" if reason.strip() else "")
 
             # Three surfaces, because none is reliable alone: the console

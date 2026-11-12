@@ -3391,7 +3391,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def check_suspicious_mail(max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES) -> str:
+        def check_suspicious_mail(
+            max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
+        ) -> str:
             """Check the inbox for anything suspicious: mail flagged phishing
             or spam by the shared classifier.
 
@@ -3442,7 +3444,9 @@ class ReadToolsMixin:
             # indistinguishable from ``pre_scan_inbox`` in the tool trace —
             # this is the one place that logs under this tool's actual name.
             with log_tool_call(
-                "check_suspicious_mail", {"max_messages": max_messages}, debug=debug_flag
+                "check_suspicious_mail",
+                {"max_messages": max_messages},
+                debug=debug_flag,
             ) as st:
                 try:
                     # Re-resolve first — ``_backends`` is stale on a
@@ -3460,7 +3464,10 @@ class ReadToolsMixin:
                         return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
                     max_messages_clamped = max(
                         1,
-                        min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
+                        min(
+                            int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES),
+                            scan_ceiling,
+                        ),
                     )
                     # Reuses the exact same shared pre-scan pass every other
                     # pre-scan-derived tool uses (mailbox fan-out, SLM wiring,

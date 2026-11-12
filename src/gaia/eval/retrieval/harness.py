@@ -111,8 +111,7 @@ def agent_query_tool(rag) -> Callable[[str], dict]:
     except ImportError as e:
         raise ImportError(
             "The agent retrieval pipeline needs the flagship agent package "
-            "(hub/agents/gaia/python, which depends on hub/agents/chat/python): "
-            "run `uv pip install -e hub/agents/chat/python -e hub/agents/gaia/python`."
+            "(hub/agents/gaia/python): run `uv pip install -e hub/agents/gaia/python`."
         ) from e
     from gaia.agents.base.tools import (  # pylint: disable=import-outside-toplevel
         _TOOL_REGISTRY,
@@ -388,7 +387,8 @@ class BenchIndex:
         """RAGSDK.query end to end; returns text, the context chunk indices, latency.
 
         ``keep_history`` leaves RAGSDK's chat history in place; by default it is
-        cleared so one question's retrieved context cannot leak into the next.
+        cleared so each scored question starts from the same state. ``query``
+        itself neither reads nor writes that history.
         """
         self._cold()
         if not keep_history:

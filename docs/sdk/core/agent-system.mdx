@@ -350,8 +350,7 @@ Agents accept many configuration parameters. Here's what each one does:
 agent = MyAgent(
     # === LLM Selection ===
     use_claude=False,              # Use Anthropic Claude API
-    use_chatgpt=False,             # Removed; True raises migration guidance
-    # If both are False, uses local Lemonade Server
+    # If False, uses local Lemonade Server
 
     # === Local LLM Settings ===
     base_url="http://localhost:13305/api/v1",  # Lemonade server URL
@@ -385,7 +384,7 @@ agent = MyAgent()
 # Or explicitly configure
 agent = MyAgent(
     base_url="http://localhost:13305/api/v1",
-    model_id="Qwen3.5-35B-A3B-GGUF"
+    model_id="Qwen3.6-35B-A3B-GGUF"
 )
 ```
 
@@ -433,11 +432,9 @@ agent = MyAgent(
 
 <Accordion title="Gateway models through Lemonade">
 
-The direct OpenAI and LiteLLM adapters have been removed. Configure the upstream
-model in Lemonade and pass its server URL and catalog model ID to the agent.
-See [gateway migration](/sdk/sdks/llm#gateway-migration). Legacy
-`use_chatgpt=True` calls raise an actionable error rather than selecting another
-provider.
+Configure the upstream model in Lemonade and pass its server URL and catalog
+model ID to the agent.
+See [gateway migration](/sdk/sdks/llm#gateway-migration).
 
 </Accordion>
 
@@ -501,7 +498,7 @@ model only, with a one-line stub that names where the full text is:
 [evicted: read_file path=src/gaia/cli.py; 41203 chars; read_tool_output(artifact=output_…, entry=1) fetches it]
 ```
 
-This is not the context compaction GAIA's roadmap rules out ("memory + RAG
+This is not the context compaction GAIA rules out ("memory + RAG
 handles long conversations"): nothing is summarised and nothing is lost. Every
 evicted result is archived whole in the agent's artifact store and stays
 fetchable through `read_tool_output`; a result that already arrived as a chunk
@@ -892,7 +889,10 @@ erases both the visible history and its archived turns.
 The next prompt admits complete turns using the active model's context budget,
 reserving space for the system prompt, tool schemas, current question and answer.
 Older turns are evicted in blocks from the model view, never cut into invalid
-call/result pairs. The archive remains intact across context eviction and model
+call/result pairs. When any turn is left out, the oldest user message still in
+view opens with `HIDDEN_TURNS_NOTE`, one sentence telling the model that earlier
+turns exist and are no longer shown; the archived turn is not changed, and a
+view with every turn in it carries no note. The archive remains intact across context eviction and model
 switches. `prepare()` and `select_history()` take an optional `on_cut` callback
 that receives a `HistoryCut(turns, tokens)` when more turns are hidden than
 before. `select_history()` alone compares with the view minus the newest turn;
@@ -1045,16 +1045,30 @@ The tool that ran the check says so. `run_shell_command`, `run_python`, and
 a `CheckResult` (`label`, `target`, `kind`, `passed`, `summary`) when the program
 was a test, lint, typecheck, or build runner, and `null` when it was not. The
 note reads that and nothing else. A shell run counts only when the program
-itself is the runner (`pytest -q`, `python -m pytest`, `uv run pytest`), so
-`cat pytest.ini` is not a test run; a failing summary line wins over a zero exit
-code, so `pytest | tail` that failed reads as failed.
+itself is the runner (`pytest -q`, `python -u -m pytest`, `py -m pytest`, `uv
+run --with pytest pytest`, `npm.cmd test`), so `cat pytest.ini` is not a test
+run; a failing summary line wins over a zero exit code, so `pytest | tail` that
+failed reads as failed. A `run_python` snippet or an `execute_python_file`
+script counts only when its code invokes a runner — `pytest.main()`,
+`unittest.main()`, a `TextTestRunner`, or a `subprocess` / `os.system` /
+`os.exec*` / `runpy` call whose program is itself the runner — and its output
+carries that runner's summary. The program is read the way the shell tool reads
+it, plus the interpreter: `sys.executable` reads as Python whether it sits in an
+argv list, an f-string (`f'{sys.executable} -m pytest'`) or a concatenation, and
+a runner behind `sh -c` or `cmd /c` counts. Printing a saved log is not a test
+run, whatever the log says or is named: `print(open('ci.log').read())` and
+`subprocess.run(['cat', 'pytest.log'])` both read a file. A runner reached only
+through a helper the snippet imports (`from mytests import run_all`) does not
+count either; the run is reported as unverified rather than guessed.
 
 Results that carry no `check_result` — MCP tools, hub agents built before the
 field existed — are still classified from their text: a tool named `run_tests`,
 `run_lint`, `typecheck`, or `build`, a `command` argument naming a known runner,
-or a `run_python` / `execute_python_file` output with a test runner's summary
-(pytest, unittest, jest, vitest, mocha, `go test`, `cargo test`). Other
-unrecognized runners don't count as a check.
+or a `run_python` output with a test runner's summary (pytest, unittest, jest,
+vitest, mocha, `go test`, `cargo test`) whose `code` argument invokes a runner. An
+`execute_python_file` result without the field never counts: the script it ran
+is not in the call's arguments. Other unrecognized runners don't count as a
+check.
 
 Before the answer goes out, the loop also checks it against the same record. An
 answer that reports a test outcome (`111 passed`, "all tests pass") when no test
@@ -1078,7 +1092,7 @@ without looking and report work they never did:
 | Check | Fires when |
 |-------|------------|
 | look | The request names a file (that exists) or a lowercase snake_case symbol such as `parse_updated()`, and no successful read named it — a failed read, or the name appearing in a directory listing, does not count; the correction says where the file is on disk. A symbol only counts in a turn about the project (a named file exists or a tool ran), so "what does `max_tokens` do?" is not a lookup request. Or, in such a turn, the answer says something "does not exist" with no search, listing or read on record. |
-| content | The answer presents data — a table or an untagged/CSV/JSON code block — and its values (with any decimals, dates and percentages in the surrounding prose) appear in no tool output or earlier user or tool message. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A scaled amount matches its other spellings ("$14.5M" and "14,500,000"; a "B" after a currency sign is billions, not bytes). A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio) counts as grounded; small whole numbers, versions and estimates are not judged. |
+| content | The answer presents data — a table (a cell may carry a currency sign, "$10,342.50"), an untagged/CSV/JSON code block, or prose that states an exact amount of money ("$2,708.95", "USD 1,375.25") — and its values appear in no tool output or earlier user or tool message. With a table or block, or after a `run_python`, `execute_python_file` or `query_data` call that never succeeded this turn, decimals, dates and percentages in the surrounding prose are judged too; otherwise only the stated amounts are. So after a failed run, "2322.16 / 141 = 16.40748" is a finding: the operands came from a tool, but the quotient is wrong. A tool's own arguments are not evidence: a search that repeats its query does not confirm the query. A scaled amount matches its other spellings ("$14.5M" and "14,500,000"; a "B" after a currency sign is billions, not bytes). A value one arithmetic step from two grounded values the answer shows (a sum, a difference, an average of two, a ratio), or a total equal to the sum of three or more grounded values it shows, counts as grounded. Prose restating a figure from a file the turn wrote is left to the `file` check; small whole numbers, versions and estimates are not judged. |
 | file | A file the turn wrote (`.md`, `.txt`, `.csv`, `.tsv`, `.json`, and the text and table cells of `.xlsx`, `.docx`, `.pptx`; up to 5 MB) holds money, percentages or unit quantities (`27 W`, `8 GB`) that no tool result this turn, input file the tools were pointed at, or user message shows. Prices only count when the evidence shows them as prices — beside a currency, on a price line, or in a data row — so a datasheet's "60 Hz" is not a source for "$60". A scale or spelling the source doesn't use still matches: "$14.5M", "$14.5 million" and "$14,500,000" are one figure, as are "$293.5B", "$293.5 billion" and "293,500,000,000", "$500k" and "$500,000", "12%", "0.12" and "twelve percent", and a range like "$3–5M" and its two ends. Totals, line amounts, per-unit splits, taxes and shares computed from sourced figures pass, and a figure computed from an unsourced one is not listed beside it. Reading the file back, and the numbers a script hard-codes, are not sources. A figure the file marks as an estimate ("est.", "~", "unverified", or "all prices are estimates") is not flagged. An answer that calls the figures unverified and names them gets no note. This check never asks the model for a correction: a false positive would have it edit a correct deliverable, so what it finds goes straight into the "not confirmed" note, naming the file and figures. The file is never edited. |
 | action | The answer says it searched, read, ran, tested, verified or documented something, and no tool of that kind ran. Negated clauses ("I did not run the tests"), advice ("once you have run it") and descriptions ("it is tested on every pull request") are not claims. |
 
@@ -1097,6 +1111,14 @@ The reasons are also listed under `result["verification"]["ungrounded"]`.
 
 Unlike an unsupported test claim, the answer is not replaced: these checks read
 prose and can be wrong, so they flag rather than rewrite.
+
+A computation that produced nothing also says so in its own result, before the
+model answers. A denied `run_python`, `execute_python_file`, `run_shell_command`
+or `query_data` call, and a `run_python`, `execute_python_file` or `query_data`
+call that failed before printing anything, carry a `computation` note telling
+the model not to report computed figures. A failed shell command, or a script
+that printed results before it crashed, gets no note: those are for the model
+to fix and run again.
 
 ### Saved output and cleanup evidence
 
@@ -1330,13 +1352,18 @@ reads captured output rather than re-executing a potentially state-changing tool
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers
-`extract_document_items(file_path, fields=None)`. It reads a permission-checked
+`extract_document_items(file_path, fields=None, terms=None)`. It reads a permission-checked
 snapshot and processes 4,000-character pages sequentially, each widened by up to
 600 characters of overlap on either side, with an additional omission check per
 page. Each call has isolated context and no tools. Requested fields, written in
 the request as `fields: name, reps, cue` or passed as the `fields` list, must
 appear on every extracted entry; missing source facts are marked as not stated.
 A `fields` list that differs from the request's is rejected rather than merged.
+When every wanted item must contain a word ("every section that mentions a
+code"), `terms` lists it and its variants; only pages containing one, ignoring
+case and line breaks, reach the model, and the result's `coverage` and the
+inventory name the terms. When no page mentions any of them, the call fails as
+incomplete rather than reporting nothing found.
 
 The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated

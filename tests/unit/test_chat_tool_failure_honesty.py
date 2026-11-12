@@ -8,8 +8,10 @@ failed, and ``notify_desktop`` returned success the moment PowerShell was
 spawned, whether or not it ever drew anything.
 """
 
+import contextlib
 import subprocess
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -19,7 +21,7 @@ from tests.unit.test_profilespec_characterization import chat_agent_build_contex
 @pytest.fixture
 def chat_agent():
     return pytest.importorskip(
-        "gaia_agent_chat.agent", reason="gaia-agent-chat wheel not installed"
+        "gaia_agent.chat_agent", reason="gaia-agent-gaia wheel not installed"
     )
 
 
@@ -30,14 +32,28 @@ def tools(chat_agent):
         yield agent._tools_registry
 
 
+@pytest.fixture
+def pretend_os(tools, chat_agent):
+    """Set ``platform.system()``; undone before ``tools`` restores the real one.
+
+    ``tools`` already patches it, and the test's ``monkeypatch`` is torn down
+    after ``tools``, so a monkeypatch here would put the fixture's mock back
+    for every later test in the process.
+    """
+    with contextlib.ExitStack() as stack:
+        yield lambda name: stack.enter_context(
+            patch.object(chat_agent.platform, "system", return_value=name)
+        )
+
+
 def _completed(code, stdout="", stderr=""):
     return subprocess.CompletedProcess(["x"], code, stdout, stderr)
 
 
 def test_a_failed_tasklist_is_an_error_not_an_empty_list(
-    tools, chat_agent, monkeypatch
+    tools, pretend_os, monkeypatch
 ):
-    monkeypatch.setattr(chat_agent.platform, "system", lambda: "Windows")
+    pretend_os("Windows")
     monkeypatch.setitem(sys.modules, "pywinauto", None)
     monkeypatch.setattr(
         subprocess,
@@ -52,8 +68,8 @@ def test_a_failed_tasklist_is_an_error_not_an_empty_list(
     assert result["return_code"] == 1
 
 
-def test_a_failed_wmctrl_names_its_exit_code(tools, chat_agent, monkeypatch):
-    monkeypatch.setattr(chat_agent.platform, "system", lambda: "Linux")
+def test_a_failed_wmctrl_names_its_exit_code(tools, pretend_os, monkeypatch):
+    pretend_os("Linux")
     monkeypatch.setattr(
         subprocess,
         "run",
@@ -90,9 +106,9 @@ class _RunningPopen:
     "popen, status", [(_ExitedPopen, "error"), (_RunningPopen, "success")]
 )
 def test_notify_desktop_reports_what_powershell_did(
-    tools, chat_agent, monkeypatch, popen, status
+    tools, pretend_os, monkeypatch, popen, status
 ):
-    monkeypatch.setattr(chat_agent.platform, "system", lambda: "Windows")
+    pretend_os("Windows")
     monkeypatch.setitem(sys.modules, "plyer", None)
     monkeypatch.setattr(subprocess, "Popen", popen)
 

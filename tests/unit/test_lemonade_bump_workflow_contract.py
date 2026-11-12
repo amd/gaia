@@ -92,14 +92,27 @@ def test_the_agent_does_not_open_the_pr_itself(steps):
 
 def test_a_failed_pin_check_files_the_tracking_issue(steps):
     check = steps[_index(steps, _pin_check, "runs the pin tests")]
-    issue = steps[
-        _index(steps, lambda s: _runs(s, "gh issue create"), "files the issue")
+    compose_at = _index(
+        steps, lambda s: _runs(s, "GAIA_AUTO_ISSUE_EOF"), "composes the issue"
+    )
+    compose = steps[compose_at]
+    assert "failure()" in compose.get("if", "")
+    pins_env = [
+        k for k, v in compose["env"].items() if f"steps.{check['id']}" in str(v)
     ]
-    assert "failure()" in issue.get("if", "")
-    pins_env = [k for k, v in issue["env"].items() if f"steps.{check['id']}" in str(v)]
     assert pins_env, "the tracking issue cannot tell a failed pin check apart"
-    assert f'"${pins_env[0]}" = "failure"' in issue["run"]
-    assert "no PR was opened" in issue["run"]
+    assert f'"${pins_env[0]}" = "failure"' in compose["run"]
+    assert "no PR was opened" in compose["run"]
+    report_at = _index(
+        steps,
+        lambda s: str(s.get("uses", "")).endswith(".github/actions/auto-issue")
+        and s.get("with", {}).get("mode") == "report",
+        "files the issue",
+    )
+    assert report_at > compose_at
+    report = steps[report_at]
+    assert "failure()" in report.get("if", "")
+    assert f"steps.{compose['id']}.outputs.body" in report["with"]["body"]
 
 
 def test_the_pin_check_tests_the_commit_that_is_pushed(steps):

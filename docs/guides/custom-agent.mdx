@@ -1,6 +1,6 @@
 ---
 title: "Custom Agents"
-description: "Create your own AI agents and add them to the GAIA Agent UI"
+description: "Create your own AI agents and run them from the CLI or the HTTP API"
 icon: "wand-magic-sparkles"
 ---
 
@@ -10,18 +10,21 @@ icon: "wand-magic-sparkles"
 
 ## Overview
 
-GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent registers automatically and is listed by the Agent UI backend's `GET /api/agents`.
+GAIA's agent registry lets you add your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent registers automatically and is listed by `GET /api/agents`.
 
 Custom agents can have their own:
 - **Personality and instructions** (system prompt)
 - **Tools** (RAG, file search, shell, image generation, vision, plus your own `@tool` functions)
 - **Preferred models** (override the server default)
-- **Conversation starters** (suggestion chips in the UI)
 - **MCP servers** (any Model Context Protocol server)
 - **Connectors** ([Google, GitHub, and more](/connectors)) — give your agent permission to read your real email, calendar, repos, etc.
 
+<Warning>
+  **The Agent UI runs the GAIA agent only.** A custom agent registers and is listed by the API, but the Agent UI has no picker for it: new chats always use the GAIA agent, and a request from the UI for any other agent is a **422**. Run your agent from the [CLI](#running-it-from-the-cli) or over the [HTTP API](#running-it-over-the-api) instead. The restriction is the UI's alone: requests that don't carry the UI's `X-Gaia-Client: agent-ui` header — the eval harness, the MCP bridge — may name any registered agent.
+</Warning>
+
 <Note>
-  This guide builds a **local** custom agent in `~/.gaia/agents/` for your own Agent UI.
+  This guide builds a **local** custom agent in `~/.gaia/agents/` that you run from the CLI or the HTTP API.
 </Note>
 
 <Tip>
@@ -73,14 +76,22 @@ class MyPythonAgent(Agent):
         def greet(name: str) -> str:
             """Greet a person by name."""
             return f"Hello, {name}! Welcome to GAIA."
+
+        self._snapshot_tools()
 ```
+
+Tools register into a registry that every agent in the process shares, so
+`_register_tools()` brackets its own tools: `_TOOL_REGISTRY.clear()` first, so
+this agent doesn't inherit tools another agent registered, and
+`self._snapshot_tools()` last, so the next agent's `clear()` can't wipe this
+agent's tools in a shared process.
 
 The only method a subclass **must** implement is `_register_tools()` (it's abstract
 on the base `Agent`); the other two have sensible defaults you can override:
 
 | Method | Required? | Purpose |
 |--------|-----------|---------|
-| `_register_tools()` | **Yes** | Registers tools into `_TOOL_REGISTRY` |
+| `_register_tools()` | **Yes** | Registers this agent's tools, then freezes them with `self._snapshot_tools()` |
 | `_get_system_prompt()` | Optional | Returns the system prompt string (defaults to `""`, i.e. mixin prompts only) |
 | `_create_console()` | Optional | Returns the console handler (defaults to `AgentConsole`, or a silent console in silent mode) |
 
@@ -116,6 +127,44 @@ def __init__(self, **kwargs):
 
 Alternatively, create a companion `agent.yaml` next to `agent.py` with a `models:` list — the registry reads that list as an ordered preference. The sidecar only honours the `models:` key; any other top-level key is ignored.
 
+### Running it from the CLI
+
+`gaia agent status` lists every agent the registry discovered. Pass that id to `gaia chat --agent` to run the agent from the terminal:
+
+```bash
+gaia agent status                                    # my-python-agent should be listed
+gaia chat --agent my-python-agent -q "Greet Ada"     # one question, then exit
+gaia chat --agent my-python-agent                    # interactive; /quit to exit
+```
+
+An unknown id fails and lists the ids that are registered. An agent that is listed but fails to construct reports the error and points at `gaia agent health <id>`. The flagship's document and indexing flags (`--index`, `--watch`, `--allowed-paths`, …) are rejected with `--agent`, since your agent doesn't read them.
+
+---
+
+## Running it over the API
+
+The HTTP API accepts any registered agent. Start the server the way the [Agent UI guide](/guides/agent-ui) describes (`gaia --ui`, or `gaia-ui` from npm), then create a session naming your agent and send your turns to it:
+
+```bash
+curl -s http://127.0.0.1:4200/api/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_type": "my-python-agent", "title": "Greet Ada"}'
+```
+
+The response carries the new session's `id`. Send a message to it to run your agent — `stream: false` returns one JSON reply instead of an event stream:
+
+```bash
+curl -s http://127.0.0.1:4200/api/chat/send \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id": "<id>", "message": "Greet Ada", "stream": false}'
+```
+
+Creating a session that names an agent that isn't registered is refused with a **422** that lists the ids which do resolve.
+
+<Warning>
+  Leave out the `X-Gaia-Client: agent-ui` header. Requests carrying it are held to the GAIA agent and get a **422** for any other `agent_type` — the rule the [Agent UI SDK reference](/sdk/sdks/agent-ui#flagship-only) describes.
+</Warning>
+
 ---
 
 ## Using GAIA connectors
@@ -130,8 +179,7 @@ A connector lets users:
 1. **Authenticate once** in Settings → Connectors (OAuth flow for
    Google-style providers, paste-an-API-key for MCP servers).
 2. **Grant scopes per agent** so each agent only sees the data it
-   actually needs. The Agent UI surfaces this when a user first picks
-   your agent.
+   actually needs.
 3. **Trust that secrets stay in the OS keyring**, never in plaintext
    files or env vars baked into your code.
 
@@ -191,6 +239,8 @@ my-agents.zip
     └── agent.py
 ```
 
+Every other file in the agent's directory is included, except `__pycache__/` directories, `.pyc`/`.pyo` bytecode and `.DS_Store`. Those tie a bundle to the exporter's Python version or OS.
+
 Bundles are validated on import. The receiving end enforces conservative limits (max 1000 entries, 500 MB uncompressed, 50 MB per file) and rejects symlinks, device or other special files, and path-traversal entries.
 
 ### Security
@@ -212,6 +262,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
     ```python
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
+    from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
     class GreeterAgent(Agent):
@@ -234,7 +285,8 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             return AgentConsole()
 
         def _register_tools(self) -> None:
-            pass
+            _TOOL_REGISTRY.clear()
+            self._snapshot_tools()
     ```
   </Accordion>
 
@@ -292,6 +344,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             _TOOL_REGISTRY.clear()
             self.register_rag_tools()
             self.register_file_search_tools()
+            self._snapshot_tools()
     ```
   </Accordion>
 
@@ -339,6 +392,7 @@ Bundles are validated on import. The receiving end enforces conservative limits 
             _TOOL_REGISTRY.clear()
             self.register_file_io_tools()
             self.register_shell_tools()
+            self._snapshot_tools()
     ```
   </Accordion>
 </AccordionGroup>
@@ -424,7 +478,7 @@ skips indexing.
     Add document Q&A to your agent with the RAG SDK
   </Card>
   <Card title="Agent UI Guide" icon="browser" href="/guides/agent-ui">
-    Learn about the GAIA Agent UI and how agents are surfaced there
+    Learn about the GAIA Agent UI, which runs the GAIA agent
   </Card>
   <Card title="Custom Installer" icon="box-archive" href="/playbooks/custom-installer/index">
     Ship your agent pre-loaded in a branded, signed GAIA installer

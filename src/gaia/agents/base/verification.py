@@ -38,7 +38,9 @@ from gaia.agents.base.checks import (
     CheckResult,
     check_kind,
     command_check_label,
+    command_check_target,
     declares_check,
+    invokes_test_runner,
     runner_summary,
 )
 from gaia.agents.base.checks import summary_reports_failure as summary_counts_failure
@@ -156,10 +158,13 @@ def verification_check_label(
     name = (tool_name or "").strip()
     if name in ("execute_python_file", "run_python") and isinstance(result, dict):
         return_code = result.get("return_code")
+        # Only run_python's arguments carry the code; a file's source isn't here.
+        code = tool_args.get("code") if isinstance(tool_args, dict) else None
         if (
             not check_was_executed(result)
             or not isinstance(return_code, int)
             or isinstance(return_code, bool)
+            or not isinstance(code, str)
         ):
             return None
         output = "\n".join(
@@ -167,8 +172,11 @@ def verification_check_label(
             for key in ("stdout", "stderr")
             if isinstance((value := result.get(key)), str)
         )
+        # The summary is a cheap scan; parsing a large snippet is not.
         found = runner_summary(output)
-        return found[0] if found else None
+        if found is None or not invokes_test_runner(code):
+            return None
+        return found[0]
     if name in _CHECK_TOOLS:
         return name
     if not isinstance(tool_args, dict):
@@ -191,7 +199,7 @@ def verification_check_target(tool_name: str, tool_args: Any) -> str:
         for key in _COMMAND_KEYS:
             command = tool_args.get(key)
             if isinstance(command, str) and command.strip():
-                return " ".join(command.split())
+                return command_check_target(command)
         return f"{tool_name} {json.dumps(tool_args, sort_keys=True, default=str)}"
     return f"{tool_name} {tool_args!r}"
 

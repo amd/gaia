@@ -31,8 +31,26 @@ const TRUSTED_API_RE = /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/api$/;
 /** Legacy fallback for manual `file://.../index.html` opens against a dev backend. */
 const LEGACY_FALLBACK = 'http://localhost:4200/api';
 
+/** Set when the desktop app restarts its backend on a new port. */
+let override: string | null = null;
+
+/** Point every later request at a restarted backend. Throws on a non-loopback URL. */
+export function setApiBase(url: string): void {
+    if (!TRUSTED_API_RE.test(url)) throw new Error(`Refusing API base ${JSON.stringify(url)}: not a loopback /api URL.`);
+    override = url;
+    // A reload reads `?api=` again; the port it was loaded with has nothing listening now.
+    if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
+        const page = new URL(window.location.href);
+        if (page.searchParams.get('api') !== url) {
+            page.searchParams.set('api', url);
+            window.history.replaceState(window.history.state, '', page);
+        }
+    }
+}
+
 export function getApiBase(): string {
     if (typeof window === 'undefined') return '/api';
+    if (override) return override;
 
     if (window.location.protocol === 'file:') {
         const fromQuery = new URLSearchParams(window.location.search).get('api');

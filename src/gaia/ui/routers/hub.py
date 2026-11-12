@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Agent Hub endpoints: catalog, install, install-status, uninstall.
 
-The Electron shell's ``gaia://`` deep-link install drives these. They are the
+The Agent UI's flagship install drives these. They are the
 HTTP surface over :mod:`gaia.hub.catalog` (remote catalog + local merge) and
 :mod:`gaia.hub.installer` (download/verify/install lifecycle).
 

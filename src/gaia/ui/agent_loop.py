@@ -27,6 +27,7 @@ Design notes:
 import asyncio
 import logging
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -48,12 +49,6 @@ _TICK_INTERVAL = int(os.environ.get("GAIA_AGENT_TICK_INTERVAL", "60"))
 # Maximum autonomous LLM calls per hour
 _HOURLY_LIMIT = int(os.environ.get("GAIA_AGENT_HOURLY_LIMIT", "30"))
 
-# Maximum goals created by the agent per day
-_DAILY_GOAL_LIMIT = int(os.environ.get("GAIA_AGENT_DAILY_GOAL_LIMIT", "10"))
-
-# Lightweight model for observation/classification (cheap ticks)
-_OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
-
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
@@ -64,44 +59,19 @@ _FOLLOWUP_GRACE_SECONDS = 10.0
 GOALS_SESSION_TITLE = "Background goals"
 GOALS_SESSION_SETTING = "agent_loop_session_id"
 
-SIDECAR_TICKS_UNSUPPORTED = (
-    "Background goals can't run with this install's GAIA agent yet: it runs as "
-    "a separate program, and goal runs only work with the agent installed into "
-    "GAIA's Python, as in a source checkout. Track "
-    "https://github.com/amd/gaia/issues/5840."
-)
-
 # Default agent mode. "autonomous" (observe → infer goals → execute, spec
 # docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
 # the honest default is "goal_driven" — which is exactly what the loop does.
 DEFAULT_AGENT_MODE = "goal_driven"
 
-# Warn once per process when a legacy-stored "autonomous" mode is normalized.
-_warned_legacy_autonomous = False
-
 
 def resolve_agent_mode(db) -> str:
-    """Return the effective agent mode: "manual" or "goal_driven".
+    """Return the stored agent mode: "manual" or "goal_driven".
 
-    "autonomous" mode's observation cycle is unimplemented (#2005), so a
-    legacy-stored "autonomous" value is normalized to "goal_driven" — the
-    behavior it always had — with a loud warning instead of a silent no-op
-    label. New writes of "autonomous" are rejected at the settings API.
+    A legacy "autonomous" value is rewritten when the database opens
+    (``ChatDatabase._migrate_legacy_agent_mode``).
     """
-    global _warned_legacy_autonomous
-    mode = db.get_setting("agent_mode") or DEFAULT_AGENT_MODE
-    if mode == "autonomous":
-        if not _warned_legacy_autonomous:
-            logger.warning(
-                "agent_mode 'autonomous' is stored in settings but its "
-                "observation cycle is not implemented (see "
-                "https://github.com/amd/gaia/issues/2005); running as "
-                "'goal_driven', which is what 'autonomous' has always "
-                "effectively done."
-            )
-            _warned_legacy_autonomous = True
-        return "goal_driven"
-    return mode
+    return db.get_setting("agent_mode") or DEFAULT_AGENT_MODE
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -157,6 +127,8 @@ class AgentLoop:
             str, tuple[threading.Event, Any, threading.Event]
         ] = {}
         self._active_goal_ticks_lock = threading.Lock()
+        # Why the last tick could not read the goal store; None once it opens.
+        self.goal_store_error: Optional[str] = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -434,15 +406,25 @@ class AgentLoop:
             store.update_goal_status(goal.id, "failed", progress_notes=note)
 
     def _get_actionable_goals(self) -> List[Any]:
-        """Return approved, queued goals from GoalStore."""
-        try:
-            from gaia.agents.base.goal_store import GoalStore
+        """Return approved, queued goals from GoalStore.
 
-            store = GoalStore()
-            return store.get_actionable_goals()[:5]
-        except Exception as exc:
-            logger.debug("AgentLoop: GoalStore lookup failed: %s", exc)
-            return []
+        Raises:
+            RuntimeError: The goal store could not be read; the tick reports it.
+        """
+        from gaia.agents.base.goal_store import GoalStore
+        from gaia.config import gaia_home
+
+        try:
+            goals = GoalStore().get_actionable_goals()[:5]
+        except (sqlite3.Error, OSError) as exc:
+            self.goal_store_error = (
+                f"Could not read approved goals from {gaia_home() / 'goals.db'}: "
+                f"{exc}. Approved goals will not run until it opens; close other "
+                "GAIA windows using it and restart GAIA."
+            )
+            raise RuntimeError(self.goal_store_error) from exc
+        self.goal_store_error = None
+        return goals
 
     # ── Tick execution ────────────────────────────────────────────────────────
 
@@ -501,12 +483,24 @@ class AgentLoop:
                 registry = _helpers._agent_registry
                 flagship = registry.get("gaia") if registry is not None else None
                 if flagship is not None and flagship.is_sidecar:
-                    raise RuntimeError(SIDECAR_TICKS_UNSUPPORTED)
+                    # The agent runs as its own binary, as the apps ship it: the
+                    # tick goes to it through the daemon, as scheduled prompts do.
+                    # Its set_loop_state call reaches sse_handler through the relay.
+                    answer = _helpers.relay_one_prompt(
+                        sse_handler,
+                        tick_prompt,
+                        agent_type="gaia",
+                        model_id=db.get_setting("custom_model") or session.get("model"),
+                        memory=_helpers._memory_mode(session, db),
+                        max_steps=None,
+                    )
+                    result_holder["result"] = {"result": answer or ""}
+                    return
                 model_id = session.get("model")
                 custom_model = db.get_setting("custom_model")
                 if custom_model:
                     model_id = custom_model
-                elif registry and agent_type != "chat":
+                elif registry:
                     model_id = registry.resolve_model(agent_type) or model_id
                 model_id, device_ctx = _helpers._apply_device_model(
                     session, agent_type, model_id, custom_model, registry
@@ -540,12 +534,6 @@ class AgentLoop:
                         db, session.get("document_ids", [])
                     )
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
-                    # Beta dynamic tool loader (#1798). Inert here: autonomous
-                    # ticks use the default "full" prompt profile and the loader
-                    # only activates on the "doc" profile — wired for future-
-                    # proofing so this path stays in lock-step with server.py's
-                    # scheduled-prompt build if that ever changes.
-                    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
                     config = GaiaAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -555,7 +543,6 @@ class AgentLoop:
                         min_context_size=device_ctx,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
-                        dynamic_tools=dynamic_tools,
                         memory_incognito=_helpers._memory_off(session, db),
                         surface="agent_ui",
                     )

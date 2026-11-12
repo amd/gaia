@@ -38,7 +38,7 @@ var runCmd = &cobra.Command{
 		"on. That is what makes it usable from a script or from CI.\n\n" +
 		"  exit 0  the agent answered and nothing reported a failure\n" +
 		"  exit 1  an error, or a tool failed and nothing recovered it — even when " +
-		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
+		"the agent still wrote an answer, so `gaia-tui run … && next-step` does not " +
 		"fire over work that never happened\n" +
 		"  exit 3  a confirmation gate held back a destructive action this run has " +
 		"no way to approve: nothing broke, and nothing was done\n" +
@@ -130,10 +130,14 @@ func printStatus(w io.Writer) error {
 	ctx := context.Background()
 
 	// Attach only: `status` must report what IS running, not start something.
+	// Read from disk, so they are reported even with the service down.
+	_, installWarnings := catalog.LocalInstalls()
+
 	agents, err := hc.Agents(ctx, false)
 	if err != nil {
 		fmt.Fprintln(w, "Background service:  not reachable")
 		printModelServer(w, "")
+		printInstallWarnings(w, installWarnings)
 		// Non-zero, so `gaia tui status || <alert>` fires. A status command
 		// that exits 0 while the thing it reports on is down is unusable in a
 		// script.
@@ -161,12 +165,27 @@ func printStatus(w io.Writer) error {
 	fmt.Fprintf(w, "\nInstalled in %s:\n", catalog.InstallRoot())
 	if len(installed.Agents) == 0 {
 		fmt.Fprintf(w, "  (none) — install the GAIA agent with `%s`\n", catalog.InstallCommand(catalog.FlagshipID))
+		printInstallWarnings(w, installWarnings)
 		return nil
 	}
 	for _, a := range installed.Agents {
 		fmt.Fprintf(w, "  %-14s %s\n", a.ID, orDash(a.InstalledVersion))
 	}
+	printInstallWarnings(w, installWarnings)
 	return nil
+}
+
+// printInstallWarnings names installed agents that could not be listed (an
+// unreadable install record). Without it such an agent just disappears, which
+// looks exactly like never having installed it.
+func printInstallWarnings(w io.Writer, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nNot listed:")
+	for _, msg := range warnings {
+		fmt.Fprintf(w, "  ! %s\n", msg)
+	}
 }
 
 // printModelServer names the Lemonade GAIA uses and what the chat model runs

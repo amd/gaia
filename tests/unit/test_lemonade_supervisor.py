@@ -23,7 +23,11 @@ import threading
 import pytest
 
 from gaia.llm import lemonade_supervisor as sup
-from gaia.llm.lemonade_launcher import LemonadeTooling
+from gaia.llm.lemonade_launcher import (
+    LemonadeTooling,
+    build_start_command,
+    render_command,
+)
 from gaia.llm.lemonade_supervisor import LemonadeStartError, LemonadeSupervisor
 
 
@@ -126,23 +130,12 @@ def test_a_running_server_costs_exactly_one_probe(tmp_path, client, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_a_stopped_server_is_started_and_the_window_is_passed_to_the_launcher(
+def test_a_stopped_server_is_started_without_a_window_in_its_command(
     tmp_path, client, monkeypatch, installed
 ):
-    """The ctx_size must reach ``build_start_command``, which is what decides
-    how it is carried — an env var for a modern install, a flag for the legacy
-    CLI. A server started without it answers /health and then fails every long
-    request, which reads as an agent bug rather than a launch bug."""
+    """Lemonade reads no start-time window; it goes with every ``/load``. A
+    window in the start command would claim a setting the server ignores."""
     monkeypatch.setattr(sup, "_port_is_open", lambda *a, **k: False)
-    seen = {}
-    real_build = sup.build_start_command
-
-    def spy(tooling, ctx_size):
-        seen["ctx_size"] = ctx_size
-        return real_build(tooling, ctx_size)
-
-    monkeypatch.setattr(sup, "build_start_command", spy)
-
     spawned = []
 
     def fake_spawn(spec):
@@ -158,8 +151,9 @@ def test_a_stopped_server_is_started_and_the_window_is_passed_to_the_launcher(
     state = s.ensure_running(ctx_size=65536)
 
     assert state.started is True
-    assert seen["ctx_size"] == 65536
     assert len(spawned) == 1
+    assert "65536" not in " ".join(spawned[0].argv)
+    assert spawned[0].env == {}
 
 
 def test_not_installed_names_the_installer_and_spawns_nothing(
@@ -248,6 +242,46 @@ def test_a_server_that_dies_on_launch_names_the_exit_code_and_the_log(
 
     assert "exited with code 3" in str(e.value)
     assert str(s.log_path()) in str(e.value)
+
+
+def _spawn_fails(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(sup.subprocess, "Popen", refuse)
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        r"C:\lemonade\bin\LemonadeServer.exe",
+        r"C:\Program Files\Lemonade Server\bin\LemonadeServer.exe",
+    ],
+)
+def test_a_launch_that_cannot_exec_shows_the_full_command(
+    tmp_path, client, monkeypatch, free_port, launcher
+):
+    """The error and the log name the exact command that failed. On a modern
+    install that command carries no context-size variable: Lemonade never
+    reads one (#3320)."""
+    tooling = LemonadeTooling(
+        found=True,
+        kind="modern",
+        client_path=r"C:\lemonade\bin\lemonade.exe",
+        server_launcher=launcher,
+    )
+    monkeypatch.setattr(sup, "resolve_lemonade", lambda: tooling)
+    _spawn_fails(monkeypatch)
+    s = _supervisor(tmp_path, client, monkeypatch)
+    expected = render_command(build_start_command(tooling))
+    assert "LEMONADE_CTX_SIZE" not in expected
+
+    with pytest.raises(LemonadeStartError) as e:
+        s.ensure_running(ctx_size=65536, timeout=5.0)
+
+    assert f"(`{expected}`)" in str(e.value)
+    header = f"=== GAIA daemon start: {expected} ==="
+    assert header in s.log_path().read_text(encoding="utf-8")
 
 
 def test_a_server_that_never_answers_is_reaped_rather_than_left_behind(
@@ -487,13 +521,14 @@ _PROBE_SCRIPT = """
 import os, pathlib, sys
 pathlib.Path(sys.argv[1]).write_text(
     "CTX=" + os.environ.get("LEMONADE_CTX_SIZE", "") + "\\n"
+    "SPEC=" + os.environ.get("GAIA_SPEC_MARKER", "") + "\\n"
     "MARKER=" + os.environ.get("GAIA_PARENT_MARKER", ""),
     encoding="utf-8",
 )
 """
 
 
-def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window(
+def test_a_real_spawn_merges_the_spec_env_into_the_parent_environment(
     tmp_path, client, monkeypatch, free_port
 ):
     """Every other test stubs ``_spawn``, which proves the call was made and
@@ -504,17 +539,15 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
     breakage: the child environment must be the parent's env MERGED with the
     spec's, never replaced by it. A bare ``env=spec.env`` drops PATH and
     LOCALAPPDATA and LemonadeServer.exe cannot start — a failure no mock can
-    produce, because a mock has no environment to lose. It pins the other half
-    too: on a modern install the context window travels in the ENV, not the
-    argv, so a spawn that dropped it would come up health-green and then fail
-    every long request.
+    produce, because a mock has no environment to lose. It also pins that a
+    modern spawn adds no context-size variable: Lemonade never reads one
+    (#3320), and GAIA sends the window with each ``/load`` instead.
     """
     import sys
 
-    # Named so resolve_lemonade classifies the override as MODERN — the form
-    # whose ctx_size rides in the environment. The placeholder exercises real
-    # resolution; argv then uses this environment's Python to run the probe,
-    # while spec.env is left exactly as the launcher built it.
+    # Named so resolve_lemonade classifies the override as MODERN. The
+    # placeholder exercises real resolution; argv then uses this environment's
+    # Python to run the probe.
     fake_server = tmp_path / ("lemonade.exe" if os.name == "nt" else "lemond")
     fake_server.touch()
 
@@ -526,20 +559,20 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
     # tooling and the StartSpec below are the real ones.
     monkeypatch.setenv("LEMONADE_SERVER_PATH", str(fake_server))
     monkeypatch.setenv("GAIA_PARENT_MARKER", "inherited")
+    monkeypatch.delenv("LEMONADE_CTX_SIZE", raising=False)
 
     real_build = sup.build_start_command
 
-    def redirect_argv_keep_env(tooling, ctx_size):
-        spec = real_build(tooling, ctx_size)
-        assert spec.env.get("LEMONADE_CTX_SIZE") == str(ctx_size), (
-            "the launcher did not put the context window in the environment, so "
-            "this test would pass for the wrong reason"
-        )
+    def redirect_argv_mark_env(tooling):
+        spec = real_build(tooling)
+        assert spec.env == {}, f"modern launch grew an env: {spec.env}"
+        # Proves the spec's own env still reaches the child through the merge.
+        spec.env["GAIA_SPEC_MARKER"] = "from-spec"
         # A copied Windows venv launcher cannot locate its Python installation.
         spec.argv[:] = [sys.executable, str(probe), str(out)]
         return spec
 
-    monkeypatch.setattr(sup, "build_start_command", redirect_argv_keep_env)
+    monkeypatch.setattr(sup, "build_start_command", redirect_argv_mark_env)
 
     s = _supervisor(tmp_path, client, monkeypatch)
     with pytest.raises(LemonadeStartError):
@@ -548,7 +581,8 @@ def test_a_real_spawn_inherits_the_parent_environment_and_carries_the_ctx_window
         s.ensure_running(ctx_size=65536, timeout=3.0)
 
     written = out.read_text(encoding="utf-8")
-    assert "CTX=65536" in written, "the context window never reached the child"
+    assert "CTX=\n" in written, "a context-size variable reached the child"
+    assert "SPEC=from-spec" in written, "the spec's env never reached the child"
     assert "MARKER=inherited" in written, (
         "the child did not inherit the parent environment — a bare env=spec.env "
         "would break LemonadeServer.exe in exactly this way"

@@ -15,9 +15,9 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
@@ -34,8 +34,8 @@ def gaia_docs(tmp_path, monkeypatch):
 def _build(**overrides) -> ChatAgent:
     config = ChatAgentConfig(silent_mode=True, **overrides)
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         return ChatAgent(config)
 
@@ -76,7 +76,7 @@ def test_saving_to_my_documents_names_the_users_folder_not_gaias(
 ):
     # "my Documents folder" sent new files into the hidden GAIA folder.
     documents = Path.home() / "OneDrive" / "Documents"
-    monkeypatch.setattr("gaia_agent_chat.agent.documents_dir", lambda: documents)
+    monkeypatch.setattr("gaia_agent.chat_agent.documents_dir", lambda: documents)
     agent = _build(allowed_paths=[str(gaia_docs)])
     try:
         line = _folders_line(agent._get_system_prompt())
@@ -141,6 +141,40 @@ def test_other_front_ends_get_no_scheduled_tasks_line(gaia_docs, surface):
     agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
     try:
         assert "Scheduled tasks" not in agent._get_system_prompt()
+    finally:
+        agent.__del__()
+
+
+def _unsupported_line(prompt: str) -> str:
+    [line] = [ln for ln in prompt.splitlines() if ln.startswith("**UNSUPPORTED:**")]
+    return line.split("—")[0].lower()
+
+
+@pytest.mark.parametrize("surface", [None, "tui", "agent_ui"])
+def test_scheduling_is_never_both_unsupported_and_offered(gaia_docs, surface):
+    agent = _build(allowed_paths=[str(gaia_docs)], surface=surface)
+    try:
+        prompt = agent._get_system_prompt()
+    finally:
+        agent.__del__()
+
+    offered = "Scheduled tasks" in prompt
+    assert offered == (surface == "agent_ui")
+    assert ("scheduling" in _unsupported_line(prompt)) != offered
+
+
+def test_only_sending_email_is_unsupported_when_email_tools_are_registered(
+    gaia_docs,
+):
+    """The email tools read mail; the prompt must not claim they send it."""
+    agent = _build(allowed_paths=[str(gaia_docs)])
+    try:
+        without = _unsupported_line(agent._get_system_prompt())
+        assert without.startswith("**unsupported:** email,")
+        assert "sending email" not in without
+        agent._instance_tools["list_inbox"] = {}
+        with_tools = _unsupported_line(agent._get_system_prompt())
+        assert with_tools.startswith("**unsupported:** sending email,")
     finally:
         agent.__del__()
 

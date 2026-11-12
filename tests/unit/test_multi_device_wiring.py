@@ -16,6 +16,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from gaia.version import LEMONADE_VERSION
+
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
 
@@ -32,6 +34,7 @@ def _make_status(running=True, context_size=32768, loaded_models=None):
         context_size=context_size,
         loaded_models=loaded_models,
         busy=False,
+        version=LEMONADE_VERSION,
     )
 
 
@@ -391,16 +394,16 @@ class TestAgentThreadsDevice:
 
 class TestChatAgentConfigDeviceField:
     def test_config_has_device_and_ctx(self):
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgentConfig
 
         cfg = ChatAgentConfig(device="npu", min_context_size=4096)
         assert cfg.device == "npu"
         assert cfg.min_context_size == 4096
 
     def test_config_device_defaults_none(self):
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent")
+        from gaia_agent.chat_agent import ChatAgentConfig
 
         cfg = ChatAgentConfig()
         assert cfg.device is None
@@ -413,12 +416,12 @@ class TestChatAgentConfigDeviceField:
 class TestResolveDeviceModelUI:
     """``resolve_device_model`` is the heart of the UI dropdown fix."""
 
-    def test_npu_resolves_to_flm_model_and_32k_ctx(self):
+    def test_npu_resolves_to_flm_model_and_its_64k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model
 
         model, ctx = resolve_device_model("chat", "npu", None)
-        assert model == "gemma4-it-e2b-FLM"
-        assert ctx == 32768
+        assert model == "gemma4-it-e4b-FLM"
+        assert ctx == 65536
 
     def test_gpu_resolves_to_gguf_model_and_profile_ctx(self):
         from gaia.llm.lemonade_client import GPU_CTX_SIZE
@@ -477,7 +480,7 @@ class TestCliDeviceModelMapping:
         [
             ("gpu", "Gemma-4-E4B-it-GGUF"),
             ("cpu", "Gemma-4-E4B-it-GGUF"),
-            ("npu", "gemma4-it-e2b-FLM"),
+            ("npu", "gemma4-it-e4b-FLM"),
         ],
     )
     def test_default_device_config_models(self, device, expected_model):
@@ -511,7 +514,7 @@ class TestSessionsRouterDeviceRewrite:
         assert resp.status_code == 200
         body = resp.json()
         assert body["device"] == "npu"
-        assert body["model"] == "gemma4-it-e2b-FLM"
+        assert body["model"] == "gemma4-it-e4b-FLM"
 
     def test_switch_to_gpu_keeps_default_model(self, client):
         created = client.post("/api/sessions", json={}).json()
@@ -548,7 +551,7 @@ class TestSessionsRouterDeviceRewrite:
         assert resp.status_code == 200
         body = resp.json()
         assert body["device"] == "npu"
-        assert body["model"] == "gemma4-it-e2b-FLM"
+        assert body["model"] == "gemma4-it-e4b-FLM"
 
     def test_create_session_with_corrupt_config_returns_actionable_500(self, client):
         from gaia import config as config_mod

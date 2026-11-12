@@ -19,7 +19,8 @@ executableName: gaia-desktop       # Actual binary name — must NOT collide wit
                                    # could find /usr/bin/gaia-desktop instead of the venv's
                                    # Python gaia binary.
                                    # Affects: .app/Contents/MacOS/gaia-desktop, gaia-desktop.exe,
-                                   # /usr/bin/gaia-desktop, deb package name, AppImage binary name
+                                   # /usr/bin/gaia-desktop, and the AppImage binary name.
+                                   # The Debian package name is configured separately below.
 copyright: Copyright © 2026 Advanced Micro Devices, Inc.
 
 directories:
@@ -44,7 +45,6 @@ files:
   - "!**/.gaia/**"
   - "!gaia.log"
   - "!**/node_modules/.cache/**"
-  - "!forge.config.cjs"
   - "!vite.config.ts"
   - "!tsconfig.json"
   - "!index.html"
@@ -61,25 +61,33 @@ extraResources:
     to: agents
     filter:
       - "**/*"
-  # Bundled `uv` binary (issue #782 T3). The CI job `fetch-uv-binary` in
-  # .github/workflows/build-electron-apps.yml downloads a pinned astral-sh/uv
-  # release, SHA256-verifies it, and extracts the single `uv` binary to
-  # build/vendor/uv/linux-x64/uv (mode 0755). Shipping this inside the
-  # AppImage removes the runtime `curl | sh` bootstrap that breaks on
-  # Ubuntu 24.04 minimal (curl not installed by default). Runtime path
-  # inside the mounted AppImage is <resources>/vendor/uv/linux-x64/uv.
-  - from: build/vendor/uv
-    to: vendor/uv
+  # The frozen `gaia` core (installer/core/freeze.py), unpacked here by the
+  # build-installers job. backend-installer.cjs runs it from <resources>/core,
+  # so the app installs no Python package on the user's PC.
+  - from: build/core
+    to: core
     filter:
       - "**/*"
+  # Pinned embeddable Lemonade archive for this platform, fetched and verified
+  # by installer/scripts/fetch_lemonade_embeddable.py. main.cjs points the
+  # backend at it, so first-run setup unpacks it instead of downloading it.
+  - from: build/vendor/lemonade
+    to: vendor/lemonade
+    filter:
+      - "**/*"
+  # Third-party licence notices for the libraries the app bundles.
+  - from: ../../../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: ../../../../licenses
+    to: licenses
 
 asar: true
 # Nothing currently needs to be unpacked from the asar.
 asarUnpack: []
 
 # afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
-# Replaces the postPackage hook from forge.config.cjs.
-afterPack: ../../../../installer/scripts/after-pack.cjs
+# electron-builder only loads hooks from inside this app's own folder.
+afterPack: ./scripts/after-pack.cjs
 
 # Auto-update provider — R2-primary generic feed (#1724).
 #
@@ -135,7 +143,7 @@ nsis:
   uninstallerSidebar: ../../../../installer/nsis/installer-sidebar.bmp
   uninstallDisplayName: ${productName}
   license: ../../../../LICENSE.md
-  include: ../../../../installer/nsis/installer.nsh
+  include: nsis/installer.nsh
   # Respect §5 — keep user data by default. The uninstaller wizard / the
   # `gaia uninstall --purge` command handle data removal when the user opts in.
   deleteAppDataOnUninstall: false
@@ -230,13 +238,15 @@ linux:
       Name: GAIA
       Comment: Privacy-first agentic AI interface for AMD Ryzen AI
       Categories: Development;Utility;
-      # StartupWMClass must match the X11 WM_CLASS the app reports at
-      # runtime. Electron derives WM_CLASS from the executable basename
-      # by default, so with executableName: gaia-desktop this becomes
-      # "gaia-desktop". Getting this wrong breaks taskbar icon grouping.
+      # Electron takes the window's app_id / WM_CLASS from package.json's
+      # desktopName ("gaia-desktop.desktop"); this and the .desktop file name
+      # (from executableName) must match it, or docks can't tie the window to GAIA.
       StartupWMClass: gaia-desktop
 
 deb:
+  # Keep the desktop package installable alongside the terminal package,
+  # which intentionally remains named `gaia`.
+  packageName: gaia-desktop
   depends:
     - libnotify4
     - libnss3
@@ -246,14 +256,15 @@ deb:
     - libdrm2
     - libgbm1
     - libxcb-dri3-0
-  recommends:
-    - python3
-    - python3-venv
   priority: optional
   fpm:
     - "--after-install=../../../../installer/debian/postinst"
     - "--before-remove=../../../../installer/debian/prerm"
     - "--after-remove=../../../../installer/debian/postrm"
+    # Earlier releases shipped this package as `gaia`; Replaces lets it take
+    # over those files. No Breaks/Conflicts: the terminal package is also `gaia`,
+    # on the same version numbers, and must stay installed alongside.
+    - "--replaces=gaia"
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}

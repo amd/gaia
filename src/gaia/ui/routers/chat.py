@@ -39,7 +39,7 @@ from ..dependencies import get_db
 from ..models import ChatRequest, ChatResponse
 from ..restart_recovery import CANCELLED_TURN_NOTICE
 from ..run_manager import run_manager
-from ..security import flagship_only
+from ..security import flagship_only, require_local_pc
 from ..sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THOUGHT_JSON_SUB_RE,
@@ -159,7 +159,7 @@ async def send_message(
                 await turn_queue.acquire(sid)
                 holds_turn = True
         except TurnCancelled:
-            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True)
+            db.add_message(sid, "assistant", "Cancelled.", ends_turn=True, stopped=True)
             session_lock.release()
             raise HTTPException(
                 status_code=409,
@@ -410,8 +410,8 @@ async def _confirm_relayed_tool(
     """
     from starlette.concurrency import run_in_threadpool
 
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -497,6 +497,34 @@ async def list_permissions():
     }
 
 
+@router.put("/api/chat/permissions", dependencies=[Depends(require_local_pc)])
+async def set_default_permission_mode(body: PermissionModeRequest):
+    """Set the mode new chats start in: ``full_access`` in ``~/.gaia/config.json``.
+
+    The same key the TUI's ``/full-access always`` writes. Chats already open
+    keep the mode they have. A paired phone can't change it: it would apply
+    to every future chat on the PC, the TUI's included.
+    """
+    if body.mode not in session_permissions.MODES:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown permission mode {body.mode!r}."
+        )
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        await asyncio.to_thread(
+            GaiaConfig.save_key,
+            "full_access",
+            body.mode == session_permissions.MODE_FULL_ACCESS,
+        )
+    except (GaiaConfigError, OSError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Couldn't save the default permission mode: {exc}",
+        ) from exc
+    return {"default_mode": session_permissions.default_mode()}
+
+
 @router.get("/api/chat/permissions/{session_id}")
 async def get_permissions(session_id: str, db: ChatDatabase = Depends(get_db)):
     """This chat's permission mode and its "always allow" grants."""
@@ -529,7 +557,7 @@ async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -588,9 +616,9 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     """Revoke a grant the chat's relayed agent holds, through its sidecar."""
     from starlette.concurrency import run_in_threadpool
 
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -633,7 +661,7 @@ async def user_input(request: UserInputRequest):
     the sidecar). Tried in that order; a session with neither pending is a
     404, never a silent no-op accept.
     """
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     from .._chat_helpers import _active_sse_handlers
 
@@ -789,7 +817,7 @@ async def send_followup(request: FollowUpRequest):
     """
     from starlette.concurrency import run_in_threadpool
 
-    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.daemon.sidecars.errors import SidecarError
 
     text = request.text.strip()
     if not text:
@@ -818,13 +846,17 @@ async def send_followup(request: FollowUpRequest):
 
 
 @router.get("/api/chat/followup/{session_id}")
-async def followup_outcome(session_id: str):
+async def followup_outcome(session_id: str, db: ChatDatabase = Depends(get_db)):
     """What the chat's last finished turn did with the messages added to it.
 
     ``taken`` were read by the turn and recorded in the chat; ``returned`` were
     not and should go out as their own messages. 409 while a turn still runs,
-    since its follow-ups have no outcome yet.
+    since its follow-ups have no outcome yet. A deleted chat is a terminal
+    condition for queued messages, so it must not look like an empty outcome.
     """
+    # Check existence first: a stale run entry must not turn a deleted chat into
+    # a misleading 409, and the client uses 404 to discard its local queue.
+    _require_session(db, session_id)
     if run_manager.is_running(session_id):
         raise HTTPException(
             status_code=409,
@@ -922,12 +954,26 @@ async def retry_with(
 
     The answer is held until ``/api/chat/retry-with/choose`` keeps one.
     """
-    from gaia.llm.lemonade_client import cloud_model_provider, resolve_ctx_size
+    from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+
+    from .._chat_helpers import _runs_on_this_pc
 
     sid = request.session_id
     if not db.get_session(sid):
         raise HTTPException(status_code=404, detail="Session not found")
-    if cloud_model_provider(request.model, None):
+    try:
+        local = await asyncio.to_thread(_runs_on_this_pc, request.model)
+    except LemonadeClientError as exc:
+        logger.error(
+            "Retry with: couldn't check %s runs locally: %s", request.model, exc
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Retry with… couldn't confirm the model runs on this PC because "
+            "Lemonade's model list didn't load. Check that Lemonade is running in "
+            "Settings > Setup, then try again.",
+        ) from exc
+    if not local:
         raise HTTPException(
             status_code=400,
             detail="Retry with… compares models on this PC; pick a local model.",

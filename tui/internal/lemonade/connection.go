@@ -109,7 +109,7 @@ func normalizeBaseURL(base string) string {
 // key (only to its recorded endpoint). An error means a key was saved for base
 // but could not be fetched; sending none would only earn a confusing 401.
 func APIKeyFor(ctx context.Context, base string) (string, error) {
-	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" && !ownCredentials() {
+	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" && !ownCredentials() && !EnvURLIgnored() {
 		return key, nil
 	}
 	if err := ChoiceError(); err != nil {

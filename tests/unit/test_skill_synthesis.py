@@ -448,6 +448,22 @@ class TestDistillCluster:
         assert skill is not None
         assert skill.name == "triage-support-ticket"
 
+    @pytest.mark.parametrize(
+        "reply, distils",
+        [
+            (f"<think>Weigh it.</think>\n{_INTERMEDIATE_MD}", True),
+            (f"<think>Weigh it, then\n{_INTERMEDIATE_MD}", False),
+            (f"Weigh it.</think>\n{_INTERMEDIATE_MD}", True),
+            (_INTERMEDIATE_MD, True),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_reasoning_never_reaches_the_parser(self, reply, distils):
+        skill = distill_cluster(_cluster(), _llm_returning(reply))
+        assert (skill is not None) is distils
+        if distils:
+            assert skill.name == "triage-support-ticket"
+
     def test_skip_output_returns_none(self):
         assert distill_cluster(_cluster(), _llm_returning("SKIP")) is None
 
@@ -580,6 +596,63 @@ class TestReconcileAndStore:
         assert row["provenance"]["from_sessions"] == ["old_0", "old_1"] + list(
             fresh.from_sessions
         )
+
+    def test_a_supersede_keeps_the_outcomes_counted_since_learning(self, store):
+        """Declines counted on the old row must still count on its successor,
+        or every re-synthesis resets the record that would retire it."""
+        vec = _unit([1, 0, 0]).tobytes()
+        store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="t",
+            markdown_body="b",
+            success_count=30,
+            attempt_count=33,
+            provenance={
+                "source": "synthesized",
+                "from_sessions": ["old_0", "old_1", "old_2"],
+                "outcomes": 3,
+                "outcome_successes": 0,
+            },
+            embedding=vec,
+        )
+
+        res = reconcile_and_store(
+            self._candidate(), _cluster(n=3), store, embedding=vec
+        )
+
+        assert res.action == "update"
+        provenance = store.search_skills(skill_id=res.skill_id)[0]["provenance"]
+        assert provenance["outcomes"] == 3
+        assert provenance["outcome_successes"] == 0
+
+    def test_a_supersede_keeps_an_rc_rows_unscored_outcomes(self, store):
+        """The successor must not read the RC row's outcomes as declines."""
+        vec = _unit([1, 0, 0]).tobytes()
+        store.put_skill(
+            name="triage-support-ticket",
+            when_to_use="t",
+            markdown_body="b",
+            success_count=30,
+            attempt_count=33,
+            provenance={
+                "source": "synthesized",
+                "from_sessions": ["old_0", "old_1", "old_2"],
+                "outcomes": 4,
+                "outcome_successes": 1,
+                "unscored_outcomes": 2,
+            },
+            embedding=vec,
+        )
+
+        res = reconcile_and_store(
+            self._candidate(), _cluster(n=3), store, embedding=vec
+        )
+
+        assert res.action == "update"
+        provenance = store.search_skills(skill_id=res.skill_id)[0]["provenance"]
+        assert provenance["unscored_outcomes"] == 2
+        record = store.record_skill_outcome([res.skill_id], success=False)
+        assert record[res.skill_id].scored_outcomes == 3
 
     def test_re_reading_consumed_episodes_never_double_counts(self, store):
         """A force pass re-reads episodes the row was built from. Only the ones

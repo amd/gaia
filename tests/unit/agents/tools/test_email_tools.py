@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Read-only email tools for the flagship agent (Phase 0 of the email skill).
+"""Reading tools for the flagship agent (Phase 0 of the email skill).
 
 The backend tests drive a real ``httpx`` client over a ``MockTransport``, so
 they assert the *shape of the outgoing Graph request* — path, ``$select``,
@@ -445,7 +445,10 @@ def harness_factory():
 def test_grant_identity_is_the_namespaced_flagship_id():
     # Must match gaia.connectors.grants' namespacing for a wheel-installed agent.
     assert EMAIL_AGENT_ID == "installed:gaia"
-    assert MAIL_SCOPES == ("https://graph.microsoft.com/Mail.ReadWrite",)
+    assert MAIL_SCOPES == (
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+    )
 
 
 def test_list_inbox_tool_returns_structured_success(harness_factory):
@@ -740,7 +743,8 @@ def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
         _Bare()._build_email_backend()
     message = str(err.value)
     assert "calendar.events" in message
-    assert GMAIL_READONLY in message
+    assert "gmail.readonly" in message and "gmail.compose" in message
+    assert "gmail.modify" not in message
 
 
 def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
@@ -898,14 +902,14 @@ def test_email_tools_are_bundled_for_the_loader():
     """An unbundled tool can never be pulled in with its cohort."""
     # The chat agent is a separate hub package; the core unit-test job does not
     # install it. "Test Chat Agent" and "Test Gaia Agent" do, and run this there.
-    pytest.importorskip("gaia_agent_chat")
-    from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 
     bundles = {b.name: b for b in PROFILE_TOOL_CONFIGS["full"].bundles}
     missing = {"email", "email_threads"} - set(bundles)
     assert not missing, (
         f"bundle(s) {missing} missing from the full profile: add them to "
-        "gaia_agent_chat.tool_bundles.FULL_BUNDLES or the loader can never "
+        "gaia_agent.tool_bundles.FULL_BUNDLES or the loader can never "
         "pull the email tools in as a cohort"
     )
     members = bundles["email"].members | bundles["email_threads"].members

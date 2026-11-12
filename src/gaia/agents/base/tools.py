@@ -4,12 +4,17 @@
 Tool registry and decorator for agent tools.
 """
 
+import contextvars
 import inspect
-import logging
 import re
 import types
 import typing
-from typing import Any, Callable, Dict, Optional
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
+
+# Set up logging via the project logger; importing this module must not
+# reconfigure the root logger.
+from gaia.logger import get_logger
 
 # Re-exported for existing callers of this module.
 # pylint: disable=unused-import
@@ -21,9 +26,7 @@ from gaia.tool_cancellation import (  # noqa: F401
     tool_cancelled,
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Tool registry to store registered tools
 _TOOL_REGISTRY: dict[str, dict] = {}
@@ -34,7 +37,72 @@ _SUPPORTED_TOOL_KWARGS = (
     "timeout_arg",
     "preflight",
     "registry",
+    "override",
 )
+
+# Names registered so far in the agent tool build under way, or None outside one.
+_BUILD_NAMES: contextvars.ContextVar[Optional[set[str]]] = contextvars.ContextVar(
+    "gaia_tool_build_names", default=None
+)
+
+
+class DuplicateToolError(ValueError):
+    """Two different functions tried to register one tool name."""
+
+
+@contextmanager
+def tool_build() -> Iterator[None]:
+    """Scope one agent's tool registration, so a name collision inside it raises.
+
+    The global registry outlives any one agent: a tool left by an earlier
+    agent's build is replaced, not a collision.
+    """
+    token = _BUILD_NAMES.set(set())
+    try:
+        yield
+    finally:
+        _BUILD_NAMES.reset(token)
+
+
+def _tool_source(f: Callable) -> str:
+    f = inspect.unwrap(f)
+    return f"{getattr(f, '__module__', '?')}.{getattr(f, '__qualname__', repr(f))}"
+
+
+def _tool_location(f: Callable) -> str:
+    code = getattr(inspect.unwrap(f), "__code__", None)
+    if code is None:
+        return _tool_source(f)
+    return f"{_tool_source(f)} ({code.co_filename}:{code.co_firstlineno})"
+
+
+def _same_tool(a: Callable, b: Callable) -> bool:
+    """True for one ``def``, however many closures a registrar has made of it."""
+    code_a = getattr(inspect.unwrap(a), "__code__", None)
+    code_b = getattr(inspect.unwrap(b), "__code__", None)
+    if code_a is not None and code_b is not None:
+        return code_a is code_b
+    return _tool_source(a) == _tool_source(b)
+
+
+def _check_name_free(
+    tool_name: str, f: Callable, destination: Mapping[str, Any], instance_local: bool
+) -> None:
+    """Raise when *tool_name* already belongs to a different tool in this tool set."""
+    existing = destination.get(tool_name)
+    existing_function = existing.get("function") if existing else None
+    if existing_function is None or _same_tool(existing_function, f):
+        return
+    build = _BUILD_NAMES.get()
+    if not instance_local and (build is None or tool_name not in build):
+        return
+    raise DuplicateToolError(
+        f"Tool name {tool_name!r} is already registered by "
+        f"{_tool_location(existing_function)}, and {_tool_location(f)} would "
+        "silently replace it. Rename one of them, or mark the one that should "
+        "win with @tool(override=True)."
+    )
+
 
 # Every model call re-sends the schema of every offered tool, so this text is
 # billed on each step of each turn. Enforced by `python util/lint.py
@@ -238,6 +306,7 @@ def tool(
     timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     registry: dict[str, dict] | None = None,
+    override: bool = False,
     **unexpected_kwargs: object,
 ) -> Callable:
     """
@@ -267,6 +336,9 @@ def tool(
         registry: An explicit instance-local destination. When omitted, register
             globally for existing callers. Passing an empty mapping is honored;
             no entry is ever written to the global registry in this mode.
+        override: Replace a different tool already registered under this name
+            in the same tool set. Without it that raises ``DuplicateToolError``;
+            re-registering the same function is always allowed.
 
     Returns:
         The original function or decorator, unchanged
@@ -279,6 +351,11 @@ def tool(
             raise TypeError(
                 f"@tool(...) got unexpected keyword argument {unexpected_name!r} "
                 f"for tool {f.__name__!r}. Accepted: {accepted}."
+            )
+        if not isinstance(override, bool):
+            raise TypeError(
+                f"@tool(override=...) must be True or False for tool "
+                f"{f.__name__!r}, got {override!r}."
             )
 
         # Extract function name and signature for the tool registry
@@ -315,6 +392,11 @@ def tool(
 
         # Register the tool with atomic metadata
         destination = _TOOL_REGISTRY if registry is None else registry
+        if not override:
+            _check_name_free(tool_name, f, destination, registry is not None)
+        build = _BUILD_NAMES.get()
+        if build is not None and registry is None:
+            build.add(tool_name)
         destination[tool_name] = {
             "name": tool_name,
             "description": _schema_description(f.__doc__),
@@ -373,16 +455,16 @@ def get_tool_display_name(tool_name: str) -> str:
     return tool.get("display_name", tool_name)  # type: ignore[no-any-return]
 
 
-def get_tool_display_label(tool_name: str) -> str:
-    """Return a user-facing label for the tool suitable for UI progress strips.
+def get_tool_display_label(tool_name: str) -> Optional[str]:
+    """Return the tool's ``display_label`` for UI progress strips, or None.
 
-    Prefers the explicit `display_label` provided on the decorator, falls
-    back to the registry `description`, then finally to the raw tool name.
+    None when the tool isn't registered or declares no ``display_label``;
+    callers pick their own fallback.
     """
     tool = _TOOL_REGISTRY.get(tool_name)
     if not tool:
-        return None  # type: ignore[return-value]
-    return tool.get("display_label")  # type: ignore[return-value]
+        return None
+    return tool.get("display_label")
 
 
 #: What a long tool call is doing, in the user's words, while it streams.
@@ -413,3 +495,57 @@ def get_tool_metadata(tool_name: str):
     importing ``_TOOL_REGISTRY`` directly.
     """
     return _TOOL_REGISTRY.get(tool_name)
+
+
+#: Categories a tool can have besides a ``KNOWN_TOOLS`` mixin name.
+TOOL_CATEGORY_MCP = "mcp"
+TOOL_CATEGORY_SKILL = "skill"
+TOOL_CATEGORY_AGENT = "agent"
+
+
+def tool_category(tool_name: str, entry: Mapping[str, Any]) -> str:
+    """Where a registered tool comes from, for grouping it in a UI.
+
+    Args:
+        tool_name: The tool's registry key.
+        entry: Its registry entry.
+
+    Returns:
+        ``"mcp"`` for a tool an MCP server provides, ``"skill"`` for one a
+        skill registered (``<skill>/<tool>``), the ``KNOWN_TOOLS`` name of the
+        mixin that defines it (``"rag"``, ``"file_io"``, ...), else
+        ``"agent"``: a tool the agent class defines itself.
+    """
+    from gaia.agents.registry import KNOWN_TOOLS
+
+    if entry.get("_mcp_server") is not None:
+        return TOOL_CATEGORY_MCP
+    if "/" in tool_name:
+        return TOOL_CATEGORY_SKILL
+    module = getattr(entry.get("function"), "__module__", None)
+    for name, (module_path, _class_name) in KNOWN_TOOLS.items():
+        if module == module_path:
+            return name
+    return TOOL_CATEGORY_AGENT
+
+
+def describe_registry(
+    registry: Mapping[str, Mapping[str, Any]],
+) -> List[Dict[str, str]]:
+    """Name, description and category of every tool in *registry*, in its order.
+
+    Args:
+        registry: A tool registry (``_TOOL_REGISTRY`` or an agent's snapshot).
+
+    Returns:
+        One ``{"name", "description", "category"}`` dict per tool. The
+        description is the one the model is given.
+    """
+    return [
+        {
+            "name": name,
+            "description": entry.get("description") or "",
+            "category": tool_category(name, entry),
+        }
+        for name, entry in list(registry.items())
+    ]

@@ -24,8 +24,8 @@ import pytest
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
@@ -270,6 +270,35 @@ class TestDispatchEmailQuery:
         # No terminal error was emitted before the relay handoff; email takes
         # no mid-turn messages, so the chat is told not to offer adding one.
         assert handler.events == [{"type": "followup_unavailable"}]
+
+
+class TestSessionIdReachesTheEmailSidecar:
+    """#2834: the chat's session id goes to an email sidecar that takes it, so
+    a follow-up resolves against the agent that showed the thread."""
+
+    def _session_id_sent(self, monkeypatch, api_version):
+        fake_handle = _FakeHandle(api_version=api_version)
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        calls = []
+        monkeypatch.setattr(
+            relay_module, "relay_query", lambda *a, **k: calls.append(k)
+        )
+        _dispatch_sidecar_query(
+            _FakeSSEHandler(), _make_request(), [], "model", "email", session_id="s1"
+        )
+        assert len(calls) == 1
+        return calls[0]["session_id"]
+
+    def test_sent_to_a_sidecar_that_takes_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.14") == "s1"
+
+    def test_sent_at_exactly_the_contract_that_added_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.12") == "s1"
+
+    def test_withheld_from_an_older_sidecar_that_would_422(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.11") is None
 
 
 if __name__ == "__main__":

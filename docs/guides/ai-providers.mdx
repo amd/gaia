@@ -12,9 +12,10 @@ turns the cloud choices off.
 
 ## Connect from the TUI
 
-1. Start `gaia tui`. On a first run, setup opens by asking where chat should
+1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
-   opens once Lemonade is installed. Otherwise press **p** during setup, or enter
+   opens once Lemonade is installed. Otherwise, with the flagship GAIA agent,
+   press **p** during setup (other agents' setup screens don't offer it), or enter
    **`/provider`** from the command palette in chat.
 2. Select **Fireworks AI**. Paste your API key into the masked field and press
    **Enter**. Keys go directly to your local Lemonade server, never through the
@@ -55,7 +56,7 @@ For **Local**, the list shows every chat model Lemonade offers, downloaded or no
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
 **Recommended** models come first — Qwen3.6 35B A3B, Qwen3.8 Flash Next,
-Gemma 4 E4B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
+Gemma 4 E4B, Muse Glimmer 30B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
 much memory this PC has for models and how much disk is free, both read from
 Lemonade:
 
@@ -66,9 +67,6 @@ Lemonade:
   details line says what it needs against what this PC has.
 - **fit unknown** — Lemonade did not report this PC's GPU memory or the model's
   size, so it cannot be judged and is not downloaded.
-- **needs newer Lemonade** — the model needs a newer Lemonade than this PC runs
-  (Qwen3.6 35B A3B needs v11.7.0, Qwen3.8 Flash Next v2026.39.1). Upgrade with
-  `gaia init --force-reinstall`.
 
 A model fits when its size plus 5% and 1 GB of working room fits the memory
 llama.cpp loads into — on a Strix Halo that is the GPU carve-out plus shared
@@ -86,22 +84,47 @@ models, not an unused local chat model.
 A3B** on any PC whose GPU has ~27 GB for models (its 23.3 GB of weights and
 vision projector plus the context cache at its smallest, 64K window — a 64 GB+
 Strix Halo or a 32 GB GPU qualifies; a 24 GB card does not), **Gemma 4 E4B** everywhere
-else, including CPU-only PCs. GAIA runs Qwen3.6 with thinking on, so each step
+else, including CPU-only PCs. Qwen3.6 must also fit the memory free when setup
+runs (about 26 GB at its smallest window): on a 48 GB Mac with other apps holding
+memory, setup picks Gemma and says how much Qwen3.6 needs and how much is free.
+GAIA keeps that pick; to use Qwen3.6 later, close those apps and choose it in **Settings → Model**. GAIA runs Qwen3.6 with thinking on, so each step
 reasons before it answers or calls a tool. It records the pick as `default_model` in `~/.gaia/config.json`,
 so the TUI's agent starts on it. Set `gaia config set default_model <id>` to
 choose your own; `gaia init` never overwrites it, and downloads it instead of
-Gemma. Questions about images then download Gemma (~6 GB) the first time you
-ask one. **Qwen3.8 Flash Next** is
+Gemma. If Lemonade explicitly reports your configured vision model as not
+downloaded, image questions explain which model to download first instead of
+starting a multi-gigabyte download during image analysis. **Qwen3.8 Flash Next** is
 available on a 128 GB Strix Halo, and never picked for you: it needs ~90 GB for
 models (82 GB of weights and vision projector plus its context cache). Choose it
 with `gaia config set default_model user.Qwen3.8-Flash-Next-GGUF`, then run
 `gaia init` to download it. On a PC that cannot hold it, `gaia init` refuses and
 says how much memory it needs. Like Qwen3.6 it runs with thinking on. To stay on Gemma on a
 large machine and skip the download, run `gaia config set default_model
-Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the setup screen and
+Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the flagship's setup screen and
 picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
+
+### Muse Glimmer 30B
+
+Meta's open-weight model built for local agents, a supported local model that is
+never picked for you. It reads images itself, so an image question loads no second
+model, and calls tools natively. It always reasons before it answers, at the "high"
+strength Meta benchmarks it with; GAIA asks for "low" on side tasks (naming a chat,
+summarizing a document, memory upkeep) and on `gaia llm`. It needs ~24 GB
+for models at a 64K window (21 GB of weights, vision projector and draft model, plus
+a small context cache), so a 32 GB GPU or a 64 GB+ Strix Halo holds it at its full
+128K window; a 24 GB card does not. It is dense rather than a mixture of experts, so
+on a Strix Halo it reads prompts and writes text noticeably more slowly than Qwen3.6.
+The first reply after GAIA starts takes longest, while the model reads GAIA's
+instructions, and the app says so while it waits.
+On our agent tasks it did about as well as Qwen3.6 but somewhat more slowly, and it more
+often saved plain text under a `.docx` or `.xlsx` name instead of a real Office file.
+
+The TUI's model picker lists it and marks it **won't fit** on a PC that cannot hold
+it. The Agent UI offers it in Settings for download only on a PC that holds it.
+Or choose it with `gaia config set default_model Muse-Glimmer-30B-GGUF`, then run
+`gaia init` to download it.
 
 ### gpt-oss 20B and 120B
 
@@ -139,8 +162,9 @@ titles, memory upkeep, document summaries and `gaia llm`.
 
 ### Add a model from Hugging Face
 
-Any GGUF chat model on Hugging Face can join the local model list. Paste its link
-and GAIA checks it before saving anything:
+Any GGUF chat model on Hugging Face, or a FastFlowLM NPU model from the
+[FastFlowLM organization](https://huggingface.co/FastFlowLM), can join the local
+model list. Paste its link and GAIA checks it before saving anything:
 
 - **Hugging Face link** — any page of a model repo works: its card, `/tree/main`,
   `/discussions`, with a tracking query string or not. A link to one `.gguf` file
@@ -160,6 +184,13 @@ and GAIA checks it before saving anything:
 - **Not already listed** — a model GAIA ships, one you already added, or a name
   Lemonade already uses for another model is refused.
 
+A FastFlowLM repo (its name ends in `-NPU2`) takes a shorter path. There is nothing to
+register, because only models in the FastFlowLM release your Lemonade runs can load, so
+GAIA looks the link up in that release's model list. It needs a Ryzen AI NPU, and it must be
+a chat model; embedding, transcription and single-turn builds are refused. Gemma 4 E4B on
+the NPU is already in the model list on a PC with an NPU it fits, so pasting its link points
+you there.
+
 A chat template without tool support is allowed with a warning: GAIA can chat with
 the model but can't use tools through it.
 
@@ -169,8 +200,8 @@ its own, if smaller): GAIA doesn't know its memory use per token, so it doesn't
 grow the window the way it does for its own models. Removing it deletes its download too, and
 if it was your saved model the next launch uses the default.
 
-- **Agent UI:** Settings › Model › Local, **Add a model from Hugging Face**. The
-  model chip's menu has **Add a model from a link…**. Added models have a
+- **Agent UI:** Settings › Model › Local, open **Add a model from Hugging Face**.
+  The model chip's menu has **Add a model from a link…**. Added models have a
   **Remove** button.
 - **TUI:** in `/provider` › Local, press **Ctrl+A**, paste the link, and press
   **Enter** to check it, **Tab** for another quantization, **Enter** again to add.
@@ -204,6 +235,37 @@ model sends its full size again.
 
 Gemma 4 E4B stays at 65,536 tokens on every PC.
 
+### Give the GPU more memory
+
+On a PC whose GPU shares the system's memory (a Strix Halo or other Ryzen AI
+APU), how much of it the GPU may use decides which models fit. GAIA reads the
+split, shows which models a bigger share would fit, and never suggests a value
+that leaves less than 16 GB the GPU can't use. The GPU and CPU figures add up
+to the PC's memory. If the PC has nothing more to give, there are no steps. Either way the change needs administrator rights and a restart, and
+GAIA never restarts the PC itself. After the restart it reads the split again
+and says whether the change took effect. The sizes start with **Keep** at
+the current share; when the default model already fits, that is the one
+picked, and **Keep as is** moves on without changing anything.
+
+- **Linux:** GAIA sets it for you after you confirm. It writes
+  `options ttm pages_limit=<pages>` to `/etc/modprobe.d/ttm.conf` (the setting
+  AMD's `amd-ttm` tool writes), rebuilds the boot image, and asks for your
+  password through `pkexec`. It keeps the file's previous contents so you can
+  undo the change. If the kernel command line, another file in
+  `/etc/modprobe.d`, or the kernel itself already decides the limit, GAIA shows
+  the exact commands instead of changing anything.
+- **Windows:** you change it in AMD Software: Adrenalin Edition, under
+  Performance › Tuning › Variable Graphics Memory, then restart. AMD allows up to
+  75% of RAM there. The steps give the one value to enter, as AMD Software
+  shows it, and say why it is smaller than the GPU total GAIA shows: usually
+  because Windows also lets the GPU use half of the remaining memory, otherwise
+  because AMD Software's GB are slightly larger. GAIA lists these steps rather
+  than applying them, because AMD's interface for this setting restarts the PC
+  by itself. Without that option, set UMA Frame Buffer Size in the BIOS.
+
+The Agent UI serves this at `/api/gpu-memory` and the daemon at
+`/daemon/v1/gpu-memory`, with `apply`, `revert` and `pending` routes under each.
+
 ## What the ranked picks measured
 
 The two flash picks were measured end to end with the GAIA flagship agent over the
@@ -229,7 +291,8 @@ still sends conversation history to Fireworks and incurs usage charges — see
 
 ## Keep every AI request off the cloud
 
-To guarantee that no AI request reaches a cloud model, turn on **Local only**:
+To guarantee that no AI request reaches a cloud model, turn on **Local only**. In the Agent UI,
+use **Settings → Privacy → Local only**. From the terminal:
 
 ```bash
 gaia config set network_policy local_ai_only
@@ -248,9 +311,19 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   TUI and every restarted Lemonade gets it back without asking. Lemonade itself
   holds the key in memory only; GAIA hands it over again when a chat starts on a
   cloud model, when you open `/provider`, and when GAIA's Lemonade restarts while
-  a cloud chat is open. A key that discovers no models is not
-  kept. GAIA never writes a key to config files, transcripts, control logs,
+  a cloud chat is open. A restarted Lemonade has forgotten Fireworks AI itself
+  too, so GAIA registers it again first, using your saved key or
+  `FIREWORKS_API_KEY`. If a cloud reply still finds the provider gone, GAIA
+  reconnects it and sends the message once more; if that fails, the error says
+  GAIA's AI engine lost the connection, not that the model is missing. A key Fireworks AI or the gateway rejects is not kept.
+  GAIA never writes a key to config files, transcripts, control logs,
   traces, or command-line arguments.
+- If Fireworks AI's model list fails but your key was not rejected, the Agent UI
+  says so and keeps the key. GAIA's own Lemonade then restarts with the Fireworks
+  models GAIA already knows, and any model loaded at that moment is unloaded. A
+  note in Settings says the list may be out of date, and the next time GAIA's
+  Lemonade starts after the list recovers, it goes back to the live list. While
+  this is active, the key is in the environment of GAIA's Lemonade process.
 - A key only goes to GAIA's own running Lemonade, to the server named in
   `LEMONADE_BASE_URL`, or to the system Lemonade when GAIA's own isn't installed.
   It never goes to whatever answers on port 13305 or 8000. If GAIA's Lemonade is
@@ -279,6 +352,9 @@ with `gaia config set network_policy cloud_allowed`. Details and limits:
   `LEMONADE_FIREWORKS_API_KEY` and `LEMONADE_AMD_API_KEY`, set in the **Lemonade
   server process**, take precedence over pasted keys. A conflict is reported
   explicitly.
+- In the Agent UI, a `FIREWORKS_API_KEY` set in GAIA's own environment connects
+  Fireworks without pasting it. First-run setup names it by its last four
+  characters, and a remembered Fireworks model is restored with it at launch.
 - **Ctrl+D** in provider setup clears that provider's key, both in Lemonade and
   the kept copy, so it does not come back next launch. Environment keys remain
   active. **Esc** cancels input or an in-progress connection.
@@ -291,14 +367,14 @@ over `LEMONADE_API_KEY`. Otherwise GAIA reads its embedded-server credential fro
 `$GAIA_HOME/lemonade/state.json` (`~/.gaia` by default) and uses it only for the
 matching local HTTP server and port.
 
-Cloud routing requires Lemonade **11.8.1 or later** and is experimental upstream.
+Cloud routing is experimental upstream.
 An empty model list is reported as a discovery problem, not a successful connection.
 Check credentials, account model access, the gateway URL, and Lemonade's server log.
 
 ## Switching and validation
 
-Use `/provider` to reconnect or switch destinations, or `/model <id>` to select
-an already-discovered model. Successful switches preserve the current conversation
+Use `/provider` to reconnect or switch destinations, or `/model <id>` (flagship
+agent only) to select an already-discovered model. Successful switches preserve the current conversation
 and loaded skills. A failed switch keeps the previous model. If the agent restarts
 mid-session, the TUI reports any reversion to its launch model.
 
@@ -333,7 +409,8 @@ remembered local model is checked against what Lemonade has downloaded and then
 used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+(`GAIA_CONFIG_DIR` relocates it). The Agent UI's model menu and **Settings >
+Advanced > Custom model ID** save there too. A one-shot `gaia-tui run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 

@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DocumentLibrary } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
+import { stripIsolates } from '../../i18n/registry';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 
 vi.mock('../../services/api');
 
@@ -65,14 +67,34 @@ it('closes on Escape', async () => {
     expect(useChatStore.getState().showDocLibrary).toBe(false);
 });
 
+/** A focused button outside the dialog, standing in for the control that opened it. */
+function focusTrigger(): HTMLButtonElement {
+    const trigger = document.createElement('button');
+    trigger.textContent = 'Open';
+    document.body.appendChild(trigger);
+    trigger.focus();
+    return trigger;
+}
+
+it('takes focus when it opens and gives it back when it closes', async () => {
+    const trigger = focusTrigger();
+    const { unmount } = render(<DocumentLibrary />);
+    await screen.findByText('broken.pdf');
+
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+});
+
 describe('DocumentLibrary with no chat open', () => {
     it('holds a newly indexed document for the next chat instead of dropping it', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
         mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
@@ -111,8 +133,8 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.attachDocument.mockResolvedValue(undefined);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalledWith('sess-1', 'doc-ok-1'));
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
@@ -133,8 +155,8 @@ describe('DocumentLibrary says where documents go', () => {
     });
 
     const indexPath = () => {
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     };
 
     it('names the open chat in the attach button label, for screen readers too', async () => {
@@ -167,6 +189,20 @@ describe('DocumentLibrary says where documents go', () => {
         expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
     });
 
+    it('drops the "will be attached" line when that document is removed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        mockedApi.deleteDocument.mockResolvedValue(undefined as never);
+        render(<DocumentLibrary />);
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+
+        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
+        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+    });
+
     it('says so when indexing worked but attaching did not', async () => {
         mockedApi.attachDocument.mockRejectedValue(new Error('Session not found'));
         render(<DocumentLibrary />);
@@ -186,7 +222,7 @@ describe('DocumentLibrary says where documents go', () => {
 
     it('explains a file outside the readable folders without asking for a bug report', async () => {
         mockedApi.uploadDocumentByPath.mockRejectedValue(Object.assign(
-            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there, or add its folder to GAIA_DOCUMENT_ROOTS and restart GAIA.'),
+            new Error('GAIA can only read documents under C:\\Users\\u. Move or copy the file there.'),
             { httpStatus: 403 },
         ));
         render(<DocumentLibrary />);
@@ -322,8 +358,8 @@ describe('DocumentLibrary path box', () => {
     const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
 
     function submitPath(path: string) {
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: path } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: path } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     }
 
     it('indexes a folder path and says how many files it added and skipped', async () => {
@@ -418,24 +454,8 @@ describe('DocumentLibrary path box', () => {
     });
 });
 
-describe('DocumentLibrary chunk counts', () => {
-    it('says "1 chunk", not "1 chunks"', async () => {
-        mockedApi.listDocuments.mockResolvedValue({
-            documents: [{ ...COMPLETE_DOC, chunk_count: 1 }],
-            total: 1,
-            total_size_bytes: 2048,
-            total_chunks: 1,
-        });
-        render(<DocumentLibrary />);
-
-        await screen.findByText('good.pdf');
-
-        expect(screen.getByText('1 chunk')).toBeTruthy();
-        expect(screen.getByText(/· 1 chunk$/)).toBeTruthy();
-        expect(screen.queryByText(/1 chunks/)).toBeNull();
-    });
-
-    it('keeps the plural for other counts', async () => {
+describe('DocumentLibrary words', () => {
+    it('shows sizes, not internal chunk counts', async () => {
         mockedApi.listDocuments.mockResolvedValue({
             documents: [COMPLETE_DOC],
             total: 1,
@@ -446,7 +466,28 @@ describe('DocumentLibrary chunk counts', () => {
 
         await screen.findByText('good.pdf');
 
-        expect(screen.getByText('5 chunks')).toBeTruthy();
-        expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+        expect(screen.queryByText(/chunk/)).toBeNull();
+        expect(screen.getByText('Drop files here to add them')).toBeTruthy();
+    });
+});
+
+describe('DocumentLibrary dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('shows when an older document was indexed in Arabic, inline and in the tooltip', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue({
+            documents: [{ ...COMPLETE_DOC, indexed_at: '2025-03-14T10:00:00Z' }],
+            total: 1,
+            total_size_bytes: 2048,
+            total_chunks: 5,
+        });
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('good.pdf');
+        const stamp = container.querySelector('.doc-timestamp')!;
+        for (const text of [stamp.textContent ?? '', stamp.getAttribute('title') ?? '']) {
+            expect(stripIsolates(text)).toMatch(ARABIC_MONTH);
+            expect(stripIsolates(text)).not.toMatch(ENGLISH_MONTH);
+        }
     });
 });

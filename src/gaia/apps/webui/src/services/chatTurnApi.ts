@@ -25,7 +25,7 @@ export async function sendFollowUp(sessionId: string, text: string): Promise<{ d
     return apiFetch('POST', '/chat/followup', { session_id: sessionId, text });
 }
 
-/** What the chat's last finished turn did with the messages added to it; rejects (409) while one runs. */
+/** What the chat's last finished turn did with the messages added to it; rejects (409) while one runs and (404) if the chat was deleted. */
 export async function getFollowUpOutcome(sessionId: string): Promise<FollowUpOutcome> {
     return apiFetch('GET', `/chat/followup/${encodeURIComponent(sessionId)}`);
 }
@@ -82,6 +82,11 @@ export async function getPermissions(sessionId: string): Promise<SessionPermissi
 
 export async function listAllPermissions(): Promise<{ default_mode: PermissionMode; sessions: SessionPermissions[] }> {
     return apiFetch('GET', '/chat/permissions');
+}
+
+/** Set the mode new chats start in (`full_access` in the config the TUI shares). */
+export async function setDefaultPermissionMode(mode: PermissionMode): Promise<{ default_mode: PermissionMode }> {
+    return apiFetch('PUT', '/chat/permissions', { mode });
 }
 
 export async function setPermissionMode(sessionId: string, mode: PermissionMode): Promise<SessionPermissions> {

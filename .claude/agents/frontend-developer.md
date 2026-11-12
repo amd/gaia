@@ -1,11 +1,11 @@
 ---
 name: frontend-developer
-description: GAIA Electron and web UI developer. Use PROACTIVELY for the Agent UI (React/Vite/Electron), standalone app UIs, or backend↔renderer IPC.
+description: GAIA Electron and web UI developer. Use PROACTIVELY for the Agent UI (React/Vite/Electron) or backend↔renderer IPC.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
-You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/webui/`). Older standalone apps live under `src/gaia/apps/{jira,llm,summarize,docker,example}/`.
+You work on GAIA frontends. Your surface is the Agent UI (`src/gaia/apps/webui/`) and its Electron shell.
 
 ## Output style
 
@@ -14,7 +14,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 ## When to use
 
 - Editing the Agent UI (`src/gaia/apps/webui/`) — React/TypeScript/Vite/Electron
-- Working on standalone app UIs (Jira, LLM, Summarize, Docker, Example)
 - Adding or modifying IPC calls between renderer and main process
 - Wiring a new frontend feature to a backend endpoint in `src/gaia/ui/`
 
@@ -61,21 +60,6 @@ npm run build                                  # required before `gaia chat --ui
 ```
 
 `gaia chat --ui` expects the Vite build output — if missing, the UI won't load.
-
-## Standalone app pattern (legacy)
-
-```
-src/gaia/apps/<app>/webui/
-├── src/
-│   ├── main.js          # Electron main
-│   ├── preload.js       # IPC bridge
-│   └── renderer/        # UI
-├── public/
-├── package.json
-└── forge.config.js
-```
-
-These use Electron Forge. Shared assets live in `src/gaia/apps/_shared/`.
 
 ## Key backend touchpoints
 

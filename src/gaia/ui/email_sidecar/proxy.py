@@ -31,8 +31,8 @@ import json as _json
 import os
 from typing import Any, Callable, Dict, Iterator, Optional
 
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
 
@@ -262,6 +262,21 @@ class SidecarProxy:
             raise SidecarError(
                 f"could not reach the {self.agent_id} sidecar to list its "
                 f"skills: {exc}"
+            ) from exc
+
+    def session_tools(self, session_id: str) -> dict:
+        """The tools the sidecar session's agent has (flagship, contract >= 2.27).
+
+        A 404 (no such session) raises; the caller decides what it means.
+        """
+        import requests
+
+        try:
+            return self._get(f"{self.prefix}/sessions/{session_id}/tools")
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to list its "
+                f"tools: {exc}"
             ) from exc
 
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
