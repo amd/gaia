@@ -1279,6 +1279,7 @@ const messages: Messages = {
     'setup.upgrading.slow': 'يستغرق تحديث خادم النماذج المحلي وقتًا أطول من المعتاد. اضغط «التحقق مرة أخرى» لمواصلة الانتظار.',
     'setup.upgrading.retry': 'حاول مرة أخرى',
     'setup.unknown.failed': 'تعذّر التحقق مما إذا كان GAIA مُعدًّا: {error}',
+    'setup.unknown.modelUnread': 'تعذّر على GAIA معرفة النموذج الذي يستخدمه ({error})',
     'setup.unknown.retry': 'التحقق مرة أخرى',
     'setup.check.title': 'فحص هذا الجهاز',
     'setup.where.title': 'اختر مكان تشغيل GAIA',

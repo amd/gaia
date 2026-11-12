@@ -76,6 +76,13 @@ const UPGRADE_WAIT_MS = 5 * 60_000;
 /** The embedded server's update ended in failure, as opposed to still running. */
 class UpgradeFailed extends Error {}
 
+/** The model in use could not be read, so a setup check can't be trusted to say "not set up". */
+class ModelUnread extends Error {
+    constructor(reason: string) {
+        super(getT().bare('setup.unknown.modelUnread', { error: reason }));
+    }
+}
+
 async function waitForEmbeddedUpgrade(): Promise<void> {
     const deadline = Date.now() + UPGRADE_WAIT_MS;
     for (;;) {
@@ -173,12 +180,18 @@ function App() {
         try {
             for (;;) {
                 await useModelStore.getState().refresh();
-                const remote = !!useModelStore.getState().active?.remote;
+                const active = useModelStore.getState().active;
+                const remote = !!active?.remote;
                 let check: SetupCheck;
                 try {
                     check = await api.checkSetup(remote);
+                    // Asked without the model, the answer is a local model's: a cloud install would read as not set up.
+                    if (!active && !check.ready) {
+                        throw new ModelUnread(useModelStore.getState().error ?? 'no answer');
+                    }
                 } catch (err) {
-                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    const starting = isRefused(err) || err instanceof ModelUnread;
+                    if (!waitForStart || !starting || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;

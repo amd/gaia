@@ -1279,6 +1279,7 @@ export const enMessages = {
     'setup.upgrading.slow': 'Updating the local model server is taking longer than usual. Press Check again to keep waiting.',
     'setup.upgrading.retry': 'Try again',
     'setup.unknown.failed': 'Could not check whether GAIA is set up: {error}',
+    'setup.unknown.modelUnread': 'GAIA could not read which model it uses ({error})',
     'setup.unknown.retry': 'Check again',
     'setup.check.title': 'Check this PC',
     'setup.where.title': 'Choose where GAIA runs',
