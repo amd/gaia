@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.call_risk import SCRIPT_ARG
+from gaia.agents.base.code_path_screen import script_path_refusal
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.logger import get_logger
 
@@ -113,6 +114,11 @@ def script_prompt_args(agent: Any, tool_name: str, prompt_args: Any) -> Any:
     except (OSError, ValueError) as e:
         # Not a path the tool can open either; its body reports that.
         logger.warning("could not resolve %r for its approval prompt: %s", named, e)
+        return {**prompt_args, SCRIPT_ARG: {"unreadable": UNREADABLE}}
+    refused = script_path_refusal(getattr(agent, "path_validator", None), path)
+    if refused:
+        # Never opened: the tool refuses this path, so its prompt shows none of it.
+        logger.warning("not reading %s for its approval prompt: %s", path, refused)
         return {**prompt_args, SCRIPT_ARG: {"unreadable": UNREADABLE}}
     preview = read_script(path)
     records = getattr(agent, "_shown_scripts", None)

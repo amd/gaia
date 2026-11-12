@@ -124,7 +124,10 @@ shell line that hands code to an interpreter (`python -c`, `powershell -Command`
 folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
 own settings is refused outright, and an earlier "Always allow" does not cover it.
 Paths are judged in the canonical form above, after folding the plain ways of building
-one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`). The screen is
+one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`).
+`execute_python_file` is also refused, before the card and before the file is opened
+to show on it, when the script's own path is a credential file or a path no approval
+can grant. The screen is
 in `gaia.agents.base.code_path_screen`.
 
 It reads the code's text, so it is not a sandbox: code that works a path out while it

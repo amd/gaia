@@ -14,7 +14,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `~/.ssh` after one approval, though the file tools refuse them outright. Such
   code is now refused before the prompt, whatever "always" was granted, and the
   prompt for a code tool says GAIA checks the code's text, not what it does when
-  it runs.
+  it runs. `execute_python_file` pointed at a credential file itself, or at a
+  path no approval can grant, is refused the same way: no `needs_confirmation`
+  is sent for it and the file is never read into one.
 
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's

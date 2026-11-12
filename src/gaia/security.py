@@ -712,6 +712,60 @@ def narrow_allowed_paths(
     return [str(p) for p in _intersect_scopes(base, ceiling, warn=warn)]
 
 
+def read_block(path: str) -> Tuple[bool, str]:
+    """Whether *path* holds secrets GAIA must not read back, in any chat.
+
+    The allowlist answers "is this in scope"; it cannot answer "is this a
+    private key". Being inside an allowed directory has never made
+    ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
+    whatever the model is told to do with it — then sees.
+
+    Args:
+        path: File path to check for read permission.
+
+    Returns:
+        Tuple of (is_blocked, reason). If blocked, reason explains why.
+    """
+    try:
+        real_path = Path(_real_path(path))
+        file_name = real_path.name.lower()
+        file_ext = real_path.suffix.lower()
+
+        if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+            return (
+                True,
+                f"Read blocked: '{real_path.name}' holds credentials, keys or "
+                f"secrets. Open it yourself if you need its contents — the "
+                f"agent is not allowed to read it into the conversation.",
+            )
+
+        if file_ext in SENSITIVE_EXTENSIONS:
+            return (
+                True,
+                f"Read blocked: files with extension '{file_ext}' are "
+                f"certificates or private keys. The agent is not allowed to "
+                f"read them into the conversation.",
+            )
+
+        for secret_dir in SECRET_DIRECTORIES:
+            if _path_is_within(real_path, Path(secret_dir)):
+                return (
+                    True,
+                    f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                    f"which holds credentials. The agent is not allowed to "
+                    f"read from it.",
+                )
+
+        return (False, "")
+
+    except UncheckablePathError as e:
+        return (True, f"Read blocked: {e}")
+    except Exception as e:
+        logger.error(f"Error checking read block for {path}: {e}")
+        # Fail-closed: refuse if we can't determine safety.
+        return (True, f"Read blocked: unable to validate path safety: {e}")
+
+
 class PathValidator:
     """
     Validates file paths against an allowed list, with user prompting for exceptions.
@@ -1405,55 +1459,13 @@ class PathValidator:
     def is_read_blocked(self, path: str) -> Tuple[bool, str]:
         """Check whether a path holds secrets the agent must not read back.
 
-        The allowlist answers "is this in scope"; it cannot answer "is this a
-        private key". Being inside an allowed directory has never made
-        ``id_rsa`` or ``.env`` safe to read into a prompt that a model — and
-        whatever the model is told to do with it — then sees.
-
         Args:
             path: File path to check for read permission.
 
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
-        try:
-            real_path = Path(_real_path(path))
-            file_name = real_path.name.lower()
-            file_ext = real_path.suffix.lower()
-
-            if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
-                return (
-                    True,
-                    f"Read blocked: '{real_path.name}' holds credentials, keys or "
-                    f"secrets. Open it yourself if you need its contents — the "
-                    f"agent is not allowed to read it into the conversation.",
-                )
-
-            if file_ext in SENSITIVE_EXTENSIONS:
-                return (
-                    True,
-                    f"Read blocked: files with extension '{file_ext}' are "
-                    f"certificates or private keys. The agent is not allowed to "
-                    f"read them into the conversation.",
-                )
-
-            for secret_dir in SECRET_DIRECTORIES:
-                if _path_is_within(real_path, Path(secret_dir)):
-                    return (
-                        True,
-                        f"Read blocked: '{real_path}' is inside '{secret_dir}', "
-                        f"which holds credentials. The agent is not allowed to "
-                        f"read from it.",
-                    )
-
-            return (False, "")
-
-        except UncheckablePathError as e:
-            return (True, f"Read blocked: {e}")
-        except Exception as e:
-            logger.error(f"Error checking read block for {path}: {e}")
-            # Fail-closed: refuse if we can't determine safety.
-            return (True, f"Read blocked: unable to validate path safety: {e}")
+        return read_block(path)
 
     def _missing_instead_of_prompt(self, path: str) -> str:
         """A "not found" refusal for an out-of-scope *path* that is not there.

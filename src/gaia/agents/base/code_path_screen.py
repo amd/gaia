@@ -472,6 +472,29 @@ def python_code_preflight(
     return preflight
 
 
+def script_path_refusal(validator: Any, path: Any) -> str:
+    """Why *path* may not be opened as a script whatever the user answers, or "".
+
+    A credential file, or a path outside the chat's folders that no approval
+    can grant. Checked before the file is opened for any purpose, its approval
+    prompt included.
+    """
+    from gaia.security import read_block
+
+    path = str(path)
+    blocked, reason = (
+        read_block(path) if validator is None else validator.is_read_blocked(path)
+    )
+    if blocked:
+        final = "No approval can grant it"
+        return reason if final in reason else f"{reason.rstrip('.')}. {final}."
+    if validator is None or validator.is_path_allowed(path, prompt_user=False):
+        return ""
+    if validator.grant_refusal_reason(path):
+        return validator.access_denied_message(path)
+    return ""
+
+
 def python_file_refusal(
     host: Any,
     file_path: Any,
@@ -482,10 +505,27 @@ def python_file_refusal(
 
     A script that cannot be read is left to the tool, which reports it.
     """
+    from gaia.agents.base.verification import NOT_EXECUTED
+
     if not isinstance(file_path, str) or not file_path.strip():
         return None
     cwd = _host_cwd(host)
     validator = getattr(host, "path_validator", None)
+    named = join_under(cwd, os.path.expanduser(file_path))
+    protected = script_path_refusal(validator, named)
+    if protected:
+        log.info("Refused to run %s: %s", file_path, protected)
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "tier": "refuse",
+            "has_errors": True,
+            "error": (
+                f"Not run: {protected} Do not copy, rename or link the file to "
+                "get around this; tell the user to open it themselves if they "
+                "need it."
+            ),
+        }
     if isinstance(script_args, str) and script_args.strip():
         mentions = protected_paths_in_code(
             script_args, python=False, cwd=cwd, validator=validator
@@ -493,7 +533,7 @@ def python_file_refusal(
         if mentions:
             return code_refusal("the script's arguments", mentions)
     try:
-        path = Path(canonical_path(join_under(cwd, os.path.expanduser(file_path))))
+        path = Path(canonical_path(named))
         with open(path, "rb") as handle:
             source = handle.read(_MAX_FOLD_BYTES + 1).decode("utf-8", "replace")
     except (OSError, ValueError) as e:

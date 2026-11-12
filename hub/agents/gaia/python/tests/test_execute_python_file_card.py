@@ -63,6 +63,35 @@ def test_the_prompt_shows_the_script_and_the_approved_script_runs(chat):
     assert "ran as shown" in result["stdout"]
 
 
+@pytest.mark.parametrize("name", [".env", "id_rsa", "server.pem"])
+def test_a_credential_file_is_refused_with_no_prompt_and_never_run(chat, name):
+    agent, workspace = chat
+    marker = workspace / "ran.txt"
+    # Valid Python, so only the refusal keeps it from running.
+    (workspace / name).write_text(
+        f"SECRET = 'envmark-4417'\nopen({str(marker)!r}, 'w').write('x')\n",
+        encoding="utf-8",
+    )
+
+    result = agent._execute_tool("execute_python_file", {"file_path": name})
+
+    assert agent.console.prompts == []
+    assert result["status"] == "error" and result["executed"] is False, result
+    assert "No approval can grant it" in result["error"]
+    assert "envmark-4417" not in str(result)
+    assert not marker.exists()
+
+
+def test_the_tool_body_refuses_a_credential_file_called_directly(chat):
+    agent, workspace = chat
+    (workspace / ".env").write_text("SECRET = 'envmark-4417'\n", encoding="utf-8")
+
+    result = _TOOL_REGISTRY["execute_python_file"]["function"](file_path=".env")
+
+    assert result["status"] == "error" and "envmark-4417" not in str(result)
+    assert "No approval can grant it" in result["error"]
+
+
 def test_a_script_swapped_while_the_prompt_is_open_does_not_run(chat):
     agent, workspace = chat
     script = workspace / "job.py"
