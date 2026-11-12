@@ -377,6 +377,14 @@ describe('NewChat empty state', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
     });
 
+    it('puts the caret after text handed over, so typing adds to it', () => {
+        render(<NewChat onSend={vi.fn()} initialText="Use the summarize skill: " />);
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(document.activeElement).toBe(box);
+        expect(box.selectionStart).toBe(box.value.length);
+        expect(box.selectionEnd).toBe(box.value.length);
+    });
+
     it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {
         const detail = `The GAIA agent could not be started: sidecar binary lock ${'PENDING-sha256 '.repeat(60).trim()}`;
         vi.mocked(api.getStartScreen).mockResolvedValue({ ...START, cards: [], skills_error: detail });
