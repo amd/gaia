@@ -708,7 +708,8 @@ jobs:
                 return 0
               fi
               executable /usr/bin/gaiacpp
-              expect "first gaiacpp on PATH" "$(command -v gaiacpp)" /usr/bin/gaiacpp
+              # Fedora lists /usr/sbin first and links it to /usr/bin.
+              expect "first gaiacpp on PATH" "$(readlink -f "$(command -v gaiacpp)")" /usr/bin/gaiacpp
               if [ "${GAIACPP}" != stub ]; then
                 expect "gaiacpp --version" "$(gaiacpp --version)" "gaiacpp ${VERSION}"
               fi
