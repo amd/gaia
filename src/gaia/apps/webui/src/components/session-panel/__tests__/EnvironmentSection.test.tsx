@@ -80,6 +80,18 @@ describe('Can read and write', () => {
         expect(rows[2]).toHaveTextContent('Document in this chat');
     });
 
+    it("lists a library copy under the document's own name (#7224)", async () => {
+        const copy = 'C:\\Users\\me\\.gaia\\documents\\6bebd6da81b2_outside.md';
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: copy, name: 'outside.md', kind: 'file', source: 'document', removable: false }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const row = (await screen.findAllByRole('listitem'))[0];
+        expect(within(row).getByText('outside.md')).toHaveAttribute('title', copy);
+        expect(within(row).queryByText('6bebd6da81b2_outside.md')).not.toBeInTheDocument();
+    });
+
     it('removes a folder through the backend and shows what it answered', async () => {
         mocked.removeEnvironmentFolder.mockResolvedValue({
             ...ENV,

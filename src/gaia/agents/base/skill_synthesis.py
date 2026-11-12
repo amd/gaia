@@ -719,6 +719,18 @@ def _lineage_record(prior: Dict, cluster: GoalCluster) -> _LineageRecord:
     )
 
 
+def _outcomes_since_learned(prior: Dict) -> Dict[str, int]:
+    """The prior row's post-adoption outcomes, for its successor to keep counting."""
+    provenance = prior.get("provenance")
+    if not isinstance(provenance, dict):
+        return {}
+    return {
+        key: int(provenance[key])
+        for key in ("outcomes", "outcome_successes", "unscored_outcomes")
+        if provenance.get(key) is not None
+    }
+
+
 def reconcile_and_store(
     candidate: DistilledProcedure,
     cluster: GoalCluster,
@@ -771,7 +783,12 @@ def reconcile_and_store(
     """
     prior = _nearest_enabled_procedure(store, embedding, similarity_tau)
 
-    def _insert(sessions: List[str], successes: int, attempts: int) -> Optional[str]:
+    def _insert(
+        sessions: List[str],
+        successes: int,
+        attempts: int,
+        carried: Optional[Dict] = None,
+    ) -> Optional[str]:
         return store.put_skill(
             name=candidate.name,
             when_to_use=candidate.when_to_use,
@@ -780,7 +797,11 @@ def reconcile_and_store(
             tool_sequence=cluster.tool_sequence(),
             success_count=successes,
             attempt_count=attempts,
-            provenance={"source": "synthesized", "from_sessions": sessions},
+            provenance={
+                "source": "synthesized",
+                "from_sessions": sessions,
+                **(carried or {}),
+            },
             embedding=embedding,
             erase_count=erase_count,
         )
@@ -799,7 +820,10 @@ def reconcile_and_store(
     lineage = _lineage_record(prior, cluster)
     if lineage.success_count > int(prior.get("success_count") or 0):
         new_id = _insert(
-            lineage.from_sessions, lineage.success_count, lineage.attempt_count
+            lineage.from_sessions,
+            lineage.success_count,
+            lineage.attempt_count,
+            carried=_outcomes_since_learned(prior),
         )
         if new_id is None:
             return ReconcileResult(action="erased")

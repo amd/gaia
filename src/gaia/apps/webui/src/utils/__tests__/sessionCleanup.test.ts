@@ -68,6 +68,11 @@ describe('isAbandonedDraft', () => {
         expect(isAbandonedDraft('s1', { ...baseState, messageQueues: { other: queued.s1 } })).toBe(true);
     });
 
+    it('is false while its first message is handed over but not sent yet', () => {
+        expect(isAbandonedDraft('s1', { ...baseState, pendingPrompt: { sessionId: 's1' } })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, pendingPrompt: { sessionId: 'other' } })).toBe(true);
+    });
+
     it('ignores the loaded-messages signal for a non-current session', () => {
         // messages reflect the CURRENT session only; a background empty draft
         // should still be reapable even though `messages` is populated here.
