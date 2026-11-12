@@ -758,6 +758,8 @@ export const enMessages = {
     'tool.take_screenshot.active': 'Taking screenshot',
     'tool.text_to_speech.done': 'Read aloud',
     'tool.text_to_speech.active': 'Reading aloud',
+    'tool.dictate_document.done': 'Turned document into audio',
+    'tool.dictate_document.active': 'Turning document into audio',
     'tool.tree.done': 'Listed folder tree',
     'tool.tree.active': 'Listing folder tree',
     'tool.wait_for_condition.done': 'Waited for condition',

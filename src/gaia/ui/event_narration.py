@@ -200,6 +200,7 @@ _NARRATION_OVERRIDES = {
     "browser_snapshot": "Reading the page in the browser",
     "browser_type": "Typing in the browser",
     "capture_skill": "Saving a skill",
+    "dictate_document": "Turning a document into audio",
     "drop_table": "Deleting a table",
     "dump_document": "Extracting text",
     "evaluate_retrieval": "Checking search results",

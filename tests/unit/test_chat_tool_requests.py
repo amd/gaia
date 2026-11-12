@@ -173,3 +173,63 @@ def test_an_existing_recording_still_asks_to_transcribe_beside_speech(message):
     found = requested_tools(message, SPEECH_REGISTRY)
     assert "transcribe_media" in found
     assert "dictate_document" not in found
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Read notes.pdf aloud and save it as report.mp3",
+        "Narrate chapter1.txt and save as chapter1.wav",
+        "Convert report.docx and save it as report.mp3",
+        "Read notes.pdf aloud to notes.mp3.",
+        "Speak handbook.md out loud and write it to C:/out/handbook.m4a",
+        'Read the essay aloud and export it as "my essay.ogg"',
+        "Narrate story.txt into story.flac",
+        "Read README.md out loud, then save the result to readme.wav!",
+    ],
+)
+def test_a_document_saved_to_a_named_audio_file_gets_the_dictation_tool(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == [
+        "dictate_document",
+        "text_to_speech",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Transcribe meeting.mp3",
+        "what does interview.mp3 say?",
+        "Listen to interview.mp3 and tell me the key points",
+        "Convert interview.mp3 to interview.wav",
+        "Who speaks first in lecture.m4a?",
+        "Transcribe podcast.flac and save it as podcast.txt",
+        "Convert interview.mp4 into audio",
+        "Save the transcript of call.mp3 as notes.txt",
+    ],
+)
+def test_reading_an_existing_audio_file_still_routes_to_transcription(message):
+    found = requested_tools(message, SPEECH_REGISTRY)
+    assert "transcribe_media" in found
+    assert "dictate_document" not in found
+
+
+def test_reading_one_recording_aloud_into_another_is_not_dictation():
+    """The input is audio, so the output name must not turn it into a dictation."""
+    msg = "Read interview.mp3 aloud and save it as copy.wav"
+    assert requested_tools(msg, SPEECH_REGISTRY) == [
+        "text_to_speech",
+        "transcribe_media",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Save it to the current folder.",
+        "Save the notes as report.mp3s.txt",
+        "Read notes.pdf aloud and save it as report.wavy",
+    ],
+)
+def test_a_name_that_only_looks_like_an_audio_file_is_not_an_output(message):
+    assert "dictate_document" not in requested_tools(message, SPEECH_REGISTRY)
