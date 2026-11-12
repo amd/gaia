@@ -255,6 +255,8 @@ def test_a_relayed_run_that_needs_approval_fails_saying_so(
     message = str(exc.value)
     assert label in message
     assert "approval" in message and "chat" in message
+    # Autonomous goals relay the same way, so the text can't say "scheduled" only.
+    assert "scheduled tasks and autonomous goals" in message
     assert "out of date" not in message and "Update GAIA" not in message
     # Nothing is posted to a run that has nobody to answer for.
     assert proxy.decisions == []

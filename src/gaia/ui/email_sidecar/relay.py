@@ -226,7 +226,8 @@ def _unattended_approval_text(tool: str, profile: RelayProfile) -> str:
     return (
         f'GAIA stopped this unattended run at "{_tool_label(tool, profile)}": '
         "that step needs your approval, and nobody is there to give it. "
-        "Scheduled tasks can't use steps that ask first, "
+        "Unattended runs, such as scheduled tasks and autonomous goals, "
+        "can't use steps that ask first, "
         "such as writing files or running commands. Ask GAIA in a chat "
         "instead, where you can approve it."
     )

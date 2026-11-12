@@ -625,7 +625,8 @@ class SSEOutputHandler(OutputHandler):
         # may have unloaded or reloaded it meanwhile. Raises when it can't.
         self.on_model_regained = None
         # Autonomous loop support
-        # background_mode=True: skip blocking user confirmation; immediately deny.
+        # background_mode=True: nobody can confirm. In process a gated tool is
+        # denied; on the sidecar relay the run ends at that step.
         self.background_mode: bool = background_mode
         # False on a transport with no route back for an answer (the stdio
         # agent): a question there would hang the turn, so none is asked.
