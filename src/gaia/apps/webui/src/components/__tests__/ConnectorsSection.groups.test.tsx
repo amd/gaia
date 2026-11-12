@@ -76,7 +76,7 @@ describe('ConnectorsSection groups', () => {
         expect(within(servers).getByText('Connected')).toBeInTheDocument();
     });
 
-    it('announces a new connection once, and the card stays put after "Not now"', async () => {
+    it('says a new connection once, on the card, which stays put', async () => {
         const git = row('Git', 'mcp_server');
         list([row('Microsoft', 'oauth_pkce'), git]);
         mocked.configureConnector.mockResolvedValue({} as never);
@@ -87,14 +87,38 @@ describe('ConnectorsSection groups', () => {
         fireEvent.click(screen.getByRole('button', { name: /^Git/ }));
         fireEvent.click(document.querySelector('.configure-actions .btn-primary, .configure-actions button')!);
 
-        await screen.findByText('Git is connected.');
-        expect(screen.getAllByText('Git is connected.')).toHaveLength(1);
-        // The card carries only its status; the sentence belongs to the offer above the list.
-        expect(within(group('MCP servers')).queryByText('Git is connected.')).not.toBeInTheDocument();
-
-        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        const servers = group('MCP servers');
+        await within(servers).findByText('Connected');
+        // The status chip is the confirmation; no banner repeats it above the list (#7703).
+        expect(screen.getAllByText('Connected')).toHaveLength(1);
         expect(screen.queryByText('Git is connected.')).not.toBeInTheDocument();
-        expect(within(group('MCP servers')).getByText('Connected')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Personalize GAIA' })).toHaveLength(1);
+    });
+
+    it('marks a connector that disconnects, and stops counting it as connected (#7704)', async () => {
+        const git = row('Git', 'mcp_server', { configured: true });
+        list([git, row('GitHub', 'mcp_server', { configured: true })]);
+        mocked.disconnectConnector.mockResolvedValue(undefined as never);
+        mocked.getConnector.mockResolvedValue({ ...git, configured: false });
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        const connected = group('Connected');
+        expect(connected.querySelector('.settings-disclosure-count')).toHaveTextContent('2');
+        fireEvent.click(within(connected).getByRole('button', { name: /^Git\b(?!Hub)/ }));
+        fireEvent.click(within(connected).getByRole('button', { name: 'Disconnect' }));
+
+        expect(await within(connected).findByText('Disconnected')).toHaveAttribute('role', 'status');
+        expect(connected.querySelector('.settings-disclosure-count')).toHaveTextContent('1');
+    });
+
+    it('offers Disconnect once: the menu steps aside while the card is open (#7704)', async () => {
+        list([row('Git', 'mcp_server', { configured: true })]);
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        expect(document.querySelector('.connector-tile-menu-trigger')).not.toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: /^Git/ }));
+        expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
+        expect(document.querySelector('.connector-tile-menu-trigger')).toBeNull();
     });
 
     it('calls a turned-off connector Paused, and a working one Connected', async () => {

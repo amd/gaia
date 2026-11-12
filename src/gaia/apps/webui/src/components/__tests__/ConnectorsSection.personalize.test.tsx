@@ -127,9 +127,9 @@ describe('Personalize GAIA offer', () => {
         mocked.disconnectConnector.mockResolvedValue(undefined as never);
         await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
         fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-        expect(await screen.findByText('Memory is connected.')).toBeInTheDocument();
+        expect(await screen.findByText(/^Want GAIA to read/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
-        await waitFor(() => expect(screen.queryByText('Memory is connected.')).toBeNull());
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Personalize GAIA' })).toBeNull());
     });
 
     it('is not offered before the connector is connected', async () => {
@@ -147,8 +147,19 @@ describe('Personalize GAIA offer', () => {
         mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
         await openTile(row);
         fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-        expect(await screen.findByText('Memory is connected.')).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        // One offer, in the card the user just used, not a second one above the list (#7703).
+        const offer = await screen.findByText(/^Want GAIA to read/);
+        expect(offer.closest('.connector-detail')).not.toBeNull();
+        expect(screen.getAllByRole('button', { name: 'Personalize GAIA' })).toHaveLength(1);
+        expect(screen.queryByText(/^Optional: let GAIA read/)).toBeNull();
         expect(screen.queryByText('Memory is connected.')).toBeNull();
+    });
+
+    it('opens the card for a connector that connects while its card is closed', async () => {
+        mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+        await screen.findByText(/^Want GAIA to read/);
+        expect(screen.getByRole('button', { name: /^Memory/ })).toHaveAttribute('aria-expanded', 'true');
     });
 });

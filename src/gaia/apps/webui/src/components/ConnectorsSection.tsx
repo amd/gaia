@@ -185,8 +185,8 @@ export function ConnectorsSection() {
     const [query, setQuery] = useState('');
     // Groups are settled when the list loads, so a tile that connects stays under the pointer.
     const [connectedAtLoad, setConnectedAtLoad] = useState<ReadonlySet<string>>(new Set());
-    // Set when a refresh shows a connector going from not connected to connected.
-    const [justConnected, setJustConnected] = useState<ConnectorRow | null>(null);
+    // The connector a refresh just showed going from not connected to connected.
+    const [justConnected, setJustConnected] = useState<string | null>(null);
     const connectorsRef = useRef<ConnectorListEntry[]>([]);
     connectorsRef.current = connectors;
     // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
@@ -246,10 +246,12 @@ export function ConnectorsSection() {
             const row = await api.getConnector(id);
             const before = connectorsRef.current.find((c) => c.id === id);
             if (before && 'configured' in before && !before.configured && row.configured) {
-                setJustConnected(row);
+                setJustConnected(id);
+                // Its card carries the one Personalize offer, so it has to be open.
+                setExpanded(id);
             } else if (!row.configured || row.enabled === false) {
                 // A disconnect or disable takes back the offer made for that connector.
-                setJustConnected((prev) => (prev?.id === id ? null : prev));
+                setJustConnected((prev) => (prev === id ? null : prev));
             }
             setConnectors((prev) => prev.map((c) => (c.id === id ? row : c)));
         } catch {
@@ -300,6 +302,9 @@ export function ConnectorsSection() {
                 <ConnectorTile
                     key={c.id}
                     connector={c}
+                    wasConnected={connectedAtLoad.has(c.id)}
+                    justConnected={justConnected === c.id}
+                    onPersonalizeStarted={() => setJustConnected(null)}
                     expanded={expanded === c.id}
                     onToggle={() => toggle(c.id)}
                     onChanged={() => void onChanged(c.id)}
@@ -333,19 +338,6 @@ export function ConnectorsSection() {
                 </div>
             )}
 
-            {justConnected && (
-                <div className="connector-personalize connector-personalize--offer" role="status">
-                    <p>
-                        <strong>{t('settings.connectors.personalize.connected', { name: justConnected.display_name })}</strong>{' '}
-                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected) })}
-                    </p>
-                    <PersonalizeButton connector={justConnected} primary onStarted={() => setJustConnected(null)} />
-                    <button type="button" className="btn-secondary" onClick={() => setJustConnected(null)}>
-                        {t('settings.connectors.personalize.notNow')}
-                    </button>
-                </div>
-            )}
-
             {loading ? (
                 <div className="connectors-loading">
                     <Loader2 size={16} className="spin" />
@@ -372,7 +364,7 @@ export function ConnectorsSection() {
                         </SettingsDisclosure>
                     )}
                     {connected.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.length} defaultOpen forceOpen={!!q}>
+                        <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.filter((c) => c.configured).length} defaultOpen forceOpen={!!q}>
                             {tiles(connected)}
                         </SettingsDisclosure>
                     )}
@@ -430,6 +422,9 @@ type McpCheck =
 
 function ConnectorTile({
     connector,
+    wasConnected,
+    justConnected,
+    onPersonalizeStarted,
     expanded,
     onToggle,
     onChanged,
@@ -438,6 +433,11 @@ function ConnectorTile({
     onClearCheck,
 }: {
     connector: ConnectorRow;
+    /** Listed under "Connected" since Settings opened, whatever it is now. */
+    wasConnected: boolean;
+    /** Connected a moment ago: the card's Personalize offer is the one that asks. */
+    justConnected: boolean;
+    onPersonalizeStarted: () => void;
     expanded: boolean;
     onToggle: () => void;
     onChanged: () => void;
@@ -452,6 +452,8 @@ function ConnectorTile({
     // so it only flags one that needs setup first.
     const renderStatus = () => {
         if (!connector.configured) {
+            // Still in the "Connected" group it was listed in, so the row has to say it left.
+            if (wasConnected) return <span className="connector-status idle" role="status">{t('settings.connectors.disconnected')}</span>;
             return connector.configurable === false
                 ? <span className="connector-status idle">{t('settings.connectors.setupRequired')}</span>
                 : null;
@@ -485,7 +487,8 @@ function ConnectorTile({
                         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </span>
                 </button>
-                <ConnectorTileMenu connector={connector} onChanged={onChanged} />
+                {/* An open card already shows these actions. */}
+                {!expanded && <ConnectorTileMenu connector={connector} onChanged={onChanged} />}
             </div>
 
             {expanded && (
@@ -503,9 +506,9 @@ function ConnectorTile({
                         />
                     )}
                     {connector.configured && connector.enabled !== false && (
-                        <div className="connector-personalize">
-                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
-                            <PersonalizeButton connector={connector} />
+                        <div className={`connector-personalize${justConnected ? ' connector-personalize--offer' : ''}`} role={justConnected ? 'status' : undefined}>
+                            <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
+                            <PersonalizeButton connector={connector} primary={justConnected} onStarted={onPersonalizeStarted} />
                         </div>
                     )}
                     {connector.configured && (
