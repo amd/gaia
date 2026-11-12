@@ -45,6 +45,23 @@ describe('unreadable goal store', () => {
         expect(errors()).toHaveLength(2);
     });
 
+    it('notifies again when the failure changes to a different reason', async () => {
+        serve(BROKEN);
+        await useGoalHealthStore.getState().check();
+        serve('Could not read approved goals from goals.db: database is locked.');
+        await useGoalHealthStore.getState().check();
+        expect(errors()).toHaveLength(2);
+    });
+
+    it('keeps the known failure and raises nothing when the backend is unreachable', async () => {
+        serve(BROKEN);
+        await useGoalHealthStore.getState().check();
+        vi.mocked(memoryApi.getGoalStoreHealth).mockRejectedValueOnce(new Error('fetch failed'));
+        await useGoalHealthStore.getState().check();
+        expect(useGoalHealthStore.getState().error).toBe(BROKEN);
+        expect(errors()).toHaveLength(1);
+    });
+
     it('raises nothing while the store reads', async () => {
         serve(null);
         await useGoalHealthStore.getState().check();
