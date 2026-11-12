@@ -22,7 +22,9 @@ namespace gaia {
 
 class GAIA_API Workspace {
 public:
-    /// The first root is primary: relative paths resolve against it.
+    /// The first root is primary: relative paths resolve against it. Roots and
+    /// every path checked against them are UTF-8 (fs::path::u8string()), on
+    /// Windows too; a string in the ANSI code page is not accepted.
     explicit Workspace(std::vector<std::string> roots);
 
     const std::vector<std::string>& roots() const { return roots_; }

@@ -1418,6 +1418,15 @@ public:
     }
     int exitCode() const { return exitCode_; }
 
+    // True once every writer of the child's stdout has closed it, within `limit`.
+    bool waitStdoutEof(std::chrono::milliseconds limit) {
+        const auto deadline = std::chrono::steady_clock::now() + limit;
+        while (!stdoutEof_ && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return stdoutEof_;
+    }
+
 private:
     void readLoop() {
         std::ostream sink(&out);
@@ -1425,7 +1434,10 @@ private:
         while (!stopReading_) {
 #ifdef _WIN32
             DWORD available = 0;
-            if (!PeekNamedPipe(stdout_, nullptr, 0, nullptr, &available, nullptr)) return;  // the child closed it
+            if (!PeekNamedPipe(stdout_, nullptr, 0, nullptr, &available, nullptr)) {
+                stdoutEof_ = true;  // no writer is left
+                return;
+            }
             if (available == 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
@@ -1439,7 +1451,10 @@ private:
             p.events = POLLIN;
             if (poll(&p, 1, 20) <= 0) continue;
             const ssize_t n = read(stdout_, buf, sizeof(buf));
-            if (n <= 0) return;
+            if (n <= 0) {
+                stdoutEof_ = n == 0;
+                return;
+            }
             sink.write(buf, n);
 #endif
         }
@@ -1456,6 +1471,7 @@ private:
 #endif
     std::thread reader_;
     std::atomic<bool> stopReading_{false};
+    std::atomic<bool> stdoutEof_{false};
     bool stdinClosed_ = false;
     bool stdoutClosed_ = false;
     bool exited_ = false;
@@ -1712,3 +1728,29 @@ TEST_F(GaiacppStdioBinary, AcceptEditsWorksInAFolderWithANonAsciiName) {
     EXPECT_TRUE(child->waitExit(kWait));
 }
 #endif
+
+// A process a tool leaves running must not keep the host's pipes open: the host
+// waits for end of file on them after the agent exits.
+TEST_F(GaiacppStdioBinary, ABackgroundProcessDoesNotHoldTheHostsPipesOpen) {
+    bench::MockLlmServer mock;
+    // Runs until stop.txt appears in the working folder, two minutes at most.
+    const std::string background =
+        BashTools::detectShell().empty()
+            ? "start \"\" /b cmd /c \"for /l %%i in (1,1,120) do @if not exist stop.txt ping -n 2 127.0.0.1 >nul\""
+            : "(i=0; while [ ! -f stop.txt ] && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done) >/dev/null 2>&1 &";
+    mock.pushResponse(toolCall("bash_execute", {{"command", background}}));
+    mock.pushResponse(answer("started"));
+    auto child = spawn(mock.baseUrl(), {"--full-access"});
+    child->send(json{{"gaia_query", "start the watcher"}}.dump());
+    const json final = waitEvent(child->out, isTerminal, 1);
+    ASSERT_TRUE(final.is_object()) << seen(*child);
+    EXPECT_EQ(final["answer"], "started") << seen(*child);
+    child->closeStdin();
+    ASSERT_TRUE(child->waitExit(kWait)) << seen(*child);
+    EXPECT_EQ(child->exitCode(), 0);
+    const bool eof = child->waitStdoutEof(std::chrono::seconds(10));
+    std::ofstream(dir_ / "work" / "stop.txt") << "stop";
+    EXPECT_TRUE(eof) << "the background process kept the agent's stdout open";
+    // Gone before the folder is removed.
+    child->waitStdoutEof(std::chrono::seconds(10));
+}

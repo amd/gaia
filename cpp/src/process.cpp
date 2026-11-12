@@ -284,9 +284,18 @@ ProcessResult runWithTimeout(const std::string& command,
     SetHandleInformation(stdoutReadH, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(stderrReadH, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
+    auto failed = [&](const std::string& what, DWORD code) {
+        CloseHandle(stdoutReadH); CloseHandle(stdoutWriteH);
+        CloseHandle(stderrReadH); CloseHandle(stderrWriteH);
+        result.exitCode = -1;
+        result.stderr_output = what + " (Windows error " + std::to_string(code) + ")";
+        return result;
+    };
+
+    STARTUPINFOEXA six;
+    ZeroMemory(&six, sizeof(six));
+    STARTUPINFOA& si = six.StartupInfo;
+    si.cb = sizeof(six);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = stdoutWriteH;
     si.hStdError = stderrWriteH;
@@ -295,13 +304,39 @@ ProcessResult runWithTimeout(const std::string& command,
     HANDLE nulIn = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (nulIn == INVALID_HANDLE_VALUE) {
-        CloseHandle(stdoutReadH); CloseHandle(stdoutWriteH);
-        CloseHandle(stderrReadH); CloseHandle(stderrWriteH);
-        result.exitCode = -1;
-        result.stderr_output = "Failed to open NUL as the command's stdin";
-        return result;
+        return failed("Failed to open NUL as the command's stdin", GetLastError());
     }
     si.hStdInput = nulIn;
+
+    // The command gets these three handles and no others: anything else it
+    // inherited (a host's pipes, sockets, another command's output) would stay
+    // open for as long as any process it started lives.
+    HANDLE inherited[3] = {nulIn, stdoutWriteH, stderrWriteH};
+    SIZE_T attrSize = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+    std::vector<char> attrBuf(attrSize);
+    six.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    if (!InitializeProcThreadAttributeList(six.lpAttributeList, 1, 0, &attrSize) ||
+        !UpdateProcThreadAttribute(six.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+                                   sizeof(inherited), nullptr, nullptr)) {
+        const DWORD code = GetLastError();
+        CloseHandle(nulIn);
+        return failed("Failed to limit the handles the command inherits", code);
+    }
+
+    // A job holds the command and everything it starts, so a timeout ends the
+    // whole tree, and so does this process dying while the command runs.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    ZeroMemory(&limits, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        const DWORD code = GetLastError();
+        if (job) CloseHandle(job);
+        DeleteProcThreadAttributeList(six.lpAttributeList);
+        CloseHandle(nulIn);
+        return failed("Failed to create a job for the command", code);
+    }
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
@@ -317,13 +352,15 @@ ProcessResult runWithTimeout(const std::string& command,
         cmdBuf.data(),
         nullptr,
         nullptr,
-        TRUE,          // inherit handles
-        0,             // creation flags
+        TRUE,          // inherit handles: only the three listed above
+        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,  // joins the job before it runs
         nullptr,       // use parent environment
         nullptr,       // use parent working directory
         &si,
         &pi
     );
+    const DWORD createError = GetLastError();
+    DeleteProcThreadAttributeList(six.lpAttributeList);
 
     // Close the write ends of the pipes — the child owns them now
     CloseHandle(stdoutWriteH);
@@ -331,12 +368,32 @@ ProcessResult runWithTimeout(const std::string& command,
     CloseHandle(nulIn);
 
     if (!created) {
+        CloseHandle(job);
         CloseHandle(stdoutReadH);
         CloseHandle(stderrReadH);
         result.exitCode = -1;
-        result.stderr_output = "CreateProcess failed for: " + command;
+        result.stderr_output = "CreateProcess failed for: " + command + " (Windows error " +
+                               std::to_string(createError) + ")";
         return result;
     }
+
+    // Nested jobs work from Windows 8 on. A refusal is reported, never worked
+    // around: without the job a timeout could only end the shell, not its tree.
+    if (!AssignProcessToJobObject(job, pi.hProcess)) {
+        const DWORD code = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        CloseHandle(job);
+        CloseHandle(stdoutReadH);
+        CloseHandle(stderrReadH);
+        result.exitCode = -1;
+        result.stderr_output = "Not run: the command could not be placed in a job, so a timeout could not stop "
+                               "what it starts (AssignProcessToJobObject, Windows error " +
+                               std::to_string(code) + ")";
+        return result;
+    }
+    ResumeThread(pi.hThread);
 
     // Read stdout and stderr from pipes using file descriptors
     // Convert HANDLEs to FILE* for readStream()
@@ -353,12 +410,15 @@ ProcessResult runWithTimeout(const std::string& command,
     // This avoids deadlock: reading before waiting blocks if child keeps stdout
     // open; waiting before reading loses output if pipe buffer fills.
     std::string capturedStdout, capturedStderr;
+    std::atomic<int> readersDone{0};
 
     std::thread convergentStdout([&]() {
         capturedStdout = readStream(stdoutFile, maxOutputBytes);
+        ++readersDone;
     });
     std::thread convergentStderr([&]() {
         capturedStderr = readStream(stderrFile, maxOutputBytes);
+        ++readersDone;
     });
 
     // Wait for process with timeout
@@ -367,16 +427,26 @@ ProcessResult runWithTimeout(const std::string& command,
 
     if (waitResult == WAIT_TIMEOUT) {
         result.timedOut = true;
-        TerminateProcess(pi.hProcess, 1);
+        TerminateJobObject(job, 1);  // the shell and everything it started
         WaitForSingleObject(pi.hProcess, 5000);  // wait for termination
         result.exitCode = -1;
     } else {
         DWORD exitCodeDw = 0;
         GetExitCodeProcess(pi.hProcess, &exitCodeDw);
         result.exitCode = static_cast<int>(exitCodeDw);
+        // The command ended on its own: what it left running in the background stays.
+        limits.BasicLimitInformation.LimitFlags = 0;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
     }
+    CloseHandle(job);
 
-    // Wait for reader threads to finish (process is dead, pipes will EOF)
+    // The pipes end when the last writer closes them. A background process the
+    // command left behind may still hold them, so the wait for it is bounded.
+    for (int waited = 0; readersDone.load() < 2 && waited < 2000; waited += 10) Sleep(10);
+    if (readersDone.load() < 2) {
+        CancelIoEx(stdoutReadH, nullptr);
+        CancelIoEx(stderrReadH, nullptr);
+    }
     convergentStdout.join();
     convergentStderr.join();
 

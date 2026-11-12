@@ -16,11 +16,12 @@ namespace gaia {
 
 namespace {
 
+// Folders and paths are UTF-8 strings here, as a model and the UI write them.
 std::string normalized(const fs::path& p) {
     std::error_code ec;
     fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
     if (ec) abs = fs::absolute(p).lexically_normal();
-    std::string s = abs.generic_string();
+    std::string s = abs.generic_u8string();
 #ifdef _WIN32
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -53,7 +54,9 @@ const std::vector<std::string>& systemDirs() {
 std::string expandHome(const std::string& p) {
     if (p.size() >= 1 && p[0] == '~' && (p.size() == 1 || p[1] == '/')) {
 #ifdef _WIN32
-        const std::string home = getEnvVar("USERPROFILE");
+        // Read wide: the narrow environment is in the code page, not UTF-8.
+        const wchar_t* profile = _wgetenv(L"USERPROFILE");
+        const std::string home = profile ? fs::path(profile).u8string() : std::string();
 #else
         const std::string home = getEnvVar("HOME");
 #endif
@@ -93,15 +96,15 @@ bool looksLikePattern(const std::string& abs) {
 Workspace::Workspace(std::vector<std::string> roots) {
     if (roots.empty()) {
         std::error_code ec;
-        roots.push_back(fs::current_path(ec).string());
+        roots.push_back(fs::current_path(ec).u8string());
     }
-    for (const auto& r : roots) roots_.push_back(normalized(expandHome(r)));
+    for (const auto& r : roots) roots_.push_back(normalized(fs::u8path(expandHome(r))));
 }
 
 bool Workspace::contains(const std::string& path) const {
-    const fs::path p = expandHome(path);
+    const fs::path p = fs::u8path(expandHome(path));
     const std::string abs =
-        normalized(p.is_absolute() ? p : fs::path(roots_.front()) / p);
+        normalized(p.is_absolute() ? p : fs::u8path(roots_.front()) / p);
     return std::any_of(roots_.begin(), roots_.end(),
                        [&](const std::string& r) { return under(abs, r); });
 }
@@ -154,11 +157,11 @@ std::string Workspace::checkCommand(const std::string& command) const {
             while (seg >> w) {
                 if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
             }
-            if (!fsCommands.count(fs::path(program).filename().string())) continue;
+            if (!fsCommands.count(fs::u8path(program).filename().u8string())) continue;
         }
         const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
-        const std::string abs = normalized(expanded);
+        const std::string abs = normalized(fs::u8path(expanded));
         if (inSystemDir(abs) || looksLikePattern(abs)) continue;
         return refusal(token);
     }
@@ -176,7 +179,7 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
     };
     // `cd` in a pipeline changes nothing and `cd` after ; or && does, so a
     // later word is checked against every folder the command could be in.
-    std::vector<std::string> folders = {normalized(cwd.empty() ? roots_.front() : fromShellPath(cwd))};
+    std::vector<std::string> folders = {normalized(fs::u8path(cwd.empty() ? roots_.front() : fromShellPath(cwd)))};
     if (!inside(folders.front())) return false;
     for (const auto& words : segments) {
         if (words.empty()) return false;
@@ -199,10 +202,10 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 const size_t end = w.find_first_of("/\\", at);
                 if (w.substr(at, end - at).find_first_of("*?[") != std::string::npos) return false;
             }
-            const fs::path p = expandHome(fromShellPath(w));
+            const fs::path p = fs::u8path(expandHome(fromShellPath(w)));
             const size_t known = folders.size();
             for (size_t f = 0; f < known; ++f) {
-                const std::string abs = normalized(p.is_absolute() ? p : fs::path(folders[f]) / p);
+                const std::string abs = normalized(p.is_absolute() ? p : fs::u8path(folders[f]) / p);
                 if (inside(abs)) {
                     if (cd) folders.push_back(abs);
                     continue;
