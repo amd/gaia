@@ -1158,6 +1158,21 @@ for (const locale of ['ar', 'en']) {
         // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
     });
 
+    // At 200% zoom the action buttons sat below the window and the wheel couldn't reach them.
+    test(`the file browser's buttons can be scrolled to at 200% zoom (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withOldFile);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await page.getByRole('button', { name: /Browse files/ }).click();
+        await page.locator('.fb-entry').first().click();
+        await page.setViewportSize({ width: 640, height: 400 });
+        const ask = page.locator('.fb-action-btn.primary');
+        await expect(ask).toBeEnabled();
+        await page.locator('.fb-search-bar').hover();
+        for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 200);
+        await expect(ask).toBeInViewport({ ratio: 1 });
+        await shot(page, `files-${locale}-zoomed`);
+    });
+
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {
         const month = locale === 'ar' ? ARABIC_MONTH : /Mar/;
         await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {

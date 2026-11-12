@@ -17,7 +17,8 @@
     display: flex;
     flex-direction: column;
     flex: 1;
-    overflow: hidden;
+    /* Scroll so the action buttons stay reachable on short windows (200% zoom). */
+    overflow-y: auto;
     padding: 0 16px 16px;
     gap: 10px;
 }
@@ -266,7 +267,7 @@
     flex: 1;
     overflow: hidden;
     gap: 12px;
-    min-height: 300px;
+    min-height: min(300px, 40vh);
 }
 
 /* File List */
