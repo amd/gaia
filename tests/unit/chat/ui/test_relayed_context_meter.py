@@ -133,6 +133,34 @@ def test_the_text_history_relay_records_how_many_turns_it_left_out(monkeypatch):
     assert h.relay_hidden_turns == len(pairs) - len(context) // 2 > 0
 
 
+@pytest.mark.parametrize("fits", [10, 5])
+def test_the_relay_tells_the_model_only_when_it_left_turns_out(monkeypatch, fits):
+    """rc18: the chat said older messages were out of view; the model denied them."""
+    from gaia.agents.base import history
+
+    turns = [_turn(i, 4000) for i in range(10)]
+    stored = [[dict(m) for m in turn] for turn in turns]
+    budget = sum(history.turn_cost(t) for t in turns[:fits])
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: budget)
+    monkeypatch.setattr(helpers, "_ui_cloud_provider", lambda model: None)
+    h, h_text = SSEOutputHandler(), SSEOutputHandler()
+
+    kept = helpers._relayed_turns(turns, "m", "q", h, None)
+    pairs = [(turn[0]["content"], turn[1]["content"]) for turn in turns]
+    context = helpers._relayed_history(pairs, "m", "q", h_text, None)
+
+    hidden = len(turns) - len(kept)
+    assert (hidden > 0) == (fits < len(turns))
+    assert h.relay_hidden_turns == h_text.relay_hidden_turns == hidden
+    sent = [m["content"] for turn in kept for m in turn]
+    for texts in (sent, [m["content"] for m in context]):
+        noted = [t for t in texts if history.HIDDEN_TURNS_NOTE in t]
+        assert len(noted) == (1 if hidden else 0)
+        if hidden:
+            assert texts[0] == f"{history.HIDDEN_TURNS_NOTE}\n\nquestion {hidden}"
+    assert turns == stored
+
+
 def test_history_exactly_at_budget_hides_nothing():
     from gaia.agents.base import history
 
@@ -142,7 +170,9 @@ def test_history_exactly_at_budget_hides_nothing():
     assert history.fit_turns(turns, budget) == turns
     # One token over evicts down to half the budget, oldest first.
     over = history.fit_turns(turns, budget - 1)
-    assert over == turns[len(turns) - len(over) :]
+    assert over[1:] == turns[len(turns) - len(over) + 1 :]
+    assert over[0][1] == turns[len(turns) - len(over)][1]
+    assert over[0][0]["content"].startswith(history.HIDDEN_TURNS_NOTE)
     assert sum(history.turn_cost(t) for t in over) <= (budget - 1) // 2
 
 

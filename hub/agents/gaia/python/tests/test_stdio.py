@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from gaia_agent import stdio
 
+from gaia.agents.base.history import HIDDEN_TURNS_NOTE
 from gaia.llm.lemonade_launcher import StartHint
 
 
@@ -571,7 +572,7 @@ def test_history_is_trimmed_in_whole_turns(monkeypatch):
     window = list(agent.conversation_history)
     assert len(window) == 12
     assert [m["role"] for m in window] == ["user", "assistant"] * 6
-    assert window[0]["content"] == "q12"
+    assert window[0]["content"] == f"{HIDDEN_TURNS_NOTE}\n\nq12"
     assert window[-1]["content"] == "a17"
 
 
@@ -2291,7 +2292,7 @@ def test_context_eviction_does_not_delete_tui_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
     for i in range(12):
         stdio._record_turn(agent, f"q{i}", f"a{i}")
-    assert agent.conversation_history[0]["content"] == "q6"
+    assert agent.conversation_history[0]["content"] == f"{HIDDEN_TURNS_NOTE}\n\nq6"
     monkeypatch.setattr(history, "history_budget", lambda *args: 1000)
     agent.conversation_history.prepare(agent, "all evidence")
     assert len(agent.conversation_history) == 24

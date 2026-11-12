@@ -307,7 +307,12 @@ is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view. A single turn
+`status` event saying older messages are out of the model's view. The model is
+told as well: the oldest user message it still reads opens with one bracketed
+sentence saying earlier turns exist and are no longer shown, so it says it can
+no longer see them instead of denying them. `turns` is fitted the same way. The
+agent only knows about turns it was sent: a caller that leaves turns out before
+calling (the Agent UI does) adds the same sentence itself. A single turn
 bigger than the whole budget is kept, not dropped: its longest messages are cut
 with a note saying how many characters are missing, so its answer stays in view.
 

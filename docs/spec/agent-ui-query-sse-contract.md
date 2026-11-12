@@ -825,7 +825,9 @@ turns (and their estimated tokens) no longer replayed to the model, and
 `message` is the line the TUI keeps in the transcript. It is sent only when more
 turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
-reported once.
+reported once. The model is told on every such turn, not once: the oldest user
+message it is sent opens with a one-sentence note that earlier turns exist and
+are no longer shown.
 
 Over stdio the agent never sends `needs_confirmation.confirm_url` or
 `error.source`. The TUI decodes them for other transports, and it sets `source`
