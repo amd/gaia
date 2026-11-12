@@ -1,0 +1,68 @@
+---
+title: "Automations"
+description: "Reminders, summaries and alerts: things GAIA does on its own and messages you about later."
+icon: "bell"
+---
+
+Ask GAIA to do something later, on a schedule, or only when something changes, and it
+messages you when there's something to say. You set it up the same way you ask GAIA
+anything: in plain words.
+
+<Note>
+  GAIA sends these messages through [Discord](/guides/discord), so set that up first. If
+  nothing is there to deliver a message, GAIA tells you when you ask.
+</Note>
+
+## What you can ask for
+
+**Reminders**: a message at a set time, once.
+
+- "Remind me in 10 minutes to stretch."
+- "Remind me at 5pm to call Sam."
+
+**Summaries**: a regular report.
+
+- "Every weekday at 8am, tell me what changed on github.com/my-org/my-app."
+- "Every evening, summarize the news about AMD."
+
+**Alerts**: GAIA keeps checking, and messages you only when there's news. It never tells
+you the same thing twice.
+
+- "Tell me if a test breaks on the main branch of my-org/my-app."
+- "Tell me when pull request 12 is approved."
+- "Let me know when there's a good weekend to climb Mount Rainier."
+- "Tell me if the price of a Steam Deck OLED drops under $450."
+
+**A check-in**: one regular look at everything you care about, which stays quiet unless
+something needs you.
+
+- "Check in every 30 minutes, but never between 11pm and 7am."
+
+GAIA confirms each one with you before it sets it up.
+
+<Tip>
+  Alerts about email, like "tell me if anything urgent lands in my inbox", need your mail
+  account connected first, under **Settings → Connectors** in the GAIA app.
+</Tip>
+
+## Seeing and changing them
+
+Just ask:
+
+- "What are you watching?"
+- "Pause the check-in."
+- "Check every hour instead."
+- "Stop the Rainier alert."
+
+GAIA finds the one you mean and confirms the change with you. There's no settings screen
+for automations: you manage them by asking.
+
+## Good to know
+
+- **Your PC has to be on.** Nothing runs while it's off or asleep. When it wakes, anything
+  that came due runs once, not once for every time it missed.
+- **Quiet hours wait.** A check due at night runs when the quiet hours end, so nothing
+  wakes you at 3am.
+- **They still ask first.** If an automation needs to change something on your PC, you get
+  the same **Allow / Deny** message as when you ask GAIA yourself.
+- You can have up to 25 automations, and a repeating one runs at most every 5 minutes.
