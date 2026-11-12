@@ -53,7 +53,7 @@ _INSTALL_SIZE_HEADROOM = {
 
 def _format_disk_gb(gb: float) -> str:
     """Render a disk size in GB, switching to MB below 1 GB."""
-    if gb < 1:
+    if round(gb * 1024) < 1024:
         return f"{gb * 1024:.0f} MB"
     return f"{gb:.1f} GB"
 

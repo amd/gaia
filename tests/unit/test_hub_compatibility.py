@@ -204,6 +204,14 @@ def test_blocker_mixes_gb_need_with_mb_free(monkeypatch):
     ), report.blockers
 
 
+@pytest.mark.parametrize(
+    "gb,text",
+    [(0.9997, "1.0 GB"), (1023.4 / 1024, "1023 MB"), (1.0, "1.0 GB"), (0.0, "0 MB")],
+)
+def test_disk_size_never_reads_1024_mb(gb, text):
+    assert compatibility._format_disk_gb(gb) == text
+
+
 def test_installer_gate_blocks_zero_min_disk_manifest(monkeypatch, tmp_path):
     from gaia.hub import installer
 
