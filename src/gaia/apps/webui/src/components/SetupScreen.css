@@ -141,17 +141,23 @@ button.setup-rail-step:hover {
     }
 }
 
+/* Scrolls the full width, with room kept for the bar so nothing shifts when it appears. */
+.setup-scroll {
+    flex: 1;
+    min-block-size: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
 .setup-inner {
     --setup-pad-block: 48px;
     display: flex;
-    flex: 1;
     flex-direction: column;
     gap: 14px;
     min-inline-size: 0;
     max-inline-size: 720px;
     margin-inline: auto;
     padding: var(--setup-pad-block) 24px;
-    overflow-y: auto;
 }
 
 .setup-card {
@@ -170,6 +176,34 @@ button.setup-rail-step:hover {
     padding: 20px 22px;
     border: 1px solid var(--accent-light);
     border-radius: var(--radius-lg);
+}
+
+/* This PC or the cloud: two cards of the same weight, the picked one outlined. */
+.setup-where {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.setup-where-card {
+    border-color: var(--border-light);
+    cursor: pointer;
+}
+
+.setup-where-card.is-active {
+    border-color: var(--accent-light);
+    box-shadow: inset 0 0 0 1px var(--accent-light);
+}
+
+.setup-where-card.is-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.setup-where-card .setup-hero-title input[type="radio"] {
+    margin-inline-end: 10px;
+    accent-color: var(--accent);
+    vertical-align: middle;
 }
 
 .setup-eyebrow {
@@ -377,6 +411,23 @@ button.setup-rail-step:hover {
     color: var(--accent-green);
 }
 
+.setup-key-label {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.setup-key-row {
+    flex-wrap: nowrap;
+}
+
+.setup-key-accepted {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+}
+
 .setup-content-name {
     display: block;
 }
@@ -435,6 +486,17 @@ button.setup-rail-step:hover {
     color: var(--text-primary);
     font-size: 22px;
     font-weight: 600;
+}
+
+/* Focus lands on the title so screen readers announce the new step: a thin line under
+   the words marks it, not the full-width box a control gets. */
+.setup-title[tabindex="-1"] {
+    inline-size: fit-content;
+}
+
+.setup-title[tabindex="-1"]:focus {
+    outline: none;
+    box-shadow: 0 2px 0 0 var(--accent-light);
 }
 
 .setup-close {
@@ -526,10 +588,42 @@ button.setup-rail-step:hover {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 10px 12px;
+    padding: 14px 16px;
     border: 1px solid var(--accent-light);
     border-radius: var(--radius-lg);
-    background: var(--accent-dim);
+}
+
+.setup-lemonade fieldset {
+    min-inline-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.setup-lemonade legend {
+    margin-block-end: 8px;
+    padding: 0;
+}
+
+label.setup-choice {
+    cursor: pointer;
+}
+
+.setup-choice input[type="radio"] {
+    flex-shrink: 0;
+    margin-block-start: 3px;
+    accent-color: var(--accent);
+}
+
+.setup-choice-tag {
+    margin-inline-start: 8px;
+    padding: 0 8px;
+    border: 1px solid var(--accent-light);
+    border-radius: var(--radius-full);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    vertical-align: 1px;
 }
 
 .setup-hint {
@@ -583,6 +677,12 @@ button.setup-rail-step:hover {
 .setup-progress::-moz-progress-bar {
     border-radius: var(--radius-full);
     background: var(--accent);
+}
+
+.setup-activity {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .setup-log {
@@ -653,6 +753,15 @@ button.setup-rail-step:hover {
 
 .setup-logs {
     margin-top: 16px;
+}
+
+/* The logs and the report sit one level in, under "Having trouble?". */
+.setup-help {
+    padding-inline-start: 17px;
+}
+
+.setup-help > .setup-log:first-child {
+    margin-top: 10px;
 }
 
 .setup-report {

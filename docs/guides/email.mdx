@@ -44,6 +44,15 @@ you haven't.
 
 ### 1. Connect your mailbox
 
+**In the Agent UI, just ask.** Ask about your mail or calendar before an account is
+connected ("what came in today?") and the reply comes with a **Connect Google** and
+**Connect Microsoft** button. Press one, sign in in the browser tab that opens, and
+ask again; GAIA gets access to the account in the same step. The same buttons are
+under **Settings › Connectors**. The agent never asks you to run a command for this.
+
+The rest of this step is for a terminal, a headless host, or a first-time Google
+client.
+
 These steps connect **Gmail**. For Outlook or Microsoft 365, follow the
 [Microsoft connector guide](/connectors/microsoft) instead, then come back to step 2 —
 everything after the connection is the same.
@@ -81,7 +90,7 @@ The first command prints an authorization URL. Open it in a browser **on the mac
 
 On a remote or headless host, open it there instead, or forward the callback port. The port is picked fresh on every run, so read it out of the printed URL's `redirect_uri=http%3A%2F%2F127.0.0.1%3A<PORT>%2Fcallback` and set the forward up in a second session **while the flow is still waiting** — there is no way to pin it in advance, and no device-code flow for Google.
 
-Skip the grant and the first mail tool call fails, naming the one command that fixes it — see [Troubleshooting](#troubleshooting).
+Skip the grant and the first mail tool call fails, naming what to fix — see [Troubleshooting](#troubleshooting).
 
 <Note>
   Power users can skip the `configure` step by exporting `GAIA_GOOGLE_CLIENT_ID` and `GAIA_GOOGLE_CLIENT_SECRET` before launching GAIA — but `gaia connectors configure google` is the recommended path, since it stores the credentials securely and reuses them across connect/disconnect cycles.
@@ -134,7 +143,7 @@ With more than one mailbox connected, the flagship picks one like this:
 1. **The only usable mailbox**, if exactly one is.
 2. **Gmail**, when both are usable.
 
-"Usable" means the account is connected, the connection carries a mail read scope, and the flagship holds a matching grant. `check_mailbox_access` reports which mailbox was chosen, why, and what the alternatives were. When none is usable, the agent names each mailbox's own state and the one command that fixes it — connect, reconnect, or grant.
+"Usable" means the account is connected, the connection carries a mail read scope, and the flagship holds a matching grant. `check_mailbox_access` reports which mailbox was chosen, why, and what the alternatives were. When none is usable, the agent names each mailbox's own state and its fix: the Connect button in the chat to connect or reconnect, or Settings › Connectors to give GAIA access.
 
 **There is no environment-variable override, by design.** Provider selection is derived from connector and grant state, so what the agent can reach is always visible in `gaia connectors`. To make it use Outlook when both are connected, revoke the flagship's Gmail grant:
 
@@ -167,9 +176,9 @@ That is a local ledger write — no browser, no OAuth round-trip. It replaces th
 
 ## Troubleshooting
 
-### "Reconnect Google in Settings -> Connectors"
+### "This Google connection lacks …"
 
-Your connection can read but was made before GAIA asked for write access, or the write option was unticked on Google's consent screen. Reconnect and leave it ticked. Reading keeps working until you do. On Outlook the same message names `Mail.ReadWrite` or `Mail.Send`.
+Your connection can read but was made before GAIA asked for write access, or the write option was unticked on Google's consent screen. Press **Reconnect Google** on the card in the chat (or under Settings › Connectors) and leave it ticked. Reading keeps working until you do. On Outlook the same message names `Mail.ReadWrite` or `Mail.Send`.
 
 ### A send failed
 
@@ -177,15 +186,17 @@ The error says the mail was not sent, and GAIA does not retry it. If the connect
 
 ### "No readable mailbox is available"
 
-The agent could not reach any mailbox, and the error names each provider's own state and its remedy — they are different fixes, so read which one you got:
+The agent could not reach any mailbox. It names each provider's own state, and the Agent UI shows a Connect card with the reply when signing in is the fix:
 
-- *not connected* → `gaia connectors connect <provider>`
-- *connected, but carries no mail read scope* → reconnect with the full scope list the error prints (`--scopes` **replaces**, so keep the whole list)
-- *connected and readable, but this agent holds no matching grant* → `gaia connectors grants grant <provider> installed:gaia --scopes <scope>` (a ledger write — no browser needed)
+- *not connected* → press **Connect Google** or **Connect Microsoft** on the card
+- *connected, but without permission to read mail* → press **Reconnect** on the card and leave mail access ticked on the consent screen
+- *connected and readable, but GAIA has not been given access to it* → turn GAIA's access on for that account under **Settings › Connectors** (no sign-in needed)
+
+In a terminal the same fixes are `gaia connectors connect <provider> --grant-agent installed:gaia` and `gaia connectors grants grant <provider> installed:gaia --scopes <scope>`.
 
 ### "Gmail API returned 401"
 
-The access token has expired or scopes were revoked. Reconnect Google in Settings → Connectors, or re-run `gaia connectors connect google --grant-agent installed:gaia`.
+The access token has expired or scopes were revoked. Press **Reconnect Google** on the card in the chat or under Settings › Connectors. In a terminal, re-run `gaia connectors connect google --grant-agent installed:gaia`.
 
 ### Reading stopped partway through a big inbox
 
