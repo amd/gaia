@@ -2796,9 +2796,9 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             ))}
                                                         </div>
-                                                    ) : (
+                                                    ) : goal.status === 'queued' || goal.status === 'in_progress' ? (
                                                         <p className="mem-goal-no-tasks">{t('mem.goals.noTasks')}</p>
-                                                    )}
+                                                    ) : null}
                                                 </div>
                                             )}
                                         </div>

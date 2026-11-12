@@ -240,7 +240,7 @@ class TestFileUpload:
             files={"file": ("empty.txt", io.BytesIO(b""), "text/plain")},
         )
         assert resp.status_code == 400
-        assert "empty" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "empty_file"
 
     def test_upload_disallowed_extension(self, client):
         """Upload a .exe file should return 400."""
@@ -255,7 +255,7 @@ class TestFileUpload:
             },
         )
         assert resp.status_code == 400
-        assert "not allowed" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "unsupported_type"
 
     def test_upload_disallowed_extension_bat_not_doc(self, client):
         """Upload a .dll file should return 400, .bat is allowed."""
@@ -288,7 +288,7 @@ class TestFileUpload:
             files={"file": ("big.txt", io.BytesIO(b"x" * size), "text/plain")},
         )
         assert resp.status_code == 413
-        assert "too large" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "too_large"
 
     def test_upload_preserves_extension(self, client):
         """Verify uploaded filename is <id>_<name>.ext pattern."""
@@ -375,6 +375,16 @@ class TestFileBrowse:
             len(data["entries"]),
             len(data["quick_links"]),
         )
+
+    def test_browse_says_the_home_folder_cannot_be_given_to_a_chat(
+        self, client, home_tmp_dir
+    ):
+        """The picker learns at browse time what the chat would refuse after Send."""
+        home = client.get("/api/files/browse").json()
+        assert "your home directory" in home["folder_refusal"]
+
+        sub = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert sub.json()["folder_refusal"] is None
 
     def test_browse_specific_directory(self, client, home_tmp_dir, sample_text_file):
         """Browse a known temp directory and verify the file appears."""
@@ -813,6 +823,39 @@ class TestFilePreview:
         data = resp.json()
         assert len(data["preview_lines"]) == 200  # Clamped to max
         assert data["total_lines"] == 300
+
+    @pytest.mark.parametrize(
+        "name,content",
+        [
+            ("report.pdf", b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"),
+            ("budget.docx", b"PK\x03\x04\x00\x00\x08\x00[Content_Types].xml"),
+            ("logo.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+        ],
+    )
+    def test_preview_binary_file_is_not_shown_as_text(
+        self, client, home_tmp_dir, name, content
+    ):
+        """PDF, DOCX and PNG files give no preview text instead of raw bytes."""
+        f = home_tmp_dir / name
+        f.write_bytes(content)
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+        assert resp.status_code == 200
+
+        data = resp.json()
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
+
+    def test_preview_text_without_known_extension(self, client, home_tmp_dir):
+        """A small text file with an unlisted extension still previews."""
+        f = home_tmp_dir / "notes.dat"
+        f.write_text("first line\nsecond line\n", encoding="utf-8")
+
+        resp = client.get("/api/files/preview", params={"path": str(f)})
+
+        data = resp.json()
+        assert data["is_text"] is True
+        assert data["preview_lines"] == ["first line", "second line"]
 
     def test_preview_nonexistent_file(self, client, home_tmp_dir):
         """Preview of nonexistent file should return 404."""

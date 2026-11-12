@@ -25,6 +25,7 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
@@ -111,6 +112,7 @@ const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
 
 function App() {
     const t = useT();
+    useWindowTitle();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
     const setCurrentSession = useChatStore((s) => s.setCurrentSession);
@@ -843,7 +845,8 @@ ${prompt}` : prompt);
             </ErrorBoundary>
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {/* The setup check can wait a minute on a hung model server; the chat shows meanwhile, so the warning must too. */}
+                {(setup.state === 'ready' || setup.state === 'checking') && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
                 {setup.state === 'serverDown' && (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.serverDown.notice')}</span>

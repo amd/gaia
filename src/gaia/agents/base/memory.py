@@ -306,7 +306,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -5910,7 +5914,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -6046,6 +6051,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -6056,7 +6063,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000

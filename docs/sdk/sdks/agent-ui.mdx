@@ -1459,6 +1459,11 @@ Deleting a chat deletes its copies.
     Upload an arbitrary file for use as a chat attachment (not added to the
     RAG library). Use `POST /api/documents/upload` instead if you want the
     file indexed for Q&A.
+
+    A refused upload returns HTTP 400 (or 413) with `detail` as an object:
+    `{"status", "message"}`, where `message` is an English sentence. `status` is
+    `no_extension`, `unsupported_type` (plus `extension`), `empty_file` or
+    `too_large` (plus `size_mb` and `max_mb`).
   </Accordion>
 
   <Accordion title="Recording progress events">
