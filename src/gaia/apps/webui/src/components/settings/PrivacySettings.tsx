@@ -25,7 +25,8 @@ export function PrivacySettings() {
     const removeSession = useChatStore((s) => s.removeSession);
     const place = useInferencePlace();
     const dataDir = useChatStore((s) => s.systemStatus?.data_dir);
-    const [asking, setAsking] = useState(false);
+    // The count when the dialog opened; the live list shrinks during the delete.
+    const [asking, setAsking] = useState<number | null>(null);
     const [deleting, setDeleting] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
     const [localOnly, setLocalOnly] = useState<boolean | null>(null);
@@ -86,7 +87,7 @@ export function PrivacySettings() {
             }
         }
         setDeleting(false);
-        setAsking(false);
+        setAsking(null);
         setResult(failed.length
             ? { ok: false, text: t('settings.privacy.deleteFailed', { n: failed.length, reason: failed.join('; ') }) }
             : { ok: true, text: t('settings.privacy.deleted') });
@@ -148,17 +149,17 @@ export function PrivacySettings() {
                 <p className="danger-warning">
                     {sessions.length === 0 ? t('settings.privacy.nothingToDelete') : t('settings.privacy.deleteWarning')}
                 </p>
-                <button type="button" className="btn-danger" onClick={() => { setResult(null); setAsking(true); }} disabled={sessions.length === 0}>
+                <button type="button" className="btn-danger" onClick={() => { setResult(null); setAsking(sessions.length); }} disabled={sessions.length === 0}>
                     {t('settings.privacy.delete')}
                 </button>
             </section>
-            {asking && (
+            {asking !== null && (
                 <ConfirmSheet
-                    title={t.plural('settings.privacy.deleteAsk', sessions.length)}
-                    confirmLabel={t.plural('settings.privacy.deleteYes', sessions.length)}
+                    title={t.plural('settings.privacy.deleteAsk', asking)}
+                    confirmLabel={t.plural('settings.privacy.deleteYes', asking)}
                     cancelLabel={t('settings.privacy.deleteCancel')}
                     onConfirm={() => void clearAll()}
-                    onCancel={() => setAsking(false)}
+                    onCancel={() => setAsking(null)}
                     danger
                     busy={deleting}
                 >

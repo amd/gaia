@@ -148,6 +148,22 @@ describe('PrivacySettings delete all chats', () => {
         expect(useChatStore.getState().sessions).toEqual([]);
     });
 
+    it('keeps the count it asked about while the chats are being deleted', async () => {
+        let finishFirst: () => void = () => {};
+        mockedApi.deleteSession.mockReturnValueOnce(new Promise<void>((r) => { finishFirst = r; }));
+        let finishSecond: () => void = () => {};
+        mockedApi.deleteSession.mockReturnValueOnce(new Promise<void>((r) => { finishSecond = r; }));
+        render(<PrivacySettings />);
+        askToDelete();
+        confirmDelete();
+        await act(async () => { finishFirst(); });
+        expect(useChatStore.getState().sessions).toEqual([TAXES]);
+        expect(screen.getByRole('alertdialog', { name: 'Delete all 2 chats?' })).toBeInTheDocument();
+        expect(screen.queryByRole('alertdialog', { name: 'Delete your 1 chat?' })).not.toBeInTheDocument();
+        await act(async () => { finishSecond(); });
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
     it('names the chats that stayed, and does not claim they are all gone', async () => {
         mockedApi.deleteSession.mockImplementation(async (id: string) => {
             if (id === 'trip') throw new Error('disk full');
