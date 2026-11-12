@@ -44,6 +44,26 @@ def test_a_wrapped_stop_is_recognised_and_other_errors_are_not():
     assert not stopped_by_user(RuntimeError(_STOP))
 
 
+def test_a_chain_that_loops_back_on_itself_ends_without_a_stop():
+    first, second = RuntimeError("a"), RuntimeError("b")
+    first.__cause__, second.__cause__ = second, first
+
+    assert not stopped_by_user(first)
+
+
+def test_an_error_raised_from_another_failure_during_a_stop_is_still_an_error():
+    """Only the explicit cause is followed when there is one."""
+    try:
+        raise StreamCancelledError(_STOP)
+    except StreamCancelledError:
+        try:
+            raise LemonadeClientError("server returned 500") from OSError("reset")
+        except LemonadeClientError as real:
+            error = real
+
+    assert not stopped_by_user(error)
+
+
 def test_the_lemonade_client_logs_a_stop_without_an_error():
     client = LemonadeClient(base_url="http://127.0.0.1:1", verbose=False)
     client.log = Mock()
