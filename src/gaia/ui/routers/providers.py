@@ -1596,7 +1596,7 @@ def _trained_window(model_id: str) -> Optional[int]:
             f"the context sizes {model_id} was trained for. Try again once the "
             "local model server is answering."
         )
-    for m in body.get("data") or []:
+    for m in _model_entries(body):
         if _model_ids_match(str(m.get("id") or ""), model_id):
             # ``context_length`` is the configured window; this is the trained one.
             window = m.get("max_context_window")

@@ -69,7 +69,7 @@ describe('Lemonade target API', () => {
         await expect(listProviderModels('local')).rejects.toThrow(detail);
     });
 
-    it.each(['', 'Bad Gateway', '<html><body>502</body></html>'])('still calls a 502 with no sentence (%j) unavailable', async (text) => {
+    it.each(['', 'Bad Gateway', '502 Bad Gateway', 'bad gateway.', '  ', 'Internal Server Error', '<html><body>502</body></html>', '{"detail": ""}'])('still calls a 502 with no sentence (%j) unavailable', async (text) => {
         fetchMock().mockResolvedValue(new Response(text, { status: 502 }));
         await expect(listProviderModels('local')).rejects.toThrow('Service unavailable. Is the backend running?');
     });

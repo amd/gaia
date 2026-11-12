@@ -113,7 +113,7 @@ export function getFriendlyError(status: number, detail: string): string {
         case 413: return detail || 'File too large to process.';
         case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
         // GAIA's own 502 says what the model server did; a proxy's carries no sentence.
-        case 502: return hasUsefulServerDetail(detail) && !/^bad gateway$/i.test(detail.trim())
+        case 502: return hasUsefulServerDetail(detail) && !/^(502\s+)?bad gateway\.?$/i.test(detail.trim())
             ? detail : 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
