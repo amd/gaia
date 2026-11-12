@@ -287,7 +287,7 @@ def test_single_quotes_do_not_smuggle_an_operator_past_the_split(command, notes)
         # A quoted or escaped paren must not cancel out a real one.
         "echo ')' && (ls || ls)",
         r"echo \) && (ls || ls)",
-        "(ls || echo \"(\") && ls",
+        '(ls || echo "(") && ls',
     ],
 )
 def test_grouping_a_chain_in_parentheses_is_refused_with_a_way_out(command, notes):
