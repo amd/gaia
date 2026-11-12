@@ -1078,8 +1078,8 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                         status.downloaded = True
                         status.loaded = True
                         break
-    except (httpx.HTTPError, ValueError) as e:
-        # Reported as unchecked, which Settings says in words.
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+        # Unchecked, which Settings says in words; InvalidURL isn't an HTTPError.
         logger.info("Could not check model %s on the model server: %s", model_name, e)
 
     logger.debug(

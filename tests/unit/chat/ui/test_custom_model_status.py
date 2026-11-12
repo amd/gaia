@@ -128,3 +128,41 @@ def test_a_prefix_or_substring_of_a_listed_id_is_not_found(model_server):
     model_server["models"] = [{"id": "Qwen3-4B-GGUF", "name": "Qwen3 4B"}]
     for wrong in ("Qwen3-4B", "Qwen3-4B-GGUF-extra", "user.", " "):
         assert _status(wrong).found is False, wrong
+
+
+@pytest.mark.parametrize(
+    "bad_base",
+    [
+        "http://localhost:13305x/api/v1",
+        "http://127.0.0.1:notaport/api/v1",
+        "http://[::1/api/v1",
+        "http://a\x00b/api/v1",
+    ],
+)
+def test_a_mistyped_server_address_leaves_the_id_unchecked(
+    model_server, monkeypatch, bad_base
+):
+    monkeypatch.setattr(system, "resolve_lemonade_base_url", lambda: bad_base)
+    status = _status("Qwen3-4B-GGUF")
+    assert (status.checked, status.found, status.loaded) == (False, False, False)
+    assert model_server["calls"] == []
+
+
+def test_a_mistyped_server_address_does_not_fail_settings(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from gaia.ui.server import create_app
+
+    monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(
+        system, "resolve_lemonade_base_url", lambda: "http://localhost:13305x/api/v1"
+    )
+    monkeypatch.setattr(system, "resolve_lemonade_api_key", lambda **k: None)
+    client = TestClient(create_app(db_path=":memory:"))
+
+    saved = client.put("/api/settings", json={"custom_model": "Qwen3-4B-GGUF"})
+    loaded = client.get("/api/settings")
+
+    for resp in (saved, loaded):
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["model_status"]["checked"] is False
