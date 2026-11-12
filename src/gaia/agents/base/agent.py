@@ -2995,6 +2995,8 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # The user's own words this turn forbid acting ("answer only with a plan").
+        self._turn_no_action_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
