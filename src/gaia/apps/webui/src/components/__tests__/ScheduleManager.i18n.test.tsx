@@ -157,4 +157,15 @@ describe('schedule dates follow the interface language, not the PC', () => {
         expect(next).toMatch(ARABIC_WEEKDAY);
         expect(next).not.toMatch(ENGLISH_CLOCK);
     });
+
+    it('keeps the English gloss of the next run free of Arabic weekdays and times', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', next_run_at: new Date(Date.now() + 3 * 86_400_000).toISOString() }] });
+        render(<ScheduleManager />);
+        const gloss = screen.getByText(/التشغيل التالي/).querySelector('.i18n-gloss');
+        const text = stripIsolates(gloss?.textContent ?? '');
+        expect(text).toContain('Next:');
+        expect(text).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+        expect(text).not.toMatch(/[؀-ۿ]/);
+    });
 });
+
