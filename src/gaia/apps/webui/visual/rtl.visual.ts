@@ -675,6 +675,66 @@ test('document being indexed', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['ar', 'en']) {
+    // A library that couldn't be listed used to look empty, as if every document were gone.
+    test(`a document library that could not be listed, then a remove that failed (${locale})`, async ({ page }) => {
+        // The app lists documents at startup too, so the list fails until Try again.
+        let listable = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => {
+                if (listable) return route.fulfill({ json: { documents: [{ id: 'd1', filename: 'q3-board.pdf', filepath: 'C:/q3-board.pdf', file_size: 2_048_000, chunk_count: 40, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }], total: 1, total_size_bytes: 2_048_000, total_chunks: 40 } });
+                return route.fulfill({ status: 500, json: { detail: 'database is locked' } });
+            });
+            await p.route('**/api/documents/d1', (route) => route.fulfill({ status: 500, json: { detail: 'database is locked' } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-load-error')).toBeVisible();
+        await shot(page, `documents-${locale}-load-failed`);
+        expect(await audit(page)).toEqual([]);
+
+        listable = true;
+        await page.locator('.doc-load-error button').click();
+        await page.locator('.doc-delete').click();
+        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await shot(page, `documents-${locale}-remove-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // Over a list it already shows, the load error is a notice, not the empty-library error.
+    test(`a document library that could not reload over documents it lists (${locale})`, async ({ page }) => {
+        let listable = true;
+        let listed = 0;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => (listable && ++listed
+                ? route.fulfill({ json: { documents: [{ id: 'd1', filename: 'q3-board.pdf', filepath: 'C:/q3-board.pdf', file_size: 2_048_000, chunk_count: 40, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 }], total: 1, total_size_bytes: 2_048_000, total_chunks: 40 } })
+                : route.fulfill({ status: 500, json: { detail: 'database is locked' } })));
+        });
+        // The app's startup listing fills the store; the library's own load then fails.
+        await expect.poll(() => listed).toBeGreaterThan(0);
+        listable = false;
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await expect(page.locator('.doc-load-error')).toHaveCount(0);
+        await shot(page, `documents-${locale}-reload-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // A rename the server refused used to fail with only a console line.
+    test(`a chat rename the server refuses says why above the composer (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route(`**/api/sessions/${ANSWER_SESSION}`, (route) => (route.request().method() === 'PUT'
+                ? route.fulfill({ status: 500, json: { detail: 'database is locked' } })
+                : route.fallback()));
+        });
+        await page.locator('.task-title').click();
+        await page.locator('.title-edit').fill(locale === 'ar' ? 'خطة الربع الثالث' : 'Q3 plan');
+        await page.locator('.title-edit').press('Enter');
+        await expect(page.locator('.input-area .export-error-bar')).toBeVisible();
+        await shot(page, `chat-${locale}-rename-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const OLD_FILE = { name: 'q1-plan.pdf', path: 'C:\\Users\\me\\Documents\\q1-plan.pdf', size: 2_048_000, at: '2026-03-14T10:00:00Z' };
 const ARABIC_MONTH = /يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر/;
 

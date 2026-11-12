@@ -14,7 +14,7 @@ on:
       - '.github/workflows/test_api.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -59,7 +59,7 @@ on:
       - '.github/workflows/test_api.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -155,7 +155,7 @@ jobs:
               # shim was removed in Lemonade v10.5), captures stdout/stderr to
               # logs, waits for health (dumping the logs on failure), and sets
               # LEMONADE_PROCESS_ID for cleanup.
-              .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+              .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
               if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
               # Pull + load + verify the LLM via GAIA's LemonadeClient so CI

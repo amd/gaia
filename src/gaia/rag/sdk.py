@@ -55,6 +55,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_vision_model,
     vision_off_reason,
 )
+from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
 from gaia.security import PathValidator
@@ -240,6 +241,45 @@ class EmptyPDFError(PDFExtractionError):
 
 class ImageExtractionError(ValueError):
     """Raised when an image file cannot be read into text, with a remedy."""
+
+
+class VisionModelFailedError(ValueError):
+    """The vision model kept failing before it read any image in the document."""
+
+    error_type = "vision_model_failed"
+
+
+# A vision model that fails this many images with none read is broken, not unlucky.
+VISION_FAILURE_LIMIT = 2
+
+
+class _VisionAttempts:
+    """Stops reading a document's images once the vision model looks broken."""
+
+    def __init__(self, file_name: str, model: Optional[str]):
+        self.file_name = file_name
+        self.model = model
+        self.reads = 0
+        self.failures = 0
+
+    def record_read(self) -> None:
+        self.reads += 1
+
+    def record_failure(self, error: Exception) -> None:
+        """Count a failed image; raise once the model has failed with nothing read."""
+        if getattr(error, "image_num", 1) > 1:
+            # The page's earlier images were read before this one failed.
+            self.reads += 1
+        self.failures += 1
+        if self.reads == 0 and self.failures >= VISION_FAILURE_LIMIT:
+            raise VisionModelFailedError(
+                f"Could not read the images in {self.file_name}: the vision model "
+                f"{self.model} failed {self.failures} times in a row without "
+                "reading any of them.\n"
+                f"Last error: {error}\n"
+                "Check Lemonade's log for errors from that model, fix it or "
+                "restart Lemonade, then index this file again."
+            ) from error
 
 
 # Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
@@ -853,6 +893,7 @@ class RAGSDK:
             max_tokens=self.config.max_tokens,
             show_stats=self.config.show_stats,
             use_local_llm=self.config.use_local_llm,
+            base_url=self.config.base_url,
         )
         self.chat = AgentSDK(chat_config)
 
@@ -1338,7 +1379,7 @@ class RAGSDK:
         from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
         if not hasattr(self, "llm_client") or self.llm_client is None:
-            self.llm_client = LemonadeClient()
+            self.llm_client = LemonadeClient(base_url=self.config.base_url)
 
         # Register + download the embedder before loading. Custom
         # (``user.``) embedders aren't Lemonade built-ins — they need
@@ -1808,6 +1849,9 @@ class RAGSDK:
             unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            attempts = _VisionAttempts(
+                file_name, vlm.vlm_model if vlm else self.config.vlm_model
+            )
 
             for i, page in enumerate(reader.pages, 1):
                 _beat()
@@ -1860,16 +1904,16 @@ class RAGSDK:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
                             )
+                            attempts.record_read()
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
-                    except LeaseWaitCancelled:
-                        raise
-                    except Exception as img_error:
+                    except VLMExtractionError as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
                         )
                         self.log.warning(page_warning)
+                        attempts.record_failure(img_error)
 
                 # Step 4: Merge
                 merged_text = self._merge_page_texts(
@@ -1989,7 +2033,7 @@ class RAGSDK:
                 )
 
             return full_text, total_pages, metadata
-        except (PDFExtractionError, IndexingStopped):
+        except (PDFExtractionError, VisionModelFailedError, IndexingStopped):
             # Already a well-formed extraction error with actionable guidance,
             # or a stop — re-raise without wrapping or re-logging.
             raise
@@ -2148,7 +2192,8 @@ class RAGSDK:
                         f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
                     )
                     return pdf_text, pdf_pages, metadata
-                except IndexingStopped:
+                except (IndexingStopped, VisionModelFailedError):
+                    # The fallback would ask the same broken model again.
                     raise
                 except Exception as pdf_err:
                     self.log.warning(
@@ -2227,6 +2272,9 @@ class RAGSDK:
             unread_image_pages = 0
             unavailable = self._vision_unavailable(vlm_available)
             total_images_processed = 0
+            attempts = _VisionAttempts(
+                file_name, vlm.vlm_model if vlm else self.config.vlm_model
+            )
 
             for i, slide in enumerate(prs.slides, 1):
                 _beat()
@@ -2273,11 +2321,17 @@ class RAGSDK:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
                             )
+                            attempts.record_read()
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
                     except LeaseWaitCancelled:
                         raise
+                    except VLMExtractionError as img_error:
+                        self.log.warning(
+                            f"Image extraction failed on slide {i}: {img_error}"
+                        )
+                        attempts.record_failure(img_error)
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"
@@ -2916,9 +2970,6 @@ These positions indicate where to split the text."""
             describe_client_hint,
             describe_start_hint,
         )
-        from gaia.llm.vlm_client import (  # pylint: disable=import-outside-toplevel
-            VLMExtractionError,
-        )
 
         file_name = Path(image_path).name
         if self.config.vlm_model is None:
@@ -3178,7 +3229,7 @@ These positions indicate where to split the text."""
             if self.llm_client is None:
                 from gaia.llm.lemonade_client import LemonadeClient
 
-                self.llm_client = LemonadeClient()
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
                 self.log.info("✅ Initialized LLM client for intelligent chunking")
 
             return self._fit_chunks_to_embedder(
@@ -4598,6 +4649,13 @@ These positions indicate where to split the text."""
             self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["xlsx_status"] = e.status
+            return stats
+        except VisionModelFailedError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"Vision model failed while indexing {file_path}: {e}")
+            stats["error"] = str(e)
+            stats["error_type"] = e.error_type
             return stats
         except (IndexingStopped, LeaseWaitCancelled):
             raise

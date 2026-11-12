@@ -29,6 +29,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { launchWrapper } = require("./linux-launch-wrapper.cjs");
 
 // Windows/Linux Chromium ships one .pak per locale. Keep en-US.pak only.
 const KEEP_PAK = new Set(["en-US.pak"]);
@@ -280,10 +281,7 @@ module.exports = async function afterPack(context) {
     try {
       if (fs.existsSync(binaryPath)) {
         fs.renameSync(binaryPath, realBinaryPath);
-        const wrapper =
-          `#!/bin/sh\n` +
-          `exec "$(dirname "$(readlink -f "$0")")/${realBinaryName}" --no-sandbox "$@"\n`;
-        fs.writeFileSync(binaryPath, wrapper);
+        fs.writeFileSync(binaryPath, launchWrapper(realBinaryName));
         fs.chmodSync(binaryPath, 0o755);
         console.log(
           `[after-pack] wrapped ${execName} → ${realBinaryName} with --no-sandbox in argv`,

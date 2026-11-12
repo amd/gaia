@@ -800,8 +800,8 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        find_model_requirement,
         no_thinking_kwargs,
+        reasoning_headroom,
     )
 
     # As the turn starts there is no answer yet: the question alone names it.
@@ -823,7 +823,6 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
-        mr = find_model_requirement(model_id)
         local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
@@ -831,11 +830,9 @@ async def _generate_session_title(
             kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         if not local:
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
-        elif mr is not None and mr.reasoning_effort:
-            # It reasons even at "low"; leave room for the title after that.
-            max_tokens = 96
         else:
-            max_tokens = 24
+            # A model that reasons even at its least needs room for the title after it.
+            max_tokens = 24 + reasoning_headroom(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()

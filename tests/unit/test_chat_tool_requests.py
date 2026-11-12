@@ -17,8 +17,10 @@ REGISTRY = {
     "tree",
     "recall",
     "read_file",
+    "analyze_image",
+    "transcribe_media",
 }
-SHELL = ["run_shell_command", "get_shell_state"]
+SHELL = ["run_shell_command"]
 
 
 @pytest.mark.parametrize(
@@ -62,6 +64,24 @@ def test_ordinary_requests_ask_for_nothing(message):
     assert requested_tools(message, REGISTRY) == []
 
 
+@pytest.mark.parametrize(
+    ("message", "tool"),
+    [
+        ("What is in C:/Users/me/Pictures/receipt.PNG?", "analyze_image"),
+        ("describe photo.jpeg for me", "analyze_image"),
+        ("Summarize standup.mp3", "transcribe_media"),
+        ("who speaks first in ~/calls/review.mp4", "transcribe_media"),
+    ],
+)
+def test_a_named_picture_or_recording_asks_for_its_tool(message, tool):
+    assert requested_tools(message, REGISTRY) == [tool]
+
+
+def test_a_file_any_tool_can_read_asks_for_nothing():
+    assert requested_tools("Summarize report.pdf and notes.md", REGISTRY) == []
+    assert requested_tools("the .mp3s are fine, .wavy lines too", REGISTRY) == []
+
+
 def test_a_tool_named_outright_is_requested():
     assert requested_tools("Call browse_directory on C:/tmp", REGISTRY) == [
         "browse_directory"
@@ -73,7 +93,6 @@ def test_a_named_tool_comes_before_the_shell_signal_and_is_not_duplicated():
     assert requested_tools(msg, REGISTRY) == [
         "run_shell_command",
         "browse_directory",
-        "get_shell_state",
     ]
 
 
