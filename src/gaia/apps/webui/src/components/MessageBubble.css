@@ -492,15 +492,21 @@
 }
 
 /* ── Code blocks ──────────────────────────────────────────────── */
+/* `clip`, not `hidden`: it rounds the corners without becoming a scroll box, so the header can stick. */
 .code-block {
     margin: 14px 0;
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    overflow: clip;
     background: var(--bg-code);
     border: 1px solid var(--border-code);
 }
 
+/* The language and Copy stay in view while a long block scrolls past;
+   -8px cancels the transcript's top padding, so no code shows above it. */
 .code-header {
+    position: sticky;
+    top: -8px;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -523,7 +529,7 @@
     gap: 4px;
     padding: 3px 10px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: var(--fs-caption);
     font-family: var(--font-mono);
     color: var(--text-code-dim);
     transition: all var(--duration) var(--ease);

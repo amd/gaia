@@ -499,6 +499,45 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongCode(page: Page): Promise<void> {
+    const code = Array.from({ length: 24 }, (_, i) => `    total += row[${i}]  # add column ${i}`).join('\n');
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Sum the columns in Python', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `Here it is:\n\n\`\`\`python\ndef total(row):\n    total = 0\n${code}\n    return total\n\`\`\`\n\nRun it on each row.`,
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long code block keeps Copy in view while it scrolls (${locale})`, async ({ page }, info) => {
+        await page.setViewportSize({ width: 1400, height: 560 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongCode);
+        const block = page.locator('.code-block');
+        await expect(block).toBeVisible();
+        const scroller = page.locator('.messages-scroll');
+        const [top, blockBox] = [await scroller.boundingBox(), await block.boundingBox()];
+        await scroller.evaluate((el, by) => { el.scrollTop += by; }, blockBox!.y - top!.y + 120);
+        const header = await page.locator('.code-header').boundingBox();
+        const after = await block.boundingBox();
+        expect(after!.y).toBeLessThan(top!.y);
+        // Unstuck, the header would be 120 px above the transcript's top edge.
+        expect(header!.y).toBeGreaterThanOrEqual(top!.y - 1);
+        expect(header!.y - top!.y).toBeLessThan(16);
+        await expect(page.locator('.code-copy')).toBeInViewport();
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`sticky-code-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
