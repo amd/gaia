@@ -107,6 +107,66 @@ class TestAudioRecorderInit:
             finally:
                 mod.sd = original_sd
 
+    @pytest.mark.parametrize(
+        "module, cls",
+        [
+            ("gaia.audio.audio_recorder", "AudioRecorder"),
+            ("gaia.audio.kokoro_tts", "KokoroTTS"),
+        ],
+    )
+    def test_frozen_build_never_offers_pip(self, module, cls, monkeypatch):
+        import importlib
+
+        mod = importlib.import_module(module)
+        monkeypatch.setattr(mod, "sd", None)
+        monkeypatch.setattr(mod, "_SD_IMPORT_ERROR", ImportError("sounddevice"))
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        with pytest.raises(ImportError) as exc:
+            if cls == "AudioRecorder":
+                mod.AudioRecorder()
+            else:
+                mod.KokoroTTS._require_sounddevice()
+        message = str(exc.value)
+        assert "isn't bundled in this GAIA build" in message
+        assert "pip install" not in message
+
+    def test_import_survives_sounddevice_without_portaudio(self, monkeypatch):
+        """sounddevice raises OSError at import when PortAudio is absent (Linux)."""
+        import importlib
+        import importlib.abc
+
+        import gaia.audio.audio_recorder as mod
+
+        class _NoPortAudio(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path=None, target=None):
+                if name == "sounddevice":
+                    raise OSError("PortAudio library not found")
+                return None
+
+        monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+        monkeypatch.setattr(sys, "meta_path", [_NoPortAudio(), *sys.meta_path])
+        try:
+            importlib.reload(mod)
+            assert mod.sd is None
+            assert isinstance(mod._SD_IMPORT_ERROR, OSError)
+        finally:
+            monkeypatch.undo()
+            importlib.reload(mod)
+
+    def test_portaudio_missing_names_the_system_package(self, monkeypatch):
+        import gaia.audio.audio_recorder as mod
+
+        monkeypatch.setattr(mod, "sd", None)
+        monkeypatch.setattr(
+            mod, "_SD_IMPORT_ERROR", OSError("PortAudio library not found")
+        )
+        with pytest.raises(ImportError) as exc:
+            mod.AudioRecorder()
+        message = str(exc.value)
+        assert "PortAudio library not found" in message
+        assert "libportaudio2" in message
+        assert "pip install" not in message
+
 
 class TestListDevices:
     def test_list_audio_devices(self, recorder, mock_sd):
