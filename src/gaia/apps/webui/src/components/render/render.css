@@ -403,9 +403,10 @@
     word-break: break-word;
 }
 
-/* Line breaks the model typed stay; the gaps between blocks do not. */
+/* Line breaks the model typed stay; the gaps between blocks do not. Not on the
+ * list item itself: a spaced-out list has bare newlines between its paragraphs. */
 .render-needs-input__question p,
-.render-needs-input__question li {
+.render-needs-input__question li > bdi {
     white-space: pre-wrap;
 }
 

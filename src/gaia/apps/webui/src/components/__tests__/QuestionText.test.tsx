@@ -81,3 +81,21 @@ describe('NeedsInputCard — Markdown in the question', () => {
         expect(question?.textContent).not.toContain('**');
     });
 });
+
+describe('QuestionText in a right-to-left page', () => {
+    it('leaves each block to the page direction and isolates its text', () => {
+        const { container } = render(<QuestionText text={MARKDOWN_QUESTION} />);
+        const box = container.querySelector('.render-needs-input__question')!;
+        // dir="auto" would turn an English question left-to-right and park it at the far edge.
+        expect(box).not.toHaveAttribute('dir');
+        for (const block of box.querySelectorAll('p, li')) {
+            expect(block.firstElementChild?.tagName).toBe('BDI');
+        }
+    });
+
+    it('keeps a paragraph inside a list item as the isolated block', () => {
+        const { container } = render(<QuestionText text={'- first\n\n  more\n\n- second'} />);
+        expect(container.querySelector('bdi p')).toBeNull();
+        expect(container.querySelectorAll('li > p > bdi').length).toBeGreaterThan(0);
+    });
+});
