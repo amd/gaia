@@ -186,7 +186,16 @@ def run_setup(
     if open_browser:
         _open_browser(PORTAL_URL, emit)
     try:
-        result = connect(prompt("Bot token (hidden): "))
+        token = prompt("Bot token (hidden): ")
+    except EOFError:
+        emit(
+            "\n❌ No token was entered: setup needs a terminal to type it in. "
+            "Run `gaia discord setup` in a terminal, or pipe the token to "
+            "`gaia discord connect`."
+        )
+        return 1
+    try:
+        result = connect(token)
     except (ValueError, DiscordTokenError, RuntimeError) as e:
         emit(f"\n❌ {e}")
         return 1
