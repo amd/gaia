@@ -94,7 +94,7 @@ describe('What GAIA knows about you', () => {
 
         // Lessons and session summaries are filtered on the server, so paging covers user facts only.
         expect(mockedApi.getKnowledge).toHaveBeenCalledWith(expect.objectContaining({ about_user: true }));
-        expect(screen.queryByText('Success Rate')).not.toBeInTheDocument();
+        expect(screen.queryByText('Success rate')).not.toBeInTheDocument();
         expect(screen.queryByText(/llm_extract/)).not.toBeInTheDocument();
         expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
     });
@@ -103,7 +103,7 @@ describe('What GAIA knows about you', () => {
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
-        expect(await screen.findByText('Success Rate')).toBeInTheDocument();
+        expect(await screen.findByText('Success rate')).toBeInTheDocument();
     });
 
     it('forgets an item in one click, and can undo it', async () => {
@@ -333,7 +333,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.commitDiscovery.mockResolvedValue({ stored: 1 });
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });
@@ -358,7 +358,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });
@@ -366,7 +366,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: 'None' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).not.toBeChecked();
-        fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).toBeChecked();
     });
 });
@@ -488,6 +488,40 @@ describe('Reminder due dates', () => {
             text: expect.stringMatching(/^Was due /), past: true,
         });
         expect(dueLabel('not a date', NOW)).toBeNull();
+    });
+
+    it('asks when to remind, and saves that time with a reminder added here', async () => {
+        await renderAbout();
+
+        fireEvent.change(screen.getByRole('textbox', { name: /Something GAIA should know/ }), {
+            target: { value: 'Water the plants' },
+        });
+        expect(screen.queryByLabelText('When to remind you')).not.toBeInTheDocument();
+        fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), { target: { value: 'reminder' } });
+        const add = screen.getByRole('button', { name: /Add/ });
+        expect(add).toBeDisabled();
+
+        fireEvent.change(screen.getByLabelText('When to remind you'), { target: { value: '2026-10-25T18:00' } });
+        expect(add).toBeEnabled();
+        fireEvent.click(add);
+
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalledWith({
+            content: 'Water the plants', category: 'reminder', due_at: '2026-10-25T18:00',
+        }));
+    });
+
+    it('lets a reminder\'s time be changed when editing it', async () => {
+        const plants = row({ id: 'r3', category: 'reminder', content: 'Water the plants', due_at: new Date(2026, 9, 25, 18, 0).toISOString() });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [CALGARY, plants], total: 2, offset: 0, limit: 200 });
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Water the plants')).getByRole('button', { name: /Edit/ }));
+        const when = screen.getByLabelText('When to remind you');
+        expect(when).toHaveValue('2026-10-25T18:00');
+        fireEvent.change(when, { target: { value: '2026-10-26T09:30' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => expect(mockedApi.editKnowledge).toHaveBeenCalledWith('r3', { due_at: '2026-10-26T09:30' }));
     });
 
     it('keeps the due date when a forgotten reminder is undone', async () => {

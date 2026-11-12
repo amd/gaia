@@ -2493,6 +2493,41 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
+def _probe_misses_only_the_model(init_body: dict | None) -> bool:
+    """True when ``/init``'s only complaint is that its model is not downloaded."""
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    model = body.get("model") or {}
+    return (
+        lemonade.get("reachable") is True
+        and lemonade.get("compatible") is not False
+        and bool(model.get("id"))
+        and model.get("present") is False
+    )
+
+
+def _missing_local_model_text(init_body: dict) -> str:
+    """What the chat says when the local model a turn needs is not downloaded.
+
+    The sidecar's own hint names a CLI; the app's way is Settings.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    from .local_models import friendly_name
+
+    name = friendly_name(init_body["model"]["id"])
+    if cloud_blocked():
+        return (
+            f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
+            "answer. Get a local model under Settings > Model, or turn off Local "
+            "only under Settings > Privacy to use a cloud model."
+        )
+    return (
+        f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
+        "another model, under Settings > Model."
+    )
+
+
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2815,6 +2850,11 @@ def _dispatch_sidecar_query(
             agent_type,
             model_id,
         )
+    elif status_code != 200 and _probe_misses_only_the_model(init_body):
+        sse_handler._emit(
+            {"type": "agent_error", "content": _missing_local_model_text(init_body)}
+        )
+        return
     elif status_code != 200:
         hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
