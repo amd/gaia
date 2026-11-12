@@ -9605,25 +9605,14 @@ class LemonadeClient:
                 )
 
                 try:
-                    # First attempt: resume download
-                    if self._consume_pull_stream(model_name, "resume"):
-                        # Retry loading
-                        response = self._post_load_with_transient_retry(
-                            url, request_data, timeout, model_name, load_retries
-                        )
-                        self.log.info(
-                            f"{_emoji('✅', '[OK]')} Loaded {model_name} after resume"
-                        )
-                        self.model = model_name
-                        return response
-
+                    resumed = self._consume_pull_stream(model_name, "resume")
                 except ModelDownloadCancelledError:
                     # Stop is the user's choice, not a failed resume: never
                     # go on to delete the model.
                     raise
                 except Exception as resume_error:
                     # A resume that failed while Stop was pressed (a timeout
-                    # racing it) is still a Stop: check before deleting.
+                    # racing it) is still a Stop.
                     stop_pressed = current_cancel_check()
                     if stop_pressed is not None and stop_pressed():
                         raise ModelDownloadCancelledError(
@@ -9643,55 +9632,95 @@ class LemonadeClient:
                             )
                         ) from resume_error
 
-                    # Honor `prompt` before the destructive delete too.
-                    if prompt and not _prompt_user_for_delete(model_name):
-                        raise LemonadeClientError(
-                            f"Resume download failed for '{model_name}'. "
-                            f"You can manually delete the model and try again."
-                        )
+                    # A dropped resume is not proof of corruption; deleting
+                    # would throw away a partial download a retry can resume.
+                    raise LemonadeClientError(
+                        f"The download of '{model_name}' was interrupted while "
+                        f"repairing it ({resume_error}). The partial download "
+                        "was kept, so trying again resumes it from where it "
+                        "stopped."
+                    ) from resume_error
 
-                    # Second (and final) attempt: delete and re-download from
-                    # scratch. Bounded to ONE delete + re-download — no loops.
+                if resumed:
                     try:
-                        self.log.info(
-                            f"{_emoji('🗑️', '[DELETE]')} Resume failed; deleting "
-                            f"corrupt '{model_name}' and re-downloading once..."
+                        response = self._post_load_with_transient_retry(
+                            url, request_data, timeout, model_name, load_retries
                         )
-                        self.delete_model(model_name)
+                        self.log.info(
+                            f"{_emoji('✅', '[OK]')} Loaded {model_name} after resume"
+                        )
+                        self.model = model_name
+                        return response
+                    except Exception as reload_error:
+                        if not self._is_corrupt_download_error(reload_error):
+                            raise
+                        self.log.warning(
+                            f"{_emoji('⚠️', '[RETRY]')} Still corrupt after resume: "
+                            f"{reload_error}"
+                        )
 
-                        self.log.info(
-                            f"{_emoji('📥', '[FRESH]')} Starting fresh download..."
-                        )
-                        if self._consume_pull_stream(model_name, "fresh download"):
-                            # Retry loading
-                            response = self._post_load_with_transient_retry(
-                                url, request_data, timeout, model_name, load_retries
+                        if self.is_users_server():
+                            from gaia.llm.lemonade_choice import (
+                                users_server_repair_message,
                             )
+
+                            raise UsersServerUnchangedError(
+                                users_server_repair_message(
+                                    self.base_url, model_name, reload_error
+                                )
+                            ) from reload_error
+
+                        # Honor `prompt` before the destructive delete too.
+                        if prompt and not _prompt_user_for_delete(model_name):
+                            raise LemonadeClientError(
+                                f"Resuming the download did not repair "
+                                f"'{model_name}'. You can manually delete the "
+                                f"model and try again."
+                            ) from reload_error
+
+                        # Second (and final) attempt: delete and re-download from
+                        # scratch. Bounded to ONE delete + re-download — no loops.
+                        try:
                             self.log.info(
-                                f"{_emoji('✅', '[OK]')} Loaded {model_name} after fresh download"
+                                f"{_emoji('🗑️', '[DELETE]')} Still corrupt after "
+                                f"resume; deleting '{model_name}' and "
+                                f"re-downloading once..."
                             )
-                            self.model = model_name
-                            return response
+                            self.delete_model(model_name)
 
-                        # Stream ended without a completion event — treat the
-                        # bounded recovery as exhausted (fall through to raise).
-                        raise LemonadeClientError(
-                            f"Fresh download did not complete for '{model_name}'"
-                        )
+                            self.log.info(
+                                f"{_emoji('📥', '[FRESH]')} Starting fresh download..."
+                            )
+                            if self._consume_pull_stream(model_name, "fresh download"):
+                                # Retry loading
+                                response = self._post_load_with_transient_retry(
+                                    url, request_data, timeout, model_name, load_retries
+                                )
+                                self.log.info(
+                                    f"{_emoji('✅', '[OK]')} Loaded {model_name} after fresh download"
+                                )
+                                self.model = model_name
+                                return response
 
-                    except ModelDownloadCancelledError:
-                        raise
-                    except Exception as fresh_error:
-                        self.log.error(
-                            f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
-                        )
-                        raise LemonadeClientError(
-                            f"Failed to repair model '{model_name}' after resume and one "
-                            f"delete + re-download attempt ({fresh_error}). "
-                            f"Try the Force-redownload action in the Agent UI, or manually "
-                            f"delete the model and re-run. "
-                            f"{lemonade_log_hint(self.base_url)}"
-                        ) from fresh_error
+                            # Stream ended without a completion event — treat the
+                            # bounded recovery as exhausted (fall through to raise).
+                            raise LemonadeClientError(
+                                f"Fresh download did not complete for '{model_name}'"
+                            )
+
+                        except ModelDownloadCancelledError:
+                            raise
+                        except Exception as fresh_error:
+                            self.log.error(
+                                f"{_emoji('❌', '[FAIL]')} Fresh download also failed: {fresh_error}"
+                            )
+                            raise LemonadeClientError(
+                                f"Failed to repair model '{model_name}' after resume and one "
+                                f"delete + re-download attempt ({fresh_error}). "
+                                f"Try the Force-redownload action in the Agent UI, or manually "
+                                f"delete the model and re-run. "
+                                f"{lemonade_log_hint(self.base_url)}"
+                            ) from fresh_error
 
             # Check if this is a "model not found" error and auto_download is enabled
             if not (auto_download and self._is_model_error(e)):
