@@ -62,6 +62,20 @@ def test_a_name_the_server_does_not_list_is_classified_with_the_model_named():
     assert typed.user_message.endswith(TUI_MODEL_SWITCH_HINT)
 
 
+def test_the_refusal_is_classified_when_lemonade_sends_it_as_an_error_envelope():
+    enveloped = LemonadeClientError(
+        "Failed to load model: {'error': {'message': 'When registering a new model, "
+        "the model name must include the `user` namespace, for example "
+        f"`user.Phi-4-Mini-GGUF`. Received: {UNKNOWN_ID}', 'type': "
+        "'model_load_error'}}"
+    )
+
+    typed = classify_lemonade_exception(enveloped)
+
+    assert isinstance(typed, LemonadeUnknownModelError)
+    assert typed.model_id == UNKNOWN_ID
+
+
 def test_the_app_is_sent_to_the_model_menu_and_the_custom_id_setting():
     typed = classify_lemonade_exception(UNKNOWN_NAME)
     shown = surface_wording(typed.user_message, "agent_ui")

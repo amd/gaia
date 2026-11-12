@@ -75,6 +75,17 @@ describe('describeFailedTurn', () => {
         expect(describeFailedTurn(`Failed to start the query run: ${memory}`).raw).toBe(false);
     });
 
+    it('does not call an assistant that failed to load a model problem', () => {
+        for (const text of [
+            "GAIA's assistant failed to load: the package is missing. Open Settings > Setup and press Run setup again, then try again.",
+            "I couldn't load the agent for this chat.",
+        ]) {
+            expect(describeFailedTurn(text).kind).toBe('unknown');
+            expect(describeFailedTurn(text).sections).not.toContain('model');
+        }
+        expect(describeFailedTurn("The model `x` couldn't load: out of memory.").kind).toBe('modelLoad');
+    });
+
     it('puts an exception dump under Details', () => {
         expect(describeFailedTurn('RuntimeError: boom').raw).toBe(true);
         expect(describeFailedTurn('RuntimeError: boom').kind).toBe('unknown');

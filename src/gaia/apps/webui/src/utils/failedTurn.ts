@@ -21,7 +21,8 @@ const RAW_MAX_CHARS = 1500;
 const COMMAND_RE = /\brun:\s|re-run your|`gaia [a-z]/i;
 
 const MODEL_UNAVAILABLE_RE = /no model called|doesn't list (?:it|this model)|must include the .?user.? namespace|isn't installed on the local LLM server|\bmodel\b[^\n]{0,80}\bwas not found\b/i;
-const MODEL_LOAD_RE = /couldn't load|failed to (?:pre)?load/i;
+// Anchored on the model: "GAIA's assistant failed to load" is a setup fault, not a model one.
+const MODEL_LOAD_RE = /\bmodel\b[^\n]{0,40}\b(?:couldn't|didn't|failed to) (?:pre)?load|failed to (?:pre)?load (?:lemonade )?model/i;
 const CONTEXT_RE = /context (?:window|size|length|limit)|exceeds the available context|maximum context|too many tokens/i;
 
 const SECTION_RE = /Settings\s*(?:>|›|→)\s*(General|Setup|Model|Permissions|Skills|Connectors|Memory|Privacy|Notifications|Advanced)\b/g;
