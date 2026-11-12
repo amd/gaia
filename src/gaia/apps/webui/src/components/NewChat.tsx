@@ -90,12 +90,16 @@ function attachWholeLibrary() {
         .map((d) => d.id));
 }
 
+/** Attached documents shown before the rest fold behind "+N more". */
+export const DOCS_SHOWN = 5;
+
 /**
  * A chat searches only the documents attached to it: show what this one will
  * get, and offer the rest of the library.
  */
 function LibraryDocuments() {
     const t = useT();
+    const [expanded, setExpanded] = useState(false);
     const documents = useChatStore((s) => s.documents);
     const draftIds = useChatStore((s) => s.draftDocumentIds);
     const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
@@ -104,11 +108,17 @@ function LibraryDocuments() {
     const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
     if (!attached.length && !offered.length) return null;
     const n = offered.length;
+    const hidden = attached.length - DOCS_SHOWN;
+    const shown = expanded || hidden <= 0 ? attached : attached.slice(0, DOCS_SHOWN);
     return (
         <div className="new-chat-docs">
             {attached.length > 0 && (
-                <ul className="new-chat-doc-list" aria-label={t('newChat.docs.forChat')}>
-                    {attached.map((d) => (
+                <ul
+                    id="new-chat-doc-list"
+                    className={`new-chat-doc-list${expanded ? ' is-expanded' : ''}`}
+                    aria-label={t('newChat.docs.forChat')}
+                >
+                    {shown.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
                             <span dir="auto">{d.filename}</span>
@@ -123,6 +133,17 @@ function LibraryDocuments() {
                         </li>
                     ))}
                 </ul>
+            )}
+            {hidden > 0 && (
+                <button
+                    type="button"
+                    className="link-btn new-chat-doc-toggle"
+                    aria-expanded={expanded}
+                    aria-controls="new-chat-doc-list"
+                    onClick={() => setExpanded((v) => !v)}
+                >
+                    {expanded ? t('newChat.docs.fewer') : t('newChat.docs.hidden', { n: hidden })}
+                </button>
             )}
             {n > 0 && (
                 <p className="new-chat-note">

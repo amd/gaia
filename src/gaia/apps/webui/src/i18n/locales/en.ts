@@ -202,6 +202,8 @@ export const enMessages = {
     'newChat.docs.attachIt': 'Attach it',
     'newChat.docs.attachAll': 'Attach all {n}',
     'newChat.docs.choose': 'Choose',
+    'newChat.docs.hidden': '+{n} more',
+    'newChat.docs.fewer': 'Show fewer',
 
     // The new chat's folders
     'folderChip.add': 'Add a folder',
