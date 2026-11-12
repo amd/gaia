@@ -395,6 +395,13 @@
     .input-column { padding: 0 12px; }
 }
 
+/* Phone: the title takes its own row so five icons cannot squeeze it to a few letters. */
+@media (max-width: 480px) {
+    .task-header { flex-wrap: wrap; row-gap: 0; }
+    .task-header-left { flex: 1 1 100%; }
+    .task-header-right { margin-inline-start: auto; }
+}
+
 /* Scroll to bottom FAB */
 .scroll-bottom-btn {
     position: absolute;
