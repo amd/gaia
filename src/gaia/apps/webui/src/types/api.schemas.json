@@ -660,6 +660,17 @@
         "title": "Entries",
         "type": "array"
       },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
+      },
       "parent_path": {
         "anyOf": [
           {

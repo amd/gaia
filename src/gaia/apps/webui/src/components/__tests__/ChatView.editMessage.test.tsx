@@ -120,6 +120,50 @@ describe('editing a sent message', () => {
     });
 });
 
+describe('resending an earlier message', () => {
+    it('says how many later messages go away, and deletes nothing until confirmed', async () => {
+        await show();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[0]);
+
+        const ask = screen.getByRole('alertdialog');
+        expect(ask.textContent).toContain('This also deletes the 2 later messages in this chat.');
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+        expect(screen.getByText('About 82 km.')).toBeTruthy();
+        expect(sends).toEqual([]);
+
+        fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[0]);
+        await act(async () => {
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete and send' }));
+        });
+        await waitFor(() => expect(sends).toEqual(['Name a canal.']));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 1);
+    });
+
+    it('asks the same before sending an edit of an earlier message', async () => {
+        await show();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[0]);
+        fireEvent.change(editor(), { target: { value: 'Name a long canal.' } });
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+
+        expect(screen.getByRole('alertdialog').textContent).toContain('2 later messages');
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(sends).toEqual([]);
+    });
+
+    it('resends the last question without asking', async () => {
+        await show();
+        await act(async () => {
+            fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[1]);
+        });
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+        await waitFor(() => expect(sends).toEqual(['How long is the Panama canl?']));
+    });
+});
+
 describe('an edit is never lost', () => {
     async function editAndSend(text: string) {
         fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[1]);

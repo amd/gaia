@@ -1090,6 +1090,11 @@ version's backend, so the first launch afterwards downloads nothing for it. A re
 that would leave no working app, such as one with no disk space, is refused with the
 reason.
 
+**On a Mac** the app can't install updates itself yet, because its builds aren't
+signed with an Apple Developer ID ([#7061](https://github.com/amd/gaia/issues/7061)).
+A new release still shows, with a **Download** link to its release page instead of
+**Update now**; install the `.dmg` from there.
+
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
 
