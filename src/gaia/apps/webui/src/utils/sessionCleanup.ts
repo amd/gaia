@@ -12,7 +12,7 @@
  *
  * A session qualifies as an abandoned draft ONLY when every emptiness signal
  * agrees, so a session that has actually started a turn is never deleted:
- *   - it still has the default "New Task" title (never renamed/auto-titled),
+ *   - it still has the default "New chat" title (never renamed/auto-titled),
  *   - the backend reports zero messages,
  *   - it has no in-flight turn (not streaming here, not in the running set),
  *   - and, when it is the current session, the loaded message list is empty.
@@ -23,7 +23,8 @@ import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from './logger';
 
-const DRAFT_TITLE = 'New Task';
+/** The title a new chat is created with; "New Task" is what older versions used. */
+const DRAFT_TITLES = new Set(['New chat', 'New Task']);
 
 interface DraftCheckState {
     sessions: Session[];
@@ -39,12 +40,12 @@ interface DraftCheckState {
 
 /**
  * Pure predicate (state passed in) so it can be unit-tested without the store.
- * Returns true when ``sessionId`` is an abandoned "New Task" draft safe to drop.
+ * Returns true when ``sessionId`` is an abandoned "New chat" (or legacy "New Task") draft safe to drop.
  */
 export function isAbandonedDraft(sessionId: string, state: DraftCheckState): boolean {
     const s = state.sessions.find((x) => x.id === sessionId);
     if (!s) return false;
-    if (s.title !== DRAFT_TITLE) return false;
+    if (!DRAFT_TITLES.has(s.title)) return false;
     if ((s.message_count ?? 0) !== 0) return false;
     if (state.runningSessionIds.includes(sessionId)) return false;
     // Messages still waiting to go out make it a chat in progress.

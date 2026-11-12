@@ -868,7 +868,19 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
     rag = agent.rag
     lines: List[str] = []
-    for doc in pending:
+    cancel = getattr(agent, "_cancel_event", None)
+    stopped = False
+    for position, doc in enumerate(pending):
+        # Stop ends the loading here; what is left stays pending for the next turn.
+        if cancel is not None and cancel.is_set():
+            left = len(pending) - position
+            lines.append(
+                "Stopped: "
+                + ("1 document was" if left == 1 else f"{left} documents were")
+                + " not loaded. They load with your next message."
+            )
+            stopped = True
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -895,6 +907,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     if succeeded:
         agent.rebuild_system_prompt()
     all_indexed = succeeded == len(pending)
+    status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
             "type": "tool_result",
@@ -903,7 +916,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             "success": all_indexed,
             # The status/message shape is what a relaying host summarizes from.
             "result_data": {
-                "status": "indexed" if all_indexed else "not all indexed",
+                "status": status,
                 "message": "; ".join(lines),
                 "success": all_indexed,
             },
