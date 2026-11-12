@@ -21,6 +21,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `/model` switch, the status uses the live client’s catalog provider, matching
   the switch notice instead of reporting a custom-prefixed cloud model as local.
 
+- **A turn that ends in an error still reports the tools it ran.** When a turn
+  stopped on an error without printing an answer, its `usage` block left out
+  `tools_used`, so `gaia -p` without `--verbose` recorded 0 tool calls for it.
+  The count now comes from that turn's own tool results.
+
 ### Added
 
 - **The agent can draft, reply, forward and send mail.** A new bundled skill,
