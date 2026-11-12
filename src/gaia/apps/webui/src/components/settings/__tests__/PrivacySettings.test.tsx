@@ -60,35 +60,61 @@ describe('PrivacySettings local only', () => {
 });
 
 describe('PrivacySettings delete all chats', () => {
-    it('deletes nothing on the first click and asks for a second', () => {
+    const askToDelete = () => fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
+    const confirmDelete = () => fireEvent.click(screen.getByRole('button', { name: 'Delete 2 chats' }));
+
+    it('asks in a dialog that names what goes, with Cancel focused, and deletes nothing yet', () => {
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
+        askToDelete();
+        const dialog = screen.getByRole('alertdialog', { name: 'Delete all 2 chats?' });
+        expect(dialog).toHaveTextContent("This can't be undone.");
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Delete 2 chats' })).toHaveClass('btn-danger');
         expect(mockedApi.deleteSession).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
         expect(useChatStore.getState().sessions).toEqual([TRIP, TAXES]);
     });
 
-    it('deletes every chat on the second click and says so', async () => {
+    it('a second click on the same button does not delete', () => {
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        askToDelete();
+        expect(screen.queryByRole('button', { name: /Click again/ })).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('Cancel closes the dialog and keeps every chat', () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('Escape cancels too', () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        fireEvent.keyDown(document, { key: 'Escape' });
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('says one chat, not 1 chats', () => {
+        useChatStore.setState({ sessions: [TRIP] });
+        render(<PrivacySettings />);
+        askToDelete();
+        expect(screen.getByRole('alertdialog', { name: 'Delete your 1 chat?' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Delete 1 chat' })).toBeInTheDocument();
+    });
+
+    it('deletes every chat once confirmed and says so', async () => {
+        render(<PrivacySettings />);
+        askToDelete();
+        confirmDelete();
         await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('All chats deleted.'));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         expect(mockedApi.deleteSession).toHaveBeenNthCalledWith(1, 'trip');
         expect(mockedApi.deleteSession).toHaveBeenNthCalledWith(2, 'taxes');
         expect(useChatStore.getState().sessions).toEqual([]);
-    });
-
-    it('asks again once the confirm expires, and that click still deletes nothing', () => {
-        vi.useFakeTimers();
-        render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        act(() => { vi.advanceTimersByTime(3999); });
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
-        act(() => { vi.advanceTimersByTime(1); });
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        expect(mockedApi.deleteSession).not.toHaveBeenCalled();
-        expect(screen.getByRole('button', { name: 'Click again to delete all chats' })).toBeInTheDocument();
     });
 
     it('names the chats that stayed, and does not claim they are all gone', async () => {
@@ -96,8 +122,8 @@ describe('PrivacySettings delete all chats', () => {
             if (id === 'trip') throw new Error('disk full');
         });
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        askToDelete();
+        confirmDelete();
         expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete 1 chat(s): Trip plan: disk full');
         expect(screen.queryByText('All chats deleted.')).not.toBeInTheDocument();
         expect(mockedApi.deleteSession).toHaveBeenCalledTimes(2);
@@ -107,8 +133,8 @@ describe('PrivacySettings delete all chats', () => {
     it('counts every failure when none of the deletes succeed', async () => {
         mockedApi.deleteSession.mockRejectedValue(new Error('offline'));
         render(<PrivacySettings />);
-        fireEvent.click(screen.getByRole('button', { name: 'Delete all chats' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Click again to delete all chats' }));
+        askToDelete();
+        confirmDelete();
         expect(await screen.findByRole('alert')).toHaveTextContent(
             'Could not delete 2 chat(s): Trip plan: offline; Taxes: offline',
         );

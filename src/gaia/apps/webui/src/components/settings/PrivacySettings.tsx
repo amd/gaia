@@ -1,12 +1,13 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useInferencePlace } from '../../stores/modelStore';
 import { useT } from '../../i18n/useT';
 import { TroubleshootingReport, type ReportClasses } from '../TroubleshootingReport';
+import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { UndoHistorySettings } from './UndoHistorySettings';
 
@@ -24,12 +25,11 @@ export function PrivacySettings() {
     const removeSession = useChatStore((s) => s.removeSession);
     const place = useInferencePlace();
     const dataDir = useChatStore((s) => s.systemStatus?.data_dir);
-    const [confirm, setConfirm] = useState(false);
+    const [asking, setAsking] = useState(false);
+    const [deleting, setDeleting] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
     const [localOnly, setLocalOnly] = useState<boolean | null>(null);
     const [savingPolicy, setSavingPolicy] = useState(false);
-    const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-    useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
     useEffect(() => {
         let active = true;
         void api.getSettings()
@@ -74,12 +74,7 @@ export function PrivacySettings() {
     }, [localOnly, savingPolicy, t]);
 
     const clearAll = useCallback(async () => {
-        if (!confirm) {
-            setConfirm(true);
-            timer.current = setTimeout(() => setConfirm(false), 4000);
-            return;
-        }
-        setConfirm(false);
+        setDeleting(true);
         const failed: string[] = [];
         for (const s of sessions) {
             try {
@@ -89,10 +84,12 @@ export function PrivacySettings() {
                 failed.push(`${s.title}: ${err instanceof Error ? err.message : err}`);
             }
         }
+        setDeleting(false);
+        setAsking(false);
         setResult(failed.length
             ? { ok: false, text: t('settings.privacy.deleteFailed', { n: failed.length, reason: failed.join('; ') }) }
             : { ok: true, text: t('settings.privacy.deleted') });
-    }, [confirm, removeSession, sessions, t]);
+    }, [removeSession, sessions, t]);
 
     return (
         <div className="settings-pane">
@@ -141,10 +138,24 @@ export function PrivacySettings() {
                 <p className="danger-warning">
                     {sessions.length === 0 ? t('settings.privacy.nothingToDelete') : t('settings.privacy.deleteWarning')}
                 </p>
-                <button type="button" className="btn-danger" onClick={() => void clearAll()} disabled={sessions.length === 0}>
-                    {confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')}
+                <button type="button" className="btn-danger" onClick={() => { setResult(null); setAsking(true); }} disabled={sessions.length === 0}>
+                    {t('settings.privacy.delete')}
                 </button>
             </section>
+            {asking && (
+                <ConfirmSheet
+                    title={t.plural('settings.privacy.deleteAsk', sessions.length)}
+                    confirmLabel={t.plural('settings.privacy.deleteYes', sessions.length)}
+                    cancelLabel={t('settings.privacy.deleteCancel')}
+                    onConfirm={() => void clearAll()}
+                    onCancel={() => setAsking(false)}
+                    danger
+                    busy={deleting}
+                >
+                    <p>{t('settings.privacy.deleteWarning')}</p>
+                    <p>{t('settings.privacy.deleteFinal')}</p>
+                </ConfirmSheet>
+            )}
             {result && <p className={result.ok ? 'settings-ok' : 'settings-error'} role={result.ok ? 'status' : 'alert'}>{result.text}</p>}
         </div>
     );
