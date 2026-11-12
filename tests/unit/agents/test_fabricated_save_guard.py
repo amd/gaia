@@ -142,6 +142,12 @@ SAVE_CLAIMS = [
         "No files were saved other than results.csv.",
         id="negated-subject-other-than",
     ),
+    # A file in the verb's own clause beats a remembered-value reading.
+    pytest.param(
+        "Here's the `summary` I saved to `out/summary.md`.",
+        id="value-before-then-a-path",
+    ),
+    pytest.param("The file was saved as your `todo.md`.", id="saved-as-your-file"),
 ]
 
 NON_CLAIMS = [

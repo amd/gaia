@@ -2006,11 +2006,20 @@ _REMEMBERED_AFTER_PATTERN = re.compile(
 )
 # "the `granite-1812` I have stored": the thing kept is a value, not a path.
 _VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
+_CLAUSE_END_PATTERN = re.compile(r"[,;:—–]|\s-\s")
 
 
 def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
     """Whether this write verb tells of a fact kept in memory, not of a file."""
-    if _REMEMBERED_AFTER_PATTERN.match(sentence, match.end()):
+    after = _REMEMBERED_AFTER_PATTERN.match(sentence, match.end())
+    if after and "memor" in after.group().lower():
+        return True
+    # "saved as your `todo.md`", "the `summary` I saved to out/s.md": a file
+    # in the verb's own clause makes it a save.
+    clause = _CLAUSE_END_PATTERN.split(sentence[match.end() :], maxsplit=1)[0]
+    if re.search(r"[\\/]", clause) or _names_a_file(clause):
+        return False
+    if after:
         return True
     head = _VALUE_BEFORE_PATTERN.search(sentence[: match.start()])
     if head is None:
