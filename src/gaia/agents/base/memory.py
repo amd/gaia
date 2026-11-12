@@ -614,8 +614,14 @@ def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """
     parts = ["Saved."]
     if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
         parts.append(
-            f"Filed as a fact: '{ignored['category']}' is not a category "
+            f"Filed as a fact: {why} "
             f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
         )
     if "due_at" in ignored:
@@ -5774,16 +5780,8 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # A bad label must not lose the fact: save without it and say so.
             ignored: Dict[str, str] = {}
-            if category in VALID_CATEGORIES - EXTRACTABLE_CATEGORIES:
-                # Not a slip: these rows lead every prompt, so a chat can't write one.
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Not saved: a chat can't write the '{category}' "
-                        "category. Call remember again with one of "
-                        f"{sorted(EXTRACTABLE_CATEGORIES)}."
-                    ),
-                }
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
             if category not in EXTRACTABLE_CATEGORIES:
                 ignored["category"] = category
                 category = "fact"
