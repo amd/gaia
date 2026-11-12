@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **No "I haven't confirmed this works" line under an answer that already
+  reports the failure.** An answer such as "No, the suite fails: 1 failed",
+  which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
+  pass". A failed lint or build, a blocked check or an unchecked change
+  still gets the line, and `verification` still records every failure.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.

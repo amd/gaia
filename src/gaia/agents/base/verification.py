@@ -393,13 +393,12 @@ def build_verification_scope(
     """
     _ran, passed, failed, blocked = _partition(executions)
     reasons: List[str] = []
-    if failed and _answer_reports(failed, answer):
-        pass
-    elif failed and passed:
+    reported = bool(failed) and _answer_reports(failed, answer)
+    if failed and passed and not reported:
         reasons.append(_mixed(passed, failed))
-    elif failed:
+    elif failed and not reported:
         reasons.append(f"{_names(failed)} didn't pass")
-    elif blocked and passed:
+    elif blocked and passed and not failed:
         reasons.append(f"{_names(passed)} passed")
     if blocked:
         one = len(_labels(blocked)) == 1
