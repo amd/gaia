@@ -114,6 +114,25 @@ function formatFullTimestamp(isoString: string, t: Translate): string {
     }
 }
 
+/** Characters a long name keeps at its end, so the extension and any version suffix stay in view. */
+export const NAME_TAIL_CHARS = 14;
+
+/** A file name that, when it doesn't fit, is cut in the middle rather than at the end. */
+function DocName({ name }: { name: string }) {
+    if (name.length <= NAME_TAIL_CHARS * 2) {
+        return <span className="doc-name" dir="auto">{name}</span>;
+    }
+    // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
+    const firstStrong = name.match(/[A-Za-zÀ-ɏ֐-ࣿ]/)?.[0] ?? '';
+    const rtlText = /[֐-ࣿ]/.test(firstStrong);
+    return (
+        <span className={`doc-name doc-name-split${rtlText ? ' is-rtl-text' : ''}`} dir="auto" title={name}>
+            <span className="doc-name-head">{name.slice(0, -NAME_TAIL_CHARS)}</span>
+            <span className="doc-name-tail">{name.slice(-NAME_TAIL_CHARS)}</span>
+        </span>
+    );
+}
+
 export function DocumentLibrary() {
     const t = useT();
     const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
@@ -599,7 +618,14 @@ export function DocumentLibrary() {
                             </button>
                         </div>
                         {hint && <p className="doc-failure-hint">{hint}</p>}
-                        {reason && (reason.more ? (
+                        {/* The hint already says what's wrong; the raw reason is for whoever asks. */}
+                        {hint && reason && (
+                            <details className="doc-failure-reason">
+                                <summary>{t('docs.technicalDetails')}</summary>
+                                <p>{[reason.summary, reason.more].filter(Boolean).join('\n')}</p>
+                            </details>
+                        )}
+                        {!hint && reason && (reason.more ? (
                             <details className="doc-failure-reason">
                                 <summary>{reason.summary}</summary>
                                 <p>{reason.more}</p>
@@ -715,6 +741,7 @@ export function DocumentLibrary() {
                             {t('docs.browse')}
                         </button>
                     </form>
+                    <p className="doc-path-hint">{t('docs.pathHint')}</p>
 
                     {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
@@ -791,7 +818,7 @@ export function DocumentLibrary() {
                         {documents.map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="auto">{doc.filename}</span>
+                                    <DocName name={doc.filename} />
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">

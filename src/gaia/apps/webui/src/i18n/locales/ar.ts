@@ -644,6 +644,8 @@ const messages: Messages = {
     'docs.cancelFailed': 'تعذّر إلغاء فهرسة {name}: {error}',
     'docs.openFolderFailed': 'تعذّر فتح المجلد الذي يحتوي {name}: {error}',
     'docs.dismissError': 'إغلاق الخطأ',
+    'docs.technicalDetails': 'تفاصيل تقنية',
+    'docs.pathHint': 'يضيف المجلد الملفات الموجودة فيه مباشرة، وتُتخطّى المجلدات الفرعية.',
     'time.justNow': 'الآن',
     'time.minutesAgo': 'قبل {n} د',
     'time.hoursAgo': 'قبل {n} س',

@@ -2,6 +2,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Document Library Modal */
 .doc-modal { width: 640px; }
+/* Pinned to the top, so the title and path box stay put while rows and notices come and go. */
+.modal-overlay:has(> .doc-modal) {
+    align-items: flex-start;
+    padding-block-start: max(24px, 7vh);
+}
+.modal-overlay > .doc-modal { max-height: calc(100vh - 2 * max(24px, 7vh)); }
 
 /* Where added documents go */
 .doc-target {
@@ -130,6 +136,26 @@
     white-space: nowrap;
 }
 .doc-meta { font-size: 12px; color: var(--text-muted); }
+
+/* A long name loses its middle, not its extension. */
+.doc-name-split { display: flex; }
+/* As for a whole name (index.css): a name in the other script still sits on the UI's own edge. */
+:root:not([dir="rtl"]) .doc-name-split.is-rtl-text,
+:root[dir="rtl"] .doc-name-split:not(.is-rtl-text) { justify-content: flex-end; }
+.doc-name-head {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.doc-name-tail { flex-shrink: 0; white-space: pre; }
+
+.doc-path-hint {
+    margin: -10px 0 14px;
+    padding-inline-start: 24px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
 
 /* Indexed timestamp */
 .doc-timestamp {

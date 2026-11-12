@@ -298,8 +298,9 @@ describe('DocumentLibrary failure reasons', () => {
 
         expect(screen.getByText("Can't be read")).toBeTruthy();
         expect(screen.getByText(/looks damaged\. Re-download or re-export it/)).toBeTruthy();
-        expect(screen.getByText('Could not read PDF: broken.pdf', { selector: 'summary' })).toBeTruthy();
-        expect(screen.getByText(/Stream has ended unexpectedly/)).toBeTruthy();
+        // The hint says it plainly; the raw reason waits behind "Technical details".
+        expect(screen.getByText('Technical details', { selector: 'summary' })).toBeTruthy();
+        expect(screen.getByText(/Could not read PDF: broken\.pdf\s+Reason: Stream has ended unexpectedly/)).toBeTruthy();
         const retry = screen.getByRole('button', { name: /Retry indexing broken\.pdf/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
@@ -319,6 +320,8 @@ describe('DocumentLibrary failure reasons', () => {
 
         expect(screen.getByText("Can't be read")).toBeTruthy();
         expect(screen.getByText('This file is empty. Add content to it, then index it again.')).toBeTruthy();
+        // "File is empty" under it said the same thing again.
+        expect(screen.getByText('File is empty').closest('details')).not.toHaveAttribute('open');
         const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });

@@ -221,7 +221,10 @@ export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
 
 /** The backend's message without its leading category label, e.g. "File not found:". */
 function stripPrefix(message: string, prefix: string): string {
-    return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+    if (!message.startsWith(prefix)) return message;
+    const rest = message.slice(prefix.length).trim();
+    // What follows the label is now the sentence's start.
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 interface UploadErrorToastProps {

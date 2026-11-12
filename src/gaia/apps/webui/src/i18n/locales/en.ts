@@ -644,6 +644,8 @@ export const enMessages = {
     'docs.cancelFailed': 'Couldn\'t cancel indexing {name}: {error}',
     'docs.openFolderFailed': 'Couldn\'t open the folder for {name}: {error}',
     'docs.dismissError': 'Dismiss error',
+    'docs.technicalDetails': 'Technical details',
+    'docs.pathHint': 'A folder adds the files directly inside it; subfolders are skipped.',
     'time.justNow': 'just now',
     'time.minutesAgo': '{n}m ago',
     'time.hoursAgo': '{n}h ago',
