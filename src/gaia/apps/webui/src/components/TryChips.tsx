@@ -5,22 +5,23 @@ import { Calculator, ChefHat, Dumbbell, ListChecks, Map, Receipt, Wrench } from 
 import type { LucideIcon } from 'lucide-react';
 import './StartCards.css';
 import { useT } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 
 interface TryExample {
     icon: LucideIcon;
-    label: string;
-    prompt: string;
+    label: MessageKey;
+    prompt: MessageKey;
 }
 
 /** One example per card the flagship can draw, so each chip ends in a card. */
 export const TRY_EXAMPLES: readonly TryExample[] = [
-    { icon: ChefHat, label: 'Recipe', prompt: 'Give me a banana bread recipe' },
-    { icon: Dumbbell, label: 'Workout', prompt: 'A 15-minute workout I can do at home' },
-    { icon: Wrench, label: 'How-to', prompt: 'How do I fix a running toilet?' },
-    { icon: ListChecks, label: 'Checklist', prompt: 'Packing list for a beach weekend' },
-    { icon: Map, label: 'Trip plan', prompt: 'Plan 3 days in Lisbon' },
-    { icon: Receipt, label: 'Split a bill', prompt: 'Split a $140 dinner four ways with a 20% tip' },
-    { icon: Calculator, label: 'Loan payment', prompt: 'Monthly payment on a $300,000 house at 6% for 30 years' },
+    { icon: ChefHat, label: 'cards.try.recipe', prompt: 'cards.try.recipePrompt' },
+    { icon: Dumbbell, label: 'cards.try.workout', prompt: 'cards.try.workoutPrompt' },
+    { icon: Wrench, label: 'cards.try.howTo', prompt: 'cards.try.howToPrompt' },
+    { icon: ListChecks, label: 'cards.try.checklist', prompt: 'cards.try.checklistPrompt' },
+    { icon: Map, label: 'cards.try.trip', prompt: 'cards.try.tripPrompt' },
+    { icon: Receipt, label: 'cards.try.bill', prompt: 'cards.try.billPrompt' },
+    { icon: Calculator, label: 'cards.try.loan', prompt: 'cards.try.loanPrompt' },
 ];
 
 /** Everyday asks that come back as interactive cards; a pick fills the box to edit or send. */
@@ -29,20 +30,25 @@ export function TryChips({ onPick, disabled }: { onPick: (prompt: string) => voi
     return (
         <div className="try-chips" role="group" aria-label={t('cards.tryGroup')}>
             <span className="try-chips-label" aria-hidden="true">{t('cards.try')}</span>
-            {TRY_EXAMPLES.map(({ icon: Icon, label, prompt }) => (
-                <button
-                    key={label}
-                    type="button"
-                    className="try-chip"
-                    title={prompt}
-                    aria-label={`${label}: ${prompt}`}
-                    onClick={() => onPick(prompt)}
-                    disabled={disabled}
-                >
-                    <Icon size={14} aria-hidden="true" />
-                    {label}
-                </button>
-            ))}
+            {TRY_EXAMPLES.map(({ icon: Icon, label: labelKey, prompt: promptKey }) => {
+                const label = t(labelKey);
+                // Plain text for the composer: no English gloss in brackets.
+                const prompt = t.bare(promptKey);
+                return (
+                    <button
+                        key={labelKey}
+                        type="button"
+                        className="try-chip"
+                        title={prompt}
+                        aria-label={`${label}: ${prompt}`}
+                        onClick={() => onPick(prompt)}
+                        disabled={disabled}
+                    >
+                        <Icon size={14} aria-hidden="true" />
+                        {label}
+                    </button>
+                );
+            })}
         </div>
     );
 }

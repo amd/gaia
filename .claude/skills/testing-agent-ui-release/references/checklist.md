@@ -33,6 +33,9 @@ whenever a person finds a bug the pass missed.
 - Quit from the tray actually exits, the first time. A second quit in the same tick
   used to be dropped.
 - The crash dialog's buttons work.
+- End the window's renderer process (the `--type=renderer` child of the app): GAIA says
+  its window stopped working, in plain words with no stack trace, and **Reload window**
+  brings the chats back on the running backend. A folder index in progress keeps going.
 - GAIA's backend dies mid-answer: end the process listening on the UI port, not the
   `gaia.exe` launcher, whose Python child keeps answering. The chat agrees with the
   "GAIA stopped" dialog. Every control its text names (such as Try again) exists, and
