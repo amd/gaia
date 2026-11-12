@@ -28,6 +28,7 @@ import threading
 from typing import Callable, Dict, Optional, Set
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.llm.lemonade_client import resolve_default_chat_model
 from gaia.logger import get_logger
 from gaia.mcp.ports import TELEGRAM_HEALTH_PORT
 from gaia.messaging.bridge import turn_idle_message
@@ -71,7 +72,7 @@ def get_or_create_session(user_id: int) -> AgentSDK:
     with _SESSIONS_LOCK:
         if user_id in _USER_SESSIONS:
             return _USER_SESSIONS[user_id]
-        sdk = AgentSDK(AgentConfig())
+        sdk = AgentSDK(AgentConfig(model=resolve_default_chat_model()))
         _USER_SESSIONS[user_id] = sdk
         return sdk
 
