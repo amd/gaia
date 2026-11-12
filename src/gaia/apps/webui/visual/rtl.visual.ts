@@ -3352,6 +3352,31 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+const LIST_THEN_TABLE = [
+    { type: 'chunk', content: 'Some vegetables:\n\n- **Kale** — a leaf.\n- **Leek** — an allium.\n\n| Crop | Days |\n|---|---|\n| Radish | 25 |\n\nAnd more' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`a list keeps its indent while the answer streams (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, LIST_THEN_TABLE);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('list vegetables');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.cursor')).toBeVisible();
+        // Only the paragraph the cursor follows runs inline; the list and table keep their layout.
+        const shape = await live.evaluate((el) => {
+            const ul = el.querySelector('.md-ul')!;
+            const li = ul.querySelector('.md-li')!;
+            const indent = getComputedStyle(ul).direction === 'rtl'
+                ? ul.getBoundingClientRect().right - li.getBoundingClientRect().right
+                : li.getBoundingClientRect().left - ul.getBoundingClientRect().left;
+            return { indent: Math.round(indent), ul: getComputedStyle(ul).display, table: getComputedStyle(el.querySelector('table')!.closest('.md-content > *')!).display };
+        });
+        expect(shape).toEqual({ indent: 24, ul: 'block', table: 'block' });
+    });
+}
+
 const NO_VISION_MODEL = [
     { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
     { type: 'tool_result', success: false, needs_model: 'vision', summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded (about 6 GB)" },
