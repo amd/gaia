@@ -23,6 +23,10 @@ from gaia.connectors.catalog.mcp_servers import _ALL_SPECS
 pytestmark = [pytest.mark.integration, pytest.mark.network]
 
 _LAUNCH_TIMEOUT_S = 180
+# One server must leave room for another under the agent's 50-tool limit.
+_MAX_TOOLS = 45
+# Servers that verify their key before answering, so a placeholder can't start them.
+_CHECKS_KEY_AT_STARTUP = {"mcp-slack": "covered by test_slack_mcp_connector.py"}
 
 # Servers that sign in before answering MCP, mapped to the stderr text of their
 # placeholder-credential rejection.
@@ -64,6 +68,8 @@ def _kill_tree(proc):
 def test_catalog_server_launches_and_lists_tools(spec):
     if os.environ.get("GAIA_SKIP_NETWORK_TESTS") == "1":
         pytest.skip("GAIA_SKIP_NETWORK_TESTS=1")
+    if spec.id in _CHECKS_KEY_AT_STARTUP:
+        pytest.skip(f"checks its key at startup; {_CHECKS_KEY_AT_STARTUP[spec.id]}")
     launcher = shutil.which(spec.mcp_command)
     if launcher is None:
         pytest.skip(f"{spec.mcp_command} is not on PATH")
@@ -122,5 +128,10 @@ def test_catalog_server_launches_and_lists_tools(spec):
         tools = _rpc(proc, lines, 2, "tools/list")
         names = [t["name"] for t in tools.get("result", {}).get("tools", [])]
         assert names, f"{spec.id} listed no tools: {tools}"
+        assert len(names) <= _MAX_TOOLS, (
+            f"{spec.id} lists {len(names)} tools; the agent loads none once active "
+            f"servers total more than 50, so trim it to {_MAX_TOOLS} or fewer with "
+            "the server's own tool filter"
+        )
     finally:
         _kill_tree(proc)

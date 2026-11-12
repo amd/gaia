@@ -1,0 +1,43 @@
+---
+title: "Figma"
+icon: "figma"
+description: "Read layout, styles and images from the Figma files you link."
+---
+
+<Info>
+  **Connector ID:** `mcp-figma` · **Package:** `figma-developer-mcp@0.13.2` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+Paste a Figma file or frame link in chat and GAIA reads its layout, styles and images. It cannot edit your designs.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Figma** tile.
+
+2. **Figma personal access token:** In Figma, open **Settings → Security → Personal access tokens** and generate a token with read access to file content.
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-figma --set FIGMA_API_KEY=...
+```
+
+## Use it
+
+Ask in chat, for example: "Describe the layout of this frame: <Figma link>."
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-figma`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

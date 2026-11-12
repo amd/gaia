@@ -13,7 +13,7 @@ mcp_servers.json instead), plus mcp-tavily, mcp-slack (#1002), and mcp-discord
   * KEPT_IDS — exactly these ids must remain in
     ``connectors.catalog.mcp_servers`` (the 3 carried over from the legacy
     catalog, plus the net-new ids).
-  * DELETED_IDS — these 16 ids must NOT be present. Regression guard against
+  * DELETED_IDS — these 14 ids must NOT be present. Regression guard against
     accidentally re-introducing untested catalog tiles.
 """
 
@@ -39,6 +39,16 @@ KEPT_IDS = frozenset(
         # Launch-checked by tests/integration/test_mcp_catalog_launch.py.
         "mcp-notion",
         "mcp-brave-search",
+        "mcp-jira",
+        "mcp-gitlab",
+        "mcp-supabase",
+        "mcp-hubspot",
+        "mcp-figma",
+        "mcp-airtable",
+        "mcp-todoist",
+        "mcp-firecrawl",
+        "mcp-exa",
+        "mcp-context7",
     }
 )
 
@@ -53,13 +63,11 @@ DELETED_IDS = frozenset(
         "mcp-playwright",
         "mcp-desktop-commander",
         "mcp-postgres",
-        "mcp-context7",
         "mcp-gmail",
         "mcp-google-calendar",
         "mcp-outlook",
         "mcp-spotify",
         "mcp-linear",
-        "mcp-jira",
         "mcp-stripe",
         "mcp-sendgrid",
         "mcp-windows-automation",

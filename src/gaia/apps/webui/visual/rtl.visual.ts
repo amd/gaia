@@ -1740,10 +1740,13 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.connectors-loading')).toHaveCount(0);
         };
 
-        test('groups: connected open, the rest closed', async ({ page }) => {
+        test('groups: search and category chips on top, every group open', async ({ page }) => {
             await openConnectors(page);
             await expect(page.locator('.connector-tile').first()).toBeVisible();
-            await expect(page.locator('details[open] .connector-tile')).toHaveCount(3);
+            await expect(page.locator('.connectors-section input[type="search"]')).toBeVisible();
+            await expect(page.locator('.connector-category.is-active')).toHaveCount(1);
+            await expect(page.locator('details:not([open]) .connector-tile')).toHaveCount(0);
+            await expect(page.locator('.connector-tile .connector-logo')).toHaveCount(await page.locator('.connector-tile').count());
             await shot(page, `connectors-${locale}-top`);
             expect(await audit(page)).toEqual([]);
         });
@@ -1851,7 +1854,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('nothing connected: accounts start open', async ({ page }) => {
+        test('nothing connected: the page opens on what can be connected', async ({ page }) => {
             await openConnectors(page, [{ id: 'microsoft', display_name: 'Microsoft', type: 'oauth_pkce', description: 'Mail', configured: false, configurable: true, mcp_env_keys: [], oauth_setup_fields: [] }]);
             await expect(page.locator('.connector-tile')).toBeVisible();
             await shot(page, `connectors-${locale}-none`);

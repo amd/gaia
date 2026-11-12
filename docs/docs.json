@@ -145,6 +145,16 @@
                   "connectors/discord",
                   "connectors/notion",
                   "connectors/brave-search",
+                  "connectors/jira",
+                  "connectors/gitlab",
+                  "connectors/supabase",
+                  "connectors/hubspot",
+                  "connectors/figma",
+                  "connectors/airtable",
+                  "connectors/todoist",
+                  "connectors/firecrawl",
+                  "connectors/exa",
+                  "connectors/context7",
                   "security/connections",
                   "security/connectors"
                 ]

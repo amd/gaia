@@ -1,0 +1,43 @@
+---
+title: "Supabase"
+icon: "database"
+description: "Read your Supabase projects, tables, logs and docs. Read-only."
+---
+
+<Info>
+  **Connector ID:** `mcp-supabase` · **Package:** `@supabase/mcp-server-supabase@0.16.1` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can list your projects, tables, logs and search the Supabase docs. It runs read-only: it cannot change your data or settings.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Supabase** tile.
+
+2. **Supabase access token:** Create a personal access token under [Account → Access Tokens](https://supabase.com/dashboard/account/tokens).
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-supabase --set SUPABASE_ACCESS_TOKEN=...
+```
+
+## Use it
+
+Ask in chat, for example: "List the tables in my project and their row counts."
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-supabase`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

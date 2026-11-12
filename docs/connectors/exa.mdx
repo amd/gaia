@@ -1,0 +1,43 @@
+---
+title: "Exa"
+icon: "magnifying-glass"
+description: "Web search built for AI, with page contents, through the Exa API."
+---
+
+<Info>
+  **Connector ID:** `mcp-exa` · **Package:** `exa-mcp-server@3.4.3` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can search the web and fetch page contents through Exa. Each call uses Exa credits.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Exa** tile.
+
+2. **Exa API Key:** Get a key from the [Exa dashboard](https://dashboard.exa.ai/api-keys).
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-exa --set EXA_API_KEY=...
+```
+
+## Use it
+
+Ask in chat, for example: "Find recent write-ups about local LLM inference on NPUs."
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-exa`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

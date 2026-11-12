@@ -26,7 +26,10 @@ const unavailable = { id: 'microsoft', display_name: 'Microsoft', error: 'unavai
 const servers = ['Notion', 'Postgres', 'Memory', 'Filesystem', 'Brave', 'Fetch'].map((n) => row(n, 'mcp_server'));
 const rows: ConnectorListEntry[] = [row('Google', 'oauth_pkce', { configured: true }), unavailable, ...servers];
 
-const group = (title: string) => screen.getByText(title).closest('details') as HTMLDetailsElement;
+const group = (title: string) => screen
+    .getAllByText(title)
+    .map((el) => el.closest('details'))
+    .find(Boolean) as HTMLDetailsElement;
 const search = (value: string) =>
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search connectors' }), { target: { value } });
 
@@ -37,13 +40,13 @@ beforeEach(() => {
 });
 
 describe('ConnectorsSection with a connector the backend could not load', () => {
-    it('shows it by name in its own open group and leaves the MCP count alone', async () => {
+    it('shows it by name in its own open group and leaves every other group count alone', async () => {
         render(<ConnectorsSection />);
         await screen.findByText('Google');
         const broken = group('Unavailable');
         expect(broken.open).toBe(true);
         expect(within(broken).getByText('Microsoft')).toBeInTheDocument();
-        expect(within(group('MCP servers')).getByText(String(servers.length))).toBeInTheDocument();
+        expect(within(group('Other')).getByText(String(servers.length))).toBeInTheDocument();
     });
 
     it('keeps search working and finds it by name', async () => {

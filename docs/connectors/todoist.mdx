@@ -1,0 +1,43 @@
+---
+title: "Todoist"
+icon: "circle-check"
+description: "Find, add, complete and reschedule your Todoist tasks."
+---
+
+<Info>
+  **Connector ID:** `mcp-todoist` · **Package:** `@doist/todoist-ai@9.0.0` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can find, add, complete and reschedule tasks, and read your projects. It asks before each change.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Todoist** tile.
+
+2. **Todoist API token:** In Todoist, open **Settings → Integrations → Developer** and copy your API token.
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-todoist --set TODOIST_API_KEY=...
+```
+
+## Use it
+
+Ask in chat, for example: "What is due today?"
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-todoist`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

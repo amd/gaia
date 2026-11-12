@@ -58,7 +58,7 @@ _TAVILY = ConnectorSpec(
     id="mcp-tavily",
     display_name="Tavily",
     icon="🛜",
-    category="dev-tools",
+    category="search",
     tier=1,
     type="mcp_server",
     description="Web search and content extraction for agents through the Tavily API.",
@@ -82,7 +82,7 @@ _MEMORY = ConnectorSpec(
     id="mcp-memory",
     display_name="Memory",
     icon="🧠",
-    category="context",
+    category="data",
     tier=1,
     type="mcp_server",
     description="Knowledge graph-based persistent memory for agents.",
@@ -251,7 +251,7 @@ _BRAVE_SEARCH = ConnectorSpec(
     id="mcp-brave-search",
     display_name="Brave Search",
     icon="🦁",
-    category="dev-tools",
+    category="search",
     tier=2,
     type="mcp_server",
     description="Web and local search through the Brave Search API.",
@@ -271,6 +271,271 @@ _BRAVE_SEARCH = ConnectorSpec(
     ),
 )
 
+# The server offers ~60 Jira and Confluence tools; GAIA loads none once active
+# servers total more than 50, so the model sees a small read-only set.
+JIRA_READ_TOOLS = (
+    "jira_search",
+    "jira_get_issue",
+    "jira_get_all_projects",
+    "jira_get_project_issues",
+    "jira_get_agile_boards",
+    "jira_get_board_issues",
+    "jira_get_sprints_from_board",
+    "jira_get_sprint_issues",
+    "jira_get_transitions",
+    "jira_get_user_profile",
+)
+
+_JIRA = ConnectorSpec(
+    id="mcp-jira",
+    display_name="Jira",
+    icon="🧭",
+    category="productivity",
+    tier=2,
+    type="mcp_server",
+    description="Search and read Jira issues, projects, boards and sprints.",
+    docs_url="https://amd-gaia.ai/docs/connectors/jira",
+    mcp_command="uvx",
+    mcp_args=(
+        "mcp-atlassian==0.24.1",
+        "--read-only",
+        "--enabled-tools",
+        ",".join(JIRA_READ_TOOLS),
+    ),
+    mcp_env_keys=(
+        "JIRA_URL",
+        "JIRA_USERNAME",
+        "JIRA_API_TOKEN",
+    ),
+    config_schema=(
+        ConfigField(
+            key="JIRA_URL",
+            label="Jira site address",
+            kind="url",
+            placeholder="https://your-team.atlassian.net",
+            help_md="The address you open Jira at, for example `https://your-team.atlassian.net`.",
+        ),
+        ConfigField(
+            key="JIRA_USERNAME",
+            label="Atlassian account email",
+            kind="email",
+            placeholder="you@example.com",
+            help_md="The email you sign in to Atlassian with.",
+        ),
+        ConfigField(
+            key="JIRA_API_TOKEN",
+            label="Atlassian API token",
+            kind="secret",
+            placeholder="ATATT…",
+            help_md="Create one at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) and paste it here.",
+            secret=True,
+        ),
+    ),
+)
+
+_GITLAB = ConnectorSpec(
+    id="mcp-gitlab",
+    display_name="GitLab",
+    icon="🦊",
+    category="dev-tools",
+    tier=2,
+    type="mcp_server",
+    description="Projects, merge requests, issues and files on GitLab.com.",
+    docs_url="https://amd-gaia.ai/docs/connectors/gitlab",
+    mcp_command="npx",
+    mcp_args=("-y", "@zereight/mcp-gitlab@2.3.25"),
+    mcp_env_keys=("GITLAB_PERSONAL_ACCESS_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="GITLAB_PERSONAL_ACCESS_TOKEN",
+            label="GitLab Personal Access Token",
+            kind="secret",
+            placeholder="glpat-…",
+            help_md="Create a token under [User settings → Access tokens](https://gitlab.com/-/user_settings/personal_access_tokens) with the `api` scope, or `read_api` to keep GAIA read-only.",
+            secret=True,
+        ),
+    ),
+)
+
+_SUPABASE = ConnectorSpec(
+    id="mcp-supabase",
+    display_name="Supabase",
+    icon="⚡",
+    category="data",
+    tier=2,
+    type="mcp_server",
+    description="Read your Supabase projects, tables, logs and docs. Read-only.",
+    docs_url="https://amd-gaia.ai/docs/connectors/supabase",
+    mcp_command="npx",
+    mcp_args=("-y", "@supabase/mcp-server-supabase@0.16.1", "--read-only"),
+    mcp_env_keys=("SUPABASE_ACCESS_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="SUPABASE_ACCESS_TOKEN",
+            label="Supabase access token",
+            kind="secret",
+            placeholder="sbp_…",
+            help_md="Create a personal access token under [Account → Access Tokens](https://supabase.com/dashboard/account/tokens).",
+            secret=True,
+        ),
+    ),
+)
+
+_HUBSPOT = ConnectorSpec(
+    id="mcp-hubspot",
+    display_name="HubSpot",
+    icon="🧲",
+    category="business",
+    tier=2,
+    type="mcp_server",
+    description="Look up and update HubSpot contacts, companies, deals and tickets.",
+    docs_url="https://amd-gaia.ai/docs/connectors/hubspot",
+    mcp_command="npx",
+    mcp_args=("-y", "@hubspot/mcp-server@0.4.0"),
+    mcp_env_keys=("PRIVATE_APP_ACCESS_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="PRIVATE_APP_ACCESS_TOKEN",
+            label="HubSpot private app token",
+            kind="secret",
+            placeholder="pat-…",
+            help_md="In HubSpot, open **Settings → Integrations → Private Apps**, create an app with the CRM scopes GAIA should have, and copy its access token.",
+            secret=True,
+        ),
+    ),
+)
+
+_FIGMA = ConnectorSpec(
+    id="mcp-figma",
+    display_name="Figma",
+    icon="🎨",
+    category="design",
+    tier=2,
+    type="mcp_server",
+    description="Read layout, styles and images from the Figma files you link.",
+    docs_url="https://amd-gaia.ai/docs/connectors/figma",
+    mcp_command="npx",
+    mcp_args=("-y", "figma-developer-mcp@0.13.2", "--stdio"),
+    mcp_env_keys=("FIGMA_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="FIGMA_API_KEY",
+            label="Figma personal access token",
+            kind="secret",
+            placeholder="figd_…",
+            help_md="In Figma, open **Settings → Security → Personal access tokens** and generate a token with read access to file content.",
+            secret=True,
+        ),
+    ),
+)
+
+_AIRTABLE = ConnectorSpec(
+    id="mcp-airtable",
+    display_name="Airtable",
+    icon="🗂️",
+    category="data",
+    tier=2,
+    type="mcp_server",
+    description="Read and edit records in the Airtable bases you choose.",
+    docs_url="https://amd-gaia.ai/docs/connectors/airtable",
+    mcp_command="npx",
+    mcp_args=("-y", "airtable-mcp-server@1.14.0"),
+    mcp_env_keys=("AIRTABLE_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="AIRTABLE_API_KEY",
+            label="Airtable personal access token",
+            kind="secret",
+            placeholder="pat…",
+            help_md="Create a token at [airtable.com/create/tokens](https://airtable.com/create/tokens) with `schema.bases:read` and `data.records:read` (add `data.records:write` to let GAIA edit), and pick the bases it may use.",
+            secret=True,
+        ),
+    ),
+)
+
+_TODOIST = ConnectorSpec(
+    id="mcp-todoist",
+    display_name="Todoist",
+    icon="✅",
+    category="productivity",
+    tier=2,
+    type="mcp_server",
+    description="Find, add, complete and reschedule your Todoist tasks.",
+    docs_url="https://amd-gaia.ai/docs/connectors/todoist",
+    mcp_command="npx",
+    mcp_args=("-y", "@doist/todoist-ai@9.0.0"),
+    mcp_env_keys=("TODOIST_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="TODOIST_API_KEY",
+            label="Todoist API token",
+            kind="secret",
+            help_md="In Todoist, open **Settings → Integrations → Developer** and copy your API token.",
+            secret=True,
+        ),
+    ),
+)
+
+_FIRECRAWL = ConnectorSpec(
+    id="mcp-firecrawl",
+    display_name="Firecrawl",
+    icon="🔥",
+    category="search",
+    tier=2,
+    type="mcp_server",
+    description="Scrape, crawl and search web pages as clean text through Firecrawl.",
+    docs_url="https://amd-gaia.ai/docs/connectors/firecrawl",
+    mcp_command="npx",
+    mcp_args=("-y", "firecrawl-mcp@3.39.0"),
+    mcp_env_keys=("FIRECRAWL_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="FIRECRAWL_API_KEY",
+            label="Firecrawl API Key",
+            kind="secret",
+            placeholder="fc-…",
+            help_md="Get a key from your [Firecrawl dashboard](https://www.firecrawl.dev/app/api-keys).",
+            secret=True,
+        ),
+    ),
+)
+
+_EXA = ConnectorSpec(
+    id="mcp-exa",
+    display_name="Exa",
+    icon="🔎",
+    category="search",
+    tier=2,
+    type="mcp_server",
+    description="Web search built for AI, with page contents, through the Exa API.",
+    docs_url="https://amd-gaia.ai/docs/connectors/exa",
+    mcp_command="npx",
+    mcp_args=("-y", "exa-mcp-server@3.4.3"),
+    mcp_env_keys=("EXA_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="EXA_API_KEY",
+            label="Exa API Key",
+            kind="secret",
+            help_md="Get a key from the [Exa dashboard](https://dashboard.exa.ai/api-keys).",
+            secret=True,
+        ),
+    ),
+)
+
+_CONTEXT7 = ConnectorSpec(
+    id="mcp-context7",
+    display_name="Context7",
+    icon="📚",
+    category="dev-tools",
+    tier=2,
+    type="mcp_server",
+    description="Up-to-date documentation and code examples for libraries. No API key.",
+    docs_url="https://amd-gaia.ai/docs/connectors/context7",
+    mcp_command="npx",
+    mcp_args=("-y", "@upstash/context7-mcp@4.6.0"),
+)
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -284,6 +549,16 @@ _ALL_SPECS = (
     _DISCORD,
     _NOTION,
     _BRAVE_SEARCH,
+    _JIRA,
+    _GITLAB,
+    _SUPABASE,
+    _HUBSPOT,
+    _FIGMA,
+    _AIRTABLE,
+    _TODOIST,
+    _FIRECRAWL,
+    _EXA,
+    _CONTEXT7,
 )
 
 for _spec in _ALL_SPECS:
