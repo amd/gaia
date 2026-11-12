@@ -51,6 +51,8 @@ from gaia.agents.base.call_risk import (
     SHELL_TOOLS,
 )
 from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
+    WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
@@ -672,6 +674,29 @@ def budget_notices_enabled() -> bool:
     raise ValueError(
         f"GAIA_AGENT_BUDGET_NOTICES must be a boolean (1/0, true/false, "
         f"on/off), got {raw!r}. Unset it to keep the notices on."
+    )
+
+
+def verify_edits_enabled() -> bool:
+    """Whether a turn reads its own edits back before it answers.
+
+    On by default. The check is read-only and in-process — it opens the files
+    this turn wrote and nothing else — so it cannot run a build, start a
+    process, or reach anything the turn had not already touched.
+    ``GAIA_AGENT_VERIFY_EDITS=0`` turns it off. Read at call time, like the
+    other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_VERIFY_EDITS")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
     )
 
 
@@ -1782,36 +1807,78 @@ _PLAN_THEN_ACT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# "Why does foo.py fail? Don't touch anything": the sentence before a "touch"
+# ban asks for an investigation, so the ban bars edits, not reading.
+_INVESTIGATION_ASK_PATTERN = re.compile(
+    r"^[\s,;:—–-]*(?:(?:please|can\s+you|could\s+you|would\s+you|help\s+me)\s+)?"
+    r"(?:find|investigate|explain|review|debug|diagnose|analy[sz]e"
+    r"|summari[sz]e|tell\s+me|show\s+me|figure\s+out|look|check|inspect|read"
+    r"|open|search|trace|describe|audit|walk\s+me\s+through)\b",
+    re.IGNORECASE,
+)
+# Something in the workspace to investigate, not small talk ("how are you?").
+_WORK_OBJECT_PATTERN = re.compile(
+    r"[\w-]\.[A-Za-z]{1,6}\b|[\\/]"
+    r"|\b(?:bug|error|fail\w*|crash\w*|build|tests?|code|function|class"
+    r"|module|config\w*|logs?|script|repo\w*|exception|trace\w*|files?"
+    r"|folder|director(?:y|ies))\b",
+    re.IGNORECASE,
+)
 
-def _no_action_requests(request: str) -> List[bool]:
-    """Each way the user's own words this turn forbid acting; True for a plan ask.
 
-    A ban the request lifts itself, a report of an earlier turn, and a plan
-    followed by "then do it" are not such a request.
+def _asks_to_investigate(text: str) -> bool:
+    """Whether the clause just before a ban asks for something to be looked into."""
+    # The ban's own sentence so far, or the sentence it follows.
+    clause = re.split(r"(?<=[.!?])\s+|\n", text.rstrip())[-1]
+    if not _WORK_OBJECT_PATTERN.search(clause):
+        return False
+    return bool(
+        _INVESTIGATION_ASK_PATTERN.match(clause) or clause.rstrip().endswith("?")
+    )
+
+
+def _no_action_requests(request: str) -> List[str]:
+    """Each way the user's own words this turn forbid acting, by kind.
+
+    "plan" asks for a plan and nothing else, "edits" bars edits during an
+    investigation the request asks for, "act" bars acting at all. A ban the
+    request lifts itself, a report of an earlier turn, and a plan followed by
+    "then do it" are not such a request.
     """
     text = (request or "").replace("’", "'")
     found = []
     for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
         after = text[match.end() :]
+        lowered = match.group().lower()
         if match.group("forbid"):
             if _NO_ACTION_EXCEPTION_PATTERN.match(after):
                 continue
-            narrative = match.group().lower().startswith(("without", "never"))
+            narrative = lowered.startswith(("without", "never"))
             if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+            if "touch" in lowered and _asks_to_investigate(text[: match.start()]):
+                found.append("edits")
                 continue
         elif _PLAN_THEN_ACT_PATTERN.search(after):
             continue
-        found.append("plan" in match.group().lower())
+        found.append("plan" if "plan" in lowered else "act")
     return found
 
 
 def _asks_for_no_action(request: str) -> bool:
     """Whether the user's own words this turn forbid acting.
 
-    Such a request wins over GAIA's nudges to look first or to do an
-    announced step.
+    Such a request wins over GAIA's nudges to do an announced step.
     """
     return bool(_no_action_requests(request))
+
+
+def _asks_not_to_look(request: str) -> bool:
+    """Whether the ban also covers looking, so look-first nudges stay off.
+
+    "Why does foo.py fail? Don't touch anything" still wants foo.py read.
+    """
+    return any(kind != "edits" for kind in _no_action_requests(request))
 
 
 def _asks_for_a_plan_only(request: str) -> bool:
@@ -1820,7 +1887,7 @@ def _asks_for_a_plan_only(request: str) -> bool:
     "Use no tools" alone still wants an answer: one that states a file's
     contents unread keeps its note. A plan names files it has yet to read.
     """
-    return any(_no_action_requests(request))
+    return "plan" in _no_action_requests(request)
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -1983,6 +2050,49 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
 #: Written files whose figures are checked, and input files read as evidence.
 _MAX_CHECKED_DELIVERABLES = 8
+# Post-edit read-back. Repair steps are granted on top of max_steps, so a model
+# under budget pressure has no reason to skip fixing what it broke.
+_VERIFY_REPAIR_STEPS = 2
+# Rounds per turn; past that the turn is looping and the gaps go into the answer.
+_MAX_EDIT_VERIFICATIONS = 2
+# Past this size a file is checked for presence only.
+_VERIFY_MAX_BYTES = 2 * 1024 * 1024
+# JSON files that conventionally allow comments and trailing commas.
+_JSONC_NAMES = frozenset(
+    {"devcontainer.json", ".devcontainer.json", ".eslintrc.json", ".babelrc.json"}
+)
+
+
+def _is_jsonc(path: Path) -> bool:
+    """Whether a .json file is JSONC by convention, so strict parsing misjudges it."""
+    name = path.name.lower()
+    if name in _JSONC_NAMES or name.startswith(("tsconfig", "jsconfig")):
+        return True
+    return any(part.lower() == ".vscode" for part in path.parts[:-1])
+
+
+def _parse_problem(path: Path, text: str) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+    suffix = path.suffix.lower()
+    if suffix in (".py", ".pyi"):
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError) as e:
+            return f"`{path}` no longer parses as Python: {e}"
+    elif suffix == ".json" and not _is_jsonc(path):
+        try:
+            json.loads(text)
+        except ValueError as e:
+            return f"`{path}` is no longer valid JSON: {e}"
+    return None
+
+
+_EDIT_VERIFICATION_PROMPT = (
+    "[check:edits] The files you changed this turn were read back off disk "
+    "and these did not come out right:\n{problems}\n\nFix them now, then "
+    "answer. You have {steps} extra steps for this and they are not charged "
+    "against your step budget."
+)
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -3121,6 +3231,12 @@ Do NOT wrap conversational replies in JSON.
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
+        # Post-edit verification bookkeeping; reset per turn below.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings: List[str] = []
+        # Whether each file parsed before this turn's first write to it.
+        self._edit_parse_baseline: Dict[str, bool] = {}
+        self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3230,6 +3346,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -4143,8 +4260,8 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # A cloud reasoning model can spend its whole budget thinking
                 # about one dense page; copying quotes needs little reasoning.
-                effort = cloud_lowest_reasoning_effort(model_id)
-                sampling = {"reasoning_effort": effort} if effort else {}
+                # None: no configured cloud_reasoning_effort is added either.
+                sampling = {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
             else:
                 # Local anti-repetition penalties fight verbatim quote copying.
                 sampling = {
@@ -4596,12 +4713,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        skills = self.skill_manager.discover()
         catalog = render_catalog(
-            {n: s for n, s in skills.items() if not _withheld_skill_tools(self, s)},
-            list_project=self._lists_project_skills(),
+            self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _catalog_skills(self) -> Dict[str, Any]:
+        """Installed skills this model can load: the pool the catalogue lists from."""
+        return {
+            n: s
+            for n, s in self.skill_manager.discover().items()
+            if not _withheld_skill_tools(self, s)
+        }
 
     def _lists_project_skills(self) -> bool:
         """Whether the catalogue lists the project's ``.claude/skills``.
@@ -7193,6 +7316,19 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _loop_guard_key(self, tool_name: str, tool_args: Any) -> Tuple[str, str]:
+        """What the repeat-call guard compares: the tool's ``dedup_key``
+        arguments when it declares one, else every argument."""
+        dedup_key = (self._tools_registry.get(tool_name) or {}).get("dedup_key")
+        # A non-dict payload has no named arguments to project.
+        if not dedup_key or not isinstance(tool_args, dict):
+            return (tool_name, str(tool_args))
+        projected = {name: tool_args.get(name) for name in dedup_key}
+        return (
+            tool_name,
+            json.dumps(projected, sort_keys=True, default=str, ensure_ascii=False),
+        )
+
     def _requested_tool_timeout(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[float]:
@@ -7719,6 +7855,8 @@ Do NOT wrap conversational replies in JSON.
                 logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
                 return refused
         evidence = getattr(self, "_completion_evidence", None)
+        if outermost:
+            self._note_edit_parse_baseline(tool_name, tool_args)
         before = (
             evidence.snapshot(
                 tool_name,
@@ -10686,6 +10824,159 @@ Do NOT wrap conversational replies in JSON.
             key for key, item in self._completion_evidence.files.items() if item.written
         }
 
+    def _files_written_this_turn(self) -> List[str]:
+        """Text files a file-editing tool wrote this turn, from the evidence ledger.
+
+        Not ``_turn_file_edits`` alone: no shipped file tool sets the
+        ``operation`` field that feeds it. Generated outputs, executor-written
+        files and mtime-inferred entries are left out.
+        """
+        paths: List[str] = []
+        evidence = getattr(self, "_completion_evidence", None)
+        files = getattr(evidence, "files", None) or {}
+        removed = getattr(evidence, "removed", None) or set()
+        for item in files.values():
+            if item.written and item.edited and not item.inferred:
+                paths.append(item.path)
+        for edit in getattr(self, "_turn_file_edits", None) or []:
+            raw = (edit or {}).get("file_path")
+            if not raw:
+                continue
+            if evidence is not None:
+                try:
+                    key = evidence.key(str(raw))
+                except (OSError, ValueError):
+                    key = None
+                item = files.get(key)
+                # Deleted on purpose, or rewritten since by something that is
+                # not a file-editing tool: no longer this edit's result.
+                if key in removed or (item is not None and not item.edited):
+                    continue
+            paths.append(str(raw))
+        return paths
+
+    def _verify_turn_edits(self) -> List[str]:
+        """Count a read-back round and keep its findings as the latest ones."""
+        problems = self._edit_problems()
+        self._edit_verification_rounds = (
+            getattr(self, "_edit_verification_rounds", 0) + 1
+        )
+        self._edit_verification_findings = problems
+        logger.debug(
+            "Post-edit verification round %d: %d problem(s)",
+            self._edit_verification_rounds,
+            len(problems),
+        )
+        return problems
+
+    def _edit_problems(self) -> List[str]:
+        """Read this turn's edits back: still there, not empty, still parses.
+
+        Read-only and in-process, through the read boundary without prompting.
+        Binary files are skipped; files over ``_VERIFY_MAX_BYTES`` are checked
+        for presence only.
+        """
+        problems: List[str] = []
+        seen: set = set()
+        validator = self._read_validator()
+        for raw in self._files_written_this_turn():
+            path = Path(str(raw))
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            if validator is not None:
+                try:
+                    allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                except (OSError, ValueError):
+                    allowed = False
+                if not allowed:
+                    continue
+            try:
+                if not path.is_file():
+                    problems.append(
+                        f"`{path}` was edited this turn but is not on disk now."
+                    )
+                    continue
+                size = path.stat().st_size
+                if size > _VERIFY_MAX_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError as e:
+                problems.append(f"`{path}` could not be read back after its edit: {e}")
+                continue
+            if b"\x00" in data:
+                continue
+            text = data.decode("utf-8-sig", errors="replace")
+            if not text.strip():
+                # Same exemptions the write-time stand-in check grants.
+                if not (
+                    _empty_by_design(str(path))
+                    or _requested_empty(
+                        str(path), getattr(self, "_current_query", None)
+                    )
+                ):
+                    problems.append(f"`{path}` is empty after this turn's edit.")
+                continue
+            problem = _parse_problem(path, text)
+            # A file that already failed to parse before the turn touched it
+            # is not this turn's breakage to repair.
+            if problem and self._parsed_before(path) is not False:
+                problems.append(problem)
+        return problems
+
+    def _baseline_key(self, path: str, root: Optional[str] = None) -> Optional[str]:
+        evidence = getattr(self, "_completion_evidence", None)
+        try:
+            key = evidence.key(path, root) if evidence is not None else path
+        except (OSError, ValueError):
+            return None
+        return os.path.normcase(str(key))
+
+    def _parsed_before(self, path: Path) -> Optional[bool]:
+        key = self._baseline_key(str(path))
+        baseline = getattr(self, "_edit_parse_baseline", None) or {}
+        return baseline.get(key) if key is not None else None
+
+    def _note_edit_parse_baseline(self, tool_name: str, tool_args: Any) -> None:
+        """Before a turn's first write to a file, note whether that file parsed."""
+        if tool_name not in WRITE_TOOLS or not isinstance(tool_args, dict):
+            return
+        if not getattr(self, "_verify_edits_on", False):
+            return
+        raw = tool_args.get("file_path") or tool_args.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw:
+            return
+        key = self._baseline_key(raw, tool_args.get("project_dir"))
+        baseline = getattr(self, "_edit_parse_baseline", None)
+        if key is None or baseline is None or key in baseline:
+            return
+        path = Path(key)
+        if path.suffix.lower() not in (".py", ".pyi", ".json"):
+            return
+        validator = self._read_validator()
+        try:
+            if validator is not None:
+                allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                if not allowed:
+                    return
+            if not path.is_file():
+                baseline[key] = True  # a new file
+                return
+            if path.stat().st_size > _VERIFY_MAX_BYTES:
+                return
+            data = path.read_bytes()
+        except (OSError, ValueError) as e:
+            logger.debug("No pre-edit parse baseline for %s: %s", path, e)
+            return
+        if b"\x00" in data:
+            return
+        text = data.decode("utf-8-sig", errors="replace")
+        # An empty file parses: emptiness is judged separately after the edit.
+        baseline[key] = not text.strip() or _parse_problem(path, text) is None
+
     def _gate_unsealed_answer(
         self, answer: Optional[str], model_failed: bool = False
     ) -> Tuple[Optional[str], List[str]]:
@@ -11203,8 +11494,10 @@ Do NOT wrap conversational replies in JSON.
         # "Do not run anything, answer only with a plan": no nudge to act.
         request_text = self._request_text(user_input)
         no_action_requested = _asks_for_no_action(request_text)
+        # "Why does foo.py fail? Don't touch anything": look, but don't edit.
+        no_look_requested = _asks_not_to_look(request_text)
         self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
-        if no_action_requested:
+        if no_look_requested:
             grounding_fired.add(LOOK)
 
         steps_taken = 0
@@ -11292,6 +11585,13 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        # Per-turn too: a previous turn's edits are not this turn's to repair.
+        # The env knob is read here, not at import, so it can be changed
+        # between turns.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings = []
+        self._edit_parse_baseline = {}
+        self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -12731,9 +13031,9 @@ Do NOT wrap conversational replies in JSON.
 
                     # Loop detection — same shape as legacy path so
                     # repeated calls across iterations are still caught.
-                    current_call = (tool_name, str(tool_args))
+                    current_call = self._loop_guard_key(tool_name, tool_args)
                     tool_call_history.append(current_call)
-                    tool_call_log.append(current_call)
+                    tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
                     consecutive_count = _repeat_count(tool_call_history)
@@ -12979,10 +13279,10 @@ Do NOT wrap conversational replies in JSON.
                 self.console.start_progress(f"Executing {tool_name}")
 
                 # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = (tool_name, str(tool_args))
+                current_call = self._loop_guard_key(tool_name, tool_args)
                 tool_call_history.append(current_call)
                 tool_call_log.append(
-                    current_call
+                    (tool_name, str(tool_args))
                 )  # Full unbounded log for workflow guards
 
                 # Enough recent calls to see a short cycle repeat to the limit
@@ -13437,7 +13737,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
-                    and not no_action_requested
+                    and not no_look_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
@@ -13787,6 +14087,39 @@ Do NOT wrap conversational replies in JSON.
                     and self._drain_followups(messages, conversation)
                 ):
                     continue
+
+                # Last chance to catch an edit that reported success but left a
+                # missing, empty or unparsable file.
+                if self._verify_edits_on and self._files_written_this_turn():
+                    if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
+                        edit_problems = self._verify_turn_edits()
+                        if edit_problems:
+                            steps_limit += _VERIFY_REPAIR_STEPS
+                            repair = {
+                                "role": "user",
+                                "content": _EDIT_VERIFICATION_PROMPT.format(
+                                    problems="\n".join(f"- {p}" for p in edit_problems),
+                                    steps=_VERIFY_REPAIR_STEPS,
+                                ),
+                            }
+                            messages.append(repair)
+                            conversation.append(dict(repair))
+                            logger.info(
+                                "Post-edit verification found %d problem(s); "
+                                "granted %d repair step(s) (limit now %d)",
+                                len(edit_problems),
+                                _VERIFY_REPAIR_STEPS,
+                                steps_limit,
+                            )
+                            continue
+                    else:
+                        # Out of repair rounds: still-broken files go into the answer.
+                        self._edit_verification_findings = self._edit_problems()
+                        completion_gaps.extend(
+                            p
+                            for p in self._edit_verification_findings
+                            if p not in completion_gaps
+                        )
 
                 unfinalized_answer = _without_tool_markup(answer_candidate)
                 if answer_before_completion_check is not None:

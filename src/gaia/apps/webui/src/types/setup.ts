@@ -184,6 +184,8 @@ export interface SetupCheck {
     ready: boolean;
     stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
+    /** Setup was seen ready on this PC before, so a `server` stage is an outage, not a first run. */
+    initialized?: boolean;
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     /** True but no setup step, e.g. no GAIA agent build for this PC. */
     warnings?: string[];

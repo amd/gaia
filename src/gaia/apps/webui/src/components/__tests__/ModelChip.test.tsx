@@ -61,6 +61,11 @@ async function openPicker() {
     return screen.findByRole('dialog', { name: 'Choose a model' });
 }
 
+/** Says yes to the download the list asks about. */
+function confirmDownload(dialog: HTMLElement) {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
+}
+
 /** The model's row in the list, not its download icon. */
 async function rowFor(dialog: HTMLElement, name: RegExp) {
     await within(dialog).findAllByRole('button', { name });
@@ -275,6 +280,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
@@ -301,9 +307,71 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'), { timeout: 9000 });
     }, 12000);
+
+    it('never starts a download without a yes, and says how big it is', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 })] : [],
+        }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF (5.2 GB)? GAIA switches to it when the download finishes.');
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' }));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF (5.2 GB)?');
+        expect(within(dialog).getByRole('alert')).not.toHaveTextContent('switches');
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        confirmDownload(dialog);
+        await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('keeps one question open: a download question replaces the cloud one', async () => {
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF');
+
+        fireEvent.click(within(dialog).getByRole('option', { name: /^kimi-k2/ }));
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' }));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('lists the provider in use first, and models on this PC before ones to download', async () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 }), model('Gemma-4-E4B-it-GGUF', { size_gb: 5.6 })]
+                : [model('fireworks.accounts/fireworks/models/kimi-k2', { rank: 1 })],
+        }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+
+        const headings = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
+        expect(headings).toEqual(['Fireworks AI', 'Local']);
+        const rows = within(dialog).getAllByRole('option').map((o) => o.textContent);
+        expect(rows).toEqual(['kimi-k2', 'Gemma-4-E4B-it-GGUF5.6 GB', 'Qwen3-8B-GGUF5.2 GB']);
+        const subheading = dialog.querySelector('.popover-subheading')!;
+        expect(subheading).toHaveTextContent('Available to download');
+        expect(subheading.compareDocumentPosition(within(dialog).getByRole('option', { name: /^Qwen3/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
 
     it('a download the server reports as failed drops the pick and says why', async () => {
         let qwen: Partial<ProviderModel> = { downloaded: false };
@@ -319,6 +387,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Downloading Qwen3-8B-GGUF failed: No space left on device/);
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
@@ -330,6 +399,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
             .toHaveTextContent(/download of Qwen3-8B-GGUF never started/);
@@ -353,6 +423,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         // While Qwen downloads, the user picks Phi, which is already here.
         fireEvent.click(await rowFor(dialog, /Phi/));
@@ -376,6 +447,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
             .toHaveTextContent(/Qwen3-8B-GGUF is no longer in the model list/);
@@ -400,10 +472,12 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         const phi = await within(dialog).findByRole('button', { name: 'Download Phi-4-GGUF' });
         await waitFor(() => expect(phi).not.toBeDisabled());
         fireEvent.click(phi);
+        confirmDownload(dialog);
         expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
 
         qwen = { downloaded: true };
@@ -422,6 +496,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(screen.getByLabelText('Model switch failed')).toBeInTheDocument());
         const chip = screen.getByLabelText('Model switch failed').closest('button')!;
@@ -434,6 +509,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
@@ -572,22 +648,21 @@ describe('ModelChip keyboard', () => {
         const dialog = await openWithKeyboard(user);
         await waitFor(() => expect(option(dialog, /^kimi-k2/)).toHaveFocus());
 
+        // The provider in use (Fireworks) is listed first; the downloading row is skipped.
         await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{End}');
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
         await user.keyboard('{Home}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowDown}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowDown}');
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
-        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(0);
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/).tabIndex).toBe(-1);
+        await user.keyboard('{End}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        expect(option(dialog, /^Qwen3-8B-GGUF/).tabIndex).toBe(0);
+        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(-1);
     });
 
     it('makes the expanded Fireworks list keyboard-reachable and focuses its first new row', async () => {
