@@ -434,6 +434,17 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    test(`the keyboard shortcuts sheet (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('Control+/');
+        await expect(page.locator('.shortcuts-dialog')).toBeVisible();
+        await shot(page, `shortcuts-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {

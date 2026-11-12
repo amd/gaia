@@ -688,3 +688,14 @@ describe('New chat right after sending a first message', () => {
         expect(await screen.findByLabelText('Message')).toHaveValue('');
     });
 });
+
+describe('the keyboard shortcuts sheet', () => {
+    it('opens with Ctrl+/ and closes with it again', async () => {
+        render(<App />);
+        await screen.findByLabelText('Message');
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+        fireEvent.keyDown(window, { key: '/', ctrlKey: true });
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).not.toBeInTheDocument());
+    });
+});

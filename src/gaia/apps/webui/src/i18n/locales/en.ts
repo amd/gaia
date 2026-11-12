@@ -239,6 +239,18 @@ export const enMessages = {
     'composer.queueTitle': 'Queue it to send when this reply ends (Enter)',
     'composer.stop': 'Stop',
     'composer.stopping': 'Stopping…',
+
+    // Keyboard shortcuts sheet
+    'shortcuts.title': 'Keyboard shortcuts',
+    'shortcuts.close': 'Close keyboard shortcuts',
+    'shortcuts.newChat': 'New chat',
+    'shortcuts.search': 'Search chats',
+    'shortcuts.sidebar': 'Show or hide the sidebar',
+    'shortcuts.settings': 'Settings',
+    'shortcuts.sheet': 'This list of shortcuts',
+    'shortcuts.send': 'Send the message',
+    'shortcuts.newLine': 'New line in the message',
+    'shortcuts.stop': 'Stop the answer',
     'composer.send': 'Send',
     'composer.private': 'Private',
     'composer.memoryOn': 'Memory on',

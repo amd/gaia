@@ -239,6 +239,18 @@ const messages: Messages = {
     'composer.queueTitle': 'أضفها إلى قائمة الانتظار لتُرسل عند انتهاء هذا الرد (Enter)',
     'composer.stop': 'إيقاف',
     'composer.stopping': 'جارٍ الإيقاف…',
+
+    // قائمة اختصارات لوحة المفاتيح
+    'shortcuts.title': 'اختصارات لوحة المفاتيح',
+    'shortcuts.close': 'إغلاق اختصارات لوحة المفاتيح',
+    'shortcuts.newChat': 'محادثة جديدة',
+    'shortcuts.search': 'البحث في المحادثات',
+    'shortcuts.sidebar': 'إظهار الشريط الجانبي أو إخفاؤه',
+    'shortcuts.settings': 'الإعدادات',
+    'shortcuts.sheet': 'قائمة الاختصارات هذه',
+    'shortcuts.send': 'إرسال الرسالة',
+    'shortcuts.newLine': 'سطر جديد في الرسالة',
+    'shortcuts.stop': 'إيقاف الإجابة',
     'composer.send': 'إرسال',
     'composer.private': 'خاصة',
     'composer.memoryOn': 'الذاكرة مفعّلة',
