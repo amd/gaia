@@ -117,6 +117,20 @@ describe('DocumentLibrary with no chat open', () => {
         await waitFor(() => expect(box.value).toBe(''));
     });
 
+    it.each([
+        ['"C:\\Reports\\q3.pdf"', 'C:\\Reports\\q3.pdf'],
+        ['file:///Users/sam/My%20Docs/q3.pdf', '/Users/sam/My Docs/q3.pdf'],
+    ])('adds a pasted path written as %s', async (pasted, expected) => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: pasted } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected));
+    });
+
     it('offers an existing document for the next chat, once', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
