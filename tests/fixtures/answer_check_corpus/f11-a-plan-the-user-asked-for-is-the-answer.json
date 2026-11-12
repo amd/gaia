@@ -17,6 +17,5 @@
     "answer_lacks": [
       "I didn't finish"
     ]
-  },
-  "xfail": "amd/gaia#7180, fixed by open PR amd/gaia#7278"
+  }
 }

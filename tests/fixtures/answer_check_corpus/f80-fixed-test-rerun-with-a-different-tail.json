@@ -54,6 +54,5 @@
       "I haven't confirmed this works",
       "didn't pass"
     ]
-  },
-  "xfail": "amd/gaia#7293, fixed by open PR amd/gaia#7319"
+  }
 }

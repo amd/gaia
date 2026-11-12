@@ -19,6 +19,5 @@
     "answer_has": [
       "2. I will add a test for each date helper."
     ]
-  },
-  "xfail": "amd/gaia#7181, fixed by open PR amd/gaia#7278"
+  }
 }

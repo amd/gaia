@@ -19,6 +19,5 @@
     "result_is_not": [
       "Organize into subfolders by type"
     ]
-  },
-  "xfail": "amd/gaia#7294, fixed by open PR amd/gaia#7322"
+  }
 }

@@ -49,6 +49,5 @@
     "model_never_told": [
       "write_file"
     ]
-  },
-  "xfail": "amd/gaia#7179, fixed by open PR amd/gaia#7277"
+  }
 }

@@ -257,7 +257,9 @@ class _Console:
     def request_user_input_blocking(self, default_if_no_response=None, **_kwargs):
         if self.reply is None:
             # Nobody answered: the window hands back the default, or the marker.
-            return default_if_no_response or "__NO_RESPONSE__"
+            if default_if_no_response is not None:
+                return default_if_no_response
+            return "__NO_RESPONSE__"
         return self.reply
 
 

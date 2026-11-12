@@ -30,6 +30,5 @@
     "answer_lacks": [
       "I couldn't confirm"
     ]
-  },
-  "xfail": "amd/gaia#7178, fixed by open PR amd/gaia#7276"
+  }
 }

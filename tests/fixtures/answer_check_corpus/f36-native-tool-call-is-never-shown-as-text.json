@@ -13,6 +13,5 @@
     "shown_lacks": [
       "__tool_calls__"
     ]
-  },
-  "xfail": "amd/gaia#7205, fixed by open PR amd/gaia#7248"
+  }
 }
