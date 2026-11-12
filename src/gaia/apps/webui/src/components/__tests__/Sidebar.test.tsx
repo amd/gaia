@@ -141,6 +141,13 @@ describe('Sidebar', () => {
         expect(screen.getByText('1 not sent')).toBeInTheDocument();
     });
 
+    it('counts the messages still to send in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        useChatStore.getState().updateQueue('b', (q) => messageQueue.enqueue(q, 'one', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(screen.getByText(/بانتظار الإرسال \(1\)/)).toBeInTheDocument();
+    });
+
     it("says a delete takes the chat's unsent messages with it, and does", async () => {
         useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'failed'));
         render(<Sidebar onNewChat={vi.fn()} />);

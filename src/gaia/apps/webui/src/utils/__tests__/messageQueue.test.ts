@@ -16,9 +16,9 @@ describe('message queue', () => {
     it('puts a message the reply refused back in line, saying why, until it is offered again', () => {
         const items = q.enqueue([], 'more', 'sending');
         const refused = q.steerRefused(items, items[0].id);
-        expect(refused[0]).toMatchObject({ state: 'queued', note: q.STEER_REFUSED_NOTE });
+        expect(refused[0]).toMatchObject({ state: 'queued', refused: true });
         expect(q.nextToSend(refused)?.text).toBe('more');
-        expect(q.promote(refused, items[0].id, 'queued', 'sending')[0].note).toBeUndefined();
+        expect(q.promote(refused, items[0].id, 'queued', 'sending')[0].refused).toBeUndefined();
     });
 
     it('sends nothing as a new turn while one is still being offered to the reply', () => {

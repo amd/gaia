@@ -132,7 +132,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const dot = status === 'done' && !unread ? null : status;
     const place = queuePlace > 0 ? `${ordinal(queuePlace)} in line` : null;
     const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
-    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const waiting = failed > 0 ? t.plural('row.notSent', failed) : unsent > 0 ? t.plural('row.toSend', unsent) : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
     const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
