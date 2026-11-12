@@ -408,6 +408,29 @@ for (const [title, locale] of [
     });
 }
 
+test('a rejected attachment keeps its message whole and leaves the other chips alone', async ({ page }) => {
+    await open(page, '', 'en');
+    await page.route((url) => url.pathname === '/api/files/upload', async (route) => {
+        const body = route.request().postData() ?? '';
+        if (body.includes('notes.xyz')) {
+            await route.fulfill({ status: 400, json: { detail: "File type '.xyz' is not allowed. Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) and documents (pdf, pptx, docx, txt, md, csv, json, xlsx, html, code files, etc.)." } });
+        } else {
+            await route.fulfill({ json: { filename: 'q.txt', original_name: 'Quarterly notes.txt', url: '/api/files/uploads/q.txt', size: 5, content_type: 'text/plain', is_image: false } });
+        }
+    });
+    await page.locator('input[type="file"]').first().setInputFiles([
+        { name: 'Quarterly notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes') },
+        { name: 'notes.xyz', mimeType: 'application/octet-stream', buffer: Buffer.from('x') },
+    ]);
+    const bad = page.locator('.composer-attachment.has-error');
+    await expect(bad).toHaveCount(1);
+    const message = bad.locator('.composer-attachment-state');
+    expect(await message.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    const good = page.locator('.composer-attachment:not(.has-error)').first();
+    expect((await good.boundingBox())!.height).toBeLessThan(40);
+    await shot(page, 'attachment-rejected');
+});
+
 for (const [title, locale, name] of [
     ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
     ['recording with an Arabic name, in English', 'en', 'تسجيل مراجعة الأعمال الفصلية.m4a'],
