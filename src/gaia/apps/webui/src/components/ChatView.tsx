@@ -348,14 +348,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent;
         // and for GAIA to start, or the send would refuse a message already taken.
-        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
-        useChatStore.getState().setPendingPrompt(null);
+        if (!pending || pendingPrompt.sending || useChatStore.getState().isLoadingMessages || initializing) return;
+        // Marked, not cleared, so New chat in the tick before the send can still take it back.
+        const handed = { ...pendingPrompt, sending: true };
+        useChatStore.getState().setPendingPrompt(handed);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
-        // clearing the prompt re-runs this effect, so no cleanup may cancel it.
+        // marking the prompt re-runs this effect, so no cleanup may cancel it.
         setTimeout(() => {
             openingRef.current = false;
-            if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
+            const store = useChatStore.getState();
+            if (store.pendingPrompt !== handed) return;
+            if (!mountedRef.current) {
+                // Left for another chat: it goes out when this one is opened again.
+                store.setPendingPrompt({ sessionId: handed.sessionId, text: handed.text });
+                return;
+            }
+            store.setPendingPrompt(null);
+            sendMessageRef.current(pending, { opening: true });
         }, 0);
     }, [pendingPrompt, isLoadingMessages, initializing]);
 
