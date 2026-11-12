@@ -9,6 +9,7 @@ import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
 import { useT } from '../../i18n/useT';
+import { isolate } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus } from '../../types';
@@ -306,7 +307,7 @@ export function AdvancedSettings() {
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel || t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')}>
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input
@@ -314,6 +315,7 @@ export function AdvancedSettings() {
                         className={`model-input${savedCustomModel ? ' has-override' : ''}`}
                         placeholder={t.bare('settings.advanced.customPlaceholder')}
                         value={customModel}
+                        dir={customModel ? 'ltr' : undefined}
                         onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setSaveNote(null); setJustSaved(false); }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !savingModel && customModelDirty && settingsLoaded) {
