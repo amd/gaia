@@ -1662,6 +1662,22 @@
     background: var(--bg-card); border: 1px solid var(--border);
     color: var(--text-primary); font-size: 13px; cursor: pointer;
 }
+/* The page's text fields, matching the app's other inputs. */
+.mem-input {
+    min-height: 34px;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    transition: border-color var(--duration-fast) var(--ease);
+}
+.mem-input::placeholder { color: var(--text-muted); }
+.mem-input:focus { border-color: var(--accent); }
+textarea.mem-input { resize: vertical; }
 
 /* Goal cards */
 .mem-goals-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1919,9 +1935,14 @@
     border: none;
     padding: 0;
     font: inherit;
-    color: var(--accent-blue);
+    font-weight: 600;
+    color: var(--accent);
     cursor: pointer;
     white-space: nowrap;
+}
+.mem-about-forgotten > span {
+    flex: 1;
+    min-width: 0;
 }
 .mem-about-link:hover,
 .mem-about-link:focus-visible {

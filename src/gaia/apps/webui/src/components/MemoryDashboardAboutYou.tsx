@@ -284,8 +284,8 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
             {forgotten.map(item => (
                 <div key={item.id} className="mem-about-forgotten" role="status">
-                    <span>
-                        {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: item.content })}
+                    <span title={item.sensitive ? undefined : item.content}>
+                        {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: oneLineQuote(item.content) })}
                     </span>
                     <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(item)}>
                         <Undo2 size={12} /> {t('mem.about.undo')}
@@ -403,4 +403,14 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
 function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+}
+
+/** How many characters of a forgotten memory the Undo bar quotes. */
+export const FORGOTTEN_QUOTE_CHARS = 80;
+
+/** A memory quoted on one line: its start, then an ellipsis when it is long. */
+export function oneLineQuote(text: string): string {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    if (flat.length <= FORGOTTEN_QUOTE_CHARS) return flat;
+    return `${flat.slice(0, FORGOTTEN_QUOTE_CHARS - 1).trimEnd()}…`;
 }

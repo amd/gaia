@@ -3041,6 +3041,35 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'about');
         });
 
+        // The add field once had the browser's own inset border and no padding, and Undo was link blue.
+        test('about you, the add field and a forgotten memory', async ({ page }) => {
+            await openMemory(page, locale);
+            await page.route('**/api/memory/knowledge/*', (route) =>
+                route.request().method() === 'DELETE' ? route.fulfill({ json: { deleted: true } }) : route.fallback());
+            const field = page.locator('.mem-about-add .mem-input');
+            const look = await field.evaluate((el) => {
+                const s = getComputedStyle(el);
+                return { pad: parseFloat(s.paddingInlineStart), radius: parseFloat(s.borderTopLeftRadius), border: s.borderTopStyle, width: parseFloat(s.borderTopWidth) };
+            });
+            expect(look.pad).toBeGreaterThanOrEqual(8);
+            expect(look.radius).toBeGreaterThan(0);
+            expect(look).toMatchObject({ border: 'solid', width: 1 });
+            const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
+            await item.locator('.mem-about-btn-remove').click();
+            const undo = page.locator('.mem-about-forgotten .mem-about-link');
+            await expect(undo).toBeVisible();
+            const [undoColor, accent] = await undo.evaluate((el) => {
+                const probe = document.createElement('span');
+                probe.style.color = 'var(--accent)';
+                el.parentElement!.appendChild(probe);
+                const want = getComputedStyle(probe).color;
+                probe.remove();
+                return [getComputedStyle(el).color, want];
+            });
+            expect(undoColor).toBe(accent);
+            await checkMemory(page, locale, 'about-forgotten');
+        });
+
         test('about you, editing a memory', async ({ page }) => {
             await openMemory(page, locale);
             const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
