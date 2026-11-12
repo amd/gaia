@@ -14,6 +14,37 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   failed, and each finished turn in readable form. `/sessions` and
   `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
   HTTP surface, or for a launch without the flag.
+- **One MCP server with a bad repeat-call declaration no longer takes the
+  others down.** An MCP server tool can name the arguments the repeat-call
+  guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose
+  declaration is invalid is refused on its own: it is disconnected, its tools
+  are neither registered nor counted toward `mcp_tool_limit`, the "MCP servers
+  that could not start" notice names it with the error, and the other servers
+  still load.
+- **The model is told when older turns are out of its view.** A long chat showed
+  "Older messages are now out of the model's view" while the model answered
+  that something from those turns was never mentioned. The oldest turn it still
+  reads now opens with a one-sentence note that earlier turns exist and are no
+  longer shown.
+
+- **`final.context` counts what the next turn really carries.** With `turns`,
+  the measurement split a text-tool model's recorded tool results into turns
+  of their own and counted this turn as its question and answer only, so a
+  large file read could push history past its budget while `turns_hidden`
+  stayed 0. It now measures whole turns, this turn's tool results included.
+- **Dropped MCP servers are shown as a warning, including ones that fail to
+  start.** The notice that configured MCP servers were left out reached the
+  Agent UI as a plain progress line, so it never appeared in the window, and a
+  server whose command failed to start was not reported at all. A `status`
+  event that warns the user now carries `level: "warning"`, and a server that
+  could not start is named with its error and where it is set up: Settings >
+  Connectors for a connector, the `mcp_servers.json` file for one added by hand.
+- **The default step limit is now 1000, up from 150.** Long multi-part tasks
+  reached 150 steps and were cut off before their last part. The limit is now
+  only a backstop for a turn that never finishes; the repeated-call and
+  repeated-failure guards still end a stuck turn early. An omitted `/query`
+  `max_steps` runs up to 1000 steps. Pass `max_steps`, or set
+  `GAIA_AGENT_MAX_STEPS`, to choose a lower limit.
 
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
@@ -24,9 +55,20 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `/model` switch the agent stops sending it, so a new model never receives
   another model's reasoning.
 
+- **The agent reserves about 0.3 GB of memory instead of about 5 GB.** The
+  OpenBLAS that numpy and FAISS bundle reserved memory for every CPU thread when
+  it loaded, so a dozen GAIA processes could run a 32-thread Windows PC out of
+  memory. Each process now gives it 2 threads unless `OPENBLAS_NUM_THREADS`,
+  `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. Search speed is unchanged.
+
 - **The terminal header recognizes cloud models with custom IDs.** After a
   `/model` switch, the status uses the live client’s catalog provider, matching
   the switch notice instead of reporting a custom-prefixed cloud model as local.
+
+- **A turn that ends in an error still reports the tools it ran.** When a turn
+  stopped on an error without printing an answer, its `usage` block left out
+  `tools_used`, so `gaia -p` without `--verbose` recorded 0 tool calls for it.
+  The count now comes from that turn's own tool results.
 
 ### Added
 
@@ -86,6 +128,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **The package description and integration guide no longer say nothing leaves the
+  machine.** Local inference is still the default; both now say a cloud provider
+  receives the conversation when you pick one.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
@@ -151,6 +196,28 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   to the chat.** It is saved to the session as soon as it is searchable, and a
   background index that fails is now reported instead of dropping out of
   sight.
+
+### Fixed
+
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act, and neither is
+  a ban that comes with the work ("fix foo.py but don't touch anything",
+  "don't touch anything, just read config.py") or "plan only" inside a
+  request to do work ("my plan only covers Postgres; extend it"). "Don't
+  touch anything" right after a request to look into something ("why does
+  foo.py fail? Don't touch anything") bars edits only: the look-first check
+  stays on, and the agent is still not pushed to make an edit it announced.
 
 ## [0.3.5]
 

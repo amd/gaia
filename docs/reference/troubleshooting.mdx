@@ -154,6 +154,17 @@ icon: "bug"
     keychain itself and asks again after each update.
   </Accordion>
 
+  <Accordion title="The model list says the OS key store is locked" icon="lock">
+    You closed the system prompt that unlocks your key store (on Linux, GNOME's
+    "Unlock keyring" or "Choose password for new keyring"), so GAIA can't read a
+    saved key. GAIA waits five minutes before asking again, so the prompt doesn't
+    keep coming back. To use a saved key sooner, choose **Try again** in the
+    model list or under **Settings → Model**, then unlock or create the keyring
+    in the prompt that opens. Connecting or testing a connector asks again too.
+    Until then a connector reads as unavailable and the new-chat inbox card stays
+    hidden.
+  </Accordion>
+
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
     Switching back from your Lemonade needs GAIA's own server, and on this PC it was
     never installed (or only partly). The switch is refused and GAIA keeps using
@@ -412,6 +423,10 @@ icon: "bug"
     gaia api start --port 8080
     ```
 
+    If `gaia api start` says it can't run in this GAIA install, you're on the
+    installed build, which has no API server. Use a source install, or
+    `gaia -p` from scripts — see [`gaia api`](/reference/cli#api-server).
+
     **Check if port is in use:**
     ```powershell
     # Windows
@@ -491,6 +506,16 @@ What GAIA does on a small PC:
   server you started yourself keeps its models loaded beside GAIA's. To have GAIA
   use that server instead, set `LEMONADE_BASE_URL` (see
   [`gaia init`](/reference/cli#init-command), "Another Lemonade Server").
+- **Each GAIA process gives its math library 2 threads.** The OpenBLAS that
+  numpy and FAISS bundle otherwise reserves memory for every CPU thread when it
+  loads: about 5 GB per process on a 32-thread PC, enough for a dozen GAIA
+  processes to run Windows out of memory. Document search and memory recall run
+  on FAISS's own threads, so they keep their speed. To choose another number, set
+  `OPENBLAS_NUM_THREADS` in the environment GAIA starts from; GAIA leaves it, and
+  `OMP_NUM_THREADS` or `GOTO_NUM_THREADS`, alone when you set them. A value in a
+  `.env` file is read too late to count. Programs GAIA runs for you inherit the
+  2 threads too, so a numpy script started from a chat does its matrix math on
+  2 threads unless you set the variable yourself.
 
 On a graphics card, GAIA reads free memory only for an AMD card on Linux.
 Elsewhere a model that does not fit the card fails in Lemonade with its own
@@ -754,6 +779,15 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="GAIA's window stopped working" icon="window-restore">
+    When only the window fails (its page crashes, often because the PC ran out
+    of memory), GAIA itself keeps running, along with any answer or folder
+    index in progress. **Reload window** brings the window back; **Quit GAIA**
+    quits, and asks first if work is still running. The details go to
+    `~/.gaia/electron-main.log` as a `RENDER_PROCESS_GONE` line. If it keeps
+    happening, close other apps to free memory, then restart GAIA.
+  </Accordion>
+
   <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
     The desktop app restarts its assistant when it stops on its own. The banner
     shows how long it has been restarting, and your chats are saved. GAIA tries
@@ -810,6 +844,49 @@ error. To run the chat model in the cloud instead, see
     chmod +x gaia-agent-ui-*.AppImage
     ./gaia-agent-ui-*.AppImage
     ```
+  </Accordion>
+
+  <Accordion title="GAIA can't start: this PC is missing something GAIA needs" icon="puzzle-piece">
+    **Cause:** a system library the desktop app needs is not installed. It
+    happens on minimal installs, containers and WSL; a full desktop install
+    already has them. The message names each missing file, for example
+    `libX11-xcb.so.1`, which GAIA needs whenever it runs on X11 rather than
+    Wayland. It appears as a dialog or a desktop notification, and in the
+    terminal when GAIA was started from one.
+
+    **Fix on Fedora:** install the desktop libraries, then open GAIA again:
+    ```bash
+    sudo dnf install gtk3 nss alsa-lib at-spi2-atk cups-libs mesa-libgbm libdrm \
+      libX11-xcb libxcb libXcomposite libXdamage libXrandr libXfixes libXtst \
+      libXScrnSaver libxkbcommon-x11 libxshmfence libnotify
+    ```
+
+    **Fix on Debian and Ubuntu:** `libX11-xcb.so.1` is in `libx11-xcb1`:
+    ```bash
+    sudo apt install libx11-xcb1
+    ```
+
+    For any other file the message names, ask your package manager which
+    package holds it, then install that package:
+    ```bash
+    dnf provides '*/libnss3.so'     # Fedora
+    apt-file search libnss3.so      # Debian, Ubuntu (sudo apt install apt-file)
+    ```
+
+    Builds before this check stop without a message in the same situation.
+  </Accordion>
+
+  <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
+    **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
+    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
+    package Fedora 44 first shipped leaves that file out, so every cloud model
+    and every model download fails. GAIA says so in setup's cloud step and in
+    a failed download, and `~/.gaia/lemonade/lemond.log` shows
+    `Problem with the SSL CA cert`. Your key is not the problem.
+
+    **Fix:** install your system's updates (GNOME Software, or
+    `sudo dnf upgrade ca-certificates`); the updated package adds the file.
+    Then restart GAIA.
   </Accordion>
 
   <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">

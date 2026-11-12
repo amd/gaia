@@ -17,6 +17,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
     agent_import_error_message,
     gaia_extras_install_args,
+    missing_extra_hint,
     pip_install_hint,
 )
 from gaia.config import gaia_agents_dir
@@ -559,14 +560,16 @@ async def async_main(action, **kwargs):
             log.error("Message is required for prompt action.")
             print("❌ Error: Message is required for prompt action.")
             sys.exit(1)
-        response = ""
-        async for chunk in client.prompt(kwargs["message"]):
-            response += chunk
+        # The client prints the answer as it streams; returning it would print it again.
+        async for _chunk in client.prompt(kwargs["message"]):
+            pass
+        print()
         if kwargs.get("show_stats", False):
             stats = client.get_stats()
             if stats:
-                return {"response": response, "stats": stats}
-        return {"response": response}
+                for key, value in stats.items():
+                    print(f"{key}: {value}")
+        return None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
@@ -1375,7 +1378,7 @@ def build_parser():
         type=int,
         default=None,
         help="Maximum conversation steps. Defaults to the agent's step limit "
-        "(150 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
+        "(1000 for the flagship, 50 for others, or $GAIA_AGENT_MAX_STEPS if set).",
     )
     agent_loop_parser.add_argument(
         "--list-tools",
@@ -5569,6 +5572,14 @@ Let me know your answer!
             # List mode: show required models without downloading
             if args.list_models:
                 agent_name = args.agent.lower()
+                if agent_name != "all" and not client.get_agent_profile(agent_name):
+                    print(f"❌ Unknown agent: {agent_name}")
+                    print(f"   Available: {', '.join(client.list_agents())}")
+                    sys.exit(1)
+                # Unreachable would show every model as not downloaded.
+                if not check_lemonade_health(args.host, port):
+                    LemonadeManager.print_server_error()
+                    sys.exit(1)
                 if agent_name == "all":
                     print("📦 Models required for all GAIA agents:\n")
                     all_models = set()
@@ -5586,10 +5597,6 @@ Let me know your answer!
                     print(f"  Total unique models: {len(all_models)}")
                 else:
                     profile = client.get_agent_profile(agent_name)
-                    if not profile:
-                        print(f"❌ Unknown agent: {agent_name}")
-                        print(f"   Available: {', '.join(client.list_agents())}")
-                        sys.exit(1)
                     print(f"📦 Models required for {profile.display_name}:\n")
                     for model_key in profile.models:
                         if model_key in MODELS:
@@ -7127,6 +7134,13 @@ def handle_api_command(args):
     log = get_logger(__name__)
 
     if args.subcommand == "start":
+        from gaia.api.flagship import api_unavailable_reason
+
+        reason = api_unavailable_reason()
+        if reason:
+            print(f"❌ {reason}", file=sys.stderr)
+            sys.exit(1)
+
         # Initialize Lemonade with mcp profile (unless --no-lemonade-check)
         if not getattr(args, "no_lemonade_check", False):
             success, _ = initialize_lemonade_for_agent(
@@ -7135,7 +7149,7 @@ def handle_api_command(args):
                 base_url=getattr(args, "base_url", None),
             )
             if not success:
-                return
+                sys.exit(1)
 
         try:
             import uvicorn
@@ -7148,6 +7162,9 @@ def handle_api_command(args):
                 os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
             if getattr(args, "streaming", False):
                 os.environ["GAIA_API_STREAMING"] = "1"
+            # The app's agents and /health resolve the server from the environment.
+            if getattr(args, "base_url", None):
+                os.environ["LEMONADE_BASE_URL"] = args.base_url
 
             from gaia.api.local_http import (
                 UnauthenticatedBindError,
@@ -7981,6 +7998,8 @@ def handle_gateway_command(args):
                     model=model,
                     messages=[{"role": "user", "content": args.prompt}],
                     max_tokens=256,
+                    # Reasoning would spend these 256 tokens before any answer.
+                    reasoning_effort=None,
                 )
             except CloudModelUnavailableError:
                 _report_unavailable_gateway_model(manager, model)
@@ -8031,12 +8050,31 @@ def handle_gateway_command(args):
         sys.exit(1)
 
 
+def _is_link(path) -> bool:
+    """True for a symlink or a Windows junction, which ``is_symlink`` misses."""
+    path = str(path)
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+    if isjunction is not None:
+        return isjunction(path)
+    import stat as stat_mod
+
+    try:
+        tag = getattr(os.lstat(path), "st_reparse_tag", 0)
+    except OSError:  # gone; the size walk reports it as unreadable
+        return False
+    # Only junctions: OneDrive placeholders are reparse points too, and hold real data.
+    return tag == getattr(stat_mod, "IO_REPARSE_TAG_MOUNT_POINT", -1)
+
+
 def _cache_folder_usage(folder: Path) -> tuple:
     """Bytes, file count and unreadable entries under *folder*, without following links."""
     size = files = 0
     # Files and folders that couldn't be read, so the size never quietly comes up short.
     unreadable: list = []
-    for dirpath, _dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+    for dirpath, dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(dirpath, d))]
         for name in filenames:
             try:
                 stat = os.lstat(os.path.join(dirpath, name))
@@ -8060,9 +8098,11 @@ def _print_cache_folders() -> None:
         return
     rows = []
     for entry in root.iterdir():
-        if entry.is_dir() and not entry.is_symlink():
+        if _is_link(entry):
+            continue
+        if entry.is_dir():
             rows.append((entry.name, *_cache_folder_usage(entry)))
-        elif entry.is_file() and not entry.is_symlink():
+        elif entry.is_file():
             try:
                 rows.append((entry.name, entry.lstat().st_size, 1, 0))
             except OSError:  # removed or locked while listing
@@ -10568,7 +10608,10 @@ def handle_mcp_command(args):
     elif args.mcp_action == "code-index":
         from gaia.mcp.servers.code_index_mcp import main as code_index_main
 
-        code_index_main([] if args.repo is None else ["--repo", str(args.repo)])
+        try:
+            code_index_main([] if args.repo is None else ["--repo", str(args.repo)])
+        except ImportError as e:
+            _exit_mcp_server_unavailable("the code index MCP server", e)
     elif args.mcp_action == "list":
         handle_mcp_list(args)
     elif args.mcp_action == "tools":
@@ -11470,6 +11513,16 @@ def handle_mcp_agent(args):
         sys.exit(1)
 
 
+def _exit_mcp_server_unavailable(what: str, error: ImportError) -> None:
+    """Exit 1 because *what* could not be imported, with a fix true for this install."""
+    get_logger(__name__).error(f"Failed to import {what}: {error}")
+    print(f"❌ Error: Could not load {what}")
+    print(f"   {error}")
+    if (error.name or "").split(".")[0] == "mcp":
+        print(f"   {missing_extra_hint('mcp')}")
+    sys.exit(1)
+
+
 def handle_mcp_serve(args):
     """Start the Agent UI MCP server (wraps the GAIA Agent UI REST API)."""
     log = get_logger(__name__)
@@ -11522,11 +11575,7 @@ def handle_mcp_serve(args):
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
     except ImportError as e:
-        log.error(f"Failed to import Agent UI MCP server: {e}")
-        print("❌ Error: Could not load Agent UI MCP server")
-        print(f"   {e}")
-        print("   Make sure the Agent UI backend is running: gaia chat --ui")
-        sys.exit(1)
+        _exit_mcp_server_unavailable("Agent UI MCP server", e)
     except Exception as e:
         log.error(f"Error starting Agent UI MCP server: {e}")
         print(f"❌ Error starting Agent UI MCP server: {e}")
@@ -11570,11 +11619,7 @@ def handle_mcp_tui(args):
     except KeyboardInterrupt:
         print("\n✅ TUI control MCP server stopped")
     except ImportError as e:
-        log.error(f"Failed to import TUI control MCP server: {e}")
-        print("❌ Error: Could not load the TUI control MCP server")
-        print(f"   {e}")
-        print('   Install the MCP extras: uv pip install -e ".[mcp]"')
-        sys.exit(1)
+        _exit_mcp_server_unavailable("the TUI control MCP server", e)
     except Exception as e:
         log.error(f"Error starting TUI control MCP server: {e}")
         print(f"❌ Error starting TUI control MCP server: {e}")
