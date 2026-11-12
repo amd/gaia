@@ -401,6 +401,16 @@ const messages: Messages = {
     'retry.button': 'إعادة المحاولة بنموذج آخر',
     'retry.head': 'إعادة المحاولة باستخدام…',
     'retry.onThisPc': 'تعمل هذه النماذج على هذا الجهاز، لا على {provider}. يُحمَّل النموذج أولًا، وقد يستغرق ذلك دقيقة.',
+    'compare.title': 'مقارنة الإجابات',
+    'compare.close': 'إغلاق المقارنة',
+    'compare.answerFrom': 'إجابة {model}',
+    'compare.originalModel': 'النموذج الأصلي',
+    'compare.original': 'الإجابة الأصلية',
+    'compare.keep': 'الاحتفاظ بهذه الإجابة',
+    'compare.keeping': 'جارٍ الاحتفاظ…',
+    'compare.loading': 'جارٍ تحميل {model}، ثم الإجابة من الأدلة نفسها. لن تُشغَّل الأدوات مرة أخرى.',
+    'compare.loadTime': 'منها {time} للتحميل',
+    'compare.rate': '{n} tok/s',
 
     // قائمة النماذج
     'modelMenu.availableToDownload': 'متاح للتنزيل',

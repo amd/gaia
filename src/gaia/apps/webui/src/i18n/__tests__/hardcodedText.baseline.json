@@ -1,7 +1,6 @@
 {
   "App.tsx": 6,
   "components/AgentActivity.tsx": 2,
-  "components/AnswerComparison.tsx": 12,
   "components/ChangesReview.tsx": 6,
   "components/ChatView.tsx": 14,
   "components/ConnectionBanner.tsx": 29,

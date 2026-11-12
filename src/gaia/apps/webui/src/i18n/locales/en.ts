@@ -401,6 +401,16 @@ export const enMessages = {
     'retry.button': 'Retry with another model',
     'retry.head': 'Retry with…',
     'retry.onThisPc': 'These run on this PC, not on {provider}. The model loads first, which can take a minute.',
+    'compare.title': 'Compare answers',
+    'compare.close': 'Close comparison',
+    'compare.answerFrom': 'Answer from {model}',
+    'compare.originalModel': 'the original model',
+    'compare.original': 'Original answer',
+    'compare.keep': 'Keep this answer',
+    'compare.keeping': 'Keeping…',
+    'compare.loading': 'Loading {model}, then answering from the same evidence. Tools are not run again.',
+    'compare.loadTime': 'incl. {time} loading',
+    'compare.rate': '{n} tok/s',
 
     // Model menu
     'modelMenu.availableToDownload': 'Available to download',
