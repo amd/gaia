@@ -165,7 +165,8 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = notification.alwaysLabel ?? scope ?? '';
+    // It names a file or skill the model chose, so its hidden characters show as codes.
+    const scopeText = visibleText(notification.alwaysLabel ?? scope ?? '', false);
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -199,7 +200,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
     const decoded = command ? decodedPowerShell(command) : '';
     const reading = command.includes('^') ? cmdReading(command) : '';
-    const hidden = [detail, code, command, decoded, args.path].some(unseen);
+    const hidden = [detail, code, command, decoded, args.path, folder, relayed?.folder, relayed?.extras].some(unseen);
 
     const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
@@ -259,7 +260,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     </h2>
                     {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{shownDetail}</pre>}
                     {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{shownDetail}</code></p>}
-                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
+                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(folder, false)}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
                     {code && <CodeBlock code={visibleText(code, true)} />}
                     {script?.text != null && !script.text.trim() && (
@@ -283,12 +284,12 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {reading && reading !== command && <p className="perm-card-detail">{t('prompt.cmdReading')}</p>}
                     {reading && reading !== command && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-cmd-reading">{visibleText(reading, true)}</pre>}
                     {hidden && <p className="perm-card-risk" role="note" data-testid="perm-hidden-note"><bdi>{t('prompt.hiddenChars')}</bdi></p>}
-                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
-                    {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
+                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(relayed.folder, false)}</code></p>}
+                    {relayed?.extras && <p className="perm-card-detail"><bdi>{visibleText(relayed.extras, false)}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
                     {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
                     {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
-                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{visibleText(notification.summary, true)}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
                 </div>
                 {remaining !== null && !expired && (
@@ -306,7 +307,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         {t('prompt.details')}
                     </button>
-                    {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(detailArgs, null, 2)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(detailArgs, null, 2), true)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (

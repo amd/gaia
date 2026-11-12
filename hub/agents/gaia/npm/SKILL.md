@@ -470,7 +470,8 @@ is `pytest` on one call and `rm -rf` on the next. `always` grants the family
 named in `always_scope` for the rest of the session (`pytest` covers every
 spelling of a test run) — say so in your UI, because it stops asking; no
 `always_scope` means don't offer it. `always_label` (when present) says the same
-grant in plain words, e.g. `editing notes.md`. If your prompt expires unanswered, send
+grant in plain words, e.g. `editing notes.md`. Both arrive with any hidden or
+reordering character in the name written as `[U+XXXX]`, so show them as sent. If your prompt expires unanswered, send
 `timeout`, not `deny`: it still refuses, but the agent tells the user the
 request timed out instead of claiming they said no. Unknown run → **404**; a
 prompt that is no longer pending → **409**; any other decision → **422**. All loud,

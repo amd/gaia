@@ -18,6 +18,13 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   path no approval can grant, is refused the same way: no `needs_confirmation`
   is sent for it and the file is never read into one.
 
+- **An "always allow" label can no longer read reversed.** `always_scope` and
+  `always_label` name a file or skill the model chose, and a name holding a
+  right-to-left override or a zero-width character was sent raw, so a button
+  built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
+  Both now carry such a character as `[U+XXXX]`. The grant still covers the
+  real file.
+
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

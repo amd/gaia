@@ -5,7 +5,7 @@
 // that don't show are shown as codes, every line of a command is there, and a
 // command whose text hides what it runs is shown decoded beside the original.
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionPrompt } from '../PermissionPrompt';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
@@ -94,5 +94,26 @@ describe('a permission card shows what will run', () => {
         show({ tool: 'run_python', toolArgs: { code: 'print("a\u2066b")' } });
         expect(screen.getByTestId('perm-code').textContent).toBe('print("a[U+2066]b")');
         expect(screen.getByTestId('perm-hidden-note')).toBeInTheDocument();
+    });
+
+    it.each([
+        ['its label', { alwaysScope: 'write_file on invoice\u202Etxt.exe', alwaysLabel: 'writing invoice\u202Etxt.exe' }],
+        ['its scope alone', { alwaysScope: 'write_file on invoice\u202Etxt.exe' }],
+    ])('marks a hidden character on the always-allow button, named by %s', (_name, grant) => {
+        const card = show({
+            tool: 'write_file', toolArgs: { file_path: 'C:\\w\\invoice\u202Etxt.exe', content: 'x' }, ...grant,
+        });
+        const always = screen.getByRole('button', { name: /Always allow/ });
+        expect(always).toHaveTextContent('invoice[U+202E]txt.exe');
+        expect(card.textContent).not.toContain('\u202E');
+    });
+
+    it('marks hidden characters in the details and the folder a command runs in', () => {
+        const card = show({
+            toolArgs: { command: 'dir', working_directory: 'C:\\w\\a\u200Bb', _risk_note: 'Not checked.' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        expect(card).toHaveTextContent('C:\\w\\a[U+200B]b');
+        expect(card.textContent).not.toContain('\u200B');
     });
 });

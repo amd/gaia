@@ -43,7 +43,7 @@ import ntpath
 import os
 import posixpath
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.call_risk import DESTRUCTIVE, RISK_NOTE_ARG, shell_command_risk
@@ -54,6 +54,7 @@ from gaia.agents.base.command_facts import (
     line_words,
     read_command,
 )
+from gaia.agents.base.person_approval import visible_line
 from gaia.agents.base.write_safety import (
     has_hidden_part,
     is_too_broad_folder,
@@ -300,14 +301,22 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     if args.get(SCRATCH_ARG):
         return None
     if tool_name in _SHELL_TOOLS:
-        return _shell_scope(tool_name, args)
-    if tool_name in PATH_TOOLS:
-        return _path_scope(tool_name, args)
-    if tool_name in _SKILL_TOOLS:
-        return _named_scope(tool_name, args, _SKILL_ARG_NAMES)
-    if tool_name in _FAMILY_TOOLS:
+        scope = _shell_scope(tool_name, args)
+    elif tool_name in PATH_TOOLS:
+        scope = _path_scope(tool_name, args)
+    elif tool_name in _SKILL_TOOLS:
+        scope = _named_scope(tool_name, args, _SKILL_ARG_NAMES)
+    elif tool_name in _FAMILY_TOOLS:
         return GrantScope(keys=(tool_name,), label=_FAMILY_TOOLS[tool_name])
-    return None
+    else:
+        return None
+    if scope is None:
+        return None
+    # The words a button shows come from the model: a hidden or reordering
+    # character in them reads as its code. The keys keep the real name.
+    return replace(
+        scope, label=visible_line(scope.label), subject=visible_line(scope.subject)
+    )
 
 
 def is_inside_folder(path: str, folder: str) -> bool:
