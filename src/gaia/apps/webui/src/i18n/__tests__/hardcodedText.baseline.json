@@ -2,7 +2,7 @@
   "App.tsx": 6,
   "components/AgentActivity.tsx": 2,
   "components/ChangesReview.tsx": 6,
-  "components/ChatView.tsx": 14,
+  "components/ChatView.tsx": 13,
   "components/ConnectionBanner.tsx": 29,
   "components/ConnectorRetryBanner.tsx": 3,
   "components/ConnectorsSection.tsx": 1,

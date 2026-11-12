@@ -1814,7 +1814,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             {isDragOver && (
                 <div className="drag-overlay">
                     <Upload size={32} strokeWidth={1.5} aria-hidden="true" />
-                    <span>Drop files to index them for this chat</span>
+                    <span>{t('chat.dropToAdd')}</span>
                 </div>
             )}
 

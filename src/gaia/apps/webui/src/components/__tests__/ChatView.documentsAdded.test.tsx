@@ -93,7 +93,7 @@ it('shows a document the agent indexed in the chat and the library', async () =>
     const state = useChatStore.getState();
     expect(state.documents.map((d) => d.id)).toEqual(['doc-1']);
     expect(state.sessions[0].document_ids).toEqual(['doc-1']);
-    const bar = screen.getByLabelText('1 indexed document');
+    const bar = screen.getByLabelText('1 document added to this chat');
     expect(within(bar).getByText('plant_manual.md')).toBeInTheDocument();
 });
 
