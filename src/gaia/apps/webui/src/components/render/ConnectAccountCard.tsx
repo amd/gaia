@@ -15,8 +15,8 @@ import { UnsupportedCard } from './UnsupportedCard';
  *
  * A mail or calendar tool that finds no usable account sends this card with
  * its result, so the Connect button is on screen whatever the model writes.
- * Pressing it starts the same sign-in as Settings › Connectors and gives the
- * asking agent access in the same step.
+ * Pressing it starts sign-in for the access the asking agent declares, and
+ * gives that agent access in the same step.
  */
 
 export const CONNECT_ACCOUNT_RENDER = 'connect_account';
@@ -122,18 +122,22 @@ function ProviderRow({
     onOpened: () => void;
 }) {
     const t = useT();
+    const openSettings = useChatStore((s) => s.openSettings);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const connect = useCallback(async () => {
+        // With no agent to size the request, Settings is where access is chosen.
+        if (grantAgents.length === 0) {
+            openSettings('connectors');
+            return;
+        }
         setBusy(true);
         setError(null);
         try {
-            const connector = await api.getConnector(connectorId);
-            const scopes = connector.available_scopes?.length
-                ? connector.available_scopes
-                : connector.default_scopes;
-            const flow = await api.authorizeConnector(connectorId, scopes, grantAgents);
+            // No scopes: the backend asks for what the granted agent declares,
+            // never the connector's whole list.
+            const flow = await api.authorizeConnector(connectorId, [], grantAgents);
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
@@ -141,7 +145,7 @@ function ProviderRow({
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, onOpened]);
+    }, [connectorId, grantAgents, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
