@@ -1705,6 +1705,11 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('#ctx-size')).toBeInViewport();
         const back = dialog.locator('.settings-back');
         await expect(back).toBeVisible();
+        // Nothing drawn over it: a sticky tab title once covered the link (#7699).
+        const link = await back.boundingBox();
+        if (!link) throw new Error('the Back link did not lay out');
+        expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [link.x + link.width / 2, link.y + link.height / 2])).toBe(true);
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
         await back.click();

@@ -66,6 +66,7 @@
 .settings-body {
     position: relative;
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
     min-height: 0;
@@ -103,8 +104,11 @@
 .settings-back {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    align-self: flex-start;
     gap: 4px;
-    margin-block-end: 8px;
+    margin-block: 14px 0;
+    margin-inline: 26px 60px;
     padding-block: 2px;
     padding-inline: 2px 6px;
     border-radius: var(--radius-sm);
@@ -882,7 +886,7 @@
     text-align: start;
 }
 
-.settings-setup-row:hover {
+.settings-setup-row:not(.is-fact):hover {
     background: var(--bg-hover);
 }
 

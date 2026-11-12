@@ -22,7 +22,7 @@ vi.mock('../ModelSettings', () => ({
                 <h2 className="settings-pane-title">Model</h2>
                 {loaded && (
                     <details className="settings-disclosure">
-                        <summary>GPU memory</summary>
+                        <summary><span id="gpu-title">GPU memory</span></summary>
                         <div className="settings-field">
                             <label htmlFor="ctx-size">Context window</label>
                             <select id="ctx-size"><option>64K</option></select>
@@ -34,7 +34,17 @@ vi.mock('../ModelSettings', () => ({
     },
 }));
 
+/** The one observer the dialog makes per jump; `fire` plays a layout change. */
+let resized: { fire: () => void; watching: Element[] } | null = null;
+
 beforeEach(() => {
+    resized = null;
+    vi.stubGlobal('ResizeObserver', class {
+        watching: Element[] = [];
+        constructor(private readonly cb: () => void) { resized = { fire: () => { if (this.watching.length) this.cb(); }, watching: this.watching }; }
+        observe(el: Element) { this.watching.push(el); }
+        disconnect() { this.watching.length = 0; }
+    });
     vi.useFakeTimers();
     vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockClear();
     useChatStore.setState({ settingsSection: 'setup', settingsJump: null });
@@ -59,6 +69,43 @@ describe('SettingsDialog jump from Setup', () => {
         expect(screen.getByText('setup pane')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Setup' })).toHaveFocus();
         expect(screen.queryByRole('button', { name: 'Back to Setup' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the way back outside the scrolling pane, clear of the tab title (#7699)', async () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        act(() => useChatStore.getState().jumpToSetting({ section: 'model', target: '#ctx-size', from: 'setup' }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(screen.getByRole('button', { name: 'Back to Setup' }).closest('.settings-scroll')).toBeNull();
+    });
+
+    it('holds the setting in view while rows above it load, until the user scrolls (#7700)', async () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        act(() => useChatStore.getState().jumpToSetting({ section: 'model', target: '#ctx-size', from: 'setup' }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        const scrolls = vi.mocked(HTMLElement.prototype.scrollIntoView);
+        const landed = scrolls.mock.calls.length;
+
+        act(() => resized?.fire());
+        expect(scrolls.mock.calls.length).toBe(landed + 1);
+
+        fireEvent.wheel(document.querySelector('.settings-scroll') as HTMLElement);
+        act(() => resized?.fire());
+        expect(scrolls.mock.calls.length).toBe(landed + 1);
+    });
+
+    it('moves focus to the tab it opened when the setting is not there', async () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        act(() => screen.getByRole('button', { name: 'Setup' }).focus());
+        act(() => useChatStore.getState().jumpToSetting({ section: 'model', target: '#no-such-setting', from: 'setup' }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(screen.getByRole('button', { name: 'Model' })).toHaveFocus();
+    });
+
+    it('focuses the heading\'s own summary when a row points at a section title', async () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        act(() => useChatStore.getState().jumpToSetting({ section: 'model', target: '#gpu-title', from: 'setup' }));
+        await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+        expect(screen.getByText('GPU memory').closest('summary')).toHaveFocus();
     });
 
     it('shows no way back when the section was picked from the list', () => {
