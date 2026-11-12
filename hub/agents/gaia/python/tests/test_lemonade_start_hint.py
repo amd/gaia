@@ -89,9 +89,11 @@ def test_server_run_error_is_classified(start_hint, monkeypatch, gaias_own):
         ConnectionError("Max retries exceeded ... Connection refused")
     )
 
-    assert "local LLM" in detail
+    assert ("local LLM" in detail) is gaias_own
     assert "Max retries" not in detail
-    assert (_INSTRUCTION in detail) is not gaias_own
+    # Shown in the apps, so never a terminal command.
+    assert _INSTRUCTION not in detail
+    assert ("Start it the way you usually do" in detail) is not gaias_own
 
 
 def _fake_agent():

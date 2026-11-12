@@ -348,13 +348,13 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
     """What an app user does about a model server that isn't answering.
 
     GAIA's own server is started by the daemon on the next message; one the
-    user runs needs this machine's start instruction.
+    user runs is theirs to start, and an app never names a terminal command.
     """
-    from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
 
     if gaia_runs_lemonade(base_url):
         return APP_SERVER_DOWN_HINT
-    return describe_start_hint().instruction
+    return APP_OTHER_SERVER_DOWN_HINT
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:

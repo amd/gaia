@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A model server GAIA doesn't run is no longer called "not installed".** When
+  that server stopped answering, a run's `error` ended with this machine's
+  start instruction, which on a PC with no Lemonade of its own read "Lemonade
+  Server is not installed. Run `gaia init`". The `error` now says the model
+  server isn't answering and that it is its owner's to start, with no command.
+
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
   guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose

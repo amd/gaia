@@ -132,6 +132,42 @@ describe('a set-up install whose model server is down at launch', () => {
         expect(text()).not.toContain('First-run setup');
     });
 
+    it('shows the notice when the server stops answering while the app is open, with no reload', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+        expect(text()).not.toContain(NOTICE);
+
+        mocked.checkSetup.mockResolvedValue(SERVER_DOWN);
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).toContain(NOTICE);
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+        expect(text()).toContain('Harbor plans');
+        expect(text()).not.toContain('First-run setup');
+    });
+
+    it('never opens setup over a chat because the poll saw the server down', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'models', initialized: true, steps: [] });
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).not.toContain('First-run setup');
+        expect(text()).not.toContain(NOTICE);
+        expect(text()).toContain('Harbor plans');
+    });
+
     it('offers setup from the notice, for a server that will not come back', async () => {
         render(<App />);
         await advance(0);

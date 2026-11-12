@@ -4891,6 +4891,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 event_type = event.get("type", "")
                 if event_type in ("answer", "agent_error") and event.get("content"):
                     event = {**event, "content": _agent_ui_wording(event["content"])}
+                if (
+                    event_type == "agent_error"
+                    and event.get("fatal")
+                    and event.get("content")
+                ):
+                    # A relayed agent can't tell a cloud chat: don't call its model local.
+                    event = {
+                        **event,
+                        "content": wording_for_model(event["content"], model_id),
+                    }
                 if event_type == "tool_start":
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):

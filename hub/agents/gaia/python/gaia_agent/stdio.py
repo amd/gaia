@@ -1397,16 +1397,26 @@ def model_server_failure(exc: BaseException) -> Optional[Any]:
 
 
 def model_server_message(typed: Any) -> str:
-    """*typed*'s user message, with a start instruction for a server GAIA doesn't run.
+    """*typed*'s user message; a lost server GAIA doesn't run is its owner's to start.
 
-    The daemon restarts GAIA's own server; a server the user runs is theirs
-    to start.
+    The daemon restarts GAIA's own server. No start command for the other: an
+    app shows this text, and the host's install says nothing of a server
+    reached by address.
     """
-    from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
-    from gaia.llm.providers.lemonade import LemonadeNetworkError
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.providers.lemonade import (
+        LemonadeNetworkError,
+        LemonadeServerUnreachableError,
+    )
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT
 
-    if isinstance(typed, LemonadeNetworkError) and not gaia_runs_lemonade():
-        return f"{typed.user_message} {describe_start_hint().instruction}"
+    if (
+        isinstance(typed, LemonadeNetworkError)
+        # That one already says to start the server.
+        and not isinstance(typed, LemonadeServerUnreachableError)
+        and not gaia_runs_lemonade()
+    ):
+        return f"The model server isn't answering. {APP_OTHER_SERVER_DOWN_HINT}"
     return typed.user_message
 
 

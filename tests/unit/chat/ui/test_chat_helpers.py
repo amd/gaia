@@ -18,7 +18,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
 from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
     _EMPTY_MODEL_ANSWER_MSG,
@@ -520,12 +520,14 @@ class TestEmptyAnswerBackendProblem:
         assert problem.endswith(APP_SERVER_DOWN_HINT)
         assert "gaia " not in problem
 
-    def test_a_server_the_user_runs_gets_its_start_hint(self):
+    def test_a_server_the_user_runs_is_theirs_to_start_with_no_command(self):
         def refuse(request):
             raise httpx.ConnectError("connection refused", request=request)
 
         problem = _probe("Gemma-4-E4B-it-GGUF", refuse, gaias_own=False)
-        assert problem.endswith("START-HINT")
+        assert problem.endswith(APP_OTHER_SERVER_DOWN_HINT)
+        assert "START-HINT" not in problem
+        assert "gaia init" not in problem and "not installed" not in problem
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))
