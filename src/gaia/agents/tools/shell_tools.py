@@ -631,11 +631,33 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
     }
 
 
-#: A web address anywhere on a line, a script's strings included.
+#: A URL anywhere on a line, a script's strings included: its scheme and host.
+#: Any scheme connects (gopher, dict, ldap, smb, sftp). The match runs to the
+#: URL's end, so a URL inside its query string is not read as a second one.
 _URL_HOST = re.compile(
-    r"\b(?:https?|ftp|wss?)://(?:[^@/\s'\"]*@)?(\[[0-9A-Fa-f:.]+\]|[^/\s:'\"?#]+)",
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*)://(?:[^/\s'\"?#]*@)?"
+    r"(\[[^\]\s'\"]*\]|[^/\s:'\"?#]+)[^\s'\";|<>()`]*",
     re.IGNORECASE,
 )
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
+
+#: Schemes that open a file on this PC instead of a connection.
+_FILE_SCHEMES = frozenset({"file"})
+
+#: curl's URL globbing: ``{a,b}`` alternatives and ``[1-20]`` ranges.
+_GLOB_SET = re.compile(r"\{([^{}]*)\}")
+_GLOB_RANGE = re.compile(r"\[(\d+|[a-z])-(\d+|[a-z])(?::\d+)?\]", re.IGNORECASE)
+_GLOB_LIMIT = 32
+
+
+def _url_hosts(text: str) -> List[str]:
+    """The host of every URL in *text* that names somewhere to connect."""
+    return [
+        match.group(2)
+        for match in _URL_HOST.finditer(text)
+        if match.group(1).lower() not in _FILE_SCHEMES
+    ]
+
 
 #: Programs whose bare operand is an address: ``curl 127.0.0.1:8000/x``.
 _FETCHERS = frozenset(
@@ -711,7 +733,8 @@ def private_destination(host: str) -> str:
     """
     from gaia.web.client import _is_blocked_ip
 
-    name = _folded(host).strip("[]").rstrip(".").lower()
+    # An IPv6 zone (`%eth0`, `%25eth0`) picks the interface, not the address.
+    name = _folded(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
     if name in _LOOPBACK_NAMES or name.endswith(
         tuple(f".{known}" for known in _LOOPBACK_NAMES)
     ):
@@ -728,31 +751,67 @@ def private_destination(host: str) -> str:
     return "your local network" if _is_blocked_ip(ip) else ""
 
 
-def _operand_host(token: str) -> str:
-    """The host a fetcher reads from its bare operand *token*, or "" for none."""
-    address = re.split(r"[/?#]", token, maxsplit=1)[0].rsplit("@", 1)[-1]
-    if not address.startswith("["):
-        address = address.rsplit(":", 1)[0]
+def _unglobbed(authority: str) -> List[str]:
+    """*authority* with curl's URL globs written out: each alternative, a range's ends."""
+    done, todo = [], [authority]
+    while todo and len(done) + len(todo) <= _GLOB_LIMIT:
+        text = todo.pop()
+        glob = _GLOB_SET.search(text)
+        picks = glob.group(1).split(",") if glob else []
+        if not glob:
+            glob = _GLOB_RANGE.search(text)
+            picks = [glob.group(1), glob.group(2)] if glob else []
+        if not glob:
+            done.append(text)
+            continue
+        todo.extend(text[: glob.start()] + pick + text[glob.end() :] for pick in picks)
+    return done + todo
+
+
+def _authority_host(authority: str) -> str:
+    """The host in ``user:password@host:port``; the last ``@`` ends the user part."""
+    address = authority.rsplit("@", 1)[-1]
+    if address.startswith("["):
+        return address[: address.find("]") + 1] or address
+    return address.rsplit(":", 1)[0]
+
+
+def _is_operand_address(address: str, alone: bool) -> bool:
+    """True when a fetcher reads *address*, written with no scheme, as a host.
+
+    *alone* says the address was the whole word: no port, path or user part.
+    """
     number = _numeric_ipv4(address)
     if number is None:
-        named = "." in address or ":" in address or "localhost" in address
-        return address if named else ""
+        return "." in address or ":" in address or "localhost" in address
     # A bare count such as `curl 3`: 0.0.0.3 is nowhere, and nobody means it.
-    if address == token and "." not in address and 0 < int(number) < 2**24:
-        return ""
-    return address
+    return not (alone and "." not in address and 0 < int(number) < 2**24)
+
+
+def _word_hosts(word: str, globs: bool) -> List[str]:
+    """The hosts a fetcher connects to for *word*, a URL with or without a scheme.
+
+    Only the URL's own authority is read: an address in its path, query string
+    or fragment is data sent to that host, not a second destination.
+    """
+    scheme = _URL_SCHEME.match(word)
+    if scheme and scheme.group(1).lower() in _FILE_SCHEMES:
+        return []
+    rest = word[scheme.end() :] if scheme else word
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    hosts = []
+    for written in _unglobbed(authority) if globs else [authority]:
+        address = _authority_host(written)
+        if address and (scheme or _is_operand_address(address, address == word)):
+            hosts.append(address)
+    return hosts
 
 
 def _fetched_hosts(program: str, arguments: List[str]) -> List[str]:
     """The hosts a fetcher's *arguments* make it connect to."""
-    hosts = []
+    hosts: List[str] = []
     for word in fetch_destinations(program, arguments):
-        if "://" in word:
-            hosts.extend(match.group(1) for match in _URL_HOST.finditer(word))
-            continue
-        address = _operand_host(word)
-        if address:
-            hosts.append(address)
+        hosts.extend(_word_hosts(word, globs=program == "curl"))
     return hosts
 
 
@@ -799,11 +858,7 @@ def _private_hosts(
         _interpreter_name(segment[0]) for step in steps for segment in step.segments
     ]
     only_fetchers = bool(programs) and all(name in _FETCHERS for name in programs)
-    hosts = (
-        [match.group(1) for match in _URL_HOST.finditer(_folded(command))]
-        if whole_line and not only_fetchers
-        else []
-    )
+    hosts = _url_hosts(_folded(command)) if whole_line and not only_fetchers else []
     for step in steps:
         for segment in step.segments:
             program = _interpreter_name(segment[0])
@@ -814,7 +869,7 @@ def _private_hosts(
                 # Only the words it connects to: not a file name, body or header.
                 hosts.extend(_fetched_hosts(program, words))
             else:
-                hosts.extend(m.group(1) for m in _URL_HOST.finditer(" ".join(words)))
+                hosts.extend(_url_hosts(" ".join(words)))
     found = []
     for host in dict.fromkeys(hosts):
         where = private_destination(host)

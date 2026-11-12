@@ -34,19 +34,50 @@ _CURL_OTHER_LONG = (
     "etag-compare etag-save expect100-timeout form form-string ftp-account "
     "ftp-alternative-to-user ftp-method ftp-port ftp-ssl-ccc-mode "
     "happy-eyeballs-timeout-ms haproxy-clientip header hostpubmd5 hostpubsha256 "
-    "hsts interface ip-tos ipfs-gateway json keepalive-cnt keepalive-time key "
-    "key-type krb libcurl limit-rate local-port login-options mail-auth mail-from "
-    "mail-rcpt max-filesize max-redirs max-time netrc-file noproxy oauth2-bearer "
-    "output output-dir parallel-max pass pinnedpubkey proto proto-default "
+    "help hsts interface ip-tos ipfs-gateway json keepalive-cnt keepalive-time key "
+    "key-type knownhosts krb libcurl limit-rate local-port login-options mail-auth "
+    "mail-from mail-rcpt max-filesize max-redirs max-time netrc-file noproxy "
+    "oauth2-bearer output output-dir parallel-max parallel-max-host pass "
+    "pinnedpubkey proto proto-default "
     "proto-redir proxy-cacert proxy-capath proxy-cert proxy-cert-type "
     "proxy-ciphers proxy-crlfile proxy-header proxy-key proxy-key-type proxy-pass "
     "proxy-pinnedpubkey proxy-service-name proxy-tls13-ciphers proxy-tlsauthtype "
     "proxy-tlspassword proxy-tlsuser proxy-user pubkey quote random-file range "
     "rate referer request request-target retry retry-delay retry-max-time "
-    "sasl-authzid service-name socks5-gssapi-service speed-limit speed-time "
-    "stderr telnet-option tftp-blksize time-cond tls-max tls13-ciphers "
+    "sasl-authzid service-name sigalgs socks5-gssapi-service speed-limit "
+    "speed-time ssl-sessions stderr telnet-option tftp-blksize time-cond tls-max tls13-ciphers "
     "tlsauthtype tlspassword tlsuser trace trace-ascii trace-config unix-socket "
-    "upload-file url-query user user-agent variable vlan-priority write-out"
+    "upload-file upload-flags url-query user user-agent variable vlan-priority "
+    "write-out"
+)
+#: Long options that take no value. One whose name starts a value option's name
+#: (``--netrc``, ``--ftp-ssl``) must not swallow the URL that follows it.
+_CURL_FLAGS = frozenset(
+    (
+        "anyauth append basic ca-native cert-status compressed compressed-ssh "
+        "create-dirs crlf digest disable disable-eprt disable-epsv "
+        "disallow-username-in-url doh-cert-status doh-insecure dump-ca-embed fail "
+        "fail-early fail-with-body false-start follow form-escape ftp-create-dirs "
+        "ftp-pasv ftp-pret ftp-skip-pasv-ip ftp-ssl ftp-ssl-ccc ftp-ssl-control "
+        "ftp-ssl-reqd get globoff haproxy-protocol head http0.9 http1.0 http1.1 "
+        "http2 http2-prior-knowledge http3 http3-only ignore-content-length include "
+        "insecure ipv4 ipv6 junk-session-cookies list-only location "
+        "location-trusted mail-rcpt-allowfails manual metalink mptcp negotiate "
+        "netrc netrc-optional next no-alpn no-buffer no-clobber no-keepalive no-npn "
+        "no-progress-meter no-sessionid ntlm ntlm-wb out-null parallel "
+        "parallel-immediate path-as-is post301 post302 post303 progress-bar "
+        "proxy-anyauth proxy-basic proxy-ca-native proxy-digest proxy-http2 "
+        "proxy-http3 proxy-insecure proxy-negotiate proxy-ntlm "
+        "proxy-ssl-allow-beast proxy-ssl-auto-client-cert proxy-tlsv1 proxytunnel "
+        "raw remote-header-name remote-name remote-name-all remote-time "
+        "remove-on-error retry-all-errors retry-connrefused sasl-ir show-error "
+        "show-headers silent skip-existing socks5-basic socks5-gssapi "
+        "socks5-gssapi-nec ssl ssl-allow-beast ssl-auto-client-cert ssl-no-revoke "
+        "ssl-reqd ssl-revoke-best-effort sslv2 sslv3 styled-output "
+        "suppress-connect-headers tcp-fastopen tcp-nodelay tftp-no-options "
+        "tls-earlydata tlsv1 tlsv1.0 tlsv1.1 tlsv1.2 tlsv1.3 tr-encoding trace-ids "
+        "trace-time use-ascii verbose version xattr"
+    ).split()
 )
 
 _WGET_HOST_SHORT = "B"
@@ -62,10 +93,28 @@ _WGET_OTHER_LONG = (
     "include-directories input-file level limit-rate load-cookies local-encoding "
     "max-redirect method output-document output-file password post-data "
     "post-file prefer-family private-key private-key-type progress "
-    "proxy-password proxy-user quota random-file random-wait read-timeout "
+    "proxy-password proxy-user quota random-file read-timeout "
     "referer regex-type reject reject-regex remote-encoding report-speed "
     "restrict-file-names save-cookies secure-protocol timeout tries user "
     "user-agent wait waitretry warc-file"
+)
+_WGET_FLAGS = frozenset(
+    (
+        "adjust-extension ask-password auth-no-challenge background "
+        "backup-converted cache check-certificate content-disposition "
+        "content-on-error continue convert-links cookies debug delete-after "
+        "directories dns-cache follow-ftp force-directories force-html glob help "
+        "host-directories hsts http-keep-alive https-only ignore-case ignore-length "
+        "inet4-only inet6-only iri keep-session-cookies mirror netrc no-cache "
+        "no-check-certificate no-clobber no-config no-cookies no-directories "
+        "no-dns-cache no-glob no-host-directories no-hsts no-http-keep-alive "
+        "no-iri no-netrc no-parent no-passive-ftp no-proxy no-remove-listing "
+        "no-verbose page-requisites parent passive-ftp preserve-permissions "
+        "protocol-directories proxy quiet random-wait recursive relative "
+        "remove-listing retr-symlinks retry-connrefused save-headers "
+        "server-response show-progress span-hosts spider strict-comments "
+        "timestamping trust-server-names unlink verbose version xattr"
+    ).split()
 )
 
 _PS_HOST = "uri proxy"
@@ -139,16 +188,34 @@ def _short_cluster(token: str, host: str, other: str) -> "tuple[str, str, str]":
     return "", "", ""
 
 
-def _long_kind(name: str, table: Dict[str, str], prefixes: bool) -> str:
-    """*name*'s entry in *table*; with *prefixes*, by any prefix, as getopt reads it."""
-    if name in table or not prefixes:
-        return table.get(name, "")
-    matches = {kind for known, kind in table.items() if known.startswith(name)}
-    return HOST if HOST in matches else OTHER if matches else ""
+def _long_option(
+    name: str, valued: Dict[str, str], flags: "frozenset[str]"
+) -> "tuple[str, str]":
+    """``(kind, full name)`` of ``--name``; kind is HOST, OTHER, or "" for no value.
+
+    A shortened name is read by prefix, as getopt and older curl builds read
+    it. One that could be several options makes the program stop, so the
+    choice only has to be safe: a host if any could be, and a value that is
+    skipped only when every candidate takes one.
+    """
+    if name in valued:
+        return valued[name], name
+    if name in flags:
+        return "", name
+    candidates = {
+        known: kind for known, kind in valued.items() if known.startswith(name)
+    }
+    hosts = [known for known, kind in candidates.items() if kind == HOST]
+    if hosts:
+        return HOST, hosts[0] if len(hosts) == 1 else name
+    if candidates and not any(flag.startswith(name) for flag in flags):
+        return OTHER, next(iter(candidates)) if len(candidates) == 1 else name
+    return "", name
 
 
 def _posix_destinations(argv: List[str], wget: bool) -> List[str]:
     long = _WGET_LONG if wget else _CURL_LONG
+    flags = _WGET_FLAGS if wget else _CURL_FLAGS
     host_short = _WGET_HOST_SHORT if wget else _CURL_HOST_SHORT
     other_short = _WGET_OTHER_SHORT if wget else _CURL_OTHER_SHORT
 
@@ -177,7 +244,9 @@ def _posix_destinations(argv: List[str], wget: bool) -> List[str]:
         if token.startswith("--"):
             name, joined, value = token[2:].partition("=")
             name = name.lower()
-            kind = _long_kind(name, long, prefixes=wget)
+            if not wget and name.startswith("expand-"):
+                name = name[len("expand-") :]
+            kind, name = _long_option(name, long, flags)
             if not kind:
                 # An option this table does not know: only a full URL in it counts.
                 if "://" in value:

@@ -296,3 +296,165 @@ def test_an_argument_that_is_not_a_destination_gets_no_note(command):
 )
 def test_private_destination(host, where):
     assert private_destination(host) == where
+
+
+#: Every line of the release test's probe, with whether the note belongs on it.
+PROBED = [
+    ("curl -s gopher://127.0.0.1:6379/_x", True),
+    ("curl -s dict://127.0.0.1:11211/stats", True),
+    ("curl -s telnet://127.0.0.1:23", True),
+    ("curl -s tftp://10.0.0.5/x", True),
+    ("curl -s ldap://127.0.0.1/", True),
+    ("curl -s smb://10.0.0.5/share/x", True),
+    ("curl -s sftp://10.0.0.5/x", True),
+    ("curl -s ws://127.0.0.1:8080/", True),
+    ("curl -s HTTP://127.0.0.1:8123/x", True),
+    ("curl -s http://127.0.0.1@example.com/", False),
+    ("curl -s http://example.com@127.0.0.1/", True),
+    ("curl -s 'https://example.com/?next=http://127.0.0.1/'", False),
+    ("curl -s https://example.com/#127.0.0.1", False),
+    ("curl -s -o 10.1 https://example.com/ -x 10.0.0.5:3128", True),
+    ("set HTTP_PROXY=http://127.0.0.1:8080 && curl -s https://example.com/", True),
+    ("curl -s --prox 10.0.0.5:3128 https://example.com/", True),
+    ("curl -s --resolv example.com:443:127.0.0.1 https://example.com/", True),
+    ("curl -s --outp 10.1 https://example.com/", False),
+    ("curl -s --dat 127.0.0.1 https://example.com/", False),
+    ("curl -s http://2130706433/", True),
+    ("curl -s http://017700000001/", True),
+    ("curl -s http://[0:0:0:0:0:ffff:127.0.0.1]/", True),
+    ("curl -s http://[::ffff:7f00:1]/", True),
+    ("curl -s http://[fd00::1]/", True),
+    ("curl -s http://[fe80::1%25eth0]/", True),
+    ("curl -s http://100.64.0.1/", True),
+    ("curl -s http://0.0.0.0:8000/", True),
+    ("curl -s http://172.16.5.4/", True),
+    ("curl -s http://172.32.5.4/", False),
+    ("curl -s http://11.0.0.1/", False),
+    ('powershell -Command "irm http://127.0.0.1:8123/x"', True),
+    (
+        'powershell -Command "Start-BitsTransfer -Source http://10.0.0.5/x -Destination out.bin"',
+        True,
+    ),
+    (
+        "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8123/x')\"",
+        True,
+    ),
+    ("curl -s -G -d q=1 http://127.0.0.1:8123/x", True),
+    ("curl -s -oout http://127.0.0.1:8123/x", True),
+    ("curl -s http://127.0.0.1.sslip.io/", True),
+    ("curl -s http://localhost./x", True),
+    ("curl -s http://LOCALHOST/x", True),
+    ("curl -s http://host.docker.internal/x", True),
+    ("curl -s http://127.0.0.1:8123/x -o 10.1 --data 10.2", True),
+    ("curl -s -H 'Host: 127.0.0.1' https://example.com/", False),
+    ("curl -s --request 127.0.0.1 https://example.com/", False),
+    ("curl -s -o 127.0.0.1.html https://example.com/", False),
+    ("curl --version", False),
+    ("curl -s -O https://example.com/10.0.0.1.txt", False),
+    ("curl -s --proxy-user 10.0.0.1:x https://example.com/", False),
+    ("curl -s --noproxy 127.0.0.1 https://example.com/", False),
+    ("curl -s -e 127.0.0.1 https://example.com/", False),
+    ("curl -s --local-port 1024 https://example.com/", False),
+    ("curl -s -Y 1000 -y 30 https://example.com/", False),
+    ("curl -s -C 100 https://example.com/", False),
+    ("curl -s -z 20260101 https://example.com/", False),
+    ("curl -s --max-filesize 1000 https://example.com/", False),
+    ("curl -s --retry-delay 5 --retry-max-time 60 https://example.com/", False),
+    ("curl -s --parallel-max 4 https://example.com/", False),
+    ("curl -s --keepalive-time 60 https://example.com/", False),
+    ("curl -s --expect100-timeout 2 https://example.com/", False),
+    ("curl -s --max-redirs 5 https://example.com/", False),
+    ("curl -s --tftp-blksize 512 https://example.com/", False),
+    ("curl -s --happy-eyeballs-timeout-ms 200 https://example.com/", False),
+    ("curl -s --rate 2 https://example.com/", False),
+    ("curl -s --speed-limit 100 --speed-time 10 https://example.com/", False),
+    ("curl -s --create-file-mode 644 https://example.com/", False),
+    ("wget --tries 3 --timeout 10 --wait 2 https://example.com/", False),
+    ("wget -l 2 -Q 100 https://example.com/", False),
+    ("wget --limit-rate 20 https://example.com/", False),
+    ("wget -o 10.1 https://example.com/", False),
+    ("wget --bind-address 10.0.0.5 https://example.com/", False),
+    (
+        'powershell -Command "iwr https://example.com/ -TimeoutSec 10 -MaximumRedirection 3"',
+        False,
+    ),
+    (
+        "powershell -Command \"iwr https://example.com/ -Headers @{'X-Forwarded-For'='127.0.0.1'}\"",
+        False,
+    ),
+    ('powershell -Command "iwr https://example.com/ -UserAgent 127.0.0.1"', False),
+]
+
+#: The same rule, on lines the probe did not try.
+BEYOND_THE_PROBE = [
+    # Any scheme that opens a connection.
+    ("curl -s gophers://127.0.0.1:70/", True),
+    ("curl ldaps://192.168.1.10/dc=example", True),
+    ("curl -u me: scp://10.0.0.5/etc/hosts", True),
+    ("curl imap://localhost/INBOX", True),
+    ("git clone ssh://git@192.168.1.5/repo.git", True),
+    ("python -c \"import pysftp; open_url('sftp://10.0.0.5/x')\"", True),
+    ("curl sftp://example.com/x", False),
+    ("curl dict://dict.org/d:word", False),
+    # A file URL opens a file, whatever host it names.
+    ("curl file://127.0.0.1/C:/notes.txt", False),
+    ("curl file://localhost/etc/hosts", False),
+    # Only the URL's own host: not one in its path, query string or fragment.
+    ("curl -s 'example.com/?u=http://127.0.0.1/'", False),
+    ("curl -s 'https://example.com/go#http://localhost/'", False),
+    ("curl -s 'https://example.com?mail=me@127.0.0.1'", False),
+    ("curl -s https://example.com/http://10.0.0.5/", False),
+    ("wget 'https://example.com/?next=http://localhost/'", False),
+    ("iwr 'https://example.com/?next=http://127.0.0.1/'", False),
+    ("python -c \"get('https://example.com/?next=http://127.0.0.1/')\"", False),
+    ("curl -s 'http://127.0.0.1/?next=https://example.com/'", True),
+    ("curl http://a@b@127.0.0.1/", True),
+    # IPv6 with a zone, and bracketed with a port and no scheme.
+    ("curl -g 'http://[fe80::1%eth0]:8080/'", True),
+    ("curl -g [::1]:8080/x", True),
+    ("curl -g '[fe80::1%25eth0]/x'", True),
+    ("curl -g 'http://[2001:4860:4860::8888%25eth0]/'", False),
+    # curl writes a URL glob out into several hosts.
+    ("curl 'http://{example.com,127.0.0.1}/x'", True),
+    ("curl 'http://192.168.1.[1-20]/'", True),
+    ("curl 'http://example.com/{10.0.0.1,10.0.0.2}'", False),
+    ("wget 'http://{example.com,127.0.0.1}/x'", False),
+    # A shortened option is read as the option it shortens.
+    ("curl -s --socks5-h 127.0.0.1:9050 https://example.com/", True),
+    ("curl --connect-t example.com:443:10.0.0.7:8443 https://example.com/", True),
+    ("curl --user-a 127.0.0.1 https://example.com/", False),
+    ("curl --max-t 10.5 --head https://example.com/", False),
+    ("curl --expand-output 10.1 https://example.com/", False),
+    ("curl --expand-url 'http://127.0.0.1:8000/{{path}}'", True),
+    # An option that takes no value does not hide the URL after it.
+    ("curl --netrc http://127.0.0.1/", True),
+    ("curl --ftp-ssl ftp://10.0.0.5/x", True),
+    ("curl --head 127.0.0.1", True),
+    ("wget --random-wait http://127.0.0.1/", True),
+    ("wget --proxy http://192.168.1.4/", True),
+    ("wget --no-verbose https://example.com/", False),
+    ("wget --exec http_proxy=10.0.0.1:8080 http://example.com/", True),
+]
+
+
+@pytest.mark.parametrize("command, noted", PROBED + BEYOND_THE_PROBE)
+def test_the_note_follows_where_the_command_connects(command, noted):
+    error, _ = _Host()._line_verdict(command)
+    note = str((error or {}).get("risk_note") or "")
+
+    assert ("Reaches " in note and "web tools" in note) is noted, note
+    if noted:
+        assert error["tier"] == TIER_CONFIRM_ONCE
+
+
+@pytest.mark.parametrize(
+    "host, where",
+    [
+        ("[fe80::1%25eth0]", "your local network"),
+        ("fe80::1%eth0", "your local network"),
+        ("[::1%lo]", "this PC"),
+        ("[2001:4860:4860::8888%eth0]", ""),
+    ],
+)
+def test_an_ipv6_zone_does_not_hide_the_address(host, where):
+    assert private_destination(host) == where
