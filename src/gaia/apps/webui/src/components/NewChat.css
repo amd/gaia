@@ -11,7 +11,7 @@
     padding: 24px 16px 18vh;
 }
 
-/* Typing drops the composer to the bottom, where the chat will continue. */
+/* Sending drops the composer to the bottom, where the chat will continue. */
 .new-chat.is-docked {
     align-items: flex-end;
     padding-bottom: 16px;
