@@ -397,11 +397,21 @@
     letter-spacing: 0.04em;
 }
 
-/* Plain-text question: agent/tool-derived content, never markdown/innerHTML. */
+/* Question: hardened markdown (no raw HTML, links or images). */
 .render-needs-input__question {
     margin: 0 0 10px;
-    white-space: pre-wrap;
     word-break: break-word;
+}
+
+.render-needs-input__question p,
+.render-needs-input__question ul,
+.render-needs-input__question ol {
+    margin: 0 0 6px;
+}
+
+.render-needs-input__question ul,
+.render-needs-input__question ol {
+    padding-inline-start: 20px;
 }
 
 .render-needs-input__options {

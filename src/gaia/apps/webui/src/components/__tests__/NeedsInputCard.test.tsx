@@ -42,6 +42,22 @@ describe('NeedsInputCard — rendering', () => {
         expect(screen.getByText(basicData.question)).toBeInTheDocument();
     });
 
+    it('formats Markdown in the question instead of showing the markers', () => {
+        const question = 'What should I do with these?\n\n- **4 invoices** (txt)\n- **4 meeting notes** (md)';
+        const { container } = render(<NeedsInputCard data={{ ...basicData, question }} />);
+        expect(screen.getByText('4 invoices').tagName).toBe('STRONG');
+        expect(container.querySelectorAll('.render-needs-input__question li')).toHaveLength(2);
+        expect(container.textContent).not.toContain('**');
+    });
+
+    it('keeps raw HTML, links and images in the question inert', () => {
+        const question = 'Pick one <script>alert(1)</script> [docs](https://evil.example) ![x](https://evil.example/p.png) <img src=x onerror=alert(1)>';
+        const { container } = render(<NeedsInputCard data={{ ...basicData, question }} />);
+        const box = container.querySelector('.render-needs-input__question')!;
+        expect(box.querySelector('script, a, img')).toBeNull();
+        expect(box.textContent).toContain('docs');
+    });
+
     it('renders each option as a clickable button', () => {
         render(<NeedsInputCard data={basicData} />);
         expect(screen.getByRole('button', { name: 'Gmail' })).toBeInTheDocument();
