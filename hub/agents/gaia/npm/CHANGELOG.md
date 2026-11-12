@@ -8,6 +8,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The model is told when older turns are out of its view.** A long chat showed
+  "Older messages are now out of the model's view" while the model answered
+  that something from those turns was never mentioned. The oldest turn it still
+  reads now opens with a one-sentence note that earlier turns exist and are no
+  longer shown.
+
+- **`final.context` counts what the next turn really carries.** With `turns`,
+  the measurement split a text-tool model's recorded tool results into turns
+  of their own and counted this turn as its question and answer only, so a
+  large file read could push history past its budget while `turns_hidden`
+  stayed 0. It now measures whole turns, this turn's tool results included.
+- **Dropped MCP servers are shown as a warning, including ones that fail to
+  start.** The notice that configured MCP servers were left out reached the
+  Agent UI as a plain progress line, so it never appeared in the window, and a
+  server whose command failed to start was not reported at all. A `status`
+  event that warns the user now carries `level: "warning"`, and a server that
+  could not start is named with its error and where it is set up: Settings >
+  Connectors for a connector, the `mcp_servers.json` file for one added by hand.
 - **The default step limit is now 1000, up from 150.** Long multi-part tasks
   reached 150 steps and were cut off before their last part. The limit is now
   only a backstop for a turn that never finishes; the repeated-call and
@@ -165,6 +183,25 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   to the chat.** It is saved to the session as soon as it is searchable, and a
   background index that fails is now reported instead of dropping out of
   sight.
+
+### Fixed
+
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act, and neither is
+  a ban that comes with the work ("fix foo.py but don't touch anything",
+  "don't touch anything, just read config.py") or "plan only" inside a
+  request to do work ("my plan only covers Postgres; extend it").
 
 ## [0.3.5]
 

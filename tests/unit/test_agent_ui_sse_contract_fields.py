@@ -48,6 +48,7 @@ def test_a_restarted_answer_crosses_to_the_host_every_time():
             "type": "status",
             "message": "cut off",
             "retracts_answer": True,
+            "level": "warning",
             "phase": "answer_restart",
         }
     ]
