@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
+Version **0.26.0**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,11 +32,11 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.3.5",
+  "agentVersion": "0.26.0",
   "components": {
     "sidecar": {
-      "componentVersion": "0.3.5",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
+      "componentVersion": "0.26.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.26.0",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {

@@ -28,6 +28,8 @@ HUB_AGENTS = {
     "email": ["gaia_agent_email/__init__.py", "gaia_agent_email/version.py"],
     "gaia": ["gaia_agent/__init__.py"],
 }
+# Agents whose version is their own; the flagship ships at core's (#5172).
+OWN_VERSION = ["email"]
 
 
 def _version_args(bump, path):
@@ -97,7 +99,7 @@ def test_real_hub_agents_are_in_sync_on_this_checkout(agent_id):
     assert len(set(values.values())) == 1, values
 
 
-@pytest.mark.parametrize("agent_id", sorted(HUB_AGENTS))
+@pytest.mark.parametrize("agent_id", OWN_VERSION)
 def test_bump_moves_every_version_file(tmp_path, agent_id):
     pkg = _copy_hub_agent(agent_id, tmp_path)
     before = _versions(pkg, agent_id)["gaia-agent.yaml"]
@@ -146,7 +148,7 @@ def test_npm_package_without_a_stamper_fails_before_writing(tmp_path):
 
 
 def test_stamper_failure_is_raised_with_its_output(tmp_path):
-    pkg = _copy_hub_agent("gaia", tmp_path)
+    pkg = _copy_hub_agent("email", tmp_path)
     (pkg.parent / "npm" / "package-lock.json").unlink()
 
     with pytest.raises(cli_agent.AgentWorkflowError) as err:
@@ -156,6 +158,53 @@ def test_stamper_failure_is_raised_with_its_output(tmp_path):
     assert "stamp_version.py" in message
     assert "package-lock.json" in message
     assert "file absent" in message
+
+
+def _copy_flagship_with_core(root: Path) -> Path:
+    """The flagship plus the core sources its stamper derives the version from."""
+    pkg = _copy_hub_agent("gaia", root)
+    for rel in (
+        "util/release_versions.py",
+        "util/release_tag.py",
+        "src/gaia/version.py",
+        "docs/docs.json",
+    ):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / rel, root / rel)
+    return pkg
+
+
+@pytest.mark.parametrize("bump", ["patch", "minor", "major"])
+def test_a_flagship_bump_fails_naming_core_and_leaves_every_file(tmp_path, bump):
+    pkg = _copy_flagship_with_core(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    with pytest.raises(cli_agent.AgentWorkflowError) as err:
+        cli_agent.cmd_version(_version_args(bump, pkg))
+
+    assert "src/gaia/version.py" in str(err.value)
+    after = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert {p: b for p, b in after.items() if p in before} == before
+    assert _stamper_check(pkg).returncode == 0
+
+
+def test_a_flagship_bump_to_cores_version_succeeds(tmp_path):
+    """Core already declares the next minor: the bump agrees, so it lands."""
+    pkg = _copy_flagship_with_core(tmp_path)
+    current = _versions(pkg, "gaia")["gaia-agent.yaml"]
+    major, minor, _ = (int(x) for x in current.split("."))
+    core = tmp_path / "src/gaia/version.py"
+    core.write_text(
+        core.read_text(encoding="utf-8").replace(
+            f'__version__ = "{current}"', f'__version__ = "{major}.{minor + 1}.0"'
+        ),
+        encoding="utf-8",
+    )
+
+    cli_agent.cmd_version(_version_args("minor", pkg))
+
+    after = _versions(pkg, "gaia")
+    assert after == dict.fromkeys(after, f"{major}.{minor + 1}.0")
 
 
 def test_a_hung_stamper_is_bounded_and_raised(tmp_path, monkeypatch):

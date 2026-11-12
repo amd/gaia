@@ -550,6 +550,18 @@ def cmd_version(args) -> None:
                     f"disagree. Fix what it names below, then re-run the "
                     f"stamper.\n{run.stdout}{run.stderr}"
                 )
+            if not extra:
+                # A stamper that derives the version elsewhere puts the old one back.
+                stamped = _read_yaml_scalar(manifest_path, "version")
+                if stamped != new:
+                    raise AgentWorkflowError(
+                        f"{manifest_path} did not move to {new}: {stamper} set it "
+                        f"to {stamped}, so this package's version follows another "
+                        f"source and every file is back on {stamped}. The flagship "
+                        f"agent ships at core's version: edit __version__ in "
+                        f"src/gaia/version.py, then run "
+                        f"`python util/release_versions.py --stamp`."
+                    )
         print(f"{stamper.name}: every target -> {new}")
 
 

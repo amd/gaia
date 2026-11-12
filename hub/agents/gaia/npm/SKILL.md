@@ -82,7 +82,8 @@ Two things follow from that, and both bite if you assume otherwise:
 
 - **The two components version independently.** `lock.agentVersion` is this
   package's version; `components.tui.componentVersion` is the terminal-hub release
-  it consumes. They will not match.
+  it consumes. From 0.26.0 both usually equal the GAIA release, but read each
+  from its own lane: nothing guarantees they match.
 - **The TUI's artifact names use `win-x64` / `win-arm64`, not `win32-*`.** Platform
   *keys* stay in Node's namespace (`process.platform` says `win32`); only the
   `filename` crosses over. Never build a TUI URL by interpolating a platform key —
@@ -785,7 +786,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.26.0"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \

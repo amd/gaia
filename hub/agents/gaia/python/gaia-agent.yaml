@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.3.5
+version: 0.26.0
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT
@@ -39,7 +39,8 @@ language: python
 # and init_memory(session_id=) (#5931); 0.25.4 is the first core that ships
 # them. (0.25.1 added reasoning_tools;
 # 0.25.0 added the allowed-folders check, #4656; 0.24.1 was the first whose
-# daemon can supervise this, #2932.)
+# daemon can supervise this, #2932.) It is stamped to core's version, the
+# release this agent ships with (util/release_versions.py).
 min_gaia_version: "0.26.0"
 models: [Gemma-4-E4B-it-GGUF]
 

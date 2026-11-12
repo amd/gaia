@@ -17,7 +17,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -410,7 +409,6 @@ def test_every_alert_workflow_uses_the_action_and_hand_rolls_no_issue_filing():
         "eval_flagship.yml",
         "lemonade-candidate-smoke.yml",
         "lemonade-version-bump.yml",
-        "nightly-patch-release.yml",
         "release_agent_gaia.yml",
     }
     for name in users:
@@ -467,33 +465,6 @@ def test_action_inputs_cover_everything_the_workflows_pass():
         unknown = set(step.get("with", {})) - known
         assert not unknown, f"{name}:{job_id} passes unknown inputs {unknown}"
         assert step["with"]["mode"] in ("report", "resolve")
-
-
-def _nightly_scope_run():
-    wf = yaml.safe_load(
-        (WORKFLOWS / "nightly-patch-release.yml").read_text(encoding="utf-8")
-    )
-    steps = wf["jobs"]["check"]["steps"]
-    return next(s for s in steps if s.get("id") == "scope")["run"], steps
-
-
-def test_every_release_check_guard_records_both_outcomes():
-    run, _ = _nightly_scope_run()
-    raised = re.findall(r"record_condition ([a-z-]+)", run)
-    passed = re.findall(r"guard_passed ([a-z-]+)", run)
-    assert sorted(raised) == sorted(passed) and len(raised) == 5
-    # Each guard is marked passed only after its own condition block.
-    for key in raised:
-        assert run.index(f"record_condition {key}") < run.index(f"guard_passed {key}")
-
-
-def test_release_check_resolve_closes_only_passed_guards():
-    _, steps = _nightly_scope_run()
-    (resolve,) = [s for s in steps if s.get("with", {}).get("mode") == "resolve"]
-    w = resolve["with"]
-    assert "key-prefix" not in w and "legacy-title-prefix" not in w
-    assert w["key"] == "${{ steps.scope.outputs.cleared_keys }}"
-    assert w["legacy-title"] == "${{ steps.scope.outputs.cleared_titles }}"
 
 
 def test_prefix_resolves_are_capped_at_the_passing_version():
@@ -752,37 +723,6 @@ def test_the_action_refuses_a_bad_body_file(tmp_path, env, error):
     proc, argv = _run_action_script(tmp_path, AI_BODY_FILE=str(body), **env)
     assert proc.returncode != 0 and argv == []
     assert error in proc.stdout
-
-
-# --- nightly-patch-release: a job's issue closes only when that job runs green --
-
-
-def _nightly_notify_steps():
-    wf = yaml.safe_load(
-        (WORKFLOWS / "nightly-patch-release.yml").read_text(encoding="utf-8")
-    )
-    return wf["jobs"]["notify-on-failure"]["steps"]
-
-
-def test_a_draft_failure_closes_only_on_a_green_draft():
-    resolves = {
-        s["with"]["key"]: s
-        for s in _nightly_notify_steps()
-        if s.get("with", {}).get("mode") == "resolve"
-    }
-    assert set(resolves) == {
-        "nightly-patch-release/check-failure",
-        "nightly-patch-release/draft-failure",
-    }
-    # A skipped draft (a guard stopped the night) must not close the draft issue.
-    assert (
-        resolves["nightly-patch-release/draft-failure"]["if"]
-        == "needs.draft.result == 'success'"
-    )
-    assert (
-        resolves["nightly-patch-release/check-failure"]["if"]
-        == "needs.check.result == 'success'"
-    )
 
 
 def test_the_check_resolve_never_matches_a_draft_issue():

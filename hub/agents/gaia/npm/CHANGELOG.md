@@ -6,7 +6,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+## [0.26.0]
+
+Ships with GAIA 0.26.0 and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+From this release the agent carries GAIA's own version, so it jumps from 0.3.5
+to 0.26.0; the sidecar contract (`apiVersion`) still versions on its own.
 
 - **The model is told when older turns are out of its view.** A long chat showed
   "Older messages are now out of the model's view" while the model answered

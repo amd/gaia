@@ -4,153 +4,44 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Syncs the version from src/gaia/version.py into the agent-ui webui
- * package.json and package-lock.json. GAIA uses a single version source of
- * truth in version.py.
+ * Syncs the Agent UI's package.json and package-lock.json version with
+ * src/gaia/version.py. util/release_versions.py owns every version field;
+ * this runs its `agent-ui` group, so existing callers keep working.
  *
  * Usage:
- *   node installer/version/bump-ui-version.mjs          # reads version.py and syncs package.json + lockfile
- *   node installer/version/bump-ui-version.mjs --check  # verify package.json + lockfile match version.py (used in CI)
+ *   node installer/version/bump-ui-version.mjs          # stamp package.json + lockfile
+ *   node installer/version/bump-ui-version.mjs --check  # verify only; exit 1 on drift
+ *
+ * Set PYTHON to choose the interpreter (default: python on Windows, python3 elsewhere).
  */
 
-import { readFileSync, writeFileSync } from "fs";
+import { spawnSync } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Script lives in installer/version/, so repo root is two levels up.
 const rootDir = resolve(__dirname, "..", "..");
+const script = resolve(rootDir, "util", "release_versions.py");
 
-const VERSION_PY = resolve(rootDir, "src", "gaia", "version.py");
-const PACKAGE_PATH = resolve(
-  rootDir,
-  "src",
-  "gaia",
-  "apps",
-  "webui",
-  "package.json"
-);
-const PACKAGE_LOCK_PATH = resolve(
-  rootDir,
-  "src",
-  "gaia",
-  "apps",
-  "webui",
-  "package-lock.json"
-);
-
-// Read version from version.py
-function readVersionPy() {
-  const content = readFileSync(VERSION_PY, "utf8");
-  const match = content.match(/__version__\s*=\s*"([^"]+)"/);
-  if (!match) {
-    console.error(`\nERROR: Could not parse __version__ from ${VERSION_PY}`);
-    process.exit(1);
-  }
-  return match[1];
+const args = process.argv.slice(2);
+if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) {
+  console.error(`Unknown arguments: ${args.join(" ")}. Expected none or --check.`);
+  process.exit(2);
 }
 
-// The lockfile stores the root package version twice — the top-level
-// `.version` and `.packages[""].version` — each immediately after a
-// `"name": "<pkg>"` line that no dependency shares. This targets exactly
-// those two: group 1 is the text up to the opening quote, group 2 the
-// version value, group 3 the closing quote.
-function lockVersionRegex(pkgName) {
-  const escaped = pkgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(
-    `("name":\\s*"${escaped}",\\s*\\n\\s*"version":\\s*")([^"]+)(")`,
-    "g"
+const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+const mode = args[0] === "--check" ? "--check" : "--stamp";
+const result = spawnSync(python, [script, mode, "--only", "agent-ui"], {
+  cwd: rootDir,
+  stdio: "inherit",
+});
+
+if (result.error) {
+  console.error(
+    `\nERROR: could not run ${python} ${script}: ${result.error.message}\n` +
+      "Install Python 3.10+, or set PYTHON to its path."
   );
-}
-
-const version = readVersionPy();
-
-if (!/^\d+\.\d+\.\d+/.test(version)) {
-  console.error(`\nERROR: Invalid version in version.py: "${version}"`);
-  console.error("  Expected format: x.y.z or x.y.z.w");
   process.exit(1);
 }
-
-const checkOnly = process.argv[2] === "--check";
-
-if (checkOnly) {
-  // --- Check mode (CI) ---
-  console.log(`version.py: ${version}\n`);
-
-  const pkg = JSON.parse(readFileSync(PACKAGE_PATH, "utf8"));
-  const lockVersions = [
-    ...readFileSync(PACKAGE_LOCK_PATH, "utf8").matchAll(
-      lockVersionRegex(pkg.name)
-    ),
-  ].map((m) => m[2]);
-
-  const pkgOk = pkg.version === version;
-  const lockOk =
-    lockVersions.length === 2 && lockVersions.every((v) => v === version);
-
-  if (!pkgOk || !lockOk) {
-    if (!pkgOk) {
-      console.log(
-        `FAIL: package.json ${pkg.name}@${pkg.version} -- expected ${version}`
-      );
-    }
-    if (lockVersions.length !== 2) {
-      console.log(
-        `FAIL: package-lock.json -- expected 2 root version fields, found ${lockVersions.length}`
-      );
-    } else if (!lockOk) {
-      console.log(
-        `FAIL: package-lock.json root version ${[
-          ...new Set(lockVersions),
-        ].join(", ")} -- expected ${version}`
-      );
-    }
-    console.log(
-      '\nRun "node installer/version/bump-ui-version.mjs" to sync package.json + lockfile to version.py.'
-    );
-    process.exit(1);
-  }
-
-  console.log(`OK: ${pkg.name}@${pkg.version} (package.json + lockfile)`);
-  console.log("\nPackage and lockfile versions match version.py.");
-} else {
-  // --- Sync mode ---
-  console.log(`\nSyncing package to version ${version} (from version.py)\n`);
-
-  try {
-    const pkg = JSON.parse(readFileSync(PACKAGE_PATH, "utf8"));
-    const old = pkg.version;
-    pkg.version = version;
-    writeFileSync(PACKAGE_PATH, JSON.stringify(pkg, null, 2) + "\n", "utf8");
-    console.log(`  package.json       ${old} -> ${version}`);
-
-    // Keep the lockfile root version in sync via a targeted regex (see
-    // lockVersionRegex); rewriting the whole file or `npm install` would
-    // churn transitive entries.
-    const lockContent = readFileSync(PACKAGE_LOCK_PATH, "utf8");
-    let count = 0;
-    const newLock = lockContent.replace(
-      lockVersionRegex(pkg.name),
-      (_m, prefix, _old, suffix) => {
-        count += 1;
-        return `${prefix}${version}${suffix}`;
-      }
-    );
-    if (count !== 2) {
-      console.error(
-        `\n  ERROR: expected 2 root version fields in package-lock.json, matched ${count}.`
-      );
-      console.error(
-        "  The lockfile structure changed — update bump-ui-version.mjs to match."
-      );
-      process.exit(1);
-    }
-    writeFileSync(PACKAGE_LOCK_PATH, newLock, "utf8");
-    console.log(`  package-lock.json  -> ${version}`);
-  } catch (err) {
-    console.error(`  ERROR: ${err.message}`);
-    process.exit(1);
-  }
-
-  console.log(`\nDone. Package version synced to v${version} from version.py.\n`);
-}
+process.exit(result.status ?? 1);
