@@ -4,8 +4,15 @@
 #include <gtest/gtest.h>
 #include <gaia/process.h>
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <stdexcept>
+#include <thread>
+#ifndef _WIN32
+#include <csignal>
+#endif
 
 using namespace gaia;
 
@@ -105,6 +112,46 @@ TEST(ProcessRunnerTest, TimeoutKillsProcess) {
     auto result = ProcessRunner::run(sleepCmd, 1000);  // 1 second timeout
 
     EXPECT_TRUE(result.timedOut);
+}
+
+// A build or test command starts other programs; a timeout has to end those too.
+TEST(ProcessRunnerTest, TimeoutKillsWhatTheCommandStarted) {
+    namespace tfs = std::filesystem;
+    const tfs::path dir = tfs::temp_directory_path() /
+                          ("gaia-timeout-tree-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    tfs::create_directories(dir);
+    const auto started = std::chrono::steady_clock::now();
+#ifdef _WIN32
+    // The inner cmd and its ping both hold held.txt open for as long as they live.
+    const auto result = ProcessRunner::run("cmd /c ping -n 60 127.0.0.1 >held.txt", 1000, dir.string());
+#else
+    const auto result = ProcessRunner::run("sleep 60 & echo $! > pid.txt; wait", 1000, dir.string());
+#endif
+    EXPECT_TRUE(result.timedOut);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20))
+        << "the call waited for what the command had started";
+
+    bool gone = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+#ifdef _WIN32
+    while (!gone && std::chrono::steady_clock::now() < deadline) {
+        std::error_code ec;
+        tfs::remove(dir / "held.txt", ec);
+        gone = !ec;  // a sharing violation while a process still has it open
+        if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+#else
+    long pid = 0;
+    std::ifstream(dir / "pid.txt") >> pid;
+    ASSERT_GT(pid, 0);
+    while (!gone && std::chrono::steady_clock::now() < deadline) {
+        gone = kill(static_cast<pid_t>(pid), 0) != 0;
+        if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+#endif
+    EXPECT_TRUE(gone) << "the process the command started outlived the timeout";
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
 }
 
 // ---------------------------------------------------------------------------

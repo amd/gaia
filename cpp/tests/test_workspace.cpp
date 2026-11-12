@@ -152,3 +152,29 @@ TEST(WorkspaceTest, ConfinedToolsRefuseOutsidePaths) {
     EXPECT_EQ(reg.executeTool("sh", json{{"command", "find / -name x"}})["status"], "error");
     EXPECT_EQ(calls, 1);
 }
+
+// Folders and paths are UTF-8 strings, whatever the machine's code page.
+TEST(WorkspaceTest, NonAsciiFoldersAreUtf8) {
+    Dirs d;
+    const fs::path root = d.base / fs::u8path("w\xc3\xb6rk \xe6\x97\xa5\xe6\x9c\xac");
+    fs::create_directories(root / "sub");
+    const std::string inside = (root / "sub" / fs::u8path("n\xc3\xb6te.txt")).u8string();
+    const std::string outside = (d.other / fs::u8path("n\xc3\xb6te.txt")).u8string();
+
+    Workspace named({root.u8string()});
+    EXPECT_TRUE(named.contains(inside));
+    EXPECT_TRUE(named.contains("sub/new.txt"));
+    EXPECT_FALSE(named.contains(outside));
+    EXPECT_EQ(named.checkPath(inside), "");
+    EXPECT_NO_THROW(json(named.checkPath(outside)).dump()) << "a refusal is valid UTF-8 JSON";
+
+    // With no folder named, the working directory is the folder.
+    const fs::path before = fs::current_path();
+    fs::current_path(root);
+    Workspace implied({});
+    const bool sees = implied.contains(inside);
+    const bool refuses = implied.contains(outside);
+    fs::current_path(before);
+    EXPECT_TRUE(sees);
+    EXPECT_FALSE(refuses);
+}

@@ -236,12 +236,12 @@ size_t DocumentIndex::indexDirectory(const std::string& root, std::vector<std::s
     for (; it != end && !ec; it.increment(ec)) {
         const fs::path& p = it->path();
         const bool dir = it->is_directory(ec);
-        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.string(), true))) {
+        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.u8string(), true))) {
             it.disable_recursion_pending();
             continue;
         }
         if (dir || !it->is_regular_file(ec)) continue;
-        if (ignore.isIgnored(p.string(), false)) continue;
+        if (ignore.isIgnored(p.u8string(), false)) continue;
         if (it->file_size(ec) > (1u << 20)) continue;
         if (!isSupportedExtension(lowerExt(p.string()))) continue;
         try {

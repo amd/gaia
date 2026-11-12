@@ -173,12 +173,12 @@ private:
 /// path to exist (weakly_canonical tolerates missing tails).
 std::string normalizePath(const std::string& path) {
     std::error_code ec;
-    fs::path p = fs::weakly_canonical(fs::path(path), ec);
+    fs::path p = fs::weakly_canonical(fs::u8path(path), ec);
     if (ec || p.empty()) {
-        p = fs::absolute(fs::path(path), ec);
-        if (ec) p = fs::path(path);
+        p = fs::absolute(fs::u8path(path), ec);
+        if (ec) p = fs::u8path(path);
     }
-    std::string s = p.generic_string();
+    std::string s = p.generic_u8string();
     while (s.size() > 1 && s.back() == '/') s.pop_back();
     return s;
 }
@@ -241,8 +241,8 @@ GitignoreMatcher GitignoreMatcher::forDirectory(const std::string& directory) {
     GitignoreMatcher matcher;
 
     std::error_code ec;
-    fs::path start = fs::weakly_canonical(fs::path(directory), ec);
-    if (ec || start.empty()) start = fs::path(directory);
+    fs::path start = fs::weakly_canonical(fs::u8path(directory), ec);
+    if (ec || start.empty()) start = fs::u8path(directory);
 
     // Walk up to the enclosing repository root so that searching `repo/src`
     // still honours `repo/.gitignore`.
@@ -263,33 +263,33 @@ GitignoreMatcher GitignoreMatcher::forDirectory(const std::string& directory) {
     if (!foundRepoRoot) {
         // Outside a repository, only the directory's own file applies. Walking
         // to the filesystem root would silently apply a stranger's rules.
-        matcher.addFile((start / ".gitignore").string());
+        matcher.addFile((start / ".gitignore").u8string());
         return matcher;
     }
 
     // Outermost first, so a nested .gitignore overrides its parent.
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        matcher.addFile((*it / ".gitignore").string());
+        matcher.addFile((*it / ".gitignore").u8string());
     }
     // A folder the caller named is searched even when the repository around it ignores it.
-    if (matcher.isIgnored(start.string(), /*isDirectory=*/true)) {
+    if (matcher.isIgnored(start.u8string(), /*isDirectory=*/true)) {
         GitignoreMatcher own;
-        own.addFile((start / ".gitignore").string());
+        own.addFile((start / ".gitignore").u8string());
         return own;
     }
     return matcher;
 }
 
 void GitignoreMatcher::addFile(const std::string& gitignorePath) {
-    std::ifstream file(gitignorePath);
+    std::ifstream file(fs::u8path(gitignorePath));
     if (!file.is_open()) return;
 
     std::ostringstream buffer;
     buffer << file.rdbuf();
 
-    fs::path baseDir = fs::path(gitignorePath).parent_path();
+    fs::path baseDir = fs::u8path(gitignorePath).parent_path();
     if (baseDir.empty()) baseDir = fs::path(".");
-    addRules(buffer.str(), baseDir.string());
+    addRules(buffer.str(), baseDir.u8string());
 }
 
 void GitignoreMatcher::addRules(const std::string& contents,
