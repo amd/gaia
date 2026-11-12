@@ -554,6 +554,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A new chat whose empty history is still loading when its first message goes out. */
+async function withSlowNewChat(page: Page): Promise<void> {
+    const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.request().method() === 'POST' ? route.fulfill({ json: created }) : route.fallback());
+    await page.route((url) => url.pathname === `/api/chat/permissions/${ANSWER_SESSION}`, (route) =>
+        route.request().method() === 'PUT' || route.request().method() === 'POST'
+            ? route.fulfill({ json: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] } })
+            : route.fallback());
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, () => { /* never answers */ });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a new chat's first message shows at once, with no skeleton (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, withSlowNewChat);
+        await page.locator('textarea').first().fill('Give me three tips for better sleep.');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.msg-user')).toHaveText('Give me three tips for better sleep.');
+        await expect(page.locator('.skeleton-messages')).toHaveCount(0);
+        await expect(page.locator('.streaming-bubble .thinking-indicator')).toBeVisible();
+        await expect(page.locator('.task-title')).toHaveText(locale === 'en' ? 'New chat' : /محادثة جديدة/);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`first-send-${locale}.png`) });
+    });
+}
+
 async function withFailedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
@@ -3038,6 +3064,66 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
     });
+}
+
+const CHANGE_PROMPTS = {
+    write: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\summary.md', content: '# Expenses Summary\n\n| Month | Total |\n|---|---|\n| October | 412.50 |\n| November | 388.10 |\n\nGrand total: 800.60\n' },
+    },
+    edit: {
+        type: 'permission_request', tool: 'edit_file', tool_label: 'editing file', confirm_id: 'c-edit',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\notes.txt', old_content: '- owner: Dana\n', new_content: '- owner: Dana\nreviewed\n' },
+    },
+    // A right-to-left override would draw the line reversed; it shows as a code instead.
+    hidden: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-hidden',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'ok = 1\n# \u202Eevil()\n' },
+    },
+    // A right-to-left mark before each statement would draw them in reverse order.
+    rlm: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-rlm',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'title = "مرحبا"\n\u200Fsafe_step(); \u200Fdelete_everything();\n' },
+    },
+};
+
+/** Left edge of `needle` as drawn inside `selector`, so a test can check visual order. */
+async function drawnLeft(page: Page, selector: string, needle: string): Promise<number> {
+    return page.locator(selector).evaluate((el, word) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const at = node.textContent?.indexOf(word) ?? -1;
+            if (at < 0) continue;
+            const range = document.createRange();
+            range.setStart(node, at);
+            range.setEnd(node, at + word.length);
+            return range.getBoundingClientRect().left;
+        }
+        throw new Error(`${word} not drawn`);
+    }, needle);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const [kind, prompt] of Object.entries(CHANGE_PROMPTS)) {
+        test(`a ${kind} prompt shows what will land in the file (${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [prompt]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('update my notes');
+            await page.keyboard.press('Enter');
+            const preview = page.locator('.perm-card-change');
+            await expect(preview).toBeVisible();
+            await expect(page.locator('.perm-card-pre').filter({ hasText: '"file_path"' })).toHaveCount(0);
+            if (kind === 'rlm') {
+                const shown = '[data-testid="perm-write-preview"]';
+                await expect(page.locator(shown)).toContainText('[U+200F]safe_step(); [U+200F]delete_everything();');
+                await expect(page.getByTestId('perm-change-unseen')).toBeVisible();
+                expect(await drawnLeft(page, shown, 'safe_step')).toBeLessThan(await drawnLeft(page, shown, 'delete_everything'));
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+            await shot(page, `permission-${kind}-${locale}`);
+        });
+    }
 }
 
 const DECLINED_STEPS = [

@@ -414,3 +414,82 @@ def test_the_write_step_instruction_is_not_saved_into_history(agent, tmp_path):
         "Before it does, write the requested files" in str(m.get("content"))
         for m in result["model_messages"]
     )
+
+
+# A forced stop's write step gets the same read-back as an ordinary sealed turn.
+_JSON_REQUEST = "Audit the loader and write `out/report.json` listing each defect."
+_JSON_TARGET = "out/report.json"
+
+
+def _json_write(content):
+    return ("w1", "write_file", {"file_path": _JSON_TARGET, "content": content})
+
+
+def test_a_forced_stop_reads_back_the_file_its_write_step_wrote(agent, tmp_path):
+    chat = _stub_chat(
+        agent,
+        *_repeats(),
+        _native(_json_write('{"defects": [1, 2,')),
+        _answer(f"`{_JSON_TARGET}` is written."),
+    )
+
+    result = agent.process_query(_JSON_REQUEST)
+
+    assert (tmp_path / _JSON_TARGET).exists()
+    assert result["status"] == "incomplete"
+    assert agent._edit_verification_findings
+    assert all("report.json" in f for f in agent._edit_verification_findings)
+    assert set(agent._edit_verification_findings) <= set(result["completion_gaps"])
+    closing = chat.sent[-1][-1]["content"]
+    assert "read back off disk" in closing and "report.json" in closing
+    # No repair step: the stop is forced, so nothing past the closing call runs.
+    assert chat.send_messages.call_count == _CALLS + 2
+
+
+def test_a_good_write_step_passes_the_read_back(agent, tmp_path):
+    chat = _stub_chat(
+        agent,
+        *_repeats(),
+        _native(_json_write('{"defects": [1, 2]}')),
+        _answer(f"`{_JSON_TARGET}` is written."),
+    )
+
+    with patch.object(agent, "_edit_problems", wraps=agent._edit_problems) as spy:
+        result = agent.process_query(_JSON_REQUEST)
+
+    assert spy.called
+    assert result["completion_gaps"] == []
+    assert "read back off disk" not in chat.sent[-1][-1]["content"]
+
+
+def test_running_out_of_steps_reads_back_the_write_step_too(agent, tmp_path):
+    agent.max_steps = 2
+    _stub_chat(
+        agent,
+        _native(("s1", _LOOKUP, {"path": "a/"})),
+        _native(("s2", _LOOKUP, {"path": "b/"})),
+        _native(_json_write('{"defects": ')),
+        _answer("Out of steps; the findings are in the file."),
+    )
+
+    result = agent.process_query(_JSON_REQUEST)
+
+    assert result["max_steps_reached"] is True
+    assert result["status"] == "incomplete"
+    assert agent._edit_verification_findings
+    assert set(agent._edit_verification_findings) <= set(result["completion_gaps"])
+
+
+def test_the_forced_stop_read_back_honours_the_off_switch(agent, monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_VERIFY_EDITS", "0")
+    chat = _stub_chat(
+        agent,
+        *_repeats(),
+        _native(_json_write('{"defects": [1, 2,')),
+        _answer(f"`{_JSON_TARGET}` is written."),
+    )
+
+    result = agent.process_query(_JSON_REQUEST)
+
+    assert not any("parse" in gap.lower() for gap in result["completion_gaps"])
+    assert "read back off disk" not in chat.sent[-1][-1]["content"]

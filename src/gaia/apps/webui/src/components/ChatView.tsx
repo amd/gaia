@@ -68,6 +68,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
 
 /** Events that only come after the agent got past a permission prompt. */
@@ -80,6 +81,7 @@ export const STOP_GRACE_MS = 15_000;
 export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
 const NO_QUEUE: QueuedMessage[] = [];
+const NO_STEPS: AgentStep[] = [];
 
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
@@ -343,40 +345,16 @@ export function ChatView({ sessionId }: ChatViewProps) {
             .catch((err) => log.doc.error('Could not load the document list', err));
     }, [setDocuments]);
 
-    // Send a prompt queued before this view mounted (a new chat's first
-    // message, or "Ask GAIA" from the file browser).
     const mountedRef = useRef(true);
-    // Left pendingPrompt, not yet sent.
-    const openingRef = useRef(false);
     const initializing = isStarting(systemStatus);
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
-    useEffect(() => {
-        const pending = pendingPrompt?.text;
-        // Wait for the history load, or it would replace the message just sent;
-        // and for GAIA to start, or the send would refuse a message already taken.
-        if (!pending || pendingPrompt.sending || useChatStore.getState().isLoadingMessages || initializing) return;
-        // Marked, not cleared, so New chat in the tick before the send can still take it back.
-        const handed = { ...pendingPrompt, sending: true };
-        useChatStore.getState().setPendingPrompt(handed);
-        openingRef.current = true;
-        // A timer, not rAF: rAF never fires while the window is hidden, and
-        // marking the prompt re-runs this effect, so no cleanup may cancel it.
-        setTimeout(() => {
-            openingRef.current = false;
-            const store = useChatStore.getState();
-            if (store.pendingPrompt !== handed) return;
-            if (!mountedRef.current) {
-                // Left for another chat: it goes out when this one is opened again.
-                store.setPendingPrompt({ sessionId: handed.sessionId, text: handed.text });
-                return;
-            }
-            store.setPendingPrompt(null);
-            sendMessageRef.current(pending, { opening: true });
-        }, 0);
-    }, [pendingPrompt, isLoadingMessages, initializing]);
+    const { openingRef, openingShown, rows, isUnsent, openingKey } = useOpeningMessage({
+        sessionId, pendingPrompt, messages, messageCount: session?.message_count ?? 0,
+        isLoadingMessages, initializing, mountedRef, send: sendMessageRef,
+    });
 
     // Auto-scroll (throttled) — scrolls at most once per 100ms while
     // streaming, and also schedules a trailing scroll so the final chunk
@@ -1660,7 +1638,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         />
                     ) : (
                         <button type="button" className="task-title" onClick={startEditTitle} title={t('row.rename')}>
-                            <span>{session?.title || t('sidebar.newChat')}</span>
+                            <span>{isPlaceholderTitle(session?.title) ? t('sidebar.newChat') : session?.title}</span>
                             <Edit3 size={12} aria-hidden="true" className="task-title-edit" />
                         </button>
                     )}
@@ -1693,7 +1671,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
-                    {isLoadingMessages && (
+                    {isLoadingMessages && !openingShown && (
                         <div className="skeleton-messages" aria-label="Loading messages">
                             {[0, 1, 2].map((i) => (
                                 <div key={i} className="skeleton-msg">
@@ -1707,7 +1685,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         </div>
                     )}
 
-                    {messages.map((msg, idx) => {
+                    {rows.map((msg, idx) => {
                         // The streaming bubble shows the just-finished answer while it fades out.
                         const isStreamEndingMsg = streamEnding
                             && msg.role === 'assistant'
@@ -1724,9 +1702,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             && msg.role === 'assistant' && idx === messages.length - 1
                             && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
+                        const unsent = isUnsent(msg);
                         return (
                             <div
-                                key={messageKeysRef.current.get(msg.id) ?? msg.id}
+                                key={openingKey(msg) ?? messageKeysRef.current.get(msg.id) ?? msg.id}
                                 className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(messageKeysRef.current.get(msg.id) ?? msg.id) ? 'msg-settled' : undefined}
                                 data-message-id={msg.id}
                                 data-role={msg.role}
@@ -1738,15 +1717,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 <MessageBubble
                                     message={msg}
                                     agentSteps={msg.role === 'assistant' ? msg.agentSteps : undefined}
-                                    onDelete={!busy ? handleDeleteMessage : undefined}
-                                    onResend={!busy && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
-                                    onEditStart={!busy && msg.role === 'user' && !retiredAgent ? () => startEdit(msg.id) : undefined}
+                                    onDelete={!busy && !unsent ? handleDeleteMessage : undefined}
+                                    onResend={!busy && !unsent && msg.role === 'user' && !retiredAgent ? handleResendMessage : undefined}
+                                    onEditStart={!busy && !unsent && msg.role === 'user' && !retiredAgent ? () => startEdit(msg.id) : undefined}
                                     editing={editingId === msg.id && !busy}
                                     editDraft={editingId === msg.id ? editDraftRef.current : null}
                                     onEditDraft={(text: string) => { editDraftRef.current = text; }}
                                     onEdit={handleEdit}
                                     onEditCancel={handleEditCancel}
-                                    onRegenerate={canRetry ? () => handleRegenerate(msg) : undefined}
+                                    onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu
                                             answeredBy={msg.stats?.model ?? session?.effective_model}
@@ -1778,7 +1757,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
                     {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
                     {isStreaming && <RecordingProgress />}
-                    {(isStreaming || streamEnding) && (
+                    {(isStreaming || streamEnding || !!openingShown) && (
                         <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
                             <MessageBubble
                                 message={{
@@ -1789,8 +1768,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     created_at: '',
                                     rag_sources: null,
                                 }}
-                                isStreaming={isStreaming}
-                                agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
+                                isStreaming={isStreaming || !!openingShown}
+                                agentSteps={isStreaming ? agentSteps : openingShown ? NO_STEPS : lastAgentStepsRef.current}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
                                 cards={isStreaming ? cards : lastCardsRef.current}
                                 liveStatus={isStreaming ? liveStatus : null}
