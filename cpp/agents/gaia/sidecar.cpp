@@ -483,7 +483,9 @@ private:
             run->decisions[confirmId] = "";
         }
         const bool shell = tool == "bash_execute";
-        const std::string scope = shell ? shellCommandScope(args.value("command", "")) : "";
+        // "Always" only where the grant is narrower than the tool: one file write must not approve every later one.
+        const ToolInfo* info = s.agent ? s.agent->tools().findTool(tool) : nullptr;
+        const std::string key = info && info->grantScope ? tool + ":" + info->grantScope(args) : "";
         json ev = {{"type", "needs_confirmation"},
                    {"run_id", run->id},
                    {"action", tool},
@@ -492,9 +494,10 @@ private:
                    {"risk", toolRisk(tool)},
                    {"tool_label", tool},
                    {"args", args}};
-        const std::string key = shell ? tool + ":" + scope : tool;
-        ev["always_scope"] = key;
-        ev["always_label"] = grantLabel(key);
+        if (!key.empty()) {
+            ev["always_scope"] = key;
+            ev["always_label"] = grantLabel(key);
+        }
         if (!s.workingDirectory.empty()) ev["prompt_context"] = {{"working_directory", s.workingDirectory}};
         run->push(ev);
         // Other chats may run while this one waits for its user.
@@ -519,7 +522,11 @@ private:
             if (!s.shellDir.empty()) fs::current_path(s.shellDir, ec);
         }
         if (d == "allow") return ToolConfirmResult::ALLOW_ONCE;
-        if (d == "always") return ToolConfirmResult::ALWAYS_ALLOW;
+        if (d == "always") {
+            if (!key.empty()) return ToolConfirmResult::ALWAYS_ALLOW;
+            run->push({{"type", "status"}, {"message", "'Always' isn't offered for " + tool + ", so only this call was allowed."}});
+            return ToolConfirmResult::ALLOW_ONCE;
+        }
         return ToolConfirmResult::DENY;
     }
 
