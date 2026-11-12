@@ -99,17 +99,22 @@ def memory_run_inference(_tmp_path) -> list:
 
 def scheduled_run(_tmp_path) -> list:
     """`gaia schedule run`, and every run the schedule daemon fires."""
+    from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.schedule import runner
     from gaia.schedule.store import Schedule
 
-    runner.fire(
-        Schedule(
-            name="t",
-            cron="0 7 1 1 *",
-            prompt="Reply with exactly: hi",
-            sink="stdout",
+    try:
+        runner.fire(
+            Schedule(
+                name="t",
+                cron="0 7 1 1 *",
+                prompt="Reply with exactly: hi",
+                sink="stdout",
+            )
         )
-    )
+    except LemonadeClientError:
+        # A refused load still reached the server; the cell judges its log.
+        pass
     return []
 
 
@@ -168,7 +173,12 @@ def _cells():
                 continue
             marks = []
             if key in KNOWN_BUGS:
-                marks.append(pytest.mark.xfail(reason=KNOWN_BUGS[key], strict=True))
+                # Only the bug's own assertion counts; a crash must not pass as it.
+                marks.append(
+                    pytest.mark.xfail(
+                        reason=KNOWN_BUGS[key], strict=True, raises=AssertionError
+                    )
+                )
             yield pytest.param(state, entry, id=f"{state}-{entry}", marks=marks)
 
 
@@ -195,10 +205,10 @@ def start(tmp_path, monkeypatch):
         )
         server = FakeLemonade(downloaded=state.on_the_server())
         server.__enter__()
+        started.append(server)
         monkeypatch.setenv("LEMONADE_BASE_URL", server.base_url)
         if state.custom_model:
             _save_custom_model(state.custom_model, tmp_path)
-        started.append(server)
         return server
 
     started: list = []
@@ -256,3 +266,16 @@ def test_every_known_bug_names_a_real_cell():
     cells = {(s, e) for s in STATES for e in ENTRY_POINTS}
     assert set(KNOWN_BUGS) <= cells
     assert set(RULES) == cells
+
+
+def test_the_server_keeps_answering_past_a_full_pipe():
+    """It logs a stderr line per request; a long test must not stall it."""
+    import urllib.request
+
+    # ~200 KB of log lines, well past any OS pipe buffer.
+    url_with_padding = "/health?pad=" + "x" * 1000
+    with FakeLemonade() as server:
+        for _ in range(200):
+            with urllib.request.urlopen(server.base_url + url_with_padding, timeout=10):
+                pass
+        assert len(server.requests) == 200

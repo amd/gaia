@@ -73,6 +73,7 @@ class FakeLemonade:
         self._dir: Optional[tempfile.TemporaryDirectory] = None
         self._proc: Optional[subprocess.Popen] = None
         self._log: Optional[Path] = None
+        self._stderr = None
         self.port = 0
 
     @property
@@ -87,16 +88,21 @@ class FakeLemonade:
         command += ["--port-file", str(port_file), "--log", str(self._log)]
         for model in self.downloaded:
             command += ["--model", model]
+        # A file, not a pipe: the server logs every request, and an unread
+        # pipe fills and stalls it in a long test.
+        stderr_file = folder / "stderr.txt"
+        self._stderr = open(stderr_file, "wb")
         self._proc = subprocess.Popen(
             command,
             env={**os.environ, **self._env, "PYTHONIOENCODING": "utf-8"},
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=self._stderr,
         )
         deadline = time.monotonic() + START_TIMEOUT_S
         while not (port_file.exists() and port_file.read_text().strip()):
             if self._proc.poll() is not None or time.monotonic() > deadline:
-                error = self._proc.stderr.read().decode("utf-8", "replace")
+                self._stderr.flush()
+                error = stderr_file.read_text(encoding="utf-8", errors="replace")
                 self.__exit__(None, None, None)
                 raise RuntimeError(f"{SERVER.name} did not start: {error[-800:]}")
             time.sleep(0.05)
@@ -107,7 +113,8 @@ class FakeLemonade:
         if self._proc is not None:
             self._proc.kill()
             self._proc.wait(timeout=30)
-            self._proc.stderr.close()
+        if self._stderr is not None:
+            self._stderr.close()
         if self._dir is not None:
             self._dir.cleanup()
 
