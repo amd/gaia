@@ -335,6 +335,23 @@ describe('ModelChip', () => {
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
     });
 
+    it('keeps one question open: a download question replaces the cloud one', async () => {
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF');
+
+        fireEvent.click(within(dialog).getByRole('option', { name: /^kimi-k2/ }));
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' }));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
     it('lists the provider in use first, and models on this PC before ones to download', async () => {
         useModelStore.setState({ active: CLOUD_ACTIVE });
         mockedApi.listProviderModels.mockImplementation(async (id) => ({

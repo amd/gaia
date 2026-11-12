@@ -15,6 +15,7 @@ import { STATE_LABELS, isDownloading, modelState, placementText } from './modelM
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
+import { MarkedText, markLtr } from './MarkedText';
 import type { ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
@@ -506,6 +507,8 @@ export function ModelChip() {
                                                     setPendingDownload(null);
                                                     return void choose(m.id, provider);
                                                 }
+                                                // One question open at a time.
+                                                setPendingCloud(null);
                                                 setPendingDownload({ model: m.id, provider, pick: true });
                                             }}
                                             disabled={switching !== null || isDownloading(m)}
@@ -550,7 +553,7 @@ export function ModelChip() {
                                                 <StateMark
                                                     m={m}
                                                     busy={downloading !== null}
-                                                    onDownload={() => setPendingDownload({ model: m.id, provider, pick: false })}
+                                                    onDownload={() => { setPendingCloud(null); setPendingDownload({ model: m.id, provider, pick: false }); }}
                                                 />
                                             )}
                                         </span>
@@ -558,9 +561,9 @@ export function ModelChip() {
                                     {pendingDownload?.model === m.id && pendingDownload.provider.id === provider.id && (
                                         <div ref={consent} className="popover-message model-download-confirm" role="alert">
                                             <span>
-                                                {m.size_gb
-                                                    ? t('modelMenu.downloadConfirm', { name: modelName, size: `${m.size_gb} GB` })
-                                                    : t('modelMenu.downloadConfirmNoSize', { name: modelName })}
+                                                <MarkedText text={m.size_gb
+                                                    ? t('modelMenu.downloadConfirm', { name: markLtr(modelName), size: markLtr(`${m.size_gb} GB`) })
+                                                    : t('modelMenu.downloadConfirmNoSize', { name: markLtr(modelName) })} />
                                                 {pendingDownload.pick && ` ${t('modelMenu.switchWhenDone')}`}
                                             </span>
                                             <span className="model-download-confirm-actions">
