@@ -15,16 +15,26 @@ BASE = "http://127.0.0.1:1/api/v1"
 @pytest.fixture
 def model_server(monkeypatch):
     """The model server's HTTP surface, answered from a table; records each call."""
-    state = {"models": [], "status": 200, "down": False, "body": None, "calls": []}
+    state = {
+        "models": [],
+        "status": 200,
+        "down": False,
+        "body": None,
+        "health": {"all_models_loaded": []},
+        "raw": None,
+        "calls": [],
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         state["calls"].append((request.method, request.url.path, request.url.query))
         if state["down"]:
             raise httpx.ConnectError("connection refused", request=request)
         if request.url.path.endswith("/models"):
+            if state["raw"] is not None:
+                return httpx.Response(200, text=state["raw"])
             body = state["body"] or {"data": state["models"]}
             return httpx.Response(state["status"], json=body)
-        return httpx.Response(200, json={"all_models_loaded": []})
+        return httpx.Response(200, json=state["health"])
 
     real_client = httpx.AsyncClient
 
@@ -76,3 +86,45 @@ def test_a_malformed_model_list_leaves_the_id_unchecked(model_server):
     model_server["body"] = {"object": "list", "data": "x"}
     status = _status("Qwen3-4B-GGUF")
     assert (status.checked, status.found) == (False, False)
+
+
+def test_a_model_list_with_a_non_object_entry_leaves_the_id_unchecked(model_server):
+    model_server["body"] = {"data": [{"id": "Qwen3-4B-GGUF"}, "Qwen3-4B-GGUF"]}
+    status = _status("Qwen3-4B-GGUF")
+    assert (status.checked, status.found) == (False, False)
+
+
+def test_a_model_list_that_is_not_json_leaves_the_id_unchecked(model_server):
+    model_server["raw"] = "<html>proxy login</html>"
+    status = _status("Qwen3-4B-GGUF")
+    assert (status.checked, status.found) == (False, False)
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        ["not", "a", "dict"],
+        {"model_loaded": 7, "all_models_loaded": "x"},
+        {"all_models_loaded": [None, 3, {"model_name": None}]},
+    ],
+)
+def test_a_malformed_health_answer_keeps_the_list_verdict(model_server, health):
+    model_server["models"] = [{"id": "Qwen3-4B-GGUF"}]
+    model_server["health"] = health
+    status = _status("Qwen3-4B-GGUF")
+    assert (status.checked, status.found, status.loaded) == (True, True, False)
+
+
+def test_a_loaded_user_model_counts_without_the_prefix(model_server):
+    model_server["health"] = {
+        "model_loaded": "My-Model-GGUF",
+        "all_models_loaded": [{"model_name": "My-Model-GGUF"}],
+    }
+    status = _status("user.My-Model-GGUF")
+    assert (status.found, status.loaded) == (True, True)
+
+
+def test_a_prefix_or_substring_of_a_listed_id_is_not_found(model_server):
+    model_server["models"] = [{"id": "Qwen3-4B-GGUF", "name": "Qwen3 4B"}]
+    for wrong in ("Qwen3-4B", "Qwen3-4B-GGUF-extra", "user.", " "):
+        assert _status(wrong).found is False, wrong

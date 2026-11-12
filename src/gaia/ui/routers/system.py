@@ -1030,8 +1030,6 @@ async def _check_model_status(model_name: str) -> ModelStatus:
         return status
     import httpx
 
-    from gaia.llm.lemonade_client import _model_ids_match
-
     try:
         base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
@@ -1042,14 +1040,16 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                 params={"show_all": "true"},
                 headers=_auth,
             )
-            body = models_resp.json() if models_resp.status_code == 200 else None
-            listed = body.get("data") if isinstance(body, dict) else None
-            if isinstance(listed, list):
+            listed: Optional[List[Dict[str, Any]]] = None
+            if models_resp.status_code == 200:
+                try:
+                    listed = _catalog_entries(models_resp.json())
+                except ValueError as e:
+                    logger.info("Model list for %s unreadable: %s", model_name, e)
+            if listed is not None:
                 status.checked = True
                 model_name_lower = model_name.lower()
                 for m in listed:
-                    if not isinstance(m, dict):
-                        continue
                     mid = str(m.get("id") or "")
                     mname = str(m.get("name") or "").lower()
                     if _model_ids_match(mid, model_name) or model_name_lower == mname:
@@ -1059,16 +1059,23 @@ async def _check_model_status(model_name: str) -> ModelStatus:
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            if health_resp.status_code == 200:
-                health_data = health_resp.json()
-                loaded_model = health_data.get("model_loaded", "")
-                if loaded_model and loaded_model.lower() == model_name.lower():
+            health_data = (
+                health_resp.json() if health_resp.status_code == 200 else None
+            )
+            if isinstance(health_data, dict):
+                loaded_model = health_data.get("model_loaded")
+                if isinstance(loaded_model, str) and _model_ids_match(
+                    loaded_model, model_name
+                ):
                     status.found = True
                     status.downloaded = True
                     status.loaded = True
                 # Also check all_models_loaded list
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("model_name", "").lower() == model_name.lower():
+                loaded_list = health_data.get("all_models_loaded")
+                for m in loaded_list if isinstance(loaded_list, list) else []:
+                    if isinstance(m, dict) and _model_ids_match(
+                        str(m.get("model_name") or ""), model_name
+                    ):
                         status.found = True
                         status.downloaded = True
                         status.loaded = True
