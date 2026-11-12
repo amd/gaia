@@ -237,6 +237,9 @@ type queryRequest struct {
 	// The folder GAIA was started in, so relative paths resolve there rather
 	// than in the daemon's own folder. Sent only to a peer proven >= 2.24.
 	WorkingDirectory string `json:"working_directory,omitempty"`
+	// That same folder as the session's file scope, as `gaia -p` sends it, so
+	// the agent looks there first and reads there without asking.
+	AllowedPaths []string `json:"allowed_paths,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -303,11 +306,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		surface = "tui"
 	}
 	var workingDirectory string
+	var allowedPaths []string
 	if peer.supportsWorkingDirectory {
 		workingDirectory, err = os.Getwd()
 		if err != nil {
 			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to find files you name without a full path: %w", err)
 		}
+		allowedPaths = []string{workingDirectory}
 	}
 
 	payload, err := json.Marshal(queryRequest{
@@ -320,6 +325,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		SessionID:          sessionID,
 		Surface:            surface,
 		WorkingDirectory:   workingDirectory,
+		AllowedPaths:       allowedPaths,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)

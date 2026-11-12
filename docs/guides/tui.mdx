@@ -621,6 +621,12 @@ the answer set apart below:
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
   a path that is still long keeps its end. A file you name without a folder,
   such as `note.txt`, is read from and saved to that same folder.
+- **The folder you started GAIA in is the chat's folder**, the same as
+  `gaia -p`: GAIA looks there first and reads files in it, and in the folders
+  under it, without asking. A file anywhere else asks first, and saying yes
+  lets GAIA use that file for the rest of the chat. Started from your home
+  folder or a drive root, that is everything under it, so start GAIA in the
+  folder you are working in.
 - **A failed step** keeps its reason under it, remedy included — that row is
   where a failure lives, not a separate error. While the turn is still running
   it reads `error` in amber, since the agent may fix it and try again. Once a

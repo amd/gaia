@@ -466,6 +466,23 @@ func TestTheFlagshipAt224GetsTheLaunchFolder(t *testing.T) {
 	}
 }
 
+// With only working_directory the agent's prompt named the home folder as the
+// place to look first, and a read in the launch folder asked for approval.
+func TestTheFlagshipAt224GetsTheLaunchFolderAsItsScope(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRelay(t)
+	f.contractVersion = "2.24"
+	sendOnce(t, f, "gaia")
+	got := f.queries[0].AllowedPaths
+	if len(got) != 1 || got[0] != want || got[0] != f.queries[0].WorkingDirectory {
+		t.Errorf("allowed_paths = %q, want exactly the launch folder [%q]: %s",
+			got, want, f.lastRawBody())
+	}
+}
+
 func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 	for _, tc := range []struct{ agent, version string }{
 		{"gaia", "2.23"},
@@ -476,8 +493,9 @@ func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 			f := newFakeRelay(t)
 			f.contractVersion = tc.version
 			sendOnce(t, f, tc.agent)
-			if raw := f.lastRawBody(); strings.Contains(raw, "working_directory") {
-				t.Errorf("working_directory was sent to a peer that rejects it: %s", raw)
+			raw := f.lastRawBody()
+			if strings.Contains(raw, "working_directory") || strings.Contains(raw, "allowed_paths") {
+				t.Errorf("the launch folder was sent to a peer that rejects it: %s", raw)
 			}
 		})
 	}
