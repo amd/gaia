@@ -53,6 +53,7 @@ export function showPermissionRequest(event: StreamEvent, sessionId: string): vo
         pathFollowUp: followUp || undefined,
         // No timeout from the backend means it waits; don't invent one.
         timeoutSeconds: event.timeout_seconds,
+        expiresAt: typeof event.expires_at === 'number' ? event.expires_at * 1000 : undefined,
     });
 }
 
@@ -88,6 +89,14 @@ export function policyAlertNotification(
     };
 }
 
+/** How a gated call ended without running: refused by the user, or its prompt timed out. */
+function denial(event: StreamEvent): 'declined' | 'timedOut' | null {
+    const data = (event.data && typeof event.data === 'object' ? event.data : {}) as { status?: unknown; timed_out?: unknown };
+    const status = event.status ?? data.status;
+    if (status !== 'denied') return null;
+    return event.timed_out === true || data.timed_out === true ? 'timedOut' : 'declined';
+}
+
 /** What a `tool_result` adds to the tool step it finishes. */
 export function toolResultUpdates(event: StreamEvent): Partial<AgentStep> {
     const updates: Partial<AgentStep> = {
@@ -96,6 +105,8 @@ export function toolResultUpdates(event: StreamEvent): Partial<AgentStep> {
         success: event.success !== false,
         latencyMs: event.latency_ms,
     };
+    const denied = denial(event);
+    if (denied) updates[denied] = true;
     // Pass through structured command output if available
     if (event.command_output) {
         updates.commandOutput = {
@@ -131,5 +142,8 @@ export function toolResultUpdates(event: StreamEvent): Partial<AgentStep> {
                 (event.result_data as any).files.length,
         };
     }
+    // A relayed result carries it inside `data`.
+    const relayed = event.data && typeof event.data === 'object' ? (event.data as { needs_model?: unknown }).needs_model : undefined;
+    if ((event.needs_model ?? relayed) === 'vision') updates.needsModel = 'vision';
     return updates;
 }

@@ -1,0 +1,53 @@
+{
+  "kind": "turn",
+  "finding": "F10 (amd/gaia#7179)",
+  "why": "The backup an edit makes is GAIA's own by-product; repeating its path is not a claimed save.",
+  "request": "In {ws}/todo.txt change milk to oat milk and tell me what each call returned.",
+  "files": {
+    "todo.txt": "- milk\n"
+  },
+  "model": [
+    {
+      "tool": "edit_file",
+      "args": {
+        "file_path": "{ws}/todo.txt",
+        "old_content": "milk",
+        "new_content": "oat milk"
+      },
+      "creates": {
+        "{ws}/todo.txt": "- oat milk\n",
+        "{ws}/.gaia/cache/backups/todo.txt.20261111_143048_506821.bak": "- milk\n"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/todo.txt",
+        "backup_created": true,
+        "backup_path": "{ws}/.gaia/cache/backups/todo.txt.20261111_143048_506821.bak"
+      }
+    },
+    {
+      "tool": "read_file",
+      "args": {
+        "file_path": "{ws}/todo.txt"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/todo.txt",
+        "content": "- oat milk\n"
+      }
+    },
+    {
+      "answer": "Changed milk to oat milk in todo.txt. edit_file returned success, and a backup was written to `{ws}/.gaia/cache/backups/todo.txt.20261111_143048_506821.bak`. read_file returned `- oat milk`."
+    }
+  ],
+  "expect": {
+    "model_calls": 3,
+    "answer_lacks": [
+      "I couldn't confirm",
+      "No successful write"
+    ],
+    "model_never_told": [
+      "write_file"
+    ]
+  }
+}

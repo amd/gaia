@@ -108,6 +108,8 @@
                     "group": "Connected Agents",
                     "pages": [
                       "guides/email",
+                      "guides/discord",
+                      "guides/automations",
                       "guides/slack",
                       "guides/telegram-adapter"
                     ]
@@ -143,6 +145,8 @@
                   "connectors/memory",
                   "connectors/slack",
                   "connectors/discord",
+                  "connectors/notion",
+                  "connectors/brave-search",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -411,6 +415,7 @@
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
+              "plans/discord-integration",
               "plans/daemon-convergence",
               "plans/autonomy-engine"
             ]

@@ -15,6 +15,7 @@ import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
@@ -47,7 +48,9 @@ function baseName(path: string): string {
 
 export function EnvironmentSection({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const t = useT();
-    const { env } = useSessionEnvironment(sessionId);
+    const { env, refresh } = useSessionEnvironment(sessionId);
+    // A turn can add a document or folder to what the chat reaches.
+    useTurnEnd(busy, () => { void refresh(); });
     const summary = env && !env.internet ? t('env.offline') : null;
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
@@ -312,7 +315,8 @@ function PhoneAccess() {
                     {t('env.qr')}
                 </button>
             )}
-            {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
+            {/* A failed start is explained in the Mobile access dialog; it isn't this switch's error. */}
+            {(error || (active && status?.error)) && <span className="sp-error">{error ?? status?.error}</span>}
         </Row>
     );
 }
@@ -323,6 +327,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const [mode, setMode] = useState<PermissionMode | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const promptWaiting = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     useEffect(() => {
         let live = true;
@@ -370,6 +375,7 @@ function Permission({ sessionId }: { sessionId: string }) {
                 ))}
             </div>
             {note && <span className="sp-meta">{t(note)}</span>}
+            {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     {t('env.fullAccessWarn')}

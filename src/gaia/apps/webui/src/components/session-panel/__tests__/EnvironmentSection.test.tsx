@@ -70,6 +70,21 @@ describe('Runs on', () => {
 });
 
 describe('Can read and write', () => {
+    it('shows a document the turn indexed once the reply ends, without a reload', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('list');
+        expect(screen.queryByText('outside.md')).toBeNull();
+
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [...ENV.folders, { path: 'C:\\Users\\me\\.gaia\\documents\\outside.md', kind: 'file', source: 'document', removable: false }],
+        } as never);
+        rerender(<EnvironmentSection sessionId={SID} busy />);
+        rerender(<EnvironmentSection sessionId={SID} busy={false} />);
+
+        expect(await screen.findByText('outside.md')).toBeInTheDocument();
+    });
+
     it('lists folders first, with where each came from', async () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const list = await screen.findByRole('list');
@@ -296,6 +311,17 @@ describe('Phone access', () => {
         expect(await screen.findByText(/iPhone connected/)).toBeInTheDocument();
         expect(toggle).toHaveAttribute('aria-checked', 'true');
         window.removeEventListener('gaia:mobile-access-request', onRequest);
+    });
+
+    it('shows no error for phone access the user never got running', async () => {
+        mocked.getTunnelStatus.mockResolvedValue({
+            active: false, url: null, token: null, startedAt: null, publicIp: null,
+            error: 'ngrok is not installed. Install it from https://ngrok.com/download or run: choco install ngrok',
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('switch', { name: 'Phone access' });
+        await waitFor(() => expect(mocked.getTunnelStatus).toHaveBeenCalled());
+        expect(screen.queryByText(/ngrok/)).toBeNull();
     });
 });
 

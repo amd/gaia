@@ -3,7 +3,7 @@
 
 /** The context meter tracks each turn, breaks the window down, and names turns before they leave view. */
 
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
@@ -118,9 +118,15 @@ describe('context meter', () => {
         await act(async () => {});
         // The resource strip has a status of its own; pick the context warning.
         const warning = screen.getAllByRole('status').find((el) => el.classList.contains('context-warning'))!;
+        // One line until the user asks for the turns it means.
+        expect(warning.textContent).not.toContain('what is in the Q3 plan?');
+        fireEvent.click(within(warning).getByRole('button', { name: 'Details' }));
         expect(warning.textContent).toContain('oldest 2 turns');
         expect(warning.textContent).toContain('what is in the Q3 plan?');
         expect(warning.textContent).toContain('list the owners');
+
+        fireEvent.click(within(warning).getByRole('button', { name: 'Dismiss' }));
+        expect(document.querySelector('.context-warning')).toBeNull();
     });
 
     it('says when there is nothing to measure yet', async () => {

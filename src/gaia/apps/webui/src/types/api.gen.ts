@@ -34,6 +34,8 @@ export interface ApiSchemas {
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
   DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -117,6 +119,8 @@ export interface ApiSchemas {
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkillLinkAddRequest: SkillLinkAddRequest;
+  SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
   SpeakRequest: SpeakRequest;
@@ -237,6 +241,7 @@ export interface AgentStepResponse {
   currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
+  declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
@@ -256,6 +261,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -463,6 +469,14 @@ export interface DeviceUsage {
    * Load of the device's busiest engine.
    */
   percent: number;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -986,6 +1000,7 @@ export interface ModelServerInfo {
  * Status of a custom model on the Lemonade server.
  */
 export interface ModelStatus {
+  checked?: boolean;
   downloaded?: boolean;
   found?: boolean;
   loaded?: boolean;
@@ -1345,6 +1360,16 @@ export interface SetupRunRequest {
   server_only?: boolean;
   skip_chat_model?: boolean;
   upgrade_embedded?: boolean;
+}
+export interface SkillLinkAddRequest {
+  allow_code?: boolean;
+  force?: boolean;
+  names?: string[] | null;
+  pin: string;
+  url: string;
+}
+export interface SkillLinkRequest {
+  url: string;
 }
 export interface SkipModelRequest {
   model_id: string;

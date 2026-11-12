@@ -1020,13 +1020,17 @@ async def get_warm_up():
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:
-    """Check if a model is found, downloaded, and loaded on Lemonade server."""
+    """Check if a model is found, downloaded, and loaded on Lemonade server.
+
+    ``checked`` stays False when the model list couldn't be read, so "not
+    found" is never claimed for a server that didn't answer.
+    """
     status = ModelStatus()
     if not model_name:
         return status
-    try:
-        import httpx
+    import httpx
 
+    try:
         base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1036,41 +1040,55 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                 params={"show_all": "true"},
                 headers=_auth,
             )
+            listed: Optional[List[Dict[str, Any]]] = None
             if models_resp.status_code == 200:
+                try:
+                    listed = _catalog_entries(models_resp.json())
+                except ValueError as e:
+                    logger.info("Model list for %s unreadable: %s", model_name, e)
+            if listed is not None:
+                status.checked = True
                 model_name_lower = model_name.lower()
-                for m in models_resp.json().get("data", []):
-                    mid = m.get("id", "").lower()
-                    mname = m.get("name", "").lower()
-                    if model_name_lower in (mid, mname):
+                for m in listed:
+                    mid = str(m.get("id") or "")
+                    mname = str(m.get("name") or "").lower()
+                    if _model_ids_match(mid, model_name) or model_name_lower == mname:
                         status.found = True
-                        status.downloaded = m.get("downloaded", False)
+                        status.downloaded = bool(m.get("downloaded", False))
                         break
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            if health_resp.status_code == 200:
-                health_data = health_resp.json()
-                loaded_model = health_data.get("model_loaded", "")
-                if loaded_model and loaded_model.lower() == model_name.lower():
+            health_data = health_resp.json() if health_resp.status_code == 200 else None
+            if isinstance(health_data, dict):
+                loaded_model = health_data.get("model_loaded")
+                if isinstance(loaded_model, str) and _model_ids_match(
+                    loaded_model, model_name
+                ):
                     status.found = True
                     status.downloaded = True
                     status.loaded = True
                 # Also check all_models_loaded list
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("model_name", "").lower() == model_name.lower():
+                loaded_list = health_data.get("all_models_loaded")
+                for m in loaded_list if isinstance(loaded_list, list) else []:
+                    if isinstance(m, dict) and _model_ids_match(
+                        str(m.get("model_name") or ""), model_name
+                    ):
                         status.found = True
                         status.downloaded = True
                         status.loaded = True
                         break
-    except Exception as e:
-        logger.debug("Model status check failed for %s: %s", model_name, e)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+        # Unchecked, which Settings says in words; InvalidURL isn't an HTTPError.
+        logger.info("Could not check model %s on the model server: %s", model_name, e)
 
     logger.debug(
-        "Model status for %s: found=%s, downloaded=%s, loaded=%s",
+        "Model status for %s: found=%s, downloaded=%s, loaded=%s, checked=%s",
         model_name,
         status.found,
         status.downloaded,
         status.loaded,
+        status.checked,
     )
     return status
 
@@ -1290,10 +1308,11 @@ async def health(db: ChatDatabase = Depends(get_db)):
     }
 
 
-def _read_model_server() -> ModelServerInfo:
+def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:
     """Read Lemonade's /health and /system-info into the Model server panel.
 
     Unreachable is an answer, not an exception: the panel shows one line.
+    ``custom_model`` is the user's chat model override, if any.
     """
     from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import (
@@ -1333,6 +1352,7 @@ def _read_model_server() -> ModelServerInfo:
         system_info=system_info if isinstance(system_info, dict) else None,
         preferred_backend=preferred,
         is_cloud_model=cloud_model_provider,
+        chat_model_id=custom_model or _default_model_name(),
     )
     return ModelServerInfo(**info, system_info_error=system_info_error)
 
@@ -1342,18 +1362,22 @@ def _config_http_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/api/system/model-server", response_model=ModelServerInfo)
-async def model_server():
+async def model_server(db: ChatDatabase = Depends(get_db)):
     """Which Lemonade GAIA uses, where, and what backend each loaded model runs on."""
     from gaia.config import GaiaConfigError
 
     try:
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(
+            _read_model_server, db.get_setting("custom_model")
+        )
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 
 
 @router.put("/api/system/model-server/backend", response_model=ModelServerInfo)
-async def set_model_server_backend(body: ModelServerBackendRequest):
+async def set_model_server_backend(
+    body: ModelServerBackendRequest, db: ChatDatabase = Depends(get_db)
+):
     """Save the llama.cpp backend for chat models; it applies on the next load.
 
     Only a backend GAIA has tested and Lemonade can run on this machine is accepted.
@@ -1361,9 +1385,10 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
     from gaia.config import GaiaConfig, GaiaConfigError
 
     choice = body.backend.strip().lower()
+    custom_model = db.get_setting("custom_model")
     try:
         if choice != "auto":
-            current = await asyncio.to_thread(_read_model_server)
+            current = await asyncio.to_thread(_read_model_server, custom_model)
             if not current.reachable:
                 raise HTTPException(status_code=503, detail=current.error)
             usable = sorted(b.name for b in current.available_backends)
@@ -1378,7 +1403,7 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
                     ),
                 )
         await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(_read_model_server, custom_model)
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 

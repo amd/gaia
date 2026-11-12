@@ -201,6 +201,45 @@ def test_a_request_not_to_act_is_not_sent_to_look(agent, workspace):
     assert PLAN in result["result"]
 
 
+def test_a_touch_ban_on_an_investigation_still_sends_the_answer_to_look(
+    agent, workspace
+):
+    sent = _script(agent, _answer(GUESS), _read("toybox/dates.py"), _answer(REVIEW))
+
+    result = agent.process_query(
+        "Find out why toybox/dates.py fails. Don't touch anything.", max_steps=10
+    )
+
+    assert "`toybox/dates.py`" in sent[1][-1]["content"]
+    assert "without opening anything" in sent[1][-1]["content"]
+    assert REVIEW in result["result"]
+
+
+ANNOUNCED_EDIT = "The bug is on line 1. Let me check toybox/dates.py and patch it."
+
+
+def test_a_touch_ban_keeps_an_announced_edit_from_being_pushed(agent, workspace):
+    sent = _script(agent, _read("toybox/dates.py"), _answer(ANNOUNCED_EDIT))
+
+    result = agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert ANNOUNCED_EDIT in result["result"]
+
+
+def test_small_talk_before_a_touch_ban_is_not_sent_to_look(agent, workspace):
+    sent = _script(agent, _answer(GUESS))
+
+    agent.process_query(
+        "Hi, how are you? Don't touch anything, toybox/dates.py stays as is.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 1
+
+
 READ_NOTHING_PLAN = (
     "1. I will load the module.\n2. I will add a test for each date helper.\n"
     "3. I will run the new tests."
@@ -263,6 +302,46 @@ def test_a_no_tools_answer_stating_a_file_unread_keeps_its_note(
 
     assert not [m for m in sent[-1] if "Look with your tools first" in m["content"]]
     assert "I didn't read `toybox/dates.py` this turn" in result["result"]
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        # rc18 round 3, as the tester typed it.
+        "Do NOT run anything in this turn and use no tools. I am testing a "
+        "display: answer with exactly this one sentence: I read {path} and it "
+        "has 4 data rows.",
+        "For {path} I want totals. Use no tools in this turn. Answer only with "
+        "a three-step plan.",
+    ],
+)
+@pytest.mark.parametrize(
+    "path", ["C:/no-such-drive-folder/t/orders.csv", "C:\\no-such\\t\\orders.csv"]
+)
+def test_a_no_tools_answer_that_says_it_read_a_full_path_keeps_its_note(
+    agent, workspace, request_text, path
+):
+    """The drive colon hid the claim: "I read C:/.../orders.csv", no note."""
+    answer = f"I read {path} and it has 4 data rows."
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(request_text.format(path=path), max_steps=10)
+
+    assert f"I didn't read `{path}` this turn" in result["result"]
+
+
+def test_a_plan_naming_a_full_path_it_has_yet_to_read_gets_no_note(agent, workspace):
+    path = "C:/no-such-drive-folder/t/orders.csv"
+    plan = f"1. I will read {path}.\n2. I will total each region.\n3. I will report."
+    _script(agent, _answer(plan))
+
+    result = agent.process_query(
+        f"For {path} I want totals. Use no tools in this turn. Answer only with "
+        "a three-step plan.",
+        max_steps=10,
+    )
+
+    assert result["result"].strip() == plan
 
 
 def test_the_verifiers_version_question_keeps_its_note(agent, workspace):

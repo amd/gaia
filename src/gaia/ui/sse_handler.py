@@ -26,7 +26,7 @@ from typing import Any, ClassVar, Dict, Iterator, List, Optional
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
-from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_outcome import FAILED_STATUSES, tool_result_dict
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
     get_tool_display_label,
@@ -35,6 +35,11 @@ from gaia.agents.base.tools import (
 )
 from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
+from gaia.agents.tools.connect_card import (
+    CONNECT_CARD_KIND,
+    CONNECT_CARD_SUMMARY,
+    connect_card_in,
+)
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
@@ -550,6 +555,9 @@ class SSEOutputHandler(OutputHandler):
     #: What "always" would grant on that prompt; ``None`` when not offered.
     _relay_always_scope: Optional[str] = None
 
+    #: Answers that prompt "timeout" when the confirm window runs out.
+    _relay_confirm_timer: Optional[threading.Timer] = None
+
     #: The sidecar question a relayed run is parked on, until it is answered.
     _relay_question_id: Optional[str] = None
 
@@ -923,6 +931,12 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A model the call needed and didn't find, so the UI can offer it.
+        if isinstance(data, dict) and isinstance(data.get("needs_model"), str):
+            event["needs_model"] = data["needs_model"]
+        # A "denied" call nobody answered is not one the user declined.
+        if isinstance(data, dict) and data.get("timed_out") is True:
+            event["timed_out"] = True
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -1032,9 +1046,24 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        connect = connect_card_in(data)
+        if connect is not None:
+            fault = str((tool_result_dict(data) or {}).get("error") or "")
+            said = fault.splitlines()[0][:200] if fault else CONNECT_CARD_SUMMARY
+            event["summary"] = said
+            # A relaying host reads the outcome and the summary off this payload.
+            connect = {
+                **connect,
+                "success": success,
+                "status": "ok" if success else "error",
+                "display_message": said,
+            }
+            event["result_data"] = connect
+            event["render"] = CONNECT_CARD_KIND
+            event["data"] = connect
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
-        if render_card is not None:
+        elif render_card is not None:
             event["result_data"] = render_card
             event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
             event["data"] = render_card
@@ -2170,6 +2199,7 @@ class SSEOutputHandler(OutputHandler):
         # renders a prompt that waits.
         if timeout is not None:
             request["timeout_seconds"] = timeout
+            request["expires_at"] = time.time() + timeout
         self._emit(request)
 
         # Poll in short intervals so cancellation is detected promptly.
@@ -2616,6 +2646,31 @@ class SSEOutputHandler(OutputHandler):
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
             self._relay_always_scope = always_scope if confirm_id else None
+            if self._relay_confirm_timer is not None:
+                self._relay_confirm_timer.cancel()
+                self._relay_confirm_timer = None
+            # The sidecar's own bound is only a backstop; this is the one the card shows.
+            timeout = self.confirm_timeout_seconds
+            if confirm_id and timeout is not None:
+                timer = threading.Timer(
+                    timeout, self._expire_relay_confirmation, args=(confirm_id,)
+                )
+                timer.daemon = True
+                timer.start()
+                self._relay_confirm_timer = timer
+
+    def _expire_relay_confirmation(self, confirm_id: str) -> None:
+        """Tell the sidecar nobody answered *confirm_id* in time."""
+        from gaia.daemon.sidecars.errors import SidecarError
+
+        try:
+            self.resolve_relay_confirmation(False, confirm_id, timed_out=True)
+        except SidecarError as exc:
+            logger.warning(
+                "Could not tell the sidecar that prompt %s timed out: %s",
+                confirm_id,
+                exc,
+            )
 
     def relay_confirmation_pending(self, confirm_id: Optional[str] = None) -> bool:
         """Whether a sidecar prompt is pending; *confirm_id* must be that one."""
@@ -2632,14 +2687,19 @@ class SSEOutputHandler(OutputHandler):
             return self._relay_always_scope
 
     def resolve_relay_confirmation(
-        self, approved: bool, confirm_id: str, always: bool = False
+        self,
+        approved: bool,
+        confirm_id: str,
+        always: bool = False,
+        timed_out: bool = False,
     ) -> bool:
         """Hand the user's answer to the sidecar run parked on it.
 
         Returns ``False`` when *confirm_id* is not the prompt pending on a live
-        relayed run, or when *always* was not offered on it. Claimed under the
-        lock before the POST, so a double click cannot send two answers; a
-        sidecar rejection raises ``SidecarError``.
+        relayed run, or when *always* was not offered on it. *timed_out* says
+        nobody answered in time. Claimed under the lock before the POST, so a
+        double click cannot send two answers; a sidecar rejection raises
+        ``SidecarError``.
         """
         with self._confirm_lock:
             proxy = self.active_relay_proxy
@@ -2654,7 +2714,9 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
-        if always:
+        if timed_out:
+            decision = "timeout"
+        elif always:
             decision = "always"
         else:
             decision = "allow" if approved else "deny"
