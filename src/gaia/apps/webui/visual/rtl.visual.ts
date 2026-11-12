@@ -422,6 +422,9 @@ for (const [title, locale, name] of [
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
         await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        // A long name is cut in the middle, so its extension stays in view.
+        await expect(page.locator('.composer-attachment-name')).toHaveText(/\.(mp4|m4a)$/);
+        await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -433,6 +436,44 @@ test('new chat', async ({ page }) => {
     await expect(page.locator('.sb-location-name')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
+            json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
+        })));
+        const add = page.locator('.new-chat-meta button.new-chat-folder');
+        await expect(add).toBeVisible();
+        await expect(page.locator('.new-chat-meta')).not.toContainText('documents');
+        await shot(page, `new-chat-add-folder-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
@@ -499,6 +540,35 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withFailedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Give me three tips for better sleep.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'Error: `fireworks.no-such-model` isn\'t available on Fireworks AI (HTTP 404).',
+                        inference_stats: { seconds: 2, place: 'via Fireworks AI' },
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer is footed as failed (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedAnswer);
+        const footer = page.locator('.msg-assistant .msg-stats-summary');
+        await expect(footer).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').hover();
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale);
@@ -537,6 +607,78 @@ for (const locale of ['ar', 'en']) {
         await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
         await page.locator('.msg-assistant').last().hover();
         await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+/** A turn GAIA re-checked: the model wrote its answer, read the file back, then wrote it again. */
+const CHECKED_ANSWER = [
+    'Done — except the last step, which you declined.',
+    '',
+    '| Month | Total |',
+    '|---|---|',
+    '| October 2026 | 47.70 |',
+    '| November 2026 | 36.75 |',
+    '| **Grand total** | **84.45** |',
+    '',
+    '**Renamed:** `draft_old.txt` → `draft_archive.txt`',
+].join('\n');
+
+async function withCheckedAnswer(page: Page): Promise<void> {
+    const step = (id: number, extra: Record<string, unknown>) => ({ id, active: false, timestamp: id, ...extra });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Total both expense files into summary.md and rename draft_old.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${CHECKED_ANSWER}\n\nSay the word and I'll add the line.`, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            step(1, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(2, { type: 'tool', label: 'Write file', tool: 'write_file', success: true }),
+                            step(3, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER }),
+                            step(4, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(5, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER.replace('declined.', 'declined (read back to confirm).') }),
+                            step(6, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a re-checked answer shows once (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCheckedAnswer);
+        await expect(page.locator('.md-table')).toHaveCount(1);
+        await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
+async function withStoppedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write about the history of canals', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The earliest canals carried water to fields, not boats. In Mesopotamia', created_at: NOW.toISOString(), rag_sources: null, stopped: true },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped answer offers Continue and Try again (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withStoppedAnswer);
+        const actions = page.locator('.msg-assistant .msg-try-again');
+        await expect(actions).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
     });
 }
 
@@ -626,6 +768,92 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await expect(seconds).toHaveText(/^\d+s$/);
         expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
         await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const QUESTION_EVENTS = [
+    {
+        type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
+        options: [
+            { value: 'red', label: 'Red', description: '' },
+            { value: 'green', label: 'Green', description: '' },
+            { value: 'blue', label: 'Blue', description: '' },
+        ],
+        allow_free_text: true, sensitive: false, timeout_seconds: 300,
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a waiting question is answered from the message box and kept as a record (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, QUESTION_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.route('**/api/chat/user-input', (route) => route.fulfill({ json: { status: 'ok', request_id: 'q-1' } }));
+        const box = page.getByRole('textbox').first();
+        await box.fill('Ask me a colour');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__option')).toHaveCount(3);
+        await expect(box).toBeFocused();
+        await expect(page.locator('.render-needs-input__hint').last(), 'the question is hidden under the message box').toBeInViewport({ ratio: 1 });
+        await shot(page, `question-waiting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await box.fill('2');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
+        await expect(page.locator('.queued-message')).toHaveCount(0);
+        await shot(page, `question-answered-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** A multi-step turn that reasons before every call, then keeps thinking. */
+function holdOnThoughtfulSteps(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const files = ['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt'];
+        const events = files.flatMap((f) => [
+            { type: 'thinking', content: `I need to read ${f} next.` },
+            { type: 'tool_start', tool: 'read_file', detail: `file_path: ${f}`, narration: `Reading file: ${f}` },
+            { type: 'tool_end', success: true, result: 'Read 2 KB' },
+        ]).concat([{ type: 'thinking', content: 'Now add up the months.' }]);
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a running turn lists its steps, not a thought between each (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnThoughtfulSteps);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Read the four files');
+        await box.press('Enter');
+        const live = page.locator('.flow-steps.live');
+        await expect(live.locator('.flow-tool')).toHaveCount(4);
+        await expect(live.locator('.flow-tool-thought-mark')).toHaveCount(4);
+        await expect(live.locator('.flow-reasoning')).toHaveCount(1);
+        await expect(live.locator('.flow-thought-hacker')).toHaveCount(0);
+        await shot(page, `thoughtful-steps-${locale}`);
+        await live.locator('.flow-tool-header').first().click();
+        await expect(live.locator('.flow-tool-thought')).toContainText('expenses_oct.csv');
+        await shot(page, `thoughtful-steps-open-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -1329,6 +1557,31 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, null);
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
+                    provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        await shot(page, `model-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
+        await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');
+        await shot(page, `model-menu-confirm-${locale}`);
+        // The question scrolls into view under its row, so the list is scrolled on purpose here.
+        expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
         const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
@@ -1669,6 +1922,31 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `spend-popover-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+const MONTH_SPENDING = {
+    month: '2026-10', total_usd: 3.42, turns: 37, unpriced_turns: 4, unreported_turns: 5,
+    limit_usd: 20, state: 'ok', by_model: [], price_source: 'list price',
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`monthly spending headline leaves out unpriced and unreported turns (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale);
+        await page.route((url) => url.pathname === '/api/spending', (route) => route.fulfill({ json: MONTH_SPENDING }));
+        await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+        const spending = page.locator('section.spending');
+        await expect(spending.locator('.spending-total')).toContainText('$3.42');
+        await expect(spending.locator('.spending-total')).toContainText('$20');
+        await expect(spending.locator('.spending-total')).toContainText(locale === 'ar' ? 'أدوار المحادثة السحابية: 28' : /28 cloud chat turns/);
+        await expect(spending.locator('p.settings-hint')).toHaveCount(2);
+        await expect(spending.locator('p.settings-hint').nth(0)).toContainText(locale === 'ar' ? '(4)' : 'Plus 4 turns on models with an unknown price');
+        await expect(spending.locator('p.settings-hint').nth(1)).toContainText(locale === 'ar' ? '(5)' : 'Plus 5 turns whose usage wasn’t reported');
+        await spending.scrollIntoViewIfNeeded();
+        await scrollPane(page, 'bottom');
+        await shot(page, `spending-month-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, 'section.spending')).toEqual([]);
     });
 }
 
@@ -2700,6 +2978,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
+    { type: 'tool_result', success: false, summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded" },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'run_python', narration: 'Running Python' },
+    { type: 'tool_result', success: false, status: 'denied', summary: "Tool 'run_python' was denied by the user." },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`steps name the action, and a declined call says so (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('what colour is the picture?');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(1)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(1).locator('.flow-tool-label')).toHaveText('You declined: Running Python');
+        await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `declined-steps-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
@@ -2862,7 +3166,14 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         const meter = page.locator('button.context-meter');
         await expect(meter).toBeVisible();
-        await expect(page.locator('.context-warning')).toBeVisible();
+        const warning = page.locator('.context-warning');
+        await expect(warning).toBeVisible();
+        // One short line by default, so it never covers the end of the chat.
+        expect((await warning.boundingBox())!.height).toBeLessThan(60);
+        await shot(page, `context-warning-${locale}`);
+        await warning.getByRole('button', { expanded: false }).click();
+        await shot(page, `context-warning-details-${locale}`);
+        expect(await audit(page)).toEqual([]);
         await meter.click();
         await expect(page.locator('.context-meter-panel')).toBeVisible();
         expect(await audit(page)).toEqual([]);

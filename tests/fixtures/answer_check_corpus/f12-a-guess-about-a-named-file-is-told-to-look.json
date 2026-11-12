@@ -1,0 +1,37 @@
+{
+  "kind": "turn",
+  "finding": "F12 (amd/gaia#7181)",
+  "why": "The nudge F12 misfired: an answer about a named file that opened nothing is sent back once to look.",
+  "request": "Review toybox/dates.py",
+  "files": {
+    "toybox/dates.py": "x = 1\n"
+  },
+  "model": [
+    {
+      "answer": "The file is missing, so I can't review it."
+    },
+    {
+      "tool": "read_file",
+      "args": {
+        "file_path": "toybox/dates.py"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "toybox/dates.py",
+        "content": "x = 1\n"
+      }
+    },
+    {
+      "answer": "It assigns x = 1 and nothing else."
+    }
+  ],
+  "expect": {
+    "model_calls": 3,
+    "model_told": [
+      "Look with your tools first"
+    ],
+    "answer_has": [
+      "It assigns x = 1"
+    ]
+  }
+}
