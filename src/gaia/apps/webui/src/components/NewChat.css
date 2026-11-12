@@ -11,7 +11,7 @@
     padding: 24px 16px 18vh;
 }
 
-/* Typing drops the composer to the bottom, where the chat will continue. */
+/* Sending drops the composer to the bottom, where the chat will continue. */
 .new-chat.is-docked {
     align-items: flex-end;
     padding-bottom: 16px;
@@ -81,7 +81,7 @@
 .new-chat-meta {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 10px;
     min-height: 28px;
     margin-top: 8px;
 }
@@ -109,8 +109,22 @@
 }
 
 .new-chat-folder.is-on {
-    border-color: var(--accent);
+    padding-block: 3px;
+    padding-inline: 9px 3px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-full);
     background: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+.new-chat-folder-clear {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+}
+
+.new-chat-folder-clear:hover:not(:disabled) {
     color: var(--text-primary);
 }
 

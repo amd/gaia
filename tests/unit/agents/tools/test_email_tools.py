@@ -327,7 +327,9 @@ def test_401_names_the_fix():
     backend = make_backend(lambda r: httpx.Response(401, text="expired"))
     with pytest.raises(MailboxAuthError) as err:
         backend.list_inbox()
-    assert "gaia connectors" in str(err.value)
+    assert "needs reconnecting" in str(err.value)
+    # The tool adds how to reconnect, worded for the front-end asking.
+    assert err.value.connect == ("microsoft",)
 
 
 def test_403_names_the_missing_scope():

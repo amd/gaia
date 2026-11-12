@@ -39,3 +39,15 @@ it('says a folded run with a policy block was blocked by policy', () => {
 
     expect(screen.getByRole('button', { name: /^Blocked by policy$/ })).toHaveAttribute('aria-expanded', 'true');
 });
+
+it('does not head a run whose only memory call failed "Saved to memory"', () => {
+    const steps: AgentStep[] = [
+        { id: 1, type: 'thinking', label: 'Thinking', detail: 'Store it as sensitive.', active: false, timestamp: 1 },
+        { id: 2, type: 'tool', label: 'Using remember', tool: 'remember', active: false, success: false, result: 'Invalid category', timestamp: 2 },
+        { id: 3, type: 'thinking', label: 'Thinking', detail: 'Use another category.', active: false, timestamp: 3 },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /Saving to memory failed/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Saved to memory/ })).toBeNull();
+});

@@ -262,8 +262,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    // Typing drops the composer to the bottom, where the chat will continue.
-    const docked = text.length > 0 || sending;
+    // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
+    const docked = sending;
     const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
     useLayoutEffect(() => {
         const el = innerRef.current;
