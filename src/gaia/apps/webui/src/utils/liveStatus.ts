@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { Translate } from '../i18n/useT';
+import { placeInLine } from './chatAlerts';
 
 /** Live status lines the backend and ChatView write in English, matched whole. */
 const EXACT: Record<string, Parameters<Translate>[0]> = {
@@ -31,6 +32,9 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.loadingModel', { model: m[1] });
     m = /^Reading page (\d+) of (\d+)…$/.exec(label);
     if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    // `_queued_status_event` in _chat_helpers.py.
+    m = /^Waiting for the GPU — (\d+)(?:st|nd|rd|th) in line$/.exec(label);
+    if (m) return placeInLine(t, 'live.queued', Number(m[1]));
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
     return label;

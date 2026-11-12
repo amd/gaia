@@ -16,7 +16,7 @@ import { log } from '../utils/logger';
 import {
     groupSessionsForList, hiddenAutomatedCount, sessionRowStatus, type ListGroup, type LiveRuns, type RowStatus,
 } from '../utils/sessionGrouping';
-import { ordinal } from '../utils/chatAlerts';
+import { placeInLine } from '../utils/chatAlerts';
 import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
@@ -130,9 +130,9 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const unread = !!session.unread && !active;
     // Done is news only until read; failed stays until the next turn.
     const dot = status === 'done' && !unread ? null : status;
-    const place = queuePlace > 0 ? `${ordinal(queuePlace)} in line` : null;
+    const place = queuePlace > 0 ? placeInLine(t, 'row.queuePlace', queuePlace) : null;
     const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
-    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const waiting = failed > 0 ? t('row.notSent', { n: failed }) : unsent > 0 ? t('row.toSend', { n: unsent }) : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
     const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
@@ -173,13 +173,14 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                 >
                     {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                     {session.private && <EyeOff size={12} className="sb-row-icon" aria-label={t('row.private')} />}
-                    {snippet ? (
+                    {snippet || note ? (
                         <span className="sb-row-text">
                             {title}
-                            <span className="sb-row-snippet"><Highlight parts={snippet} /></span>
+                            {snippet && <span className="sb-row-snippet"><Highlight parts={snippet} /></span>}
+                            {/* Its own line, so the note never cuts a long title short. */}
+                            {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
                         </span>
                     ) : title}
-                    {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
                 </button>
             )}
             {phone && editing && (

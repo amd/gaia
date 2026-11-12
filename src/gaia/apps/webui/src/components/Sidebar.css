@@ -401,11 +401,11 @@
 }
 
 .sb-row-queue {
-    flex-shrink: 0;
-    margin-inline-start: auto;
+    overflow: hidden;
     color: var(--text-muted);
     font-size: 11.5px;
     white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .sb-row-queue.is-failed {
