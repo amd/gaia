@@ -118,6 +118,21 @@ def test_the_relay_records_how_many_turns_it_left_out(monkeypatch):
     assert cut and cut[0]["turns"] == h.relay_hidden_turns
 
 
+def test_the_text_history_relay_records_how_many_turns_it_left_out(monkeypatch):
+    """An agent on contract 2.21-2.24 measures context but takes text pairs."""
+    from gaia.agents.base import history
+
+    pairs = [(f"question {i}", "x" * 4000) for i in range(10)]
+    budget = sum(history.turn_cost(_turn(i, 4000)) for i in range(5))
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: budget)
+    monkeypatch.setattr(helpers, "_ui_cloud_provider", lambda model: None)
+    h = SSEOutputHandler()
+
+    context = helpers._relayed_history(pairs, "m", "q", h, None)
+
+    assert h.relay_hidden_turns == len(pairs) - len(context) // 2 > 0
+
+
 def test_history_exactly_at_budget_hides_nothing():
     from gaia.agents.base import history
 

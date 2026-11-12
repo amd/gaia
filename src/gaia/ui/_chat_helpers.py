@@ -2158,6 +2158,9 @@ def _relayed_history(
     # select_history returns the turns' own message dicts, so identity says
     # which clipped messages the model still sees.
     in_view = {id(message) for message in context}
+    sse_handler.relay_hidden_turns = sum(
+        1 for turn in turns if not any(id(message) in in_view for message in turn)
+    )
     shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
     seen = _relay_clips.get(session_id, set()) if session_id else set()
     if session_id:
