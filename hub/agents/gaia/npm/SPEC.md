@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.27"`                  |
+| Contract version   | `API_VERSION = "2.28"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -298,7 +298,7 @@ missing required one is `422` before the agent runs. `run_id` must parse as a
 UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 (`model`, `provider`, `max_steps`, `session_id`, `can_answer_questions`,
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
-`changes_turn_id`, `surface`) is optional.
+`changes_turn_id`, `surface`, `reply_style`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
 is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
@@ -382,6 +382,16 @@ own `internet_off` is applied, so a switch posted earlier is replaced by the
 body's value, and on a session's first turn it is a **404** because the
 session does not exist yet. A caller whose user can flip the switch while a
 turn starts re-reads it when `/query` answers and posts it if it changed.
+
+`reply_style` (contract ≥ 2.28) is `"voice"` for a turn that will be spoken
+aloud, else `"text"` (the default). A voice turn adds a note to that turn's
+user message, not the system prompt, so the cached prompt for typed turns is
+unchanged. The note asks for one short status line before each tool call and
+for the final answer to open with `<spoken>…</spoken>`: one or two plain
+sentences, at most 40 words, with no markdown, paths, URLs or code. The caller
+strips the tags; a voice answer that arrives without them is a format slip to
+report, not an error. The value applies to that turn only: omitting it on a
+retained session's next turn means `"text"`. Pre-2.28 binaries `422` the field.
 
 `changes_turn_id` (contract ≥ 2.19) asks the agent to record the turn's file
 changes for undo. Before a tool writes, edits, creates or deletes a file, the

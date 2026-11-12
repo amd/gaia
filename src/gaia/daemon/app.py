@@ -324,6 +324,10 @@ def create_app(
     from gaia.daemon.setup_routes import build_setup_router
 
     app.include_router(build_setup_router(token))
+    # Dictation and voice mode for the TUI: the daemon owns the mic and speaker.
+    from gaia.daemon.voice_routes import build_voice_router
+
+    app.include_router(build_voice_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

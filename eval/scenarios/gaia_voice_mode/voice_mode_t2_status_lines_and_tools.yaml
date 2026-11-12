@@ -1,0 +1,48 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/tiers_files_shell/projects/atlas_notes.md —
+# code name BLUE HERON, budget $41,300, owner Priya Natarajan. See
+# GAIA_FIXTURE_VALUES.md, "Files and shell".
+id: voice_mode_t2_status_lines_and_tools
+name: "Voice mode — Status Line Before the Tool, Summary From the Result"
+category: gaia_voice_mode
+severity: high
+tags: [t2_compound]
+description: |
+  In voice mode the agent writes one short line before each tool call saying
+  what it is about to do (it is spoken while the tool runs), never claims a
+  result before the tool returns, and the spoken summary states what the
+  tool actually found. The full detail still follows the block.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  notes: "atlas_notes.md staged at ~/gaia-eval/tiers_files_shell/projects/."
+
+turns:
+  - turn: 1
+    objective: "SEND AS A VOICE TURN: call send_message with reply_style=\"voice\". Ask about the planted note"
+    user_message: "what's the budget in my atlas notes file in ~/gaia-eval/tiers_files_shell/projects?"
+    ground_truth:
+      expected_answer: "$41,300"
+    success_criteria: |
+      agent_tools[] shows a real read of atlas_notes.md (read_file or an
+      equivalent). Before the tool call the agent wrote a short line (under
+      about 12 words) saying what it is about to do, which does not claim the
+      answer. The final answer opens with a <spoken> block of at most 40
+      words that gives $41,300 in plain words. FAIL if the amount is wrong or
+      guessed without a read, if the block is missing, or if the block
+      contains a file path.
+
+  - turn: 2
+    objective: "SEND AS A VOICE TURN: call send_message with reply_style=\"voice\". Ask a follow-up needing the same file"
+    user_message: "who owns it, and what's the code name?"
+    ground_truth:
+      expected_answer: "Priya Natarajan; BLUE HERON"
+    success_criteria: |
+      The <spoken> block names Priya Natarajan and the code name Blue Heron.
+      FAIL if either is wrong or the block is missing. A second file read is
+      fine but not required.
+
+expected_outcome: |
+  Tool steps are narrated with short honest lines, and the spoken summary
+  reports the real result in plain words.

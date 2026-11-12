@@ -602,6 +602,7 @@ names the update command.
 | `Ctrl+F` | Open the newest generated image or audio file. Available only for the verified image/audio cards shown by the TUI |
 | `Ctrl+G` | Reveal the newest generated image or audio file in its folder. Like `Ctrl+F`, this is unavailable over SSH; use the displayed path on the remote machine instead |
 | `Ctrl+O` | Show every step in full — the agent's narration, wrapped commands, timings — or fold it back to one row per step |
+| `Ctrl+R` | Dictate: speak, and what you said lands in the composer at the cursor. `Ctrl+R`, `Esc` or `Enter` stops — see [Talking to GAIA](#talking-to-gaia) |
 
 ### Reading a turn
 
@@ -705,6 +706,8 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
 | `/copy all` | Copy the whole conversation as markdown |
 | `/agents` | List agents installed on this machine and switch to one, without quitting |
+| `/dictate` | Same as `Ctrl+R`: speak into the composer |
+| `/talk` | Voice mode: talk with GAIA and hear a short spoken answer — see [Talking to GAIA](#talking-to-gaia) |
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
@@ -748,6 +751,42 @@ options are the same: `↑`/`↓` (or `Tab`) to move between them, a number key 
 one directly, `Enter` to answer, and the mouse works identically to the palette above.
 `Esc` cancels the turn rather than the question, since abandoning it is the only way
 out once it is up.
+
+### Talking to GAIA
+
+GAIA can listen and speak. The GAIA background service records this PC's
+microphone and plays speech through its speakers, and speech recognition and
+the voice run on your local Lemonade Server, so audio never leaves the machine.
+Over SSH the microphone is the remote machine's, not yours.
+
+**Dictation** (`Ctrl+R` or `/dictate`) types for you. While it records, the line
+above the composer reads `● Listening — Ctrl+R or Esc to stop`, with the words
+it has heard so far. Pauses don't end it. Stopping puts the text at the cursor;
+nothing is sent until you press `Enter`.
+
+**Voice mode** (`/talk`) is a full screen on the same conversation. Say
+something, pause, and GAIA answers: it says one or two sentences out loud while
+the full answer, and every step it took, is on screen. Before each step it
+says what it is about to do. Each spoken turn is an ordinary turn in the chat,
+so `Esc` returns to the conversation with your voice turns in it, the spoken
+summary shown in bold above each answer.
+
+| Key, in voice mode | What it does |
+|---|---|
+| Any key while GAIA speaks | Stops it, and it listens again |
+| `p` | Pause listening, and `p` again to resume |
+| `c` | Show or hide captions: what you said and what GAIA said |
+| `Space` | Talk, then `Space` again to send, when Settings › Voice › Turn-taking is push-to-talk |
+| `Esc` | Back to the chat. A turn still running carries on there |
+
+The microphone pauses while GAIA speaks, since the service has no echo
+cancellation; that is why a key, not your voice, interrupts it. Spoken replies
+are English-only for now: with another voice language GAIA answers on screen.
+The first time, voice mode asks to download the speech models it needs
+(`d` downloads them). Voice mode needs a GAIA agent new enough to give spoken
+replies, and says so if yours is older. The voice and speed are `/voice`'s;
+the other settings are the `voice_*` keys in [Configuration](/reference/cli#configuration),
+shared with the Agent UI.
 
 ### When the agent asks first
 

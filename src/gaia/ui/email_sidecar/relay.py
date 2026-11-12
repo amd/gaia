@@ -616,6 +616,7 @@ def relay_query(
     surface: Optional[str] = None,
     turns: Optional[List[List[Dict[str, Any]]]] = None,
     reasoning: bool = False,
+    reply_style: Optional[str] = None,
 ) -> None:
     """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
 
@@ -735,6 +736,8 @@ def relay_query(
         body["changes_turn_id"] = changes_turn_id
     if surface is not None:
         body["surface"] = surface
+    if reply_style is not None:
+        body["reply_style"] = reply_style
     if turns is not None:
         body["turns"] = turns
         body["context"] = []

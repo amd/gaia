@@ -1893,6 +1893,15 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
+| `voice_language` | _(unset = the app's language)_ | The language you speak in dictation and voice mode, as a two-letter code. Spoken replies are English-only; another language answers on screen |
+| `voice_asr_model` | `auto` | The speech recognizer: `auto` (Moonshine for English, Whisper otherwise) or a Lemonade model id |
+| `voice_turn_taking` | `hands_free` | `hands_free` ends your turn on a pause; `push_to_talk` waits for `Space` in the TUI's voice mode |
+| `voice_silence_ms` | `500` | How long a pause ends your turn, 300–1200 ms |
+| `voice_status_updates` | `true` | In voice mode, say a short line before each step |
+| `voice_captions` | `true` | Show captions in voice mode |
+| `voice_volume` | `100` | How loud GAIA speaks in voice mode, 0–100 |
+| `voice_chime` | `true` | Play a short tone when GAIA has heard you |
+| `voice_wake_word` | `true` | In hands-free voice mode, answer only when you say "Hey GAIA" or just after GAIA spoke |
 | `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
 
 ### Local only

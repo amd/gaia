@@ -97,7 +97,8 @@ AGENT_ID = "gaia"
 #: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
 #: session's "always" answers, and ``/skills``' ``claude-project`` source.
 #: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
-API_VERSION = "2.27"
+#: 2.28 added ``/query``'s ``reply_style`` field for spoken voice turns.
+API_VERSION = "2.28"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -287,6 +288,17 @@ class QueryRequest(_Strict):
             "agent's GAIA home, keyed by session_id and this id, and the "
             "recording is complete before the terminal event is sent. Use "
             "file_snapshots.new_turn_id() to make one. Omit it to record nothing."
+        ),
+    )
+
+    reply_style: Optional[Literal["text", "voice"]] = Field(
+        default=None,
+        description=(
+            "'voice' asks for a reply that can be spoken (contract >= 2.28): a "
+            "short status line before each tool call, and an answer that opens "
+            "with a <spoken>...</spoken> summary of at most 40 words, then the "
+            "detail. The caller strips the tags. Send it every turn: a retained "
+            "session keeps the last value. Omit it for 'text'."
         ),
     )
 
@@ -1615,6 +1627,8 @@ async def query(request: QueryRequest):
         _declare_who_answers(handler, session, request)
         _apply_memory_mode(agent, request.memory)
         _apply_internet_switch(agent, request.internet_off)
+        # Per turn, so a voice turn's note never carries into a typed one.
+        agent.reply_style = request.reply_style or "text"
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
             # ambiguity itself instead of parking on a question forever.

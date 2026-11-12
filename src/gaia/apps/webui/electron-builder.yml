@@ -171,6 +171,11 @@ mac:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}
   hardenedRuntime: true
   gatekeeperAssess: false
+  # macOS asks for the microphone with this line (dictation and voice mode).
+  # The hardened runtime also needs com.apple.security.device.audio-input in
+  # the entitlements file below.
+  extendInfo:
+    NSMicrophoneUsageDescription: GAIA listens when you dictate or talk to it. Your voice is processed on this PC.
   entitlements: ../../../../installer/macos/entitlements.mac.plist
   entitlementsInherit: ../../../../installer/macos/entitlements.mac.plist
   # Notarization is env-driven (APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +

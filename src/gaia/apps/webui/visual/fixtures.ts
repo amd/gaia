@@ -157,6 +157,19 @@ export const SYSTEM_STATUS = {
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
+/** Voice settings and readiness on a PC with every speech model downloaded. */
+export const VOICE_SETTINGS = {
+    language: null, asr_model: 'auto', turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true,
+};
+export const VOICE_STATUS = {
+    ready: true, error: null, error_code: null, language: 'en', asr_model: 'Moonshine-Tiny-Streaming', tts_model: 'kokoro-v1',
+    speaks: true, turn_taking: 'hands_free', silence_ms: 500, status_updates: true, captions: true,
+    models: [
+        { id: 'Moonshine-Tiny-Streaming', purpose: 'transcription', downloaded: true, size_gb: 0.1 },
+        { id: 'kokoro-v1', purpose: 'tts', downloaded: true, size_gb: 0.34 },
+    ],
+};
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -233,6 +246,8 @@ const ROUTES: Record<string, unknown> = {
         ],
     },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
+    'GET /voice/settings': VOICE_SETTINGS,
+    'GET /voice/status': VOICE_STATUS,
 };
 
 /**

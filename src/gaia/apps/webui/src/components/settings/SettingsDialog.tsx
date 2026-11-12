@@ -14,7 +14,7 @@ import { SkillsSettings } from './SkillsSettings';
 import { MemorySettings } from './MemorySettings';
 import { PrivacySettings } from './PrivacySettings';
 import { NotificationSettings } from './NotificationSettings';
-import { ReadAloudSettings } from './ReadAloudSettings';
+import { VoiceSettings } from './VoiceSettings';
 import '../SettingsModal.css';
 import './SettingsDialog.css';
 import { useT } from '../../i18n/useT';
@@ -57,7 +57,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'connectors': return <ConnectorsPane />;
             case 'memory': return <MemorySettings />;
             case 'notifications': return <NotificationSettings />;
-            case 'voice': return <ReadAloudSettings />;
+            case 'voice': return <VoiceSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
         }

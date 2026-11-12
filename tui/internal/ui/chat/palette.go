@@ -46,6 +46,8 @@ var paletteCommands = []paletteCommand{
 	{"/copy all", "Copy the whole conversation as markdown"},
 	{"/read-aloud", "Read the last reply aloud; again (or /read-aloud stop) stops it"},
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
+	{"/dictate", "Speak into the composer; Ctrl+R does the same"},
+	{"/talk", "Voice mode: talk with GAIA and hear the answer"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
 }

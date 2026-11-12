@@ -697,3 +697,12 @@
     vertical-align: -2px;
     margin-inline-end: 3px;
 }
+
+/* A voice turn's spoken summary: what GAIA said, above the detail. */
+.msg-spoken-lead {
+    margin: 0 0 6px;
+    color: var(--text-primary);
+    font-size: var(--fs-prose);
+    font-weight: 600;
+    line-height: 1.5;
+}

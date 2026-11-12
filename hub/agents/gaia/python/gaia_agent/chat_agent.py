@@ -135,6 +135,7 @@ from gaia.utils.file_lock import held_by_another_program
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.utils.user_folders import documents_dir
 from gaia.vlm.mixin import VLMToolsMixin
+from gaia.voice.prompt import VOICE_TURN_NOTE
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager``).
 # Distinct from ``None``. A missing RAG extra caches ``None``; any other RAG
@@ -1022,8 +1023,12 @@ class ChatAgent(
         return f"{Path(file_path).name} ({file_path}){written_in}"
 
     def get_memory_dynamic_context(self) -> str:
-        """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        """Per-turn context, which documents are indexed, and the voice note."""
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            VOICE_TURN_NOTE if getattr(self, "reply_style", "text") == "voice" else "",
+        )
         return "\n".join(part for part in parts if part)
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
@@ -3363,6 +3368,31 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "status": "error",
                     "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",
                 }
+
+        # ── Her own voice settings ──────────────────────────────────────────────
+
+        @tool
+        def set_voice_setting(setting: str, value: str) -> dict:
+            """Change how GAIA herself sounds or listens in voice mode.
+
+            Use when the user asks you to change your voice, speak faster or
+            slower, be louder or quieter, show or hide captions, turn the
+            chime on or off, or stop or start waiting for "Hey GAIA". Heard
+            from your next reply. You can change only these six; for any
+            other setting, tell the user where it is in Settings.
+
+            Args:
+                setting: voice, speed, volume, captions, chime or wake_word.
+                value: voice: a Kokoro id or name (af_bella, George). speed:
+                    percent 50-200. volume: percent 0-100. Others: on or off.
+
+            Returns:
+                status and the six settings as they are now, or an error
+                to tell the user.
+            """
+            from gaia.voice.settings import change_voice_setting
+
+            return change_voice_setting(setting, value)
 
         # ── TTS (voice output) ──────────────────────────────────────────────────
 

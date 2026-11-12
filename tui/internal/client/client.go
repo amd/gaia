@@ -189,3 +189,29 @@ const CapabilityMemory Capability = "memory"
 type CapabilityReporter interface {
 	Supports(c Capability) (supported, known bool)
 }
+
+// replyStyleKey carries a turn's reply style through Send's context.
+type replyStyleKey struct{}
+
+// ReplyStyleVoice asks the agent for a spoken reply: a <spoken> summary
+// first, and a short status sentence before each tool call.
+const ReplyStyleVoice = "voice"
+
+// WithReplyStyle marks the turn sent with ctx as spoken. Carried on the
+// context rather than set on the client so it belongs to exactly one turn.
+func WithReplyStyle(ctx context.Context, style string) context.Context {
+	return context.WithValue(ctx, replyStyleKey{}, style)
+}
+
+// ReplyStyleFrom is the style WithReplyStyle set, or "" for a typed turn.
+func ReplyStyleFrom(ctx context.Context) string {
+	style, _ := ctx.Value(replyStyleKey{}).(string)
+	return style
+}
+
+// VoiceReplier is implemented by transports that can say, before voice mode
+// opens, whether the agent can be asked for spoken replies. The error is the
+// sentence to show when it can't.
+type VoiceReplier interface {
+	CheckVoiceReplies(ctx context.Context) error
+}

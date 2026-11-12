@@ -70,6 +70,7 @@ from gaia.ui.email_sidecar.profiles import (
     memory_supported,
     profile_for,
     reasoning_supported,
+    reply_style_supported,
     scope_supported,
     session_id_supported,
     surface_supported,
@@ -2074,6 +2075,12 @@ def _memory_mode(session: dict, db) -> str:
     return "on" if memory_enabled(db) else "off"
 
 
+def _apply_reply_style(agent, request) -> None:
+    """Set the in-process agent's reply style for this turn; a cached agent
+    must not carry a voice turn's note into a typed one."""
+    agent.reply_style = getattr(request, "reply_style", "text")
+
+
 def _apply_memory_state(agent, session: dict, db) -> None:
     """Set *agent*'s memory-off state for this turn from *session* and Settings.
 
@@ -2756,6 +2763,27 @@ def _dispatch_sidecar_query(
         )
         return
 
+    relayed_reply_style = None
+    if getattr(request, "reply_style", "text") == "voice":
+        if not reply_style_supported(profile, handle.api_version):
+            logger.warning(
+                "%s agent at contract %s can't take reply_style (needs %s)",
+                agent_type,
+                handle.api_version,
+                profile.min_reply_style_api_version,
+            )
+            sse_handler._emit(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        "Voice mode needs a newer GAIA agent. Update GAIA to the "
+                        "latest version, then try again."
+                    ),
+                }
+            )
+            return
+        relayed_reply_style = "voice"
+
     relayed_internet_off = None
     if profile.min_internet_api_version is not None:
         if internet_supported(profile, handle.api_version):
@@ -2960,6 +2988,7 @@ def _dispatch_sidecar_query(
                 "agent_ui" if surface_supported(profile, handle.api_version) else None
             ),
             reasoning=reasoning_supported(profile, handle.api_version),
+            reply_style=relayed_reply_style,
             max_steps=max_steps,
             turns=relayed_turns,
         )
@@ -4130,6 +4159,7 @@ async def _get_chat_response(
                 _register_agent_memory_ops(agent)
 
         _apply_memory_state(agent, session, db)
+        _apply_reply_style(agent, request)
         apply_environment(agent, session_id, db)
         message = request.message
         if index_failures:
@@ -4669,6 +4699,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         sse_handler._emit({"type": "mcp_status", "servers": mcp_report})
 
                 _apply_memory_state(agent, session, db)
+                _apply_reply_style(agent, request)
                 apply_environment(agent, request.session_id, db)
                 query = with_folder_note(
                     request.message, load_environment(db, session_id)["folders"]

@@ -40,6 +40,7 @@ export interface ApiSchemas {
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  DownloadRequest: DownloadRequest;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -146,6 +147,10 @@ export interface ApiSchemas {
   ValidationError: ValidationError;
   VisionModelRequest: VisionModelRequest;
   Voice: Voice;
+  VoiceModel: VoiceModel;
+  VoiceSettings: VoiceSettings;
+  VoiceSettingsUpdate: VoiceSettingsUpdate;
+  VoiceStatus: VoiceStatus;
   WarmUpStatus: WarmUpStatus;
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
@@ -362,6 +367,7 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  reply_style?: "text" | "voice";
   session_id: string;
   stream?: boolean;
 }
@@ -534,6 +540,9 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+export interface DownloadRequest {
+  model: string;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -1520,6 +1529,51 @@ export interface UserInputRequest {
  */
 export interface VisionModelRequest {
   model_id?: string | null;
+}
+export interface VoiceModel {
+  downloaded: boolean;
+  id: string;
+  purpose: string;
+  size_gb?: number | null;
+}
+export interface VoiceSettings {
+  asr_model?: string;
+  captions?: boolean;
+  chime?: boolean;
+  language?: string | null;
+  silence_ms?: number;
+  status_updates?: boolean;
+  turn_taking?: string;
+  volume?: number;
+  wake_word?: boolean;
+}
+export interface VoiceSettingsUpdate {
+  asr_model?: string | null;
+  captions?: boolean | null;
+  chime?: boolean | null;
+  language?: string | null;
+  silence_ms?: number | null;
+  status_updates?: boolean | null;
+  turn_taking?: string | null;
+  volume?: number | null;
+  wake_word?: boolean | null;
+}
+export interface VoiceStatus {
+  asr_model: string;
+  captions: boolean;
+  chime?: boolean;
+  error?: string | null;
+  error_code?: string | null;
+  language: string;
+  models?: VoiceModel[];
+  ready: boolean;
+  silence_ms: number;
+  speaks: boolean;
+  status_updates: boolean;
+  tts_model: string;
+  turn_taking: string;
+  volume?: number;
+  wake_word?: boolean;
 }
 /**
  * Work that quitting or unloading the model would cut short.

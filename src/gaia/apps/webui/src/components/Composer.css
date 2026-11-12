@@ -255,6 +255,10 @@
 /* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
 @media (max-width: 480px) {
     .composer-chip-memory .composer-chip-label { display: none; }
+    /* The mic button takes this room; the folder icon and its tooltip carry the name. */
+    .folder-chip .composer-chip-label { display: none; }
+    .composer-row, .composer-row-left, .composer-row-right { gap: 1px; }
+    .composer-row .composer-icon-btn { width: 28px; }
 }
 
 .composer-chip.is-warning {
@@ -273,4 +277,136 @@
 .composer-chip.is-unavailable {
     opacity: 0.5;
     cursor: default;
+}
+
+/* Dictation: a red ring, the words as they are heard, a level meter and a timer. */
+.composer.is-recording {
+    box-shadow: var(--shadow-sm), inset 0 0 0 1.5px color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+.composer-livebox {
+    min-height: 24px;
+    padding: 4px 0;
+    font-size: var(--fs-prose);
+    line-height: 1.5;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.composer-livebox-partial {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.composer-livebox-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-inline-start: 2px;
+    vertical-align: -2px;
+    background: var(--danger);
+    animation: composer-caret var(--duration-blink) var(--ease-step) infinite;
+}
+
+@keyframes composer-caret {
+    50% { opacity: 0; }
+}
+
+.composer-mic.is-recording {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
+}
+
+.composer-mic.is-recording:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--danger);
+}
+
+.composer-rec {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-inline: 6px;
+}
+
+.composer-rec-wave {
+    width: 72px;
+    height: 22px;
+}
+
+/* New level samples arrive at the reading end. */
+[dir="rtl"] .composer-rec-wave {
+    transform: scaleX(-1);
+}
+
+.composer-rec-time {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--danger);
+    font-variant-numeric: tabular-nums;
+}
+
+.composer-send.is-voice {
+    background: var(--text-primary);
+    color: var(--bg-primary);
+}
+
+.composer-send.is-voice:hover:not(:disabled) {
+    background: var(--text-primary);
+    opacity: 0.88;
+}
+
+.composer-dictation-notice {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding-block: 6px;
+    padding-inline: 10px 4px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+}
+
+.composer-dictation-notice.is-error {
+    background: var(--danger-dim);
+}
+
+.composer-dictation-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.composer-dictation-text strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.composer-dictation-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.composer-dictation-size {
+    color: var(--text-muted);
+}
+
+.composer-dictation-error {
+    flex-basis: 100%;
+    color: var(--danger);
+}
+
+@media (max-width: 640px) {
+    .composer-rec-wave { width: 44px; }
+    .composer-rec { margin-inline: 2px; }
+    /* iOS zooms into anything under 16px when it is focused. */
+    .composer-input, .composer-livebox { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .composer-livebox-cursor { animation: none; }
 }
