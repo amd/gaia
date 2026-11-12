@@ -480,9 +480,14 @@ class _Catalog:
 
     calls: list = []
     downloaded = True
+    cloud = False
 
     def __init__(self, **kwargs):
         _Catalog.calls.append(("__init__", kwargs))
+
+    def _is_cloud_model(self, model):
+        _Catalog.calls.append(("_is_cloud_model", model))
+        return _Catalog.cloud
 
     def get_model_info(self, model):
         _Catalog.calls.append(("get_model_info", model))
@@ -510,6 +515,7 @@ def stub_env(monkeypatch):
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
     _Catalog.calls = []
     _Catalog.downloaded = True
+    _Catalog.cloud = False
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     manager = MagicMock()
@@ -682,7 +688,23 @@ def test_a_local_model_that_is_not_downloaded_is_refused_not_downloaded(
     assert _StubAgent.instances == []
     # The server was only reached, never asked to load (or fetch) a model.
     assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
-    assert [c[0] for c in _Catalog.calls] == ["__init__", "get_model_info"]
+    assert [c[0] for c in _Catalog.calls] == [
+        "__init__",
+        "_is_cloud_model",
+        "get_model_info",
+    ]
+
+
+def test_a_gateway_model_the_catalog_leaves_out_is_not_called_undownloaded(
+    stub_env, monkeypatch
+):
+    """Another provider's model, missing while its token is expired, has no download."""
+    _config(monkeypatch, last_model="openrouter.some-model")
+    _Catalog.downloaded = False
+    _Catalog.cloud = True
+    assert print_mode.run("q") == 0
+    assert _agent().config.model_id == "openrouter.some-model"
+    assert "get_model_info" not in [c[0] for c in _Catalog.calls]
 
 
 def test_a_downloaded_local_model_is_checked_then_loaded(stub_env, monkeypatch):
@@ -1150,6 +1172,7 @@ def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
     monkeypatch.setattr(print_mode, "_start_server", lambda m, b, preload=True: None)
     _Catalog.calls = []
     _Catalog.downloaded = True
+    _Catalog.cloud = False
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     def fake_attempts(text, count, flags):

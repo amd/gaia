@@ -251,9 +251,11 @@ def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
     if cloud_model_provider(model):
         return model
     detected_base_url = _start_server(model, base_url, preload=False)
-    info = LemonadeClient(
-        base_url=base_url or detected_base_url, verbose=False
-    ).get_model_info(model)
+    client = LemonadeClient(base_url=base_url or detected_base_url, verbose=False)
+    # A gateway model the catalog leaves out (no or expired token) has nothing to download.
+    if client._is_cloud_model(model):  # pylint: disable=protected-access
+        return model
+    info = client.get_model_info(model)
     if not info["downloaded"]:
         raise RuntimeError(
             f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
