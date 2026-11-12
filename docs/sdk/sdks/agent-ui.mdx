@@ -2367,6 +2367,13 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
     Aggregate counts by status, for the dashboard header cards.
   </Accordion>
 
+  <Accordion title="GET /api/goals/health">
+    `{"error": string | null}`. `error` says why the background loop could
+    not read the goal store on its last tick, so approved goals are not
+    running; it is `null` once the store reads again. The UI shows it as a
+    notification and in Memory › Goals.
+  </Accordion>
+
   <Accordion title="GET /api/goals/pending-approval">
     Agent-inferred goals awaiting user review.
   </Accordion>

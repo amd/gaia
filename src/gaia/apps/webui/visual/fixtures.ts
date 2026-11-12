@@ -211,6 +211,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
+    'GET /goals/health': { error: null },
     'GET /documents': DOCUMENTS,
     // Installed, so no screen shows the "GAIA agent isn't installed" notice unless its test asks.
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },

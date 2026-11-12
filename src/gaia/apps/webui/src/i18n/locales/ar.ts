@@ -2739,6 +2739,7 @@ const messages: Messages = {
     'mem.goals.createFailed': 'تعذّر إنشاء الهدف',
     'mem.goals.cancelFailed': 'تعذّر إلغاء الهدف',
     'mem.goals.deleteFailed': 'تعذّر حذف الهدف',
+    'mem.goals.storeError': 'الأهداف المعتمدة لا تعمل',
     // The resource usage strip at the top of a chat
     'resources.region': 'استخدام الموارد على هذا الجهاز',
     'resources.toggle': 'استخدام الموارد',
