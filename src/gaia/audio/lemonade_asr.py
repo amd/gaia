@@ -539,18 +539,23 @@ class LemonadeASRClient(LemonadeAudioService):
             and entry.get("id")
         )
 
-    def ensure_model(self, say: Optional[Callable[[str], None]] = None) -> None:
+    def ensure_model(
+        self,
+        say: Optional[Callable[[str], None]] = None,
+        on_percent: Optional[Callable[[int], None]] = None,
+    ) -> None:
         """Make the transcription model servable, pulling it if it is not yet.
 
         Lemonade would pull it inside the first request instead, which leaves a
-        live caller waiting on a download it was never told about.
+        live caller waiting on a download it was never told about. *on_percent*
+        receives the download's progress.
 
         Raises:
             ConnectionError: Lemonade Server is not reachable.
             LemonadeASRError: The model is not in this server's catalog, or the
                 pull failed.
         """
-        self.ensure_model_pulled("transcription", say=say)
+        self.ensure_model_pulled("transcription", say=say, on_percent=on_percent)
 
     def transcribe(
         self,
