@@ -570,6 +570,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             } finally {
                 checkingModelRef.current = false;
             }
+            // The check can take seconds; if the user switched chats, leave the text as a draft here.
+            if (isStale()) return false;
         }
 
         // Build message text with attachment references
