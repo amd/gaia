@@ -27,12 +27,31 @@ from gaia.llm.lemonade_client import (
     resolve_ctx_size,
 )
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
-from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
 
 #: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
 _SIDE_CALLS = threading.local()
+
+
+def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
+    """Whether *chunk* is the provider's native tool-call envelope, not prose.
+
+    A cloud model on the in-text tool format gets no ``tools`` yet can still
+    call one natively; then only a whole JSON envelope counts, so a model
+    merely quoting the prefix stays text.
+    """
+    if not chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+        return False
+    if tools:
+        return True
+    try:
+        envelope = json.loads(chunk)
+    except ValueError:
+        return False
+    return isinstance(envelope, dict) and isinstance(envelope.get(_NATIVE_TC_KEY), list)
 
 
 class LLMCallCancelled(Exception):
@@ -593,7 +612,10 @@ class AgentSDK:
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
         except Exception as e:
-            self.log.error(f"Error in send_messages: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages: {e}")
             raise
 
     def _send_messages_cancellable(
@@ -703,7 +725,7 @@ class AgentSDK:
                 # would print raw JSON at the user — so it terminates the stream
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
-                if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                if _is_tool_call_envelope(chunk, tools):
                     self._recorder_mark()
                     call_reported = True
                     self._report_llm_call(call_started, streamed=True, ok=True)
@@ -743,7 +765,10 @@ class AgentSDK:
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
         except Exception as e:
-            self.log.error(f"Error in send_messages_stream: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages_stream stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages_stream: {e}")
             raise
         finally:
             # Cancelling closes this generator at the yield; without this the
@@ -1196,6 +1221,7 @@ class AgentSDK:
             )
 
         # Create RAG config matching chat config
+        rag_kwargs.setdefault("base_url", self.config.base_url)
         rag_config = RAGConfig(
             model=self.config.model,
             show_stats=self.config.show_stats,
@@ -1274,82 +1300,6 @@ class AgentSDK:
         # Rough approximation: ~4 characters per token for English text
         # This is conservative to avoid overrunning context
         return len(text) // 4
-
-    def summarize_conversation_history(self, max_history_tokens: int) -> Optional[str]:
-        """
-        Summarize conversation history when it exceeds the token budget.
-
-        Args:
-            max_history_tokens: Maximum allowed tokens for stored history
-
-        Returns:
-            The generated summary (when summarization occurred) or None
-        """
-        if max_history_tokens <= 0:
-            raise ValueError("max_history_tokens must be positive")
-
-        history_entries = list(self.chat_history)
-        if not history_entries:
-            return None
-
-        history_text = "\n".join(history_entries)
-        history_tokens = self._estimate_tokens(history_text)
-
-        if history_tokens <= max_history_tokens:
-            print(
-                "History tokens are less than max history tokens, so no summarization is needed"
-            )
-            return None
-
-        print(
-            "History tokens are greater than max history tokens, so summarization is needed"
-        )
-
-        self.log.info(
-            "Conversation history (~%d tokens) exceeds budget (%d). Summarizing...",
-            history_tokens,
-            max_history_tokens,
-        )
-
-        summary_prompt = (
-            "Summarize the following conversation between a user and the GAIA web "
-            "development agent. Preserve:\n"
-            "- The app requirements and inferred schema/data models\n"
-            "- Key implementation details already completed\n"
-            "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
-            "- Any constraints or preferences the user emphasized\n\n"
-            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context.\n\n"
-            "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
-        )
-
-        # Use AgentSDK's send() so history formatting/ordering is handled consistently
-        # by the same path used for normal chat turns.
-        original_history = list(self.chat_history)
-        try:
-            chat_response = self.send(
-                summary_prompt,
-                max_tokens=min(self.config.max_tokens, 2048),
-                timeout=1200,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self.log.error("Failed to summarize conversation history: %s", exc)
-            # Restore history to avoid dropping context on failure
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        summary = chat_response.text.strip() if chat_response else ""
-        if not summary:
-            self.log.warning("Summarization returned empty content; keeping history.")
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        self.chat_history.clear()
-        self.chat_history.append(
-            f"{self.config.assistant_name}: Conversation summary so far:\n{summary}"
-        )
-        return summary
 
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """

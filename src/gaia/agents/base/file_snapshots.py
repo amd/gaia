@@ -43,10 +43,6 @@ MANIFEST_VERSION = 1
 #: The answer a turn belongs to, when another process recorded the turn.
 MESSAGE_LINK = "message.json"
 
-#: Default retention; the user changes both in Settings (``gaia config``).
-DEFAULT_RETENTION_DAYS = 7
-DEFAULT_MAX_MB = 500
-
 #: A review diff longer than this is cut, and says so.
 MAX_DIFF_CHARS = 200_000
 

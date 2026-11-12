@@ -54,6 +54,9 @@ def test_freeze_bundles_the_webui_build_where_the_server_looks():
 
 def test_freeze_refuses_without_a_webui_build(tmp_path, monkeypatch):
     monkeypatch.setattr(freeze, "WEBUI_DIST", tmp_path / "dist")
+    # Only the UI build is missing; the test env need not hold every bundled module.
+    for name in ("COLLECT_SUBMODULES", "COLLECT_ALL", "REQUIRED_MODULES"):
+        monkeypatch.setattr(freeze, name, [])
     with pytest.raises(SystemExit) as exc:
         freeze._verify_freeze_env()
     message = str(exc.value)

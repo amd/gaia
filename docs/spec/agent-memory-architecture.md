@@ -402,7 +402,9 @@ The `meta` table records the embedder that produced the stored vectors (`MemoryS
 
 ### Dedup
 
-`store()` looks for an entry with >80% word overlap (Szymkiewicz-Simpson coefficient) in the same category + context + entity, then merges only a true duplicate: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's. A restatement or a refinement ("... is Elena" -> "... is Elena Petrova") updates the existing entry, keeps the fuller wording and the max confidence, and updates `updated_at`. A swapped, inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19", "is" -> "is not") is a different fact and gets its own entry, so dedup never overwrites one fact with another. Context scoping means "deploy process" in `work` won't collide with `personal`.
+`store()` looks for an entry with >80% word overlap (Szymkiewicz-Simpson coefficient) in the same category + context + entity, then merges only a true duplicate: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's. A restatement or a refinement ("... is Elena" -> "... is Elena Petrova") updates the existing entry, keeps the fuller wording and the max confidence, and updates `updated_at`. A swapped, inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19", "is" -> "is not") is a different fact and gets its own entry, so dedup never overwrites one fact with another. Context scoping means "deploy process" in `work` won't collide with `personal`. The overlap ignores the same filler, so "I am allergic to mango" and "User is allergic to mango" are one fact. Entity scoping treats no tag, a bare label (`user`, `health`), a `user:` tag and a tag that names the user (`person:user`, `person:me`) as the user, one subject; any other `type:name` tag (`person:Sam`, `app:slack`, `project:x`) is its own subject and matches only itself. So `remember` saving a fact with a tag and extraction saving it without one leave one entry, and a sensitive entry stays sensitive.
+
+A sensitive fact has one row per context, and no copy of it is stored unflagged. A write that repeats a sensitive entry merges into it whatever its category; in another context it is stored sensitive. Saving a fact as sensitive takes over the unflagged copies in its context, keeping the fullest wording among them, and flags the copies in others. A rewording too loose to merge (it holds 75% of the sensitive entry's content words, such as "User has a mango allergy") keeps its own row and takes the flag; a one-word fact ("I have diabetes") flags only a short restatement, not every entry that mentions the word. Forgetting an entry also forgets its copies: the same words bar filler and bracketed asides, or, when either is sensitive, a looser rewording that does not negate it.
 
 ### Fact Conflict & Consolidation
 
@@ -1869,25 +1871,10 @@ async def list_entities() -> List[Dict]:
 async def get_entity(entity: str) -> List[Dict]:
     """Get all knowledge linked to a specific entity."""
 
-# --- Contexts ---
-@router.get("/api/memory/contexts")
-async def list_contexts() -> List[Dict]:
-    """List all contexts with their knowledge counts.
-    Returns: [{"context": "work", "count": 68}, {"context": "personal", "count": 23}]"""
-
 # --- Tool Performance ---
 @router.get("/api/memory/tools")
 async def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
-
-@router.get("/api/memory/tools/{tool_name}/history")
-async def tool_history(tool_name: str, limit: int = 50) -> List[Dict]:
-    """Recent call history for a specific tool."""
-
-# --- Errors ---
-@router.get("/api/memory/errors")
-async def recent_errors(limit: int = 20) -> List[Dict]:
-    """Recent tool errors across all tools."""
 
 # --- Conversations ---
 @router.get("/api/memory/conversations")
@@ -2147,7 +2134,7 @@ class MemoryStore:
 
 ### Key Behaviors
 
-- **Deduplication:** `store()` merges only a restatement or a refinement of an entry in the same category + context + entity (see [Dedup](#dedup)), keeping the fuller wording and max confidence and updating `updated_at`. A changed value is a new entry that consolidation retires via `superseded_by`; it never overwrites the old one.
+- **Deduplication:** `store()` merges only a restatement or a refinement of an entry in the same category + context + subject (see [Dedup](#dedup)), keeping the fuller wording and max confidence and updating `updated_at`. A changed value is a new entry that consolidation retires via `superseded_by`; it never overwrites the old one.
 - **Hybrid search:** Vector (FAISS cosine) + BM25 (FTS5) fused via RRF. Both components always run — no degradation to keyword-only. Active items only (`superseded_by IS NULL`). FTS5 uses AND semantics with OR expansion on zero results. Query sanitized; input capped at 500 chars.
 - **Confidence:** 0.0-1.0 scale. +0.02 on recall with use_count increment (atomic SQL-side arithmetic), decays x0.9 for items unused >30 days. Clamped to [0.0, 1.0] on storage.
 - **Thread safety:** All DB operations protected by `threading.Lock`.

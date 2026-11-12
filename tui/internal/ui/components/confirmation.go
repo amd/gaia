@@ -34,6 +34,9 @@ const (
 	// has no table entry for. Not DESTRUCTIVE: nothing about `pytest` deletes
 	// anything, and saying so is what trains people to wave the real one through.
 	RiskExecute
+	// RiskAccess lets GAIA into one more file or folder. The call that raised
+	// it is as often a read as a write, so the card claims neither.
+	RiskAccess
 )
 
 // riskFromWire maps the agent's `risk` field onto a tier. The agent reads the
@@ -71,6 +74,8 @@ func (t RiskTier) Badge() string {
 		return badgeDestructiveStyle.Render("DESTRUCTIVE")
 	case RiskExecute:
 		return badgeExecuteStyle.Render("RUNS CODE")
+	case RiskAccess:
+		return badgeReadStyle.Render("ACCESS")
 	case RiskDenied:
 		return badgeDeniedStyle.Render("BLOCKED")
 	default:
@@ -127,7 +132,6 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"send-email/discard_draft":    RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
-	"run_cli_command":     RiskDestructive,
 	"wait_for_condition":  RiskDestructive,
 	"run_python":          RiskDestructive,
 	"execute_python_file": RiskDestructive,
@@ -146,7 +150,7 @@ var confirmationRiskTiers = map[string]RiskTier{
 	// Erases every memory and past conversation; nothing brings them back.
 	"forget_everything": RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
-	"allow_path_access": RiskWrite,
+	"allow_path_access": RiskAccess,
 	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
 	"trust_project_folder": RiskWrite,
 }
@@ -157,7 +161,6 @@ var confirmationRiskTiers = map[string]RiskTier{
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
 	"run_shell_command":    "Run this command?",
-	"run_cli_command":      "Run this command?",
 	"wait_for_condition":   "Poll with this command?",
 	"run_python":           "Run this Python code?",
 	"execute_python_file":  "Run this Python file?",
@@ -208,7 +211,6 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
-	"run_cli_command":     "command",
 	"wait_for_condition":  "command",
 	"run_python":          "code",
 	"execute_python_file": "code",

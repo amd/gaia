@@ -79,6 +79,8 @@ export interface StreamEvent {
     tool?: string;
     summary?: string;
     success?: boolean;
+    /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
+    timed_out?: boolean;
     steps?: string[];
     /** One plain line per plan step, parallel to `steps` (for plan events). */
     step_narrations?: string[];

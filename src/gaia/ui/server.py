@@ -47,11 +47,8 @@ from gaia.security import AllowedPathsEnvError, env_allowed_paths
 # in ``_chat_helpers`` (shared by both server.py and the router modules).
 # pylint: disable=unused-import
 from ._chat_helpers import _attach_chat_stream  # noqa: F401
-from ._chat_helpers import _build_history_pairs  # noqa: F401
-from ._chat_helpers import _compute_allowed_paths  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
-from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
 from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
@@ -72,6 +69,7 @@ from .routers import goals as goals_router_mod
 from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
+from .routers import logs as logs_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
@@ -87,13 +85,9 @@ from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
-from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import UploadStaticFiles
-from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
-from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
-from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +445,7 @@ class _ScheduledRuns:
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
-            # Background mode: nobody is watching, so gated tools are denied.
+            # Background mode: nobody can approve, so a gated step ends the run.
             console = SSEOutputHandler(background_mode=True)
             worker = run_in_own_thread(
                 lambda: _run_scheduled_prompt(
@@ -954,6 +948,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(gpu_memory_router_mod.router)
     app.include_router(resources_router_mod.router)
     app.include_router(lemonade_router_mod.router)
+    app.include_router(logs_router_mod.router)
     app.include_router(providers_router_mod.router)
     app.include_router(speech_router_mod.router)
     app.include_router(spending_router_mod.router)

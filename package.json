@@ -1,20 +1,8 @@
 {
   "name": "gaia-apps",
   "version": "1.0.0",
-  "description": "GAIA Electron Applications",
+  "description": "GAIA repo-level npm tooling",
   "private": true,
-  "scripts": {
-    "app:example:run:dev": "node src/gaia/apps/_shared/dev-server.js example",
-    "install:framework": "cd src/gaia/electron && npm install",
-    "install:apps": "npm run install:framework"
-  },
-  "workspaces": [
-    "src/gaia/electron",
-    "src/gaia/apps/*/webui"
-  ],
-  "devDependencies": {
-    "electron": "^45.2.3"
-  },
   "overrides": {
     "tar": ">=7.5.8",
     "find-my-way": ">=9.7.0",

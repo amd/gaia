@@ -179,6 +179,15 @@ func TestPathAccessPromptAsksInWords(t *testing.T) {
 	}
 }
 
+// A read outside the chat's folders raised this card headed WRITE.
+func TestPathAccessPromptIsNotHeadedWrite(t *testing.T) {
+	m := NewConfirmationModel("run-1", "allow_path_access", "Allow GAIA to use the file note.txt for this session?", "")
+	view := m.View()
+	if !strings.Contains(view, "ACCESS") || strings.Contains(view, "WRITE") {
+		t.Errorf("path access card = %q, want it headed ACCESS, not WRITE", view)
+	}
+}
+
 // The trust question is asked in words and is not mistaken for a destructive action.
 func TestProjectTrustPromptAsksInWords(t *testing.T) {
 	if got := ActionTitle("trust_project_folder"); strings.Contains(got, "_") {
@@ -542,7 +551,7 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 		t.Errorf("shell warning must point at the command on screen: %q", shell)
 	}
 
-	if got := destructiveWarning("run_cli_command", false); got != shell {
+	if got := destructiveWarning("wait_for_condition", false); got != shell {
 		t.Errorf("both shell tools must share the wording, got %q", got)
 	}
 
