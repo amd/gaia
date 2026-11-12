@@ -229,7 +229,7 @@ for msg in messages:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash) |
+| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash; a known path with new content updates its row) |
 | `get_document` | `(doc_id) -> Optional[Dict]` | Get document by ID |
 | `list_documents` | `() -> List[Dict]` | List all documents |
 | `delete_document` | `(doc_id) -> bool` | Delete a document |
