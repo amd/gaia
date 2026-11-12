@@ -3116,6 +3116,8 @@ Do NOT wrap conversational replies in JSON.
         # Rebuilt by every process_query; None before the first turn.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
+        # Backups this session's edits made (keys, file names), across turns.
+        self._session_backups: Tuple[set, set] = (set(), set())
 
         # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -10881,8 +10883,10 @@ Do NOT wrap conversational replies in JSON.
             return user_input
         note = (
             f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
-            f"text is saved at {path}. To count, search or process it, read that "
-            "file with a tool; never copy the message into a tool call.]"
+            f"text is saved at {path}, exactly as typed: the file holds the "
+            "request itself too, not only the text it is about. To count, search "
+            "or process it, read that file with a tool; never copy the message "
+            "into a tool call.]"
         )
         return f"{note}\n\n{user_input}"
 
@@ -11068,6 +11072,7 @@ Do NOT wrap conversational replies in JSON.
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
+            backups=self._session_backups,
         )
         # Files edited this turn, so an empty response can name what it left
         # behind. Per-turn: an instance persists across queries.
