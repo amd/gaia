@@ -292,7 +292,7 @@ Medians of 7 runs, in seconds.
 | Metric | Status | What's needed |
 |---|---|---|
 | M2 split | Not captured | The journeys keep phase totals only. The backend installer already timestamps every stage in `~/.gaia/electron-install.log`; step 0 uploads that log as an artifact |
-| M3, M4, M5 on hardware, M6 | Not measured | A run on a clean AMD PC as described in §5.1. Not taken from the machine this plan was written on: it holds an editable `~/.gaia/venv` and warm caches, and an eval and other sessions' models were loaded at the time, so its numbers would be neither clean nor quiet |
+| M3, M4, M5 on hardware, M6 | Not measured | A run of `python util/measure_app_speed.py --release <tag> --runs 3 --out <json>` on a clean AMD PC as described in §5.1. Not taken from the machine this plan was written on: it holds an editable `~/.gaia/venv` and warm caches, and an eval and other sessions' models were loaded at the time, so its numbers would be neither clean nor quiet |
 
 A baseline number is only ever copied from a real run. Never estimate one or edit it by
 hand. Gaps stay marked as gaps until a run fills them.
@@ -317,7 +317,7 @@ failures now. Steps 8–10 depend on 7.
 
 | Step | Change | Fixes | Depends on |
 |---|---|---|---|
-| 0 | Measurement: the journeys upload `electron-install.log` (M2 split), plus a script that times M3–M6 on a clean PC into a JSON file beside the CI baseline. Run it once on a clean AMD PC and commit the numbers | §5.3 gaps | — |
+| 0 | Measurement: the journeys upload `electron-install.log` (M2 split), plus `util/measure_app_speed.py`, which times M3–M6 on a clean PC into a JSON file beside the CI baseline. Run it once on a clean AMD PC and commit the numbers | §5.3 gaps | — |
 | 1 | `gaia` and `npu` init profiles stop installing pip extras. The app installs them already, and a frozen core bundles them | A5, D5 | — |
 | 2 | `gaia -p` and `gaia chat` relay through the daemon to the sidecar, reusing the scheduled-prompt relay (`ui/server.py:390`) | B1, B2 | — |
 | 3 | Skill preference schema comes from the sidecar | B7 | sidecar route |

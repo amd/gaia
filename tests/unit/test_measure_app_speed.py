@@ -10,7 +10,10 @@ GAIA, Lemonade, Python or caches.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -50,7 +53,7 @@ def test_clean_env_hides_this_pcs_installs(speed, tmp_path):
         "PYTHONPATH",
     ):
         assert key not in env
-    assert env["PATH"] == r"C:\Windows\System32;C:\node"
+    assert env["PATH"] == os.pathsep.join([r"C:\Windows\System32", r"C:\node"])
     home = tmp_path / "home"
     assert env["USERPROFILE"] == env["HOME"] == str(home)
     assert env["LOCALAPPDATA"] == str(home / "AppData" / "Local")
@@ -180,3 +183,48 @@ def test_busy_processes_skip_the_measured_profile(speed, monkeypatch, tmp_path):
     # A shell that mentions pytest, the user's own Agent UI and a script under a
     # pytest temp folder are not running a test or a model.
     assert [b.split()[1] for b in busy] == ["2", "4", "6", "8", "9"]
+
+
+def test_a_stalled_child_is_killed_with_its_children(speed):
+    """A grandchild holding stdout must not keep the reader blocked."""
+    grandchild = "import time; time.sleep(120)"
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+        "print('started', flush=True); time.sleep(120)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child], stdout=subprocess.PIPE, text=True
+    )
+    t0 = time.monotonic()
+    timer, expired = speed.kill_tree_after(proc, 2.0)
+    lines = list(proc.stdout)
+    proc.wait(timeout=30)
+    timer.cancel()
+    assert expired.is_set()
+    assert lines == ["started\n"]
+    assert time.monotonic() - t0 < 60
+
+
+def test_a_child_that_finishes_in_time_is_not_killed(speed):
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    timer, expired = speed.kill_tree_after(proc, 30.0)
+    assert proc.wait(timeout=30) == 0
+    timer.cancel()
+    assert not expired.is_set()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", r"C:\venv\Scripts\gaia.exe", "eval", "agent"],
+        ["python", "/home/me/venv/bin/gaia", "eval", "agent"],
+    ],
+)
+def test_a_gaia_eval_is_busy_on_either_path_style(speed, argv):
+    assert speed.is_busy("python.exe", argv)
+
+
+def test_gaia_chat_is_not_busy_on_either_path_style(speed):
+    assert not speed.is_busy("python.exe", ["python", r"C:\v\gaia.exe", "chat"])
+    assert not speed.is_busy("python", ["python", "/v/bin/gaia", "chat"])

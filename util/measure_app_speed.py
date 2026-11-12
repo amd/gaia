@@ -37,10 +37,11 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psutil
@@ -50,6 +51,8 @@ INSTALLER_PATH = "src/gaia/apps/webui/services/backend-installer.cjs"
 UI_HEADERS = {"X-Gaia-UI": "1", "Content-Type": "application/json"}
 CHAT_PROMPT = "Reply with exactly one word: ready"
 WARM_PROMPT = "Reply with exactly one word: again"
+# A first-run init downloads every model, so it gets far longer than any other step.
+GAIA_INIT_TIMEOUT_S = 2 * 3600.0
 
 # Prefixes of variables that point a process at this PC's own GAIA, Lemonade,
 # Python or caches. None of them exist on a clean PC.
@@ -230,7 +233,7 @@ def is_busy(name: str, argv: List[str]) -> bool:
     if any(n in name.lower() for n in _BUSY_NAMES):
         return True
     args = [a.lower() for a in argv]
-    names = [Path(a).name for a in args]
+    names = [PureWindowsPath(a).name for a in args]
     if "-m" in args[:-1]:
         module = args[args.index("-m") + 1]
         if module in _BUSY_MODULES or module.startswith("gaia.eval"):
@@ -241,6 +244,35 @@ def is_busy(name: str, argv: List[str]) -> bool:
         if n in ("gaia", "gaia.exe") and args[i + 1 : i + 2] == ["eval"]:
             return True
     return False
+
+
+def kill_tree_after(
+    proc: subprocess.Popen, seconds: float
+) -> Tuple[threading.Timer, threading.Event]:
+    """Kill *proc* and its children after *seconds*; cancel the returned timer.
+
+    Children are killed too because one that inherited stdout would keep a
+    reader of the pipe blocked after the parent died.
+    """
+    expired = threading.Event()
+
+    def expire() -> None:
+        expired.set()
+        try:
+            family = psutil.Process(proc.pid).children(recursive=True)
+        except psutil.NoSuchProcess:
+            family = []
+        for p in family:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                pass
+        proc.kill()
+
+    timer = threading.Timer(seconds, expire)
+    timer.daemon = True
+    timer.start()
+    return timer, expired
 
 
 def busy_processes(profile_root: Optional[Path]) -> List[str]:
@@ -423,6 +455,7 @@ class Run:
             ["git", "show", f"{self.release}:{INSTALLER_PATH}"],
             cwd=REPO_ROOT,
             capture_output=True,
+            timeout=60,
             check=True,
         ).stdout
         installer.write_bytes(source)
@@ -478,6 +511,7 @@ class Run:
         events: List[Tuple[float, Dict[str, Any]]] = []
         tail: List[str] = []
         assert proc.stdout is not None
+        timer, expired = kill_tree_after(proc, GAIA_INIT_TIMEOUT_S)
         for line in proc.stdout:
             now = time.monotonic() - start
             tail = (tail + [line.rstrip()])[-40:]
@@ -490,7 +524,13 @@ class Run:
                 if isinstance(event, dict) and "event" in event:
                     events.append((now, event))
         code = proc.wait()
+        timer.cancel()
         exit_at = time.monotonic() - start
+        if expired.is_set():
+            raise MeasureError(
+                f"gaia init did not finish in {GAIA_INIT_TIMEOUT_S:.0f} s; "
+                "stopped it. Last output:\n" + "\n".join(tail)
+            )
         if code != 0:
             raise MeasureError(f"gaia init failed (exit {code}):\n" + "\n".join(tail))
         return init_breakdown(events, exit_at)
@@ -776,12 +816,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            timeout=60,
             check=True,
         ).stdout.strip(),
         "machine": machine_info(),
         "tools": {
             t: subprocess.run(
-                [t, "--version"], capture_output=True, text=True, check=True
+                [t, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
             ).stdout.strip()
             for t in ("node", "uv")
         },
