@@ -294,6 +294,7 @@ export const enMessages = {
     'chatError.timeout': 'The request timed out. Try a shorter question, or a faster model in Settings → Model.',
     'chatError.resendFailed': 'Your message was not sent again',
     'chatError.resendStale': 'This chat changed since it was opened, so nothing was sent. Reopen the chat, then try again.',
+    'chatError.resendStarting': 'GAIA is still starting, so your question and its answer were left as they are. Try again in a moment.',
     'chatError.savedReport': 'GAIA saved a problem report for this on this PC as {id}; nothing was sent anywhere.',
     'serverDown.title': 'The local model server isn’t answering',
     'serverDown.body': 'Every message goes through it, cloud models included, so this one was not sent.',
