@@ -28,6 +28,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import StreamCancelledError
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
 
@@ -588,6 +589,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
+        except (LeaseWaitCancelled, StreamCancelledError, LLMCallCancelled):
+            raise
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages: {e}")
@@ -623,7 +626,7 @@ class AgentSDK:
                         final = chunk
                     else:
                         parts.append(chunk.text)
-        except LeaseWaitCancelled as e:
+        except (LeaseWaitCancelled, StreamCancelledError) as e:
             raise LLMCallCancelled(str(e)) from e
         finally:
             # Ends the HTTP stream: cut off on a GPU, read to its end on the NPU.
@@ -734,8 +737,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
-        except LeaseWaitCancelled:
-            raise  # the caller stopped waiting: not an error
+        except (LeaseWaitCancelled, StreamCancelledError):
+            raise  # the caller stopped waiting or streaming: not an error
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")

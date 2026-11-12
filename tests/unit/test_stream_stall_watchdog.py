@@ -10,6 +10,7 @@ idle limit, and a local model prefilling for longer than the idle limit.
 """
 
 import json
+import logging
 import threading
 import time
 from contextlib import nullcontext
@@ -24,6 +25,7 @@ from gaia.llm.retry import (
     ModelCallRetrier,
     RetryPolicy,
     RetryState,
+    StreamCancelledError,
     StreamStalledError,
     attach_retry_state,
     classify_exception,
@@ -355,22 +357,27 @@ def test_local_prefill_past_its_budget_is_not_retried(make_client):
 
 
 @pytest.mark.parametrize("remote", [True, False], ids=["hosted", "local"])
-def test_stop_during_a_stall_ends_the_stream_promptly(make_client, monkeypatch, remote):
+def test_stop_during_a_stall_ends_the_stream_promptly(
+    make_client, monkeypatch, caplog, remote
+):
     """Stop must not wait out the idle limit (or a local prefill budget)."""
     monkeypatch.setenv("GAIA_LLM_STREAM_IDLE_TIMEOUT", "60")
     stop_at = time.monotonic() + 1.0
     with StallServer([stall_after_headers, good]) as server:
         client = make_client(server, remote=remote)
         started = time.monotonic()
-        with model_retry_notices(
-            lambda notice: None, lambda: time.monotonic() > stop_at
+        with (
+            caplog.at_level(logging.INFO),
+            model_retry_notices(
+                lambda notice: None, lambda: time.monotonic() > stop_at
+            ),
         ):
-            with pytest.raises(LemonadeClientError) as raised:
+            with pytest.raises(StreamCancelledError):
                 _run(client, timeout=600)
         took = time.monotonic() - started
         assert server.requests == 1, "a Stop must never be retried"
     assert took < 5, f"Stop took {took:.1f}s to end the stream"
-    assert retry_state_of(raised.value) is None
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert _no_reader_left()
 
 

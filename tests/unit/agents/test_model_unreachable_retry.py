@@ -15,6 +15,7 @@ too small a window re-raises for reload, and an auth error is not retried.
 
 import io
 import json
+import logging
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -41,6 +42,7 @@ from gaia.llm.retry import (
     RetryNotice,
     RetryPolicy,
     RetryState,
+    StreamCancelledError,
     attach_retry_state,
     tag_http_failure,
 )
@@ -291,6 +293,95 @@ def test_stop_while_queued_for_the_model_cancels_instead_of_erroring(agent, capl
     assert result["status"] == "cancelled"
     assert len(sent) == 1
     assert "Unexpected error calling LLM" not in caplog.text
+
+
+def _assert_cancelled_without_errors(result, caplog) -> None:
+    assert result["status"] == "cancelled"
+    assert result["result"] == ""
+    assert result["error_count"] == 0
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
+    infos = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and "cancel" in r.getMessage().lower()
+    ]
+    assert infos
+
+
+def test_stop_during_model_call_cancels_without_error_logs(agent, caplog):
+    """Stop raised as StreamCancelledError cancels cleanly in both streaming
+    and non-streaming agent loops without writing ERROR records."""
+    sent = _script(
+        agent, StreamCancelledError("Stopped while waiting for the model to respond.")
+    )
+    with caplog.at_level(logging.INFO):
+        result = agent.process_query("Check the ledger", max_steps=10)
+
+    assert len(sent) == 1
+    _assert_cancelled_without_errors(result, caplog)
+
+
+def test_stop_mid_stream_writes_no_error_across_client_sdk_and_agent(
+    clean_registry, caplog
+):
+    """Real LemonadeClient._stream_chat_chunks -> AgentSDK.send_messages_stream
+    -> Agent._process_query_impl stack: Stop logs INFO, never three ERRORs."""
+    from gaia.chat.sdk import AgentConfig, AgentSDK
+
+    sdk = AgentSDK(AgentConfig(model=DEFAULT_MODEL_NAME, use_claude=False))
+    client = sdk.llm_client._backend
+
+    agent = _make_agent(streaming=True)
+    agent.chat = sdk
+    agent.console.cancelled = threading.Event()
+
+    stall_gate = threading.Event()
+
+    def _stall_create(**_kwargs):
+        agent.console.cancelled.set()
+        stall_gate.wait(5.0)
+        return iter(())
+
+    fake_openai = MagicMock()
+    fake_openai.chat.completions.create.side_effect = _stall_create
+
+    try:
+        with (
+            patch.object(client, "_ensure_model_loaded", return_value=None),
+            patch.object(client, "_follow_gaia_lemonade", return_value=None),
+            patch.object(client, "cloud_model_provider", return_value=None),
+            patch("gaia.llm.lemonade_client.is_cloud_model", return_value=False),
+            patch("gaia.llm.lemonade_client.OpenAI", return_value=fake_openai),
+            caplog.at_level(logging.INFO),
+        ):
+            result = agent.process_query("Check the ledger", max_steps=5)
+    finally:
+        stall_gate.set()
+
+    _assert_cancelled_without_errors(result, caplog)
+
+
+def test_cancellable_sdk_call_converts_stream_cancel_without_error_logs(caplog):
+    """AgentSDK.send_messages(..., cancel=...) maps StreamCancelledError to
+    LLMCallCancelled without logging ERROR in send_messages_stream."""
+    from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+
+    sdk = AgentSDK(AgentConfig(model=DEFAULT_MODEL_NAME, use_claude=False))
+
+    def _cancelled_chat(*_args, **_kwargs):
+        raise StreamCancelledError("Stopped while waiting for the model to respond.")
+
+    cancel = threading.Event()
+    with (
+        patch.object(sdk.llm_client, "chat", side_effect=_cancelled_chat),
+        caplog.at_level(logging.INFO),
+    ):
+        with pytest.raises(LLMCallCancelled, match="Stopped while waiting"):
+            sdk.send_messages([{"role": "user", "content": "hi"}], cancel=cancel)
+
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
 
 
 def test_stream_cut_after_partial_output_is_asked_again_cleanly(clean_registry):

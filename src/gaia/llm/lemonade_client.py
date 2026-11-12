@@ -6039,6 +6039,8 @@ class LemonadeClient:
             return self._model_retrier(model, gone_server_waits).call(
                 api_call, what=what, state=state
             )
+        except StreamCancelledError:
+            raise
         except Exception as e:
             down = self._server_down_error(e, model)
             if down is None:
@@ -6987,6 +6989,8 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
+        except StreamCancelledError:
+            raise
         except openai.AuthenticationError:
             if self.cloud_model_provider(model):
                 raise _cloud_request_error(401) from None
@@ -7258,6 +7262,8 @@ class LemonadeClient:
                 f"Completed streaming text completion. Generated {tokens_generated} tokens."
             )
 
+        except StreamCancelledError:
+            raise
         except openai.AuthenticationError:
             raise LemonadeAuthError(
                 "Lemonade rejected the API key (401 Unauthorized) on "

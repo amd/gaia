@@ -205,6 +205,7 @@ from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
     RetryNotice,
     RetryState,
+    StreamCancelledError,
     StreamStalledError,
     describe_retry_state,
     model_retry_notices,
@@ -11722,8 +11723,8 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
+                    except (LeaseWaitCancelled, StreamCancelledError, LLMCallCancelled):
+                        # Stopped while waiting or streaming from the model: not an LLM error.
                         cancelled_by_console = True
                         break
                     except Exception as e:
@@ -11906,8 +11907,8 @@ Do NOT wrap conversational replies in JSON.
                             f"*Technical details: {str(e)}*"
                         )
                         break
-                    except LeaseWaitCancelled:
-                        # Stopped while queued for the model: not an LLM error.
+                    except (LeaseWaitCancelled, StreamCancelledError, LLMCallCancelled):
+                        # Stopped while waiting or streaming from the model: not an LLM error.
                         self.console.stop_progress()
                         cancelled_by_console = True
                         break
@@ -13784,6 +13785,8 @@ Do NOT wrap conversational replies in JSON.
                     _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
                     steps_taken,
                 )
+            except (LeaseWaitCancelled, StreamCancelledError, LLMCallCancelled):
+                cancelled_by_console = True
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the step-limit summary: %s", e)
                 final_answer = (
