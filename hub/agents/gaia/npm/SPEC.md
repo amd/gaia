@@ -83,7 +83,7 @@ delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
 
 The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
 core release publishes as the `terminal-hub` component and a core install runs as
-`gaia-tui` — so behaviour is identical by construction rather than by convention.
+`gaia-cli` — so behaviour is identical by construction rather than by convention.
 Building a second copy under this package's lane would put the same bytes at a
 different version under a third naming convention, and the two would drift.
 
@@ -189,7 +189,7 @@ check.
 | Component | Default directory              | Executable          |
 | --------- | ------------------------------ | ------------------- |
 | `sidecar` | `~/.gaia/agents/gaia/`         | `gaia-agent[.exe]`  |
-| `tui`     | `~/.gaia/npm-cache/gaia-<agentVersion>/` | `gaia-tui[.exe]` |
+| `tui`     | `~/.gaia/npm-cache/gaia-<agentVersion>/` | `gaia-cli[.exe]` |
 
 The sidecar directory is a **cross-repo contract** with
 `gaia.daemon.sidecars.fetch.default_cache_dir("gaia")`. The daemon spawns and
@@ -238,7 +238,7 @@ filling the chat with uvicorn's startup log.
 The TUI directory is keyed by `agentVersion` — this package's version, not the
 component's — so a bump of either never reuses the previous release's executable.
 
-The TUI executable is renamed to `gaia-tui` on install, **never** `gaia`: the
+The TUI executable is renamed to `gaia-cli` on install, **never** `gaia`: the
 `terminal-hub` artifact is `gaia-<platform>` and npm installs a `gaia` bin shim on
 `PATH`, so keeping the hub's name would shadow the shim. `filename` (what is
 downloaded) and `executable` (what is written) are separate fields for exactly this

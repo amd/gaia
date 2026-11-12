@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 API = "https://api.github.com/repos/amd/gaia"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
@@ -75,19 +75,33 @@ def core_version(tag: str) -> str:
     return f"{major}.{minor}.{patch}"
 
 
-def expected_assets(tag: str) -> Dict[str, str]:
-    """Installer id -> the asset name the release should carry for it."""
+def _tui_binary(platform: str, published: Iterable[str]) -> str:
+    """A raw terminal binary's name: gaia-cli-<platform>, or gaia-<platform>
+    on a release from before the binary became gaia-cli."""
+    legacy = f"gaia-{platform}"
+    if legacy in published and f"gaia-cli-{platform}" not in published:
+        return legacy
+    return f"gaia-cli-{platform}"
+
+
+def expected_assets(tag: str, published: Iterable[str] = ()) -> Dict[str, str]:
+    """Installer id -> the asset name the release should carry for it.
+
+    ``published`` is what the release carries, when known: it decides which of
+    their two names the raw terminal binaries go by.
+    """
     v = asset_version(tag)
+    published = set(published)
     names = {
         "win-setup": f"gaia-{v}-win-x64-setup.exe",
         "agent-ui-exe": f"gaia-agent-ui-{v}-x64-setup.exe",
         "agent-ui-dmg": f"gaia-agent-ui-{v}-arm64.dmg",
         "agent-ui-appimage": f"gaia-agent-ui-{v}-x86_64.AppImage",
         "agent-ui-deb": f"gaia-agent-ui-{v}-amd64.deb",
-        "tui-bin-linux-x64": "gaia-linux-amd64",
-        "tui-bin-darwin-arm64": "gaia-darwin-arm64",
-        "tui-bin-darwin-x64": "gaia-darwin-amd64",
-        "tui-bin-win-x64": "gaia-windows-amd64.exe",
+        "tui-bin-linux-x64": _tui_binary("linux-amd64", published),
+        "tui-bin-darwin-arm64": _tui_binary("darwin-arm64", published),
+        "tui-bin-darwin-x64": _tui_binary("darwin-amd64", published),
+        "tui-bin-win-x64": _tui_binary("windows-amd64.exe", published),
         "wheel": f"amd_gaia-{pep440(tag)}-py3-none-any.whl",
         # Attached to release candidates (their own freeze); a final takes
         # the published flagship from the hub instead.
@@ -161,7 +175,7 @@ def pick_default(releases: List[Dict[str, Any]]) -> str:
     for rel in sorted(releases, key=lambda r: sort_key(r["tag_name"]), reverse=True):
         tag = rel["tag_name"]
         have = {a["name"] for a in rel.get("assets", [])}
-        names = expected_assets(tag)
+        names = expected_assets(tag, have)
         missing = [names[i] for i in required(tag) if names[i] not in have]
         if not missing:
             return tag
@@ -214,9 +228,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parse_tag(tag)
 
     deadline = time.monotonic() + args.wait_minutes * 60
-    names = expected_assets(tag)
     while True:
         assets = release_assets(tag)
+        names = expected_assets(tag, assets or ())
         missing = [
             names[i] for i in required(tag) if assets is None or names[i] not in assets
         ]
@@ -245,13 +259,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     prev_assets = {
         a["name"]: a["browser_download_url"] for a in (prev or {}).get("assets", [])
     }
-    prev_names = expected_assets(prev_tag) if prev_tag else {}
+    prev_names = expected_assets(prev_tag, prev_assets) if prev_tag else {}
 
     info: Dict[str, Any] = {
         "tag": tag,
         "version": asset_version(tag),
         "pep440": pep440(tag),
-        # gaia-tui stamps the tag itself: `gaia-tui version` -> "gaia v0.25.1-rc2 (...)".
+        # gaia-cli stamps the tag itself: `gaia-cli version` -> "gaia v0.25.1-rc2 (...)".
         "tui_version": tag[1:],
         "core_version": core_version(tag),
         "prerelease": parse_tag(tag)[3] is not None,

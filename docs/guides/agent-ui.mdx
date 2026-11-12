@@ -632,7 +632,7 @@ GAIA manages it for you, and it gives its memory back when you stop using GAIA:
 
 | When | What happens |
 |---|---|
-| You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-tui`) | GAIA's background service starts the server if it is not running |
+| You open the app (desktop, `npx @amd-gaia/agent-ui`, or `gaia-cli`) | GAIA's background service starts the server if it is not running |
 | You close the last GAIA app | Every model is unloaded, so your GPU memory is free again. The server itself stays up for a quick next launch |
 | Another GAIA process is still using it, or a request is in flight | Nothing is unloaded until it is done |
 | No GAIA process has held it, and it has served no request, for 15 minutes | The server stops entirely |

@@ -120,7 +120,7 @@ agent — a parallel task, a second harness — the file interleaves, and **a ne
 tool timeout reads as your session's failure**. Set `GAIA_AGENT_LOG` in the launcher:
 
 ```powershell
-$env:GAIA_AGENT_LOG = 'C:\...\gaia-tui-test\logs\agent-session.log'
+$env:GAIA_AGENT_LOG = 'C:\...\gaia-cli-test\logs\agent-session.log'
 ```
 
 Lines also carry `pid:NNNN`, so the shared default is still attributable when you forget.
@@ -135,7 +135,7 @@ user's real `~/.gaia/memory.db`, and everything you plant during a test drive be
 permanent fact about the user:
 
 ```powershell
-$env:GAIA_MEMORY_DB = 'C:\...\gaia-tui-test\memory\test-memory.db'
+$env:GAIA_MEMORY_DB = 'C:\...\gaia-cli-test\memory\test-memory.db'
 ```
 
 This is the eval-runner rule applied to interactive sessions. `gaia eval agent` already

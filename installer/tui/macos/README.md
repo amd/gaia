@@ -4,9 +4,9 @@ Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools
 
 | Path | Mode |
 | --- | --- |
-| `/usr/local/bin/gaia-tui` | 0755 |
+| `/usr/local/bin/gaia-cli` | 0755 |
 | `/usr/local/bin/gaia-agent` | 0755 |
-| `/usr/local/share/doc/gaia-tui/LICENSE.md` | 0644 |
+| `/usr/local/share/doc/gaia-cli/LICENSE.md` | 0644 |
 
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
@@ -27,7 +27,7 @@ files, so the shared parents are the `--install-location` and never payload.
 | Component | Identifier | Install location |
 | --- | --- | --- |
 | binaries | `ai.amd.gaia.terminal-hub` | `/usr/local/bin` |
-| licence | `ai.amd.gaia.terminal-hub.docs` | `/usr/local/share/doc/gaia-tui` |
+| licence | `ai.amd.gaia.terminal-hub.docs` | `/usr/local/share/doc/gaia-cli` |
 
 `productbuild` combines them into the single `.pkg` a user double-clicks. Both
 BOMs are read back after `pkgbuild` and the build fails if either the expected
@@ -41,8 +41,8 @@ then forget both receipts (`--forget` drops the receipt only; it deletes nothing
 so the order matters):
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-sudo rm -rf /usr/local/share/doc/gaia-tui
+sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent
+sudo rm -rf /usr/local/share/doc/gaia-cli
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
@@ -63,7 +63,7 @@ All four arguments are required.
 
 - `--arch` is `arm64` or `x64`.
 - `--payload` is a directory that already contains two executables named
-  `gaia-tui` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
+  `gaia-cli` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
   `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
   them. The core is its own component, installed to `/usr/local/lib/gaia` and
   linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
@@ -132,7 +132,7 @@ Codesign the Go binaries *before* staging them:
 ```bash
 codesign --force --options runtime --timestamp \
   --sign "Developer ID Application: … ($APPLE_TEAM_ID)" \
-  ./stage/darwin-arm64/gaia-tui ./stage/darwin-arm64/gaia-agent
+  ./stage/darwin-arm64/gaia-cli ./stage/darwin-arm64/gaia-agent
 ```
 
 `--options runtime` (the hardened runtime) is required for notarization.

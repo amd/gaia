@@ -126,7 +126,7 @@ Not every hub package is an agent. `type` discriminates them, and two ship today
 
 | Package | `type` | `language` | What it is |
 |---------|--------|------------|------------|
-| `terminal-hub` (moving to `tui`) | `component` | `go` | The `gaia-tui` binary — six platform builds |
+| `terminal-hub` (moving to `tui`) | `component` | `go` | The `gaia-cli` binary — six platform builds |
 | `agent-ui` | `app` | `typescript` | The Electron desktop app installers |
 
 Their manifests live in `hub/components/<id>/gaia-agent.yaml` and publish through
@@ -333,7 +333,7 @@ python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
 pip install -e hub/agents/email/python/
-gaia-tui chat --agent email --query "Triage my inbox"
+gaia-cli chat --agent email --query "Triage my inbox"
 python -m pytest hub/agents/email/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
@@ -347,7 +347,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 # Full integration
 gaia agent list
-gaia-tui chat --agent gaia --query "hello"
+gaia-cli chat --agent gaia --query "hello"
 ```
 
 ## Related

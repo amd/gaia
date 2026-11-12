@@ -124,7 +124,7 @@ run options:
   --sidecar-dir <dir>  Where to install the agent sidecar
                        (default ~/.gaia/agents/gaia — the daemon's own cache)
   --force              Re-download even when a verified binary is already cached
-  -- <tui args>        Forward everything after \`--\` to gaia-tui verbatim
+  -- <tui args>        Forward everything after \`--\` to gaia-cli verbatim
 
 fetch options:
   --component <name>   Fetch only one of: ${COMPONENTS.join(", ")} (default: both)

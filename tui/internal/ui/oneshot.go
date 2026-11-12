@@ -579,7 +579,7 @@ func ReportReadiness(
 
 // ReportLocalReadiness is the same gate for an agent the TUI spawns itself.
 //
-// It is what makes `gaia-tui chat --agent gaia --query …` on a machine with no
+// It is what makes `gaia-cli chat --agent gaia --query …` on a machine with no
 // gaia-agent print the same three-part refusal a person sees on the readiness
 // screen, and exit 1 — instead of failing at exec with a message that names
 // neither the program nor where to get it.

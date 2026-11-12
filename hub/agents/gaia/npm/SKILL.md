@@ -6,11 +6,11 @@ description: Use when integrating the @amd-gaia/gaia npm package — running GAI
 # Integrating `@amd-gaia/gaia`
 
 `@amd-gaia/gaia` delivers **two binaries** and owns their process lifecycle: the
-frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
+frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-cli`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
+runs as `gaia-cli`, so its behaviour cannot differ from that one. Everything runs on the local machine against
 a local model server — nothing you type or index leaves it.
 
 Two ways in:
@@ -754,7 +754,7 @@ There is no silent null.
   comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
-- **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
+- **The TUI is installed as `gaia-cli`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
   reason. Don't rename it back.

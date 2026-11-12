@@ -1,6 +1,6 @@
 ---
 title: "Terminal UI — Developer Manual"
-description: "Build gaia-tui from source, drive it from a script through the control API, and debug it"
+description: "Build gaia-cli from source, drive it from a script through the control API, and debug it"
 icon: "wrench"
 ---
 
@@ -15,7 +15,7 @@ Three processes, and knowing which one you are looking at saves most of the
 debugging time:
 
 ```
-gaia-tui            Go. The terminal app and the control API.
+gaia-cli            Go. The terminal app and the control API.
   └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
                     and every tool.
        └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
@@ -39,7 +39,7 @@ Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
 
 ```bash
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build          # -> tui/bin/gaia-tui (.exe on Windows)
+cd tui && make build          # -> tui/bin/gaia-cli (.exe on Windows)
 ```
 
 Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
@@ -68,8 +68,8 @@ than source. When testing an agent from a checkout, set the matching mode on the
 TUI launch so its ensure request agrees:
 
 ```bash
-GAIA_GAIA_AGENT_MODE=dev gaia-tui     # flagship
-GAIA_EMAIL_AGENT_MODE=dev gaia-tui    # email
+GAIA_GAIA_AGENT_MODE=dev gaia-cli     # flagship
+GAIA_EMAIL_AGENT_MODE=dev gaia-cli    # email
 ```
 
 Starting a dev sidecar separately while the TUI still defaults to `user` creates

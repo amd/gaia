@@ -85,7 +85,7 @@ func TestChannelSelection(t *testing.T) {
 func withScriptInstall(t *testing.T) {
 	t.Helper()
 	home := withHome(t)
-	withExecutable(t, filepath.Join(home, ".gaia", "bin", "gaia-tui"), "linux")
+	withExecutable(t, filepath.Join(home, ".gaia", "bin", "gaia-cli"), "linux")
 	prevArch := goarch
 	goarch = "amd64"
 	t.Cleanup(func() { goarch = prevArch })

@@ -3,7 +3,7 @@
 Chat with GAIA in your terminal — no browser, no account, nothing you type
 leaves your machine.
 
-`gaia-tui` boots straight into the flagship `gaia` agent: conversation,
+`gaia-cli` boots straight into the flagship `gaia` agent: conversation,
 documents, data, web research, memory, skills. There is nothing to browse and
 nothing to pick — one binary, one agent, unless you ask for another by id
 (see [Running another agent](#running-another-agent)).
@@ -27,7 +27,7 @@ Then set up the local model — several GB, so give it a while — and launch:
 
 ```bash
 gaia init
-gaia-tui
+gaia-cli
 ```
 
 `gaia init` installs Lemonade Server, the runtime that does the thinking on your
@@ -37,11 +37,11 @@ tells you the same thing.
 ### Or use the Windows setup
 
 `gaia-<version>-win-x64-setup.exe` from the
-[GitHub release](https://github.com/amd/gaia/releases/latest) installs `gaia-tui`
+[GitHub release](https://github.com/amd/gaia/releases/latest) installs `gaia-cli`
 and `gaia-agent` per-user, plus a **GAIA** Windows Terminal profile (IBM Plex Mono
 and a dark GAIA colour scheme). Its Start menu and desktop shortcuts open that
 profile when Windows Terminal is installed. Without Windows Terminal they run
-`gaia-tui` in the default console. Uninstalling removes the profile and the fonts
+`gaia-cli` in the default console. Uninstalling removes the profile and the fonts
 it added. See the
 [Terminal UI guide](https://amd-gaia.ai/docs/guides/tui#installing) for
 exactly what it writes.
@@ -49,17 +49,18 @@ exactly what it writes.
 ### Or download the binary directly
 
 Every GitHub release carries the binary for each platform, and these links
-always fetch the latest release's. Rename it to `gaia-tui` and put it on your
-`PATH`:
+always fetch the latest release's. Rename it to `gaia-cli` and put it on your
+`PATH`. (Earlier releases name these files without the `cli`, for example
+`gaia-linux-amd64`; releases since the rename carry both names.)
 
 | Platform | Download |
 |---|---|
-| Windows x64 | [`gaia-windows-amd64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-windows-amd64.exe) |
-| Windows ARM64 | [`gaia-windows-arm64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-windows-arm64.exe) |
-| macOS Apple Silicon | [`gaia-darwin-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-darwin-arm64) |
-| macOS Intel | [`gaia-darwin-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-darwin-amd64) |
-| Linux x64 | [`gaia-linux-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-linux-amd64) |
-| Linux ARM64 | [`gaia-linux-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-linux-arm64) |
+| Windows x64 | [`gaia-cli-windows-amd64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-windows-amd64.exe) |
+| Windows ARM64 | [`gaia-cli-windows-arm64.exe`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-windows-arm64.exe) |
+| macOS Apple Silicon | [`gaia-cli-darwin-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-darwin-arm64) |
+| macOS Intel | [`gaia-cli-darwin-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-darwin-amd64) |
+| Linux x64 | [`gaia-cli-linux-amd64`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-linux-amd64) |
+| Linux ARM64 | [`gaia-cli-linux-arm64`](https://github.com/amd/gaia/releases/latest/download/gaia-cli-linux-arm64) |
 
 [`gaia-tui-SHA256SUMS.txt`](https://github.com/amd/gaia/releases/latest/download/gaia-tui-SHA256SUMS.txt)
 lists the SHA-256 of each. A direct download still needs the
@@ -67,7 +68,7 @@ lists the SHA-256 of each. A direct download still needs the
 agent's daemon both go through it — so the one-line installer above is the
 shorter route.
 
-The binary is installed as `gaia-tui`, never as `gaia`: the two have different
+The binary is installed as `gaia-cli`, never as `gaia`: the two have different
 subcommands and would collide on your `PATH`.
 
 ### Building from source
@@ -78,14 +79,14 @@ For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia-tui (.exe on Windows)
-cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
+cd tui && make build                # -> tui/bin/gaia-cli (.exe on Windows)
+cp bin/gaia-cli ~/.local/bin/       # somewhere on your PATH
 ```
 
 ## Your first run
 
 ```bash
-gaia-tui
+gaia-cli
 ```
 
 That opens on a splash frame (the GAIA mascot), then a readiness gate, then
@@ -102,19 +103,19 @@ Colours adapt to your terminal automatically. Some terminals never answer that
 query (SSH, tmux, a CI log) — if the screen comes out hard to read, force it:
 
 ```bash
-GAIA_TUI_THEME=light gaia-tui    # or dark; unset or "auto" = detect
+GAIA_TUI_THEME=light gaia-cli    # or dark; unset or "auto" = detect
 ```
 
 ## Running another agent
 
-`gaia-tui` ships one agent by default, but it can also drive `email` by id —
+`gaia-cli` ships one agent by default, but it can also drive `email` by id —
 it keeps its own readiness gate (background service, sidecar, local model,
 mailbox):
 
 ```bash
-gaia-tui run email                             # chat with it
-gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-tui chat --agent email                    # same as `run email`
+gaia-cli run email                             # chat with it
+gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
+gaia-cli chat --agent email                    # same as `run email`
 ```
 
 Installing and uninstalling a hub sidecar agent like `email` is the Python
@@ -129,12 +130,12 @@ gaia hub uninstall email
 ## Commands worth knowing
 
 ```bash
-gaia-tui                    # launch straight into the flagship agent's chat
-gaia-tui run <id>           # chat with an agent by id (e.g. email)
-gaia-tui run <id> --query "…"  # one-shot: answer on stdout, exit 0/1/3
-gaia-tui chat --agent <id>  # same idea, via the chat subcommand
-gaia-tui status             # is the background service running, and what do I have
-gaia-tui version
+gaia-cli                    # launch straight into the flagship agent's chat
+gaia-cli run <id>           # chat with an agent by id (e.g. email)
+gaia-cli run <id> --query "…"  # one-shot: answer on stdout, exit 0/1/3
+gaia-cli chat --agent <id>  # same idea, via the chat subcommand
+gaia-cli status             # is the background service running, and what do I have
+gaia-cli version
 ```
 
 `--full-access` is available only for agents launched as subprocesses.
@@ -168,11 +169,11 @@ already done.
 
 ## Exit codes
 
-`gaia-tui run --query` is built to be scripted:
+`gaia-cli run --query` is built to be scripted:
 
 - `0` — the agent answered and nothing reported a failure
 - `1` — an error, or a tool failed and nothing recovered it. This holds even
-  when the agent still wrote an answer, so `gaia-tui run … && next-step` never
+  when the agent still wrote an answer, so `gaia-cli run … && next-step` never
   fires over work that did not actually happen.
 - `3` — a confirmation gate held back a destructive action this run had no way
   to approve: nothing broke, and nothing was done
@@ -216,8 +217,8 @@ went wrong: on a known-good model, a bad answer is the harness's fault, not the
 model's.
 
 ```bash
-gaia-tui run gaia --query "..." --use-claude
-gaia-tui run gaia --use-claude --claude-model claude-haiku-4-5
+gaia-cli run gaia --query "..." --use-claude
+gaia-cli run gaia --use-claude --claude-model claude-haiku-4-5
 ```
 
 **This sends your conversation off the machine**, which is the one thing GAIA
@@ -264,7 +265,7 @@ on the model you switched to, not the one the TUI launched with.
 
 Three independent layers, and only one of them has a flag.
 
-**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia-tui ./cmd/gaia`.
+**The TUI binary** — just rebuild it: `cd tui && go build -o bin/gaia-cli ./cmd/gaia`.
 
 **GAIA core / the daemon** — no flag exists. The daemon serves whichever
 checkout launched it, so you point it at your clone by launching it from an
@@ -285,7 +286,7 @@ binary; set the agent's mode environment variable to `dev` on the TUI launch so
 the TUI and daemon request the same checkout:
 
 ```bash
-GAIA_EMAIL_AGENT_MODE=dev gaia-tui run email
+GAIA_EMAIL_AGENT_MODE=dev gaia-cli run email
 ```
 
 Dev mode resolves the TUI caller's checkout (`git rev-parse --show-toplevel`)
@@ -303,7 +304,7 @@ sparse metadata — a sentinel only proves id and version:
 ```bash
 mkdir -p ~/.gaia/agents/myagent
 echo '{"id":"myagent","version":"0.1.0"}' > ~/.gaia/agents/myagent/.installed
-gaia-tui status     # lists myagent under "Installed in ~/.gaia/agents"
+gaia-cli status     # lists myagent under "Installed in ~/.gaia/agents"
 ```
 
 **It will not run through the daemon.** Sidecar specs are built into GAIA core
@@ -339,9 +340,9 @@ that their agent-side context is unchanged, because their protocol has no reset.
 
 ## The `tui` prefix
 
-A leading `tui` word is accepted and dropped — `gaia-tui tui status` and
-`gaia-tui status` are the same command. It exists for older docs and scripts
-that spell the binary `gaia tui …`; new ones should use `gaia-tui`.
+A leading `tui` word is accepted and dropped — `gaia-cli tui status` and
+`gaia-cli status` are the same command. It exists for older docs and scripts
+that spell the binary `gaia tui …`; new ones should use `gaia-cli`.
 
 ## Contributing: colours
 

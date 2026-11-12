@@ -243,7 +243,7 @@ class TestCompletionTuiHintRich:
         cmd._print_completion()
         out = buf.getvalue()
         assert init_command._INSTALLER_HINT in out
-        assert "    gaia-tui " not in out
+        assert "    gaia-cli " not in out
 
 
 class TestTuiDetection:
@@ -254,6 +254,14 @@ class TestTuiDetection:
         monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
         assert InitCommand._tui_installed() is False
 
+        name = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
+        (tmp_path / "bin").mkdir()
+        (tmp_path / "bin" / name).write_text("")
+        assert InitCommand._tui_installed() is True
+
+    def test_an_install_from_before_gaia_cli_still_counts(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
         name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
         (tmp_path / "bin").mkdir()
         (tmp_path / "bin" / name).write_text("")
@@ -264,7 +272,7 @@ class TestTuiDetection:
     ):
         monkeypatch.setenv("GAIA_HOME", str(tmp_path))
         monkeypatch.setattr(init_command.shutil, "which", lambda _name: None)
-        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        name = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
         (tmp_path / "bin").mkdir()
         (tmp_path / "bin" / name).write_text("")
         cmd = InitCommand(profile="gaia", yes=True)
@@ -318,7 +326,7 @@ class TestWindowsInstallerTuiDetection:
         monkeypatch.setitem(sys.modules, "winreg", fake)
         assert InitCommand._tui_installed() is False
 
-        (install_dir / "gaia-tui.exe").write_text("")
+        (install_dir / "gaia-cli.exe").write_text("")
         assert InitCommand._tui_installed() is True
         assert fake.opened[-1] == r"Software\AMD\GAIA"
 
@@ -331,5 +339,5 @@ class TestWindowsInstallerTuiDetection:
         default_dir.mkdir(parents=True)
         assert InitCommand._tui_installed() is False
 
-        (default_dir / "gaia-tui.exe").write_text("")
+        (default_dir / "gaia-cli.exe").write_text("")
         assert InitCommand._tui_installed() is True

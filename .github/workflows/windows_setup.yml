@@ -27,14 +27,14 @@
 # which is exactly the behaviour every other caller gets.
 #
 # `sidecar` works as it does in tui_installers.yml: pinned fetches the real
-# gaia-agent against the committed digest; stub stands gaia-tui in for it on
+# gaia-agent against the committed digest; stub stands gaia-cli in for it on
 # PRs, where that digest is a placeholder. Nothing stub-built is published.
 # A release candidate passes `artifact`: the gaia-agent its own run froze
 # (build_flagship_sidecar.yml), because the committed pin is the last
 # published flagship, not one built from the candidate's commit.
 #
 # Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,
-# so the setup wraps the same gaia-tui bytes the raw downloads publish.
+# so the setup wraps the same gaia-cli bytes the raw downloads publish.
 
 name: Windows setup
 
@@ -156,7 +156,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The frozen gaia the terminal component ships beside gaia-tui.exe.
+  # The frozen gaia the terminal component ships beside gaia-cli.exe.
   core:
     uses: ./.github/workflows/build_core.yml
     with:
@@ -201,7 +201,7 @@ jobs:
           name: ${{ inputs.artifact_prefix }}winsetup-gaia-core-win32-x64
           path: core-download
 
-      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md, core/.
+      # What build-setup.sh consumes: gaia-cli.exe, gaia-agent.exe, LICENSE.md, core/.
       - name: Stage the terminal payload
         env:
           SIDECAR: ${{ inputs.sidecar }}
@@ -210,14 +210,14 @@ jobs:
           mkdir -p stage/win-x64/core
           # Relative paths: Git Bash's tar reads the `D:` of an absolute path as a host.
           tar -xzf core-download/gaia-core-win32-x64.tar.gz -C stage/win-x64/core
-          cp bin/gaia-win-x64.exe stage/win-x64/gaia-tui.exe
+          cp bin/gaia-win-x64.exe stage/win-x64/gaia-cli.exe
           cp LICENSE.md stage/win-x64/LICENSE.md
           case "${SIDECAR}" in
             stub)
               # The committed sidecar digest is a placeholder between releases, so
               # a PR cannot fetch a real one and must not pretend to. Everything
               # but the sidecar's identity stays under test; nothing is published.
-              cp stage/win-x64/gaia-tui.exe stage/win-x64/gaia-agent.exe
+              cp stage/win-x64/gaia-cli.exe stage/win-x64/gaia-agent.exe
               ;;
             artifact)
               # Verified against the hash its freeze leg recorded.

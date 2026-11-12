@@ -496,7 +496,7 @@ func stubCLIInstall(t *testing.T, can bool, install func(io.Writer) error) *int 
 	return &calls
 }
 
-// The .pkg, .deb and .rpm install only gaia-tui and gaia-agent, so setup found
+// The .pkg, .deb and .rpm install only gaia-cli and gaia-agent, so setup found
 // no CLI and stopped at step 1 (#6659). It now installs the CLI and carries on.
 func TestSetupInstallsAMissingCLIThenRuns(t *testing.T) {
 	stubLemonadeNotInstalled(t, true)

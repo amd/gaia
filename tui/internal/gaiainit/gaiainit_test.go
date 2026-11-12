@@ -232,7 +232,7 @@ func TestRunCommandNamesTheProfileThatIsRun(t *testing.T) {
 	}
 }
 
-// The terminal installers put `gaia` beside gaia-tui; a pip-installed `gaia`
+// The terminal installers put `gaia` beside gaia-cli; a pip-installed `gaia`
 // earlier on PATH is another release and must not answer for it.
 func TestBinaryPrefersTheGaiaBesideThisProgram(t *testing.T) {
 	name := "gaia"
@@ -249,7 +249,7 @@ func TestBinaryPrefersTheGaiaBesideThisProgram(t *testing.T) {
 		}
 	}
 	orig := selfExecutable
-	selfExecutable = func() (string, error) { return filepath.Join(shipped, "gaia-tui"), nil }
+	selfExecutable = func() (string, error) { return filepath.Join(shipped, "gaia-cli"), nil }
 	t.Cleanup(func() { selfExecutable = orig })
 
 	got, err := Binary()

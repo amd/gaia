@@ -174,7 +174,7 @@ def live_tui(tui_binary, tmp_path, monkeypatch):
 def _ready(cols=120, rows=40):
     """Give the TUI a terminal size and wait for it to be past the splash.
 
-    The anchor has to hold whatever this machine has installed. `gaia-tui` boots
+    The anchor has to hold whatever this machine has installed. `gaia-cli` boots
     splash -> readiness gate -> chat, and where it STOPS depends on whether
     Lemonade is up and the models are down — so the only host-independent
     landmark is the product name, which the gate header ("Getting GAIA ready")
@@ -310,7 +310,7 @@ def test_stale_control_file_is_rejected_after_the_tui_exits(live_tui):
     info, error = tui_mcp.discover()
     assert info is None
     assert error["status"] == "error"
-    assert "gaia-tui --control" in error["detail"]
+    assert "gaia-cli --control" in error["detail"]
     assert stale["token"] not in error["detail"]
 
 

@@ -48,7 +48,7 @@ on first launch if the user skipped that step.
   - The TUI's auto-start and start hints (`preflight/autostart.go`, `lemonadeStartRemedy`).
   - About 20 CI workflows run on self-hosted machines with a system Lemonade.
 - **`gaia` with no command opens the web Agent UI**, not the terminal UI; the terminal UI is
-  a separate `gaia-tui` binary. `gaia chat --ui`, and the top-level `--ui` and `--cli` flags,
+  a separate `gaia-cli` binary. `gaia chat --ui`, and the top-level `--ui` and `--cli` flags,
   are other routes into the same web UI, referenced in 43 files.
 - **`npx @amd-gaia/gaia`** fetches the TUI and agent binaries and opens the TUI, but needs
   the Python `gaia` command installed separately, and leaves no lasting `gaia` command.
@@ -138,7 +138,7 @@ the default port without setting `LEMONADE_BASE_URL`.
 ## 4. PR 2: plain `gaia` opens the terminal UI; remove legacy commands
 
 **Running `gaia` with no arguments starts the terminal UI**, launching the verified
-`gaia-tui` binary the installer put in place, with the same flags passed through. Today it
+`gaia-cli` binary the installer put in place, with the same flags passed through. Today it
 opens the web Agent UI. If the terminal UI binary is missing, `gaia` says how to install it
 rather than opening something else.
 

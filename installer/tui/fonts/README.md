@@ -12,7 +12,7 @@ same fetch-and-verify contract the installer already uses for `gaia-agent`.
 | Zip SHA-256 | `6d23f01257663d8cc49a0d64c22ced630b79e0e2a0ac08a0da86e9a38bbc481c` (matches the digest GitHub publishes for the asset) |
 | Zip size | 6,940,652 bytes |
 | Faces bundled | Regular, Bold, Italic, Bold Italic (`fonts/complete/ttf/`, ~700 KB) |
-| Licence | SIL Open Font License 1.1, shipped as `IBM-Plex-Mono-OFL.txt` next to `gaia-tui.exe` |
+| Licence | SIL Open Font License 1.1, shipped as `IBM-Plex-Mono-OFL.txt` next to `gaia-cli.exe` |
 
 Four faces, not one: the TUI renders bold and italic text, and without the real
 faces Windows Terminal synthesises them. Every face carries the family name

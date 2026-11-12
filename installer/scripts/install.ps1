@@ -14,18 +14,21 @@ $GAIA_VENV = "$GAIA_HOME\venv"
 $GAIA_BIN = "$GAIA_HOME\bin"
 # GAIA's commands in $GAIA_BIN: copies of the frozen gaia.exe, which share the
 # _internal folder beside them and run as gaia-mcp when called by that name.
-$GAIA_COMMANDS = @("gaia", "gaia-cli", "gaia-mcp")
+$GAIA_COMMANDS = @("gaia", "gaia-mcp")
 # Every Windows PC gets the x64 build; Windows on Arm runs it emulated.
 $CORE_ASSET = "gaia-core-win32-x64.tar.gz"
 
-# The GAIA Terminal UI binary comes from the GitHub release: publish.yml
-# attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
+# The GAIA Terminal UI binary (gaia-cli) comes from the GitHub release:
+# publish.yml attaches all six builds and gaia-tui-SHA256SUMS.txt to every
+# release. Installed GAIAs find the newest release through that file's name.
 $GAIA_RELEASES_URL = if ($env:GAIA_RELEASES_URL) { $env:GAIA_RELEASES_URL } else { "https://github.com/amd/gaia/releases" }
 $GAIA_RELEASES_URL = $GAIA_RELEASES_URL.TrimEnd('/')
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (Resolve-Pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 $GAIA_RELEASE_TAG = $env:GAIA_RELEASE_TAG
 $TUI_SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
+# Set by Install-Core: this install had the Terminal UI as gaia-tui.
+$HAD_GAIA_TUI = $false
 $CORE_SUMS_FILE = "gaia-core-SHA256SUMS.txt"
 # The release this run installs from, resolved once. A hashtable so functions
 # can set it without reaching the caller's scope under iex.
@@ -102,6 +105,8 @@ function Install-Core {
         if (-not (Test-Path $GAIA_BIN)) {
             New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
         }
+        # Read before the cleanup below can delete gaia-tui.exe.old (Install-Tui).
+        $script:HAD_GAIA_TUI = Test-LegacyTui
         # What an earlier upgrade moved aside; one still in use is removed next time.
         Get-ChildItem -LiteralPath $GAIA_BIN -Filter "*.exe*.old" -File |
             Remove-Item -Force -ErrorAction SilentlyContinue
@@ -171,11 +176,11 @@ function Get-HubPlatform {
 
 function Get-TuiAssetName {
     # The terminal binary as publish.yml names it on the release:
-    # gaia-<GOOS>-<GOARCH>.exe.
+    # gaia-cli-<GOOS>-<GOARCH>.exe.
     $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     switch ($arch) {
-        "AMD64" { return "gaia-windows-amd64.exe" }
-        "ARM64" { return "gaia-windows-arm64.exe" }
+        "AMD64" { return "gaia-cli-windows-amd64.exe" }
+        "ARM64" { return "gaia-cli-windows-arm64.exe" }
         default { return $null }
     }
 }
@@ -292,7 +297,10 @@ function Resolve-ReleaseAgent {
 function Resolve-TuiAsset {
     param(
         [Parameter(Mandatory)][string]$Filename,
-        [string]$SumsName = $TUI_SUMS_FILE
+        [string]$SumsName = $TUI_SUMS_FILE,
+        # The file's name on releases that predate $Filename, used when the
+        # checksum file lists it and not $Filename.
+        [string]$LegacyFilename
     )
 
     # Asked once, so gaia, the terminal binary and their checksums all come
@@ -316,10 +324,19 @@ function Resolve-TuiAsset {
             return $null
         }
         # Same rule as install.sh: exactly one line for the file, lowercase hex.
-        $found = @()
+        $names = @()
+        $digests = @()
         foreach ($line in Get-Content -LiteralPath $sumsFile) {
             $parts = $line.Trim() -split '\s+', 2
-            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -ceq $Filename) { $found += $parts[0] }
+            if ($parts.Count -eq 2) { $names += $parts[1].TrimStart('*'); $digests += $parts[0] }
+        }
+        if ($LegacyFilename -and ($names -cnotcontains $Filename) -and ($names -ccontains $LegacyFilename)) {
+            Write-GaiaWarning "$tag names this build $LegacyFilename; installing that."
+            $Filename = $LegacyFilename
+        }
+        $found = @()
+        for ($i = 0; $i -lt $names.Count; $i++) {
+            if ($names[$i] -ceq $Filename) { $found += $digests[$i] }
         }
         $sha = if ($found.Count -eq 1) { $found[0] } else { $null }
     }
@@ -482,6 +499,12 @@ function Install-VerifiedBinary {
     }
 }
 
+# Whether this install has the Terminal UI under its earlier name, gaia-tui. A
+# GAIA updating itself has moved that binary to gaia-tui.exe.old.
+function Test-LegacyTui {
+    return (Test-Path -LiteralPath "$GAIA_BIN\gaia-tui.exe") -or (Test-Path -LiteralPath "$GAIA_BIN\gaia-tui.exe.old")
+}
+
 # A missing terminal hub fails the install - it is the advertised entry point.
 function Install-Tui {
     Write-Step "Installing the GAIA Terminal UI"
@@ -497,8 +520,24 @@ function Install-Tui {
 
     # Never `gaia.exe`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
-    $resolved = Resolve-TuiAsset -Filename $filename
-    [void](Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaia-tui.exe" -Label "GAIA Terminal UI")
+    $resolved = Resolve-TuiAsset -Filename $filename -LegacyFilename ($filename -replace '^gaia-cli-', 'gaia-')
+    [void](Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaia-cli.exe" -Label "GAIA Terminal UI")
+
+    # An install from before the rename keeps its gaia-tui command: left as the
+    # old binary it would start the old version. A GAIA updating itself puts
+    # its moved-aside binary back unless a new one is here.
+    $legacy = "$GAIA_BIN\gaia-tui.exe"
+    if ($script:HAD_GAIA_TUI -or (Test-LegacyTui)) {
+        try {
+            Copy-Item -LiteralPath "$GAIA_BIN\gaia-cli.exe" -Destination $legacy -Force
+        }
+        catch {
+            Write-GaiaError "Could not update $legacy`: $_"
+            Write-Host "  Fix:  close GAIA, then re-run this installer. The command is now gaia-cli." -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+        Write-Success "gaia-tui still starts it; the command is now gaia-cli"
+    }
 }
 
 # The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
@@ -510,7 +549,7 @@ function Install-Tui {
 #
 # Returns $true only when the agent binary is on disk. The caller uses that to
 # decide what to promise: the hub spawns gaia-agent as a child process, so
-# without it `gaia-tui` opens an agent list rather than a chat. ARM64 Windows
+# without it `gaia-cli` opens an agent list rather than a chat. ARM64 Windows
 # hits this every time — the sidecar publishes no build for it.
 function Install-FlagshipAgent {
     param([hashtable]$Pin = @{ Kind = "" })
@@ -663,7 +702,7 @@ function Show-NextSteps {
     Write-Host "  1. Open a new terminal window, so the gaia command is on your PATH" -ForegroundColor White
     if ($FlagshipInstalled) {
         Write-Host "  2. Open GAIA: " -ForegroundColor White -NoNewline
-        Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+        Write-Host "gaia-cli" -ForegroundColor $COLOR_GREEN
         Write-Host "     On first launch it sets up the local model server and lets you" -ForegroundColor White
         Write-Host "     choose which models to download before anything downloads." -ForegroundColor White
         Write-Host "     (type " -ForegroundColor White -NoNewline
@@ -678,7 +717,7 @@ function Show-NextSteps {
         Write-Host " to set up the local model runtime and download the models" -ForegroundColor White
         Write-Host "     (~6 GB; ~28 GB on PCs whose GPU can run the larger model)" -ForegroundColor White
         Write-Host "  3. Open the GAIA Terminal UI: " -ForegroundColor White -NoNewline
-        Write-Host "gaia-tui" -ForegroundColor $COLOR_GREEN
+        Write-Host "gaia-cli" -ForegroundColor $COLOR_GREEN
         Write-Host "     The GAIA agent was skipped - see the warning above - so this" -ForegroundColor $COLOR_YELLOW
         Write-Host "     opens the agent list, not a chat. Re-run this installer to retry." -ForegroundColor $COLOR_YELLOW
     }

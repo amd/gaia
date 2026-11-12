@@ -3330,7 +3330,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-cli --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -11581,7 +11581,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-cli --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -11601,7 +11601,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia-tui --control` session")
+            print("   Target  : the running `gaia-cli --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

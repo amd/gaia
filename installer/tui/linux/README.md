@@ -4,11 +4,11 @@ Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 
 | Path | Mode |
 | --- | --- |
-| `/usr/bin/gaia-tui` | 0755 |
+| `/usr/bin/gaia-cli` | 0755 |
 | `/usr/bin/gaia-agent` | 0755 |
 | `/usr/share/applications/gaia-tui.desktop` | 0644 |
-| `/usr/share/icons/hicolor/256x256/apps/gaia-tui.png` | 0644 |
-| `/usr/share/doc/gaia-tui/LICENSE.md` | 0644 |
+| `/usr/share/icons/hicolor/256x256/apps/gaia-cli.png` | 0644 |
+| `/usr/share/doc/gaia-cli/LICENSE.md` | 0644 |
 
 All files are owned `root:root`. The desktop entry sets `Terminal=true` — this is
 a TUI, so the launcher has to open a terminal for it.
@@ -34,7 +34,7 @@ dist/gaia-1.4.0.x86_64.rpm
 ```
 
 - `--payload` is a directory that already contains two executables named
-  `gaia-tui` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
+  `gaia-cli` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
   its `_internal` folder. The script copies them; it does not build them. The
   core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
   script stops a daemon running it before the package is removed or upgraded.
@@ -108,10 +108,10 @@ Then install in a container that did **not** build the packages:
 
 ```bash
 docker run --rm -v "$PWD/dist:/out:ro" debian:bookworm \
-  bash -c 'dpkg -i /out/gaia_1.4.0_amd64.deb && gaia-tui version && dpkg -P gaia'
+  bash -c 'dpkg -i /out/gaia_1.4.0_amd64.deb && gaia-cli version && dpkg -P gaia'
 
 docker run --rm -v "$PWD/dist:/out:ro" fedora:latest \
-  bash -c 'dnf install -y /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
+  bash -c 'dnf install -y /out/gaia-1.4.0.x86_64.rpm && gaia-cli version && rpm -e gaia'
 ```
 
 Use `debian:bookworm`, not `-slim`. The slim image ships
@@ -131,7 +131,7 @@ Verify with `dpkg-deb --ctrl-tarfile <deb> | tar -t` (only `control` and
 ## Notes
 
 - **Package name is `gaia`**, so the artifact names come out as required. The
-  documentation directory is `/usr/share/doc/gaia-tui/` rather than the Debian
+  documentation directory is `/usr/share/doc/gaia-cli/` rather than the Debian
   convention `/usr/share/doc/gaia/`, matching the binary users actually invoke.
   fpm also auto-generates a `/usr/share/doc/gaia/changelog.gz` in the `.deb`.
 - **The rpm's internal release is `1`** (`gaia-1.4.0-1.x86_64`), while the
@@ -141,4 +141,4 @@ Verify with `dpkg-deb --ctrl-tarfile <deb> | tar -t` (only `control` and
   `/usr/lib/.build-id/**` symlinks that serve debuginfo we do not ship and that
   collide between any two packages sharing a build ID.
 - **The icon** is generated from `src/gaia/img/gaia.png` (4096×4096) downscaled
-  to 256×256, the hicolor size the desktop entry resolves via `Icon=gaia-tui`.
+  to 256×256, the hicolor size the desktop entry resolves via `Icon=gaia-cli`.

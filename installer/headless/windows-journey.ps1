@@ -50,7 +50,7 @@ $logs = "$work\logs"
 
 $rel = Get-Content $env:RELEASE_JSON -Raw | ConvertFrom-Json
 $version = $rel.version
-# gaia-tui stamps the tag itself: `gaia-tui version` -> "gaia v0.25.1-rc2 (...)".
+# gaia-cli stamps the tag itself: `gaia-cli version` -> "gaia v0.25.1-rc2 (...)".
 $tuiVersion = $rel.tui_version
 $pep440 = $rel.pep440
 
@@ -157,21 +157,24 @@ function Use-NewTerminalPath {
     $env:PATH = "$machine;$user;" + (Split-Path $python)
 }
 
+# The Terminal UI the row installed. A setup from before the binary became
+# gaia-cli (the release a PR tests) has gaia-tui.exe there instead.
 function Tui-Exe {
-    if ($env:KIND -eq 'install-ps1') { return "$gaiaHome\bin\gaia-tui.exe" }
-    return "$tuiDir\gaia-tui.exe"
+    if ($env:KIND -eq 'install-ps1') { return "$gaiaHome\bin\gaia-cli.exe" }
+    if (-not (Test-Path "$tuiDir\gaia-cli.exe") -and (Test-Path "$tuiDir\gaia-tui.exe")) { return "$tuiDir\gaia-tui.exe" }
+    return "$tuiDir\gaia-cli.exe"
 }
 
-# A release stamps gaia-tui in two spellings today: the raw binaries say the
+# A release stamps gaia-cli in two spellings today: the raw binaries say the
 # tag (v0.25.1-rc2), the setup's copy the package version (0.25.1-rc.2).
 # Either names this release.
 function Check-TuiVersion([string[]]$Expected) {
     $out = & (Tui-Exe) version 2>&1 | Out-String
-    Write-Host "gaia-tui version -> $out"
-    if ($LASTEXITCODE -ne 0) { Fail "gaia-tui version exited $LASTEXITCODE" }
+    Write-Host "gaia-cli version -> $out"
+    if ($LASTEXITCODE -ne 0) { Fail "gaia-cli version exited $LASTEXITCODE" }
     $want = @($Expected | Where-Object { $_ })
     if ($want.Count -and -not ($want | Where-Object { $out -match [regex]::Escape($_) })) {
-        Fail "gaia-tui reports '$out', expected $($want -join ' or ')"
+        Fail "gaia-cli reports '$out', expected $($want -join ' or ')"
     }
 }
 
@@ -421,7 +424,7 @@ switch ($Step) {
                 $env:HOME = $userHome
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Content -Raw '$script' | Invoke-Expression"
                 if ($LASTEXITCODE -ne 0) { Fail "install.ps1 failed (exit $LASTEXITCODE)" }
-                foreach ($f in "$gaiaHome\bin\_internal", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-tui.exe", "$gaiaHome\bin\gaia-agent.exe") {
+                foreach ($f in "$gaiaHome\bin\_internal", "$gaiaHome\bin\gaia.exe", "$gaiaHome\bin\gaia-mcp.exe", "$gaiaHome\bin\gaia-cli.exe", "$gaiaHome\bin\gaia-agent.exe") {
                     if (-not (Test-Path $f)) { Fail "install.ps1 finished but $f is not there" }
                 }
                 # The venv's python.exe must not reach the user's PATH.
@@ -439,9 +442,11 @@ switch ($Step) {
                 if ($recorded.Count -ne 1) { Fail "the setup recorded the terminal under $($recorded.Count) sets of ids, expected 1" }
                 $tuiDir = $recorded[0].Dir
                 Write-Host "the release under test installed the terminal to $tuiDir"
-                foreach ($f in 'gaia-tui.exe', 'gaia-agent.exe', 'Uninstall.exe') {
-                    if (-not (Test-Path "$tuiDir\$f")) { Fail "$f did not land in $tuiDir" }
+                foreach ($f in (Tui-Exe), "$tuiDir\gaia-agent.exe", "$tuiDir\Uninstall.exe") {
+                    if (-not (Test-Path $f)) { Fail "$f did not land" }
                 }
+                # Only a setup that ships gaia-cli can be held to having removed gaia-tui.
+                if ((Test-Path "$tuiDir\gaia-cli.exe") -and (Test-Path "$tuiDir\gaia-tui.exe")) { Fail "the setup left the old gaia-tui.exe in $tuiDir" }
                 $regPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name Path).Path
                 if ($regPath -notlike "*$tuiDir*") { Fail "the terminal's folder was not added to the user PATH" }
             }
@@ -570,7 +575,7 @@ switch ($Step) {
             if (Test-Path $uiKey) { Write-Host "::warning::$uiKey survived the uninstall" }
         }
         $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ProcessName -in @('gaia-desktop', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
+            $_.ProcessName -in @('gaia-desktop', 'gaia-cli', 'gaia-tui', 'gaia-agent') -or ($_.Path -and $_.Path -like "$gaiaHome\venv\*")
         }
         foreach ($r in $running) { $problems += "still running: $($r.ProcessName) ($($r.Path))" }
         foreach ($d in Daemon-Processes) { $problems += "still running: the daemon, pid $($d.ProcessId) ($($d.CommandLine))" }

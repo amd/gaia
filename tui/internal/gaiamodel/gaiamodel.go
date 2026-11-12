@@ -34,7 +34,7 @@ var Binary = func() (string, error) {
 	bin, err := gaiainit.ResolveCLI()
 	if err != nil {
 		return "", fmt.Errorf(
-			"the `gaia` CLI is not beside gaia-tui, on PATH or in ~/.gaia/bin, so models can't be added from a link. " +
+			"the `gaia` CLI is not beside gaia-cli, on PATH or in ~/.gaia/bin, so models can't be added from a link. " +
 				"Reinstall GAIA from https://amd-gaia.ai/#install, or install it with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 				"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`)")
 	}

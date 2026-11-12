@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
+
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

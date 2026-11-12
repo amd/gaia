@@ -33,6 +33,12 @@ FINAL_ONLY_SETUP = (
 )
 
 TUI = [
+    "gaia-cli-darwin-amd64",
+    "gaia-cli-darwin-arm64",
+    "gaia-cli-linux-amd64",
+    "gaia-cli-linux-arm64",
+    "gaia-cli-windows-amd64.exe",
+    "gaia-cli-windows-arm64.exe",
     "gaia-darwin-amd64",
     "gaia-darwin-arm64",
     "gaia-linux-amd64",
@@ -489,5 +495,12 @@ def test_the_binaries_match_the_ones_the_release_checksums(jobs):
         for s in jobs["github-release"]["steps"]
         if s.get("name") == "Checksum TUI binaries"
     ]
-    for name in cra.TUI_FILES:
-        assert name in step["run"]
+    run = step["run"]
+    listed = [n for n in cra.TUI_FILES if n.startswith("gaia-cli-")]
+    assert len(listed) == 6
+    for name in listed:
+        assert name in run
+    # The step derives each earlier name from its gaia-cli one.
+    assert 'cp "${f}" "${f/#gaia-cli-/gaia-}"' in run
+    assert 'sha256sum "${expected[@]}" "${legacy[@]}" > gaia-tui-SHA256SUMS.txt' in run
+    assert {n.replace("gaia-cli-", "gaia-") for n in listed} < set(cra.TUI_FILES)

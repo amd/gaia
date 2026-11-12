@@ -1671,13 +1671,13 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_only_the_tui_in_bin_still_needs_the_agent(self):
-        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        """A terminal install whose agent download failed leaves gaia-cli alone."""
         from gaia.home import gaia_home
 
         self._remove_flagship()
         bin_dir = gaia_home() / "bin"
         bin_dir.mkdir(parents=True)
-        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        tui = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
         (bin_dir / tui).write_bytes(b"x")
         self.host_key = "darwin-arm64"
         status, _ = self._check_with_models()
@@ -3226,7 +3226,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     complete, out = self._render(cmd, rich)
                     self.assertTrue(complete)
                     self.assertIn("GAIA initialization complete!", out)
-                    self.assertIn("gaia-tui", out)
+                    self.assertIn("gaia-cli", out)
                     self.assertNotIn("not installed yet", out)
 
     def test_npu_profile_leads_with_the_flagship_not_the_chat_wheels(self):

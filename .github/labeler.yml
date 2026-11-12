@@ -54,7 +54,7 @@ talk:
 # (milestone #45). Kept with the src/gaia area rules above the hub-agent block.
 # ---------------------------------------------------------------------------
 
-# Go terminal UI (gaia-tui)
+# Go terminal UI (gaia-cli)
 tui:
   - changed-files:
     - any-glob-to-any-file: ['tui/**/*', '.github/workflows/build_tui.yml']

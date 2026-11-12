@@ -13,6 +13,7 @@ import {
   PLATFORM_LABELS,
   PLATFORM_ORDER,
   artifactFileName,
+  legacyBinaryFileName,
   desktopArtifactFileName,
   detectOs,
   placeOs,
@@ -26,17 +27,18 @@ import {
   type PlatformKey,
 } from './download-target';
 
-// The six raw terminal binaries as publish.yml attaches them to a release,
-// copied from the v0.25.0 GitHub release — which carries NO terminal
+// The six raw terminal binaries as publish.yml attaches them to a release.
+// The v0.25.0 GitHub release carried only these, under their older `gaia-`
+// names, and NO terminal
 // installers, the "installer absent" case below.
 const V = '0.23.0';
 const RAW_BINARIES = [
-  'gaia-linux-amd64',
-  'gaia-linux-arm64',
-  'gaia-darwin-amd64',
-  'gaia-darwin-arm64',
-  'gaia-windows-amd64.exe',
-  'gaia-windows-arm64.exe',
+  'gaia-cli-linux-amd64',
+  'gaia-cli-linux-arm64',
+  'gaia-cli-darwin-amd64',
+  'gaia-cli-darwin-arm64',
+  'gaia-cli-windows-amd64.exe',
+  'gaia-cli-windows-arm64.exe',
 ];
 // What publish.yml's github-release-installers attaches alongside them.
 const INSTALLER_FILES = [
@@ -174,12 +176,19 @@ describe('artifactFileName', () => {
   // The exact asset names the release carries; a wrong one is not a build
   // failure anywhere, it is a missing button.
   it("matches the release's binary names, in Go's os/arch spelling", () => {
-    expect(artifactFileName('win-x64', V)).toBe('gaia-windows-amd64.exe');
-    expect(artifactFileName('win-arm64', V)).toBe('gaia-windows-arm64.exe');
-    expect(artifactFileName('darwin-x64', V)).toBe('gaia-darwin-amd64');
-    expect(artifactFileName('darwin-arm64', V)).toBe('gaia-darwin-arm64');
-    expect(artifactFileName('linux-x64', V)).toBe('gaia-linux-amd64');
-    expect(artifactFileName('linux-arm64', V)).toBe('gaia-linux-arm64');
+    expect(artifactFileName('win-x64', V)).toBe('gaia-cli-windows-amd64.exe');
+    expect(artifactFileName('win-arm64', V)).toBe('gaia-cli-windows-arm64.exe');
+    expect(artifactFileName('darwin-x64', V)).toBe('gaia-cli-darwin-amd64');
+    expect(artifactFileName('darwin-arm64', V)).toBe('gaia-cli-darwin-arm64');
+    expect(artifactFileName('linux-x64', V)).toBe('gaia-cli-linux-amd64');
+    expect(artifactFileName('linux-arm64', V)).toBe('gaia-cli-linux-arm64');
+  });
+
+  it('names the same build as releases before gaia-cli did, minus the cli', () => {
+    expect(ORDER.map(legacyBinaryFileName)).toEqual(
+      ORDER.map((p) => artifactFileName(p, V).replace('gaia-cli-', 'gaia-')),
+    );
+    expect(legacyBinaryFileName('linux-arm64')).toBe('gaia-linux-arm64');
   });
 
   it('names a binary for every platform, and only those six', () => {
@@ -188,7 +197,7 @@ describe('artifactFileName', () => {
 
   // The raw binaries are published version-less; only the installers carry it.
   it('ignores the version for the raw binaries', () => {
-    expect(artifactFileName('linux-x64', '9.9.9')).toBe('gaia-linux-amd64');
+    expect(artifactFileName('linux-x64', '9.9.9')).toBe('gaia-cli-linux-amd64');
   });
 
   it('matches the installer filenames, each in its own packaging convention', () => {
@@ -205,7 +214,7 @@ describe('artifactFileName', () => {
   it('maps the Windows setup and its two single-app files to the 0.25.0 asset names', () => {
     expect(artifactFileName('win-x64-setup', '0.25.0')).toBe('gaia-0.25.0-win-x64-setup.exe');
     expect(desktopArtifactFileName('win-x64', '0.25.0')).toBe('gaia-agent-ui-0.25.0-x64-setup.exe');
-    expect(artifactFileName('win-x64', '0.25.0')).toBe('gaia-windows-amd64.exe');
+    expect(legacyBinaryFileName('win-x64')).toBe('gaia-windows-amd64.exe');
   });
 
   it('spells the Windows one-liner exactly as docs/quickstart.mdx does', () => {
@@ -228,7 +237,7 @@ describe('artifactFileName', () => {
     // Distinct names, so no installer can shadow the raw binary of its platform.
     expect(byFilename.size).toBe(keys.length);
     expect(byFilename.get('gaia-0.23.0-win-x64-setup.exe')).toBe('win-x64-setup');
-    expect(byFilename.get('gaia-windows-amd64.exe')).toBe('win-x64');
+    expect(byFilename.get('gaia-cli-windows-amd64.exe')).toBe('win-x64');
   });
 });
 

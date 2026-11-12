@@ -1256,7 +1256,7 @@ emit(ok=all(t["ok"] for t in turns), turns=turns)
 
 
 class Tui:
-    """One ``gaia-tui`` session under the isolated home, driven over its
+    """One ``gaia-cli`` session under the isolated home, driven over its
     loopback control API. Its console is hidden: Bubble Tea needs one, nobody
     needs to see it."""
 
@@ -1290,7 +1290,7 @@ class Tui:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
-                raise RuntimeError(f"gaia-tui exited with {self.proc.returncode}")
+                raise RuntimeError(f"gaia-cli exited with {self.proc.returncode}")
             try:
                 info = json.loads(control.read_text(encoding="utf-8"))
                 break
@@ -1623,8 +1623,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "lemond on the same port -- a fault of this harness, not of GAIA",
     )
     sub.add_parser("ui-lease", help="an Agent UI under its own GAIA_HOME (#5159)")
-    tui = sub.add_parser("tui", help="back-to-back real gaia-tui sessions")
-    tui.add_argument("--tui-exe", required=True, help="a gaia-tui built from tui/")
+    tui = sub.add_parser("tui", help="back-to-back real gaia-cli sessions")
+    tui.add_argument("--tui-exe", required=True, help="a gaia-cli built from tui/")
     tui.add_argument("--sessions", type=int, default=16)
     tui.add_argument("--gap", type=float, default=3.0)
     tui.add_argument(

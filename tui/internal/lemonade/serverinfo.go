@@ -198,7 +198,7 @@ func clip(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// StatusLine is one line for a status bar or `gaia-tui status`:
+// StatusLine is one line for a status bar or `gaia-cli status`:
 // "Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan, 64K ctx".
 func (s ServerInfo) StatusLine() string {
 	owner := map[string]string{"gaia": "GAIA's own", "user": "yours", "remote": "remote"}[s.Owner]

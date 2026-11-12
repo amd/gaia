@@ -12,7 +12,7 @@ turns the cloud choices off.
 
 ## Connect from the TUI
 
-1. Start `gaia-tui`. On a first run, setup opens by asking where chat should
+1. Start `gaia-cli`. On a first run, setup opens by asking where chat should
    run: choose **Fireworks AI** or **AMD LLM Gateway** there, and its key form
    opens once Lemonade is installed. Otherwise, with the flagship GAIA agent,
    press **p** during setup (other agents' setup screens don't offer it), or enter
@@ -407,11 +407,11 @@ remembered local model is checked against what Lemonade has downloaded and then
 used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-cli run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 
-For development, build `tui/bin/gaia-tui` and launch the checkout with:
+For development, build `tui/bin/gaia-cli` and launch the checkout with:
 
 ```bash
 scripts/dev/run-tui.sh --dev --control

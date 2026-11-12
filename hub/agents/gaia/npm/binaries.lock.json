@@ -38,37 +38,37 @@
       "platforms": {
         "win32-x64": {
           "filename": "gaia-win-x64.exe",
-          "executable": "gaia-tui.exe",
+          "executable": "gaia-cli.exe",
           "sha256": "9b1c467b04b267f172a6024589f1ba0ddc882729337913d8afa7dcd43a7a7967",
           "size": 20604416
         },
         "win32-arm64": {
           "filename": "gaia-win-arm64.exe",
-          "executable": "gaia-tui.exe",
+          "executable": "gaia-cli.exe",
           "sha256": "332068c5588e5639213225d63e4a1827d9258928e4053b7d6602668dc7eda60c",
           "size": 19030016
         },
         "darwin-arm64": {
           "filename": "gaia-darwin-arm64",
-          "executable": "gaia-tui",
+          "executable": "gaia-cli",
           "sha256": "bb5ae28ae99ad25c095b3f57c4abf4e2ff67fa560122dc0a99036aedf9184802",
           "size": 18801330
         },
         "darwin-x64": {
           "filename": "gaia-darwin-x64",
-          "executable": "gaia-tui",
+          "executable": "gaia-cli",
           "sha256": "5259c82dc195297130e16377586ed6e0e668c5ec7f8b27a76ee029d67d776b52",
           "size": 20015840
         },
         "linux-x64": {
           "filename": "gaia-linux-x64",
-          "executable": "gaia-tui",
+          "executable": "gaia-cli",
           "sha256": "07f1cc448f8056b5915eff2869f9f3eec3a5d04485d93e448ccad00d186d23c5",
           "size": 19669154
         },
         "linux-arm64": {
           "filename": "gaia-linux-arm64",
-          "executable": "gaia-tui",
+          "executable": "gaia-cli",
           "sha256": "c324100d2de989823e816a6aae7eb4e1224019096b9a46ef1a6983ca6b98598f",
           "size": 18350242
         }

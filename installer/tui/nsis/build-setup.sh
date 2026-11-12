@@ -14,7 +14,7 @@
 #                  --fonts dist/fonts \
 #                  --agent-ui-setup dist/gaia-agent-ui-0.23.0-x64-setup.exe
 #
-# --payload must already hold gaia-tui.exe, gaia-agent.exe, LICENSE.md and core/
+# --payload must already hold gaia-cli.exe, gaia-agent.exe, LICENSE.md and core/
 # (the frozen gaia: gaia.exe and its _internal folder).
 # --fonts must hold the faces installer/tui/fetch_fonts.py staged and verified.
 # --agent-ui-setup is the electron-builder setup for the desktop app component,
@@ -28,7 +28,7 @@ usage() {
 usage: build-setup.sh --version <x.y.z[-rc.N]> --payload <dir> --out <dir> --fonts <dir> --agent-ui-setup <path>
 
   --version       version to stamp into the installer and its filename (x.y.z, or x.y.z-rc.N)
-  --payload       directory holding gaia-tui.exe, gaia-agent.exe, LICENSE.md and core/
+  --payload       directory holding gaia-cli.exe, gaia-agent.exe, LICENSE.md and core/
   --out           directory the setup .exe is written to
   --fonts         IBM Plex Mono faces staged by installer/tui/fetch_fonts.py
   --agent-ui-setup  gaia-agent-ui-<x.y.z>-x64-setup.exe, the desktop app component
@@ -89,10 +89,10 @@ REPO="$(cd "${HERE}/../../.." && pwd)"
 
 # Every input checked before makensis runs, so a missing file is one clear
 # message rather than an NSIS compile error pointing at a generated path.
-for f in "${PAYLOAD}/gaia-tui.exe" "${PAYLOAD}/gaia-agent.exe" "${PAYLOAD}/LICENSE.md" "${PAYLOAD}/core/gaia.exe"; do
+for f in "${PAYLOAD}/gaia-cli.exe" "${PAYLOAD}/gaia-agent.exe" "${PAYLOAD}/LICENSE.md" "${PAYLOAD}/core/gaia.exe"; do
   [ -f "${f}" ] || {
     echo "build-setup.sh: payload is incomplete -- '${f}' is missing." >&2
-    echo "  --payload must hold gaia-tui.exe (cross-compiled from tui/), gaia-agent.exe" >&2
+    echo "  --payload must hold gaia-cli.exe (cross-compiled from tui/), gaia-agent.exe" >&2
     echo "  (installer/tui/fetch_sidecar.py --platform win-x64), the repo's LICENSE.md and" >&2
     echo "  core/, the gaia-core-win32-x64 build (.github/workflows/build_core.yml)." >&2
     exit 1

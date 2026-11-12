@@ -17,16 +17,17 @@ GAIA_BIN="$GAIA_HOME/bin"
 GAIA_CORE="$GAIA_HOME/core"
 # GAIA's commands, linked into $GAIA_BIN to the one frozen gaia: it runs as
 # gaia-mcp when called by that name.
-GAIA_COMMANDS="gaia gaia-cli gaia-mcp"
+GAIA_COMMANDS="gaia gaia-mcp"
 
-# The GAIA Terminal UI binary comes from the GitHub release: publish.yml
-# attaches all six builds and gaia-tui-SHA256SUMS.txt to every release.
+# The GAIA Terminal UI binary (gaia-cli) comes from the GitHub release:
+# publish.yml attaches all six builds and gaia-tui-SHA256SUMS.txt to every
+# release. Installed GAIAs find the newest release through that file's name.
 GAIA_RELEASES_URL="${GAIA_RELEASES_URL:-https://github.com/amd/gaia/releases}"
 GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
-# 1 installs only the gaia command: a package (.pkg, .deb, .rpm) owns gaia-tui
+# 1 installs only the gaia command: a package (.pkg, .deb, .rpm) owns gaia-cli
 # and gaia-agent.
 GAIA_CLI_ONLY="${GAIA_CLI_ONLY:-}"
 # Set by resolve_pin: "", "final" or "rc".
@@ -248,7 +249,7 @@ hub_platform() {
 }
 
 # Print this machine's terminal binary as publish.yml names it on the release:
-# gaia-<GOOS>-<GOARCH>, e.g. "gaia-linux-amd64".
+# gaia-cli-<GOOS>-<GOARCH>, e.g. "gaia-cli-linux-amd64".
 tui_asset_name() {
     _os=""
     _arch=""
@@ -263,7 +264,7 @@ tui_asset_name() {
     if [ -z "$_os" ] || [ -z "$_arch" ]; then
         return 1
     fi
-    printf 'gaia-%s-%s\n' "$_os" "$_arch"
+    printf 'gaia-cli-%s-%s\n' "$_os" "$_arch"
 }
 
 # Turn GAIA_RELEASE_TAG into one coherent release: gaia, the terminal binary
@@ -466,7 +467,7 @@ download_and_verify() {
     # this as `if ! download_and_verify ...`, which switches `set -e` off inside
     # the body, so an unchecked failure here reached the caller as success and
     # printed "installed" over a binary that was never written.
-    # (A running gaia-tui is not one of the cases: `install` unlinks the target
+    # (A running gaia-cli is not one of the cases: `install` unlinks the target
     # first, so the replace succeeds and the live process keeps the old inode.)
     if ! mkdir -p "$(dirname "$_dest")"; then
         print_error "Could not create $(dirname "$_dest") for $_label."
@@ -519,6 +520,14 @@ install_tui() {
         exit 1
     fi
 
+    # A release from before the binary became gaia-cli lists it without "cli".
+    legacy="gaia-${filename#gaia-cli-}"
+    if ! awk -v f="$filename" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' "$tmp/$TUI_SUMS_FILE" \
+        && awk -v f="$legacy" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' "$tmp/$TUI_SUMS_FILE"; then
+        print_warning "$RELEASE_TAG names its Terminal UI build $legacy; installing that as gaia-cli."
+        filename="$legacy"
+    fi
+
     # The checksum file is the only source for the digest: exactly one entry of
     # lowercase hex, or no install. A second line for the file is a newline in
     # $want, which the character check below refuses.
@@ -537,11 +546,22 @@ install_tui() {
     # Never `gaia`: tui/internal/daemon/client.go resolves `gaia` on PATH to
     # start the Python-owned daemon, so a Go binary by that name finds itself.
     if ! download_and_verify "$release_url/$filename" "$tmp/$filename" "$want" \
-            "$GAIA_BIN/gaia-tui" "GAIA Terminal UI"; then
+            "$GAIA_BIN/gaia-cli" "GAIA Terminal UI"; then
         echo "  Look: $GAIA_RELEASES_URL/tag/$RELEASE_TAG lists the release's files."
         exit 1
     fi
-    print_success "GAIA Terminal UI $RELEASE_TAG installed to $GAIA_BIN/gaia-tui"
+    print_success "GAIA Terminal UI $RELEASE_TAG installed to $GAIA_BIN/gaia-cli"
+
+    # An install from before the rename keeps its gaia-tui command, as a link:
+    # left as the old binary it would start the old version.
+    if [ -e "$GAIA_BIN/gaia-tui" ] || [ -L "$GAIA_BIN/gaia-tui" ]; then
+        if ! rm -f "$GAIA_BIN/gaia-tui" || ! ln -s gaia-cli "$GAIA_BIN/gaia-tui"; then
+            print_error "Could not point $GAIA_BIN/gaia-tui at gaia-cli."
+            echo "  Fix:  delete $GAIA_BIN/gaia-tui and start GAIA with gaia-cli."
+            exit 1
+        fi
+        print_success "gaia-tui still starts it; the command is now gaia-cli"
+    fi
 }
 
 # The flagship agent's frozen sidecar. The terminal hub spawns `gaia-agent` as a
@@ -637,6 +657,11 @@ link_gaia_commands() {
     print_step "Linking GAIA commands into $GAIA_BIN..."
     if ! mkdir -p "$GAIA_BIN"; then
         print_error "Could not create $GAIA_BIN"
+        exit 1
+    fi
+    # gaia-cli was a link to gaia before it became the Terminal UI's name.
+    if [ -L "$GAIA_BIN/gaia-cli" ] && ! rm -f "$GAIA_BIN/gaia-cli"; then
+        print_error "Could not remove the old link $GAIA_BIN/gaia-cli"
         exit 1
     fi
     for name in $GAIA_COMMANDS; do
@@ -835,7 +860,7 @@ show_next_steps() {
         echo "  1. Open a new terminal (PATH was not written to a startup file)"
     fi
     if [ "${FLAGSHIP_INSTALLED:-0}" = "1" ]; then
-        printf '  2. Open GAIA: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '  2. Open GAIA: %sgaia-cli%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         echo "     On first launch it sets up the local model server and lets you"
         echo "     choose which models to download before anything downloads."
         printf '     (type %s/agents%s there to list installed agents)\n' "$COLOR_GREEN" "$COLOR_RESET"
@@ -843,7 +868,7 @@ show_next_steps() {
     else
         printf '  2. Set up the local model runtime: %sgaia init%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         echo "     (installs GAIA's own Lemonade Server and the models — no password needed)"
-        printf '  3. Open the GAIA Terminal UI: %sgaia-tui%s\n' "$COLOR_GREEN" "$COLOR_RESET"
+        printf '  3. Open the GAIA Terminal UI: %sgaia-cli%s\n' "$COLOR_GREEN" "$COLOR_RESET"
         printf '     %sThe GAIA agent was skipped — see the warning above — so this\n' "$COLOR_YELLOW"
         printf '     opens the agent list, not a chat. Re-run this installer to retry.%s\n' "$COLOR_RESET"
     fi

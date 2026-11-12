@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// The installer ships this binary as `gaia-tui`, so a hardcoded `gaia` in the
+// The installer ships this binary as `gaia-cli`, so a hardcoded `gaia` in the
 // usage lines told users to type a command they do not have. Every name below
 // is one the binary can genuinely be invoked under.
 func TestBinaryName(t *testing.T) {
@@ -21,14 +21,14 @@ func TestBinaryName(t *testing.T) {
 		argv0 string
 		want  string
 	}{
-		{"installed name", "gaia-tui", "gaia-tui"},
-		{"absolute path", "/usr/local/bin/gaia-tui", "gaia-tui"},
-		{"relative path", filepath.Join("build", "gaia-tui"), "gaia-tui"},
-		{"dot-slash", "./gaia-tui", "gaia-tui"},
+		{"installed name", "gaia-cli", "gaia-cli"},
+		{"absolute path", "/usr/local/bin/gaia-cli", "gaia-cli"},
+		{"relative path", filepath.Join("build", "gaia-cli"), "gaia-cli"},
+		{"dot-slash", "./gaia-cli", "gaia-cli"},
 		{"renamed by the user", "/opt/bin/gaia-hub", "gaia-hub"},
 		{"go run temp binary", "/tmp/go-build123/b001/exe/gaia", "gaia"},
-		{"exe suffix", "gaia-tui.exe", "gaia-tui"},
-		{"exe suffix with path", "/opt/GAIA/gaia-tui.exe", "gaia-tui"},
+		{"exe suffix", "gaia-cli.exe", "gaia-cli"},
+		{"exe suffix with path", "/opt/GAIA/gaia-cli.exe", "gaia-cli"},
 		{"exe suffix uppercase", "GAIA-TUI.EXE", "GAIA-TUI"},
 		{"empty argv", "", defaultBinaryName},
 		{"whitespace argv", "   ", defaultBinaryName},
@@ -47,9 +47,9 @@ func TestBinaryName(t *testing.T) {
 }
 
 // A `.exe` suffix is stripped, but a name that merely ends in something else is
-// left alone — `gaia-tui.dev` is a legitimate binary name, not a Windows one.
+// left alone — `gaia-cli.dev` is a legitimate binary name, not a Windows one.
 func TestBinaryNameOnlyStripsExe(t *testing.T) {
-	if got := binaryName("gaia-tui.dev"); got != "gaia-tui.dev" {
+	if got := binaryName("gaia-cli.dev"); got != "gaia-cli.dev" {
 		t.Errorf("binaryName stripped a non-.exe extension: got %q", got)
 	}
 }
@@ -60,9 +60,9 @@ func TestUsageNamesTheInvokedBinary(t *testing.T) {
 	original := rootCmd.Use
 	t.Cleanup(func() { rootCmd.Use = original })
 
-	rootCmd.Use = binaryName("/usr/local/bin/gaia-tui")
+	rootCmd.Use = binaryName("/usr/local/bin/gaia-cli")
 	usage := rootCmd.UsageString()
-	if !strings.Contains(usage, "gaia-tui [flags]") {
+	if !strings.Contains(usage, "gaia-cli [flags]") {
 		t.Errorf("root usage does not name the invoked binary:\n%s", usage)
 	}
 
@@ -70,8 +70,8 @@ func TestUsageNamesTheInvokedBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find run command: %v", err)
 	}
-	if path := runCmd.CommandPath(); !strings.HasPrefix(path, "gaia-tui ") {
-		t.Errorf("subcommand path = %q, want it to start with %q", path, "gaia-tui ")
+	if path := runCmd.CommandPath(); !strings.HasPrefix(path, "gaia-cli ") {
+		t.Errorf("subcommand path = %q, want it to start with %q", path, "gaia-cli ")
 	}
 }
 

@@ -40,7 +40,7 @@ const pkg = JSON.parse(readFileSync(path.join(pkgRoot, "package.json"), "utf8"))
 
 const EXPECTED_EXECUTABLE: Record<string, string> = {
   sidecar: "gaia-agent",
-  tui: "gaia-tui",
+  tui: "gaia-cli",
 };
 
 describe("shipped binaries.lock.json", () => {
@@ -143,7 +143,7 @@ describe("shipped binaries.lock.json", () => {
         expect(entry.filename.endsWith(".exe")).toBe(isWin);
         // Installed name is ours, not the hub's: the hub artifact is called
         // `gaia`, which would shadow the npm bin shim.
-        expect(entry.executable).toBe(`gaia-tui${isWin ? ".exe" : ""}`);
+        expect(entry.executable).toBe(`gaia-cli${isWin ? ".exe" : ""}`);
         expect(typeof entry.size).toBe("number");
         if (!isPlaceholderSha(entry.sha256)) {
           expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -152,12 +152,12 @@ describe("shipped binaries.lock.json", () => {
     }
   });
 
-  it("installs the TUI as gaia-tui, never as gaia", () => {
+  it("installs the TUI as gaia-cli, never as gaia", () => {
     // A cache-dir executable literally named `gaia` would shadow the npm bin shim —
     // and terminal-hub's artifacts ARE named `gaia-*`, so this is a live hazard.
     expect(Object.keys(pkg.bin)).toEqual(["gaia"]);
     for (const entry of Object.values(tui.platforms)) {
-      expect(entry.executable.replace(/\.exe$/, "")).toBe("gaia-tui");
+      expect(entry.executable.replace(/\.exe$/, "")).toBe("gaia-cli");
     }
   });
 

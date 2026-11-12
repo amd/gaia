@@ -13,10 +13,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PYTHONPATH="$REPO/src:$REPO/hub/agents/gaia/python"
 export PATH="$REPO/scripts/dev/bin:$PATH"
 
-BIN="$REPO/tui/bin/gaia-tui"
+BIN="$REPO/tui/bin/gaia-cli"
 if [ ! -x "$BIN" ]; then
   echo "Terminal UI not built. Run:" >&2
-  echo "    cd tui && go build -o bin/gaia-tui ./cmd/gaia" >&2
+  echo "    cd tui && go build -o bin/gaia-cli ./cmd/gaia" >&2
   exit 1
 fi
 

@@ -130,14 +130,14 @@ describe("resolveEntry", () => {
   it("resolves each component independently", () => {
     const lock = makeLock();
     expect(resolveEntry(lock, "sidecar", "linux-x64").executable).toBe("gaia-agent");
-    expect(resolveEntry(lock, "tui", "linux-x64").executable).toBe("gaia-tui");
+    expect(resolveEntry(lock, "tui", "linux-x64").executable).toBe("gaia-cli");
   });
 
   it("maps the win32 platform key onto terminal-hub's win-* artifact name", () => {
     const lock = makeLock();
     const entry = resolveEntry(lock, "tui", "win32-x64");
     expect(entry.filename).toBe("gaia-win-x64.exe");
-    expect(entry.executable).toBe("gaia-tui.exe");
+    expect(entry.executable).toBe("gaia-cli.exe");
     // Our own lane keeps the process.platform spelling — only the TUI crosses over.
     expect(resolveEntry(lock, "sidecar", "win32-x64").filename).toBe(
       "gaia-agent-win32-x64.exe",
@@ -187,7 +187,7 @@ describe("resolveEntry", () => {
     const lock = makeLock();
     lock.components["tui"]!.platforms["linux-x64"] = {
       filename: "../../etc/passwd",
-      executable: "gaia-tui",
+      executable: "gaia-cli",
       sha256: "c".repeat(64),
     };
     expect(() => resolveEntry(lock, "tui", "linux-x64")).toThrow(/unsafe filename/);

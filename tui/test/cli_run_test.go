@@ -54,7 +54,7 @@ func TestMain(m *testing.M) {
 	restoreDaemon := daemon.StubDefaultStartForTest(func(context.Context) (*exec.Cmd, error) {
 		return nil, errors.New("test: no daemon")
 	})
-	daemonHome, err := os.MkdirTemp("", "gaia-tui-test-daemon-")
+	daemonHome, err := os.MkdirTemp("", "gaia-cli-test-daemon-")
 	if err != nil {
 		panic(err)
 	}
@@ -76,7 +76,7 @@ func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 	}
 
 	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "gaia-tui-build")
+		dir, err := os.MkdirTemp("", "gaia-cli-build")
 		if err != nil {
 			buildErr = err
 			return
@@ -87,7 +87,7 @@ func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 		if runtime.GOOS == "windows" {
 			suffix = ".exe"
 		}
-		builtBin = filepath.Join(dir, "gaia-tui"+suffix)
+		builtBin = filepath.Join(dir, "gaia-cli"+suffix)
 		mockBin := filepath.Join(dir, "gaia-agent"+suffix)
 
 		root, rerr := os.Getwd()
@@ -366,19 +366,19 @@ func TestTheShippedSubcommandsExist(t *testing.T) {
 
 	out, err := exec.Command(gaiaBin, "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("gaia-tui --help: %v\n%s", err, out)
+		t.Fatalf("gaia-cli --help: %v\n%s", err, out)
 	}
 	commands := commandNames(t, string(out))
 	for _, want := range []string{"run", "status", "chat"} {
 		if !commands[want] {
-			t.Errorf("`gaia-tui --help` does not list the %q subcommand:\n%s", want, out)
+			t.Errorf("`gaia-cli --help` does not list the %q subcommand:\n%s", want, out)
 		}
 	}
 	// Matched as a COMMAND, not as a substring: `status`'s own summary says
 	// "what is installed", and a bare Contains("install") hits that.
 	for _, gone := range []string{"list", "install", "uninstall", "hub"} {
 		if commands[gone] {
-			t.Errorf("`gaia-tui --help` still offers the %q subcommand, which is gone:\n%s", gone, out)
+			t.Errorf("`gaia-cli --help` still offers the %q subcommand, which is gone:\n%s", gone, out)
 		}
 	}
 }

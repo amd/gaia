@@ -354,7 +354,7 @@ def tui_metas(tui_dir: Path, names: dict[str, str]) -> list[dict]:
                 "platform": key,
                 "filename": filename,
                 "executable": (
-                    "gaia-tui.exe" if filename.endswith(".exe") else "gaia-tui"
+                    "gaia-cli.exe" if filename.endswith(".exe") else "gaia-cli"
                 ),
                 "sha256": sha256(path),
                 "size": path.stat().st_size,

@@ -735,7 +735,7 @@ jobs:
             -X ${PKG}.version=${VERSION} \
             -X ${PKG}.commit=${{ github.sha }} \
             -X ${PKG}.date=${DATE}" \
-            -o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            -o ../release-assets/gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
 
       # Reads the linked binary's PE resource directory: the linker silently
@@ -748,7 +748,7 @@ jobs:
           VERSION: ${{ needs.validate.outputs.npm_version }}
         run: |
           python3 util/check_pe_resources.py --expect-version "${VERSION}" \
-            "release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
+            "release-assets/gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
 
       - name: Upload
         uses: actions/upload-artifact@v7
@@ -1005,7 +1005,7 @@ jobs:
           - **macOS** — `gaia-@NPM_VERSION@-darwin-arm64.pkg` (Apple Silicon) or `gaia-@NPM_VERSION@-darwin-x64.pkg` (Intel)
           - **Linux** — `gaia_@NPM_VERSION@_amd64.deb` (Debian/Ubuntu) or `gaia-@NPM_VERSION@.x86_64.rpm` (Fedora/RHEL/SUSE). They install as version `@PKG_VERSION@`, so the final release upgrades over them
 
-          Installer checksums are in `gaia-installers-SHA256SUMS.txt`. The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`).
+          Installer checksums are in `gaia-installers-SHA256SUMS.txt`. The terminal hub is also attached as standalone binaries (`gaia-cli-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`).
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
 
@@ -1062,11 +1062,16 @@ jobs:
       # Exactly these six, the build-tui matrix: install.sh and install.ps1
       # refuse a binary with no checksum line, so a missing one is a broken
       # install for that platform.
+      # Each is attached a second time as gaia-<os>-<arch>, its name before the
+      # binary became gaia-cli: a GAIA installed from an earlier release only
+      # updates to a release that carries that name. The checksum file keeps
+      # its name for the same reason, since every install finds the newest
+      # release through it.
       - name: Checksum TUI binaries
         run: |
           set -euo pipefail
           cd release-assets
-          expected=(gaia-linux-amd64 gaia-linux-arm64 gaia-darwin-amd64 gaia-darwin-arm64 gaia-windows-amd64.exe gaia-windows-arm64.exe)
+          expected=(gaia-cli-linux-amd64 gaia-cli-linux-arm64 gaia-cli-darwin-amd64 gaia-cli-darwin-arm64 gaia-cli-windows-amd64.exe gaia-cli-windows-arm64.exe)
           missing=()
           for f in "${expected[@]}"; do
             [ -s "${f}" ] || missing+=("${f}")
@@ -1075,7 +1080,12 @@ jobs:
             echo "::error::the release is missing terminal binaries: ${missing[*]}. install.sh / install.ps1 fetch these from the latest release, so it must not ship without them. Re-run the failed 'Build TUI binary' leg, then this job."
             exit 1
           fi
-          sha256sum "${expected[@]}" > gaia-tui-SHA256SUMS.txt
+          legacy=()
+          for f in "${expected[@]}"; do
+            cp "${f}" "${f/#gaia-cli-/gaia-}"
+            legacy+=("${f/#gaia-cli-/gaia-}")
+          done
+          sha256sum "${expected[@]}" "${legacy[@]}" > gaia-tui-SHA256SUMS.txt
           cat gaia-tui-SHA256SUMS.txt
 
       # The frozen gaia install.sh and install.ps1 fetch, so the one-line install
