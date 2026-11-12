@@ -296,7 +296,7 @@ users never transcribe anything. They arrive on first use instead:
 | Component | Size | Notes |
 |---|---|---|
 | ffmpeg | ~80 MB | Installed via winget / brew / apt if it isn't on `PATH`. |
-| Whisper-Large-v3-Turbo | 1.62 GB | Pulled by Lemonade on first transcription. |
+| Whisper-Large-v3-Turbo | 1.62 GB | Downloaded on first transcription. The chat shows the download and its progress before transcribing starts. |
 | `sherpa-onnx` + speaker models | ~40 MB + ~33 MB | Installed for diarization on first transcription. Not fatal if it can't — the transcript is still produced, falling back to text-only speaker inference, and the file says which method ran. |
 | `yt-dlp` | ~10 MB | Installed the first time you give GAIA a link. Not included in packaged desktop builds yet: there, download the video and attach the file. |
 

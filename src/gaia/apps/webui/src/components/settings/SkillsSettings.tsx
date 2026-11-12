@@ -6,6 +6,7 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey, Params } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { AddSkillsFromLink } from './AddSkillsFromLink';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import type { SkillInfo, SkillSource } from '../../types';
 
@@ -80,6 +81,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
                 <p className="settings-hint">{t('settings.skills.how', SKILLS_DIR)}</p>
             </details>
+            <AddSkillsFromLink onAdded={load} />
             {error && <p className="settings-error" role="alert">{error}</p>}
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
             {skills && skills.length > 6 && (

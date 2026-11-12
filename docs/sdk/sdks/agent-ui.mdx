@@ -709,7 +709,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model_status": {
         "found": true,
         "downloaded": true,
-        "loaded": false
+        "loaded": false,
+        "checked": true
       }
     }
     ```
@@ -717,11 +718,11 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Description |
     |-------|------|-------------|
     | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
-    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), `loaded` (currently active), and `checked` (the model list was read; when `false`, `found` says nothing). Settings notes a saved ID that is unlisted or could not be checked. |
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -1994,7 +1995,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
-    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same words about the same subject, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
+    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same fact about the same subject, however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">
@@ -2507,6 +2508,10 @@ plan and make one set of choices.
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+    `initialized` is true once setup was seen ready on this PC. With it, a
+    `"server"` stage (the model server isn't answering) is an outage, not a
+    first run: the app keeps its chats, says so, and re-checks when the server
+    answers.
 
     **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
     only the embedding model is needed locally), `load` (also check that the
@@ -3046,8 +3051,8 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="GET /api/spending">
     This month's cloud chat turns in the Agent UI at list price, cached input at
-    its cached rate (the basis each answer's own cost uses). A turn that fails or is stopped before it answers isn't counted,
-    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    its cached rate (the basis each answer's own cost uses). A turn stopped before any reply isn't counted, nor is one that fails before any reply with no usage reported (an answer stopped partway is, since the provider may bill it),
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
     entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
@@ -3112,6 +3117,40 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="DELETE /api/skills/{name}/preferences">
     Forget every saved preference of the skill. Returns `{"skill", "reset"}`.
+  </Accordion>
+
+  <Accordion title="GET /api/skills/featured">
+    The skill libraries the Skills panel offers as one-click adds. Returns
+    `{"libraries": [{"id", "name", "url", "description"}]}`.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/preview">
+    List and audit the skills behind a pasted link without installing any.
+    Body: `{"url"}`. Returns `{"link", "source", "pin", "warning", "skills":
+    [{"name", "description", "path", "has_code", "permissions",
+    "permissions_unreadable", "verdict", "findings", "installed", "update",
+    "error"}]}`. `permissions` lists what the skill declares it may do as
+    `[{"grant", "text"}]` — the raw grant (`network:read:*.example.com`) and a
+    plain-language sentence. `permissions_unreadable` is true when they could
+    not be parsed, so an empty list means unknown, not none. `pin` is
+    `commit:<sha>` for a GitHub link and the archive's `sha256:<digest>` for any
+    other `.zip`. **400** when
+    the link cannot be read or holds no skill.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/add">
+    Add skills behind a link to `~/.gaia/skills`. Body: `{"url", "names",
+    "allow_code", "force", "pin"}`; omit `names` to add every addable skill.
+    `pin` is required: send the preview's `pin` so what lands is what was
+    reviewed. Skills that ship code are refused unless `allow_code` is true.
+    Returns `{"added": [...], "failed": {name: reason}}`. **422** when `pin`
+    is missing, **400** when it is malformed or the link cannot be read,
+    **409** when the link changed since the preview.
+  </Accordion>
+
+  <Accordion title="DELETE /api/skills/{name}">
+    Remove a skill from `~/.gaia/skills`. Returns `{"removed"}`. **404** when
+    no such skill is installed, **400** for a skill that ships with GAIA.
   </Accordion>
 </AccordionGroup>
 
