@@ -1941,7 +1941,7 @@ export const enMessages = {
     'settings.permissions.fullAccess': 'Start new chats in full access',
     'settings.permissions.on': 'On. Every new chat runs commands and changes files without asking. Chats already open keep their mode.',
     'settings.permissions.off': 'Off. New chats ask before they change files or run commands. Chats already open keep their mode.',
-    'settings.permissions.warning': 'Full access lets GAIA change or delete files and run commands on this PC without asking you first, in every new chat, until you turn this off. A mistake or a bad instruction in a document it reads can do real damage. This is the same setting as the TUI’s /full-access always.',
+    'settings.permissions.warning': 'Full access lets GAIA change or delete files and run commands on this PC without asking you first, in every new chat, until you turn this off. A mistake or a bad instruction in a document it reads can do real damage.',
     'settings.permissions.turnOn': 'Turn on full access for new chats',
     'settings.permissions.turnOff': 'Turn off full access',
     'settings.permissions.none': 'No chat has full access or anything allowed without asking.',
