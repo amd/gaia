@@ -299,6 +299,15 @@ func start(args []string) (<-chan Event, context.CancelFunc, error) {
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- Event{Line: fmt.Sprintf("could not read the rest of gaia init's output: %v", err)}:
+			case <-ctx.Done():
+				return
+			}
+			// Keep draining, or the child blocks on a full pipe and never exits.
+			_, _ = io.Copy(io.Discard, r)
+		}
 	}
 	go stream(stdout)
 	go stream(stderr)

@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Kind is how this gaia-tui was installed, which decides how it is replaced.
@@ -543,14 +544,22 @@ func runPackage(ctx context.Context, p Plan, stdout, stderr io.Writer) error {
 	return nil
 }
 
+var downloadClient = newDownloadClient(30 * time.Second)
+
+func newDownloadClient(headerTimeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = headerTimeout
+	return &http.Client{Transport: transport}
+}
+
 func download(ctx context.Context, url, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	// No overall timeout: an installer is large. The dial and headers still
-	// fail fast through the transport's defaults.
-	resp, err := http.DefaultClient.Do(req)
+	// No overall timeout: an installer is large. A server that never answers
+	// still fails, through the header timeout.
+	resp, err := downloadClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("cannot download %s: %w", url, err)
 	}
