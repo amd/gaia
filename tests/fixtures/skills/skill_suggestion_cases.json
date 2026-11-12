@@ -26,6 +26,10 @@
     {"request": "What should I watch tonight? I loved Arrival and can't stand slow dramas", "expected": ["recommendations"], "acceptable": []},
     {"request": "Good morning! What was I working on yesterday?", "expected": ["check-in"], "acceptable": []},
     {"request": "Give me my daily rundown: headlines plus my open items", "expected": ["daily-brief"], "acceptable": []},
+    {"request": "Remind me at 5pm to call the plumber back", "expected": ["automations"], "acceptable": []},
+    {"request": "Alert me if the main branch build breaks on my repo", "expected": ["automations"], "acceptable": ["github-triage"]},
+    {"request": "Summarize my inbox for me every weekday morning at 8", "expected": ["automations"], "acceptable": ["inbox-triage", "daily-brief", "summarize"]},
+    {"request": "What are you watching for me right now? Pause the weather alert", "expected": ["automations"], "acceptable": ["source-watch"]},
     {"request": "Create a file called todo.txt with three lines in it", "expected": ["file-ops"], "acceptable": []},
     {"request": "Find the file on my disk that mentions the warranty number", "expected": ["file-ops"], "acceptable": ["document-brief"]},
     {"request": "Research the home battery market on the web and write it up as a sourced report I can share", "expected": ["research-report"], "acceptable": ["document-brief", "office-docs"]},
@@ -78,6 +82,7 @@
     {"request": "How many slides should a ten-minute talk have?", "expected": [], "acceptable": []},
     {"request": "What does an HTTP 502 error usually mean?", "expected": [], "acceptable": []},
     {"request": "Any tips for running shorter meetings?", "expected": [], "acceptable": []},
+    {"request": "Any tips for remembering birthdays without an app?", "expected": [], "acceptable": []},
     {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []}
   ]
 }
