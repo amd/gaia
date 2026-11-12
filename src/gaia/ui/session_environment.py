@@ -313,7 +313,12 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "folders": sorted(
-            entries.values(), key=lambda e: (e["kind"] != "folder", e["path"].lower())
+            entries.values(),
+            key=lambda e: (
+                e["kind"] != "folder",
+                (e["name"] or Path(e["path"]).name).lower(),
+                e["path"].lower(),
+            ),
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],

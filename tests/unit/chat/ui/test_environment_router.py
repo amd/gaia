@@ -99,6 +99,27 @@ def test_a_library_copy_is_listed_under_the_documents_own_name(
     assert others and all(f["name"] is None for f in others)
 
 
+def test_files_are_listed_in_the_order_of_the_names_shown(client, session_id, tmp_path):
+    db = client.app.state.db
+    for prefix, name in (("0aaa", "zebra.md"), ("ffff", "apple.md")):
+        copy = tmp_path / f"{prefix}_{name}"
+        copy.write_text(name, encoding="utf-8")
+        doc = db.add_document(
+            filename=name,
+            filepath=str(copy),
+            file_hash=f"h-{name}",
+            file_size=len(name),
+            chunk_count=1,
+            file_mtime=copy.stat().st_mtime,
+        )
+        db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    names = [f["name"] for f in body["folders"] if f["name"]]
+    assert names == ["apple.md", "zebra.md"]
+
+
 def test_add_then_remove_folder_persists(client, session_id, folder):
     added = client.post(
         f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
