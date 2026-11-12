@@ -139,6 +139,26 @@ def test_a_bare_repository_still_asks(host, tmp_path):
     assert not _unasked(host, tmp_path, "git log -1")
 
 
+def test_a_folder_git_reads_as_a_repository_through_commondir_still_asks(
+    host, tmp_path
+):
+    # git takes a folder holding HEAD and commondir as a repository, and reads
+    # the config beside the objects that commondir names.
+    _repo(tmp_path)
+    store = tmp_path / "store"
+    (store / "objects").mkdir(parents=True)
+    (store / "refs").mkdir()
+    (store / "config").write_text("[log]\n\tshowSignature = true\n")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "HEAD").write_text("ref: refs/heads/main\n")
+    (sub / "commondir").write_text("../store\n")
+    assert not _unasked(host, sub, "git log -1")
+    assert not _unasked(host, tmp_path, "cd sub && git log -1")
+    assert not _unasked(host, tmp_path, "git -C sub log -1")
+    assert _unasked(host, tmp_path, "git log -1")
+
+
 SIGNING_CONFIG = (
     PLAIN_CONFIG + "[log]\n\tshowSignature = true\n[gpg]\n\tprogram = ./evil\n"
 )
@@ -694,3 +714,31 @@ def test_a_list_of_files_to_read_asks(host, tmp_path):
     assert not _unasked(host, tmp_path, "wc --files0-from list")
     assert not _unasked(host, tmp_path, "wc -l --files0-from list")
     assert _unasked(host, tmp_path, "wc -l list")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # GNU tools accept any unambiguous prefix of a long option.
+        "grep --recurs hi .",
+        "grep --dereference-r hi .",
+        "grep --directori recurse hi .",
+        "ls --recurs",
+        "ls --deref",
+        "tail --foll notes.txt",
+        "wc --files0 list",
+        "wc --fi list",
+    ],
+)
+def test_a_shortened_long_option_asks_like_the_full_one(host, tmp_path, command):
+    (tmp_path / "notes.txt").write_text("hi\n")
+    (tmp_path / "list").write_text("notes.txt\0")
+    assert not _unasked(host, tmp_path, command)
+
+
+@pytest.mark.parametrize(
+    "command", ["git log -U3", "git log --remerge-diff", "git log --binary"]
+)
+def test_a_git_flag_that_implies_a_diff_asks(host, tmp_path, command):
+    _repo(tmp_path)
+    assert not _unasked(host, tmp_path, command)

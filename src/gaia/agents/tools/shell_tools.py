@@ -2889,7 +2889,10 @@ def _segment_runs_unasked(segment: list) -> bool:
     for word in segment[1:]:
         if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
             return False
-        if word.lower() in _ASKING_LONG_OPTIONS:
+        # GNU tools accept any unambiguous prefix (``--recurs``, ``--files0``).
+        if word.startswith("--") and any(
+            option.startswith(word.lower()) for option in _ASKING_LONG_OPTIONS
+        ):
             return False
         if name == "dir" and word.lower() in _DIR_DISPLAY_SWITCHES:
             continue
@@ -3041,8 +3044,8 @@ def _git_dirs(start: str) -> Optional[List[Path]]:
             ):
                 return None
             return dirs
-        if (folder / "HEAD").is_file() and (folder / "objects").is_dir():
-            # A bare repository: git reads this folder's own config.
+        if os.path.lexists(folder / "HEAD"):
+            # git may take this folder as the repository, config and all.
             return None
         if dot.is_file():
             text = dot.read_text(encoding="utf-8", errors="replace").strip()
@@ -3089,7 +3092,8 @@ def _git_repo_config_is_plain(start: str) -> bool:
 
 
 _GIT_DIFF_FLAG = re.compile(
-    r"^(?:-p|-u|-G.*|-S.*|--patch.*|--stat.*|--numstat|--shortstat|--dirstat.*"
+    r"^(?:-p|-u|-U\d*|--remerge-diff|--binary"
+    r"|-G.*|-S.*|--patch.*|--stat.*|--numstat|--shortstat|--dirstat.*"
     r"|--summary|--ext-diff|--textconv|--word-diff.*|--color-words.*|--raw"
     r"|--name-only|--name-status|--check|--follow|--cc|-c|-m|--diff-merges.*)$"
 )
