@@ -73,6 +73,20 @@ describe('the file browser opened from the library', () => {
         expect(useChatStore.getState().showFileBrowser).toBe(false);
     });
 
+    it('stays open to show the error when a file fails to add', async () => {
+        mockedApi.uploadDocumentByPath.mockRejectedValue(new Error('indexing failed'));
+        openBrowserFromLibrary();
+        render(<FileBrowser onStartChat={vi.fn()} />);
+
+        const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
+        fireEvent.click(within(row).getByRole('checkbox'));
+        fireEvent.click(screen.getByRole('button', { name: /Add to library/i }));
+
+        expect(await screen.findByText(/indexing failed/)).toBeInTheDocument();
+        expect(useChatStore.getState().showFileBrowser).toBe(true);
+        expect(useChatStore.getState().showDocLibrary).toBe(false);
+    });
+
     it('does not reopen the library when it starts a chat about the files', async () => {
         mockedApi.uploadDocumentByPath.mockResolvedValue(DOC as never);
         mockedApi.attachDocument.mockResolvedValue(undefined as never);
