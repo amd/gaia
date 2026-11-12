@@ -129,3 +129,27 @@ it('names a declined call in a folded summary', () => {
 
     expect(screen.getByRole('button', { name: /^Read file, you declined a step$/ })).toBeInTheDocument();
 });
+
+it('marks a folded run with a declined call by the declined icon, not the check mark', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_python', false, false), id: 2, declined: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    const summary = screen.getByRole('button', { name: /you declined a step/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+    expect(summary.querySelector('.lucide-circle-check, .lucide-check-circle-2')).toBeNull();
+});
+
+it('keeps the check mark on a folded run where every call ran', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('find_files'), id: 2 },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    const summary = screen.getByRole('button', { name: /^Read file, found files$/ });
+    expect(summary.querySelector('.lucide-ban')).toBeNull();
+    expect(summary.querySelector('.flow-steps-done')).not.toBeNull();
+});
