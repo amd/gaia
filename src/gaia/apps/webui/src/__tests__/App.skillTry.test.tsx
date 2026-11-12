@@ -99,6 +99,7 @@ describe('trying a skill from Settings', () => {
             skills: [{ name: 'pdf-forms', description: 'Fill PDF forms', version: null, tier: null, tools: [], path: '/s/pdf-forms/SKILL.md', source: 'agent-bundled' }],
             invalid: {},
         });
+        mocked.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
         render(<App />);
         await advance(0);
         act(() => useChatStore.getState().openSettings('skills'));

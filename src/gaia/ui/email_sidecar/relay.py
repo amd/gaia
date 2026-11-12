@@ -43,6 +43,7 @@ issue #2109 plan for the full rationale.
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from typing import Any, Callable, ContextManager, Dict, List, Optional
 
@@ -313,6 +314,10 @@ def _dispatch_one(
                 request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
+            timeout = getattr(handler, "confirm_timeout_seconds", None)
+            if isinstance(timeout, (int, float)) and timeout > 0:
+                request["timeout_seconds"] = timeout
+                request["expires_at"] = time.time() + timeout
             if getattr(handler, "background_mode", False) is True:
                 # Unattended run (a schedule): nobody can answer, so end it here
                 # rather than race the sidecar, which ends a session-less run

@@ -148,6 +148,8 @@ export interface StreamEvent {
     sensitive?: boolean;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
+    /** When that timeout ends, in Unix seconds, so a replayed prompt keeps counting from it. */
+    expires_at?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;
     /** The connector's display name (for tool_start of MCP tools). */
