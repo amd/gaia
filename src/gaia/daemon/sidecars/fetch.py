@@ -186,6 +186,18 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
     )
 
 
+def hub_installed_binary(agent_dir_name: str) -> Optional[Path]:
+    """The verified Hub-installed binary for *agent_dir_name*, or ``None``.
+
+    Never downloads. Raises :class:`IntegrityError` when an install exists but
+    no longer matches its sentinel.
+    """
+    installed = _hub_installed_binary(
+        default_cache_dir(agent_dir_name), plat.current_platform_key()
+    )
+    return installed.binary_path if installed is not None else None
+
+
 def fetch_binary(
     *,
     out_dir: Optional[Path] = None,
