@@ -19,11 +19,19 @@ export type SettingsSection =
     | 'permissions'
     | 'skills'
     | 'connectors'
+    | 'messaging'
     | 'memory'
     | 'privacy'
     | 'notifications'
     | 'voice'
     | 'advanced';
+
+export interface SettingsJump {
+    section: SettingsSection;
+    /** CSS selector for the setting inside that section. */
+    target: string;
+    from: SettingsSection;
+}
 
 /**
  * Read a UI preference, saying so when the store is unreadable.
@@ -293,6 +301,10 @@ interface ChatState {
     runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
+    /** A setting to scroll to in the open section, and the section that sent the user there. */
+    settingsJump: SettingsJump | null;
+    /** The section Settings was last closed on, so it reopens there this session. */
+    lastSettingsSection: SettingsSection;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -333,6 +345,7 @@ interface ChatState {
     /** Close the file browser without going back to the library, e.g. to start a chat. */
     leaveFileBrowser: () => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
+    jumpToSetting: (jump: SettingsJump, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -617,6 +630,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
+    settingsJump: null,
+    lastSettingsSection: 'general',
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -677,8 +692,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     },
     openFileBrowserFromLibrary: () => set({ showDocLibrary: false, showFileBrowser: true, fileBrowserFromLibrary: true }),
     leaveFileBrowser: () => set({ showFileBrowser: false, fileBrowserFromLibrary: false }),
-    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
-    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
+    openSettings: (section, provider) => set((s) => ({
+        settingsSection: section ?? s.lastSettingsSection,
+        settingsProvider: provider ?? null,
+        settingsJump: null,
+    })),
+    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsJump: jump }),
+    closeSettings: () => set((s) => ({
+        settingsSection: null,
+        settingsProvider: null,
+        settingsJump: null,
+        lastSettingsSection: s.settingsSection ?? s.lastSettingsSection,
+    })),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
