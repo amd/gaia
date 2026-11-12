@@ -269,6 +269,36 @@ class TestEnsureModelPulled:
         assert percents == [0, 25, 100]
         assert said and "0.15 GB" in said[0]
 
+    def test_the_streamed_pull_carries_the_speech_clients_key(self, monkeypatch):
+        """An authenticated Lemonade rejects a pull without the caller's key."""
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        keys = []
+
+        def pull_model_stream(client, model_name, **kwargs):
+            keys.append(client._auth_headers().get("Authorization"))
+            yield {"event": "complete", "percent": 100}
+
+        monkeypatch.setattr(LemonadeClient, "pull_model_stream", pull_model_stream)
+        Wire(
+            monkeypatch,
+            [
+                catalog(
+                    {
+                        "id": "Whisper-Base",
+                        "labels": ["transcription"],
+                        "downloaded": False,
+                    }
+                )
+            ],
+        )
+        LemonadeASRClient(
+            base_url=BASE, model="Whisper-Base", api_key="k-123"
+        ).ensure_model(on_percent=lambda _p: None)
+
+        assert keys == ["Bearer k-123"]
+
     def test_a_failed_streamed_pull_raises_the_speech_error(self, monkeypatch):
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 

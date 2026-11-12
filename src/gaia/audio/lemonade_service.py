@@ -132,7 +132,9 @@ class LemonadeAudioService:
         """Pull ``self.model`` by name over Lemonade's streamed pull."""
         from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
-        client = LemonadeClient(base_url=self.base_url, verbose=False)
+        client = LemonadeClient(
+            base_url=self.base_url, api_key=self.api_key, verbose=False
+        )
         last = -1
         try:
             for event in client.pull_model_stream(self.model):
