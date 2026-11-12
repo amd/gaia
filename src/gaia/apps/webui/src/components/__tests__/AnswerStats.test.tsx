@@ -69,15 +69,17 @@ describe('AnswerStats', () => {
     /** A footer line by its whole text; its numbers sit in their own `<bdi>`. */
     const line = (text: string) => (_: string, el: Element | null) => el?.tagName === 'SPAN' && el.textContent === text;
 
-    it('shows plain words, and the exact numbers on a click', () => {
+    it('shows how long it took, the rest on hover, and the exact numbers on a click', () => {
         render(<AnswerStats latencyMs={40_200} stats={stats} />);
-        const summary = screen.getByRole('button', { name: 'Answered in 40 s on your GPU · first word in 1 s' });
+        const summary = screen.getByRole('button', { name: 'Answered in 40 s on your GPU' });
+        expect(summary).toHaveAttribute('title', expect.stringContaining('Answered in 40 s on your GPU · first word in 1 s'));
         expect(summary).toHaveAttribute('title', expect.stringContaining('First token 1012 ms'));
         expect(screen.queryByText(line('68 → 510 tokens'))).not.toBeInTheDocument();
         expect(document.body).not.toHaveTextContent('TTFT');
 
         fireEvent.click(summary);
         expect(summary).toHaveAttribute('aria-expanded', 'true');
+        expect(summary).toHaveTextContent('Answered in 40 s on your GPU · first word in 1 s');
         expect(screen.getByText(line('Total time 40.2 s'))).toBeInTheDocument();
         expect(screen.getByText(line('First token 1012 ms'))).toBeInTheDocument();
         expect(screen.getByText(line('68 → 510 tokens'))).toBeInTheDocument();
@@ -133,9 +135,9 @@ describe('AnswerStats in Arabic', () => {
         const { container } = render(<AnswerStats latencyMs={40_200} stats={stats} />);
         const summary = screen.getByRole('button');
         expect([...summary.querySelectorAll('bdi[dir="ltr"]')].map((b) => b.textContent))
-            .toEqual(['40 s', '1 s', '40 s', '1 s']);
+            .toEqual(['40 s', '40 s']);
         expect(read(summary.querySelector('.i18n-gloss')?.textContent))
-            .toBe('(Answered in 40 s on your GPU · first word in 1 s)');
+            .toBe('(Answered in 40 s on your GPU)');
         expect(summary.getAttribute('title')).not.toMatch(/[\uE000\uE001]/);
 
         fireEvent.click(summary);

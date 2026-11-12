@@ -499,6 +499,44 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongPasteAndTable(page: Page): Promise<void> {
+    const paste = Array.from({ length: 200 }, (_, i) => `row ${i + 1}: the quick brown fox`).join('\n');
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `${paste}\nWhich databases fit a team of five?`, created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: [
+                            '## Which one to use', '',
+                            'Pick by where the data lives.', '',
+                            '### Comparison', '',
+                            '| Engine | Monthly cost | When it fits |',
+                            '|---|---|---|',
+                            '| SQLite | 0 | One app, small data, no server to run |',
+                            '| PostgreSQL | 1,200 | Many writers, extensions such as PostGIS |',
+                        ].join('\n'),
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long paste shows its ending, and a table aligns only its numbers (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPasteAndTable);
+        await expect(page.locator('.msg-excerpt')).toContainText('Which databases fit a team of five?');
+        const prose = page.locator('.md-table tr').nth(1).locator('td').nth(2);
+        await expect(prose).toHaveCSS('text-align', 'start');
+        await expect(page.locator('.md-table tr').nth(1).locator('td').nth(1)).toHaveClass('is-numeric');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`answer-polish-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';

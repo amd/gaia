@@ -11,6 +11,17 @@
     mask-image: linear-gradient(to bottom, black calc(100% - 3.5em), transparent);
 }
 
+/* A long message collapsed to its first and last lines, with the count between. */
+.msg-excerpt-lines {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.msg-excerpt-gap {
+    margin: 4px 0;
+    color: var(--text-muted);
+    font-size: var(--fs-label);
+}
+
 /* ~9 lines of the message. */
 .msg-collapsible.is-collapsed {
     max-height: calc(9 * 1.65em);

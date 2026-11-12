@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Collapse rules for long user messages, code blocks and step outputs. The full text stays rendered and copyable. */
+/** Collapse rules for long user messages, code blocks and step outputs. Copy always takes the whole text. */
 
 import React, { useId, useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
@@ -25,6 +25,23 @@ export function countLines(text: string): number {
 
 export function isLongUserMessage(text: string): boolean {
     return countLines(text) > USER_COLLAPSE_LINES || text.length > USER_COLLAPSE_CHARS;
+}
+
+/** Lines a collapsed user message keeps at each end. */
+export const USER_EXCERPT_LINES = 3;
+
+/**
+ * The start and end of a long message, so a question typed after a pasted
+ * block still shows; null when it is long in characters, not lines.
+ */
+export function messageExcerpt(text: string): { head: string; tail: string; hidden: number } | null {
+    const lines = text.split('\n');
+    if (lines.length <= USER_COLLAPSE_LINES) return null;
+    return {
+        head: lines.slice(0, USER_EXCERPT_LINES).join('\n'),
+        tail: lines.slice(-USER_EXCERPT_LINES).join('\n'),
+        hidden: lines.length - 2 * USER_EXCERPT_LINES,
+    };
 }
 
 /** "700 lines", or "60,000 characters" when the length is in a few very long lines. */

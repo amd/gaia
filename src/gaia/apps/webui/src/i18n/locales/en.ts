@@ -316,11 +316,13 @@ export const enMessages = {
     'turnChanges.loadError': 'Could not check this turn\'s file changes: {error}',
     'msg.showAll': 'Show all',
     'msg.showLess': 'Show less',
+    'msg.moreLines.one': '… 1 more line',
+    'msg.moreLines.other': '… {n} more lines',
     'msg.stopped': 'Stopped',
     'msg.stoppedUnconfirmed': 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.',
     'msg.stoppedError': 'Stopped. GAIA reported an error while stopping: {error}',
     'msg.about': 'About this answer',
-    'msg.timestamp': 'Message timestamp',
+    'msg.yesterdayAt': 'Yesterday, {time}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'Answered in {time}',

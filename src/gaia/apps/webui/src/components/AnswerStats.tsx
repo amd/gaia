@@ -53,6 +53,7 @@ function summaryLine(
     ended: TurnEnding | undefined,
     say: Say,
     mark: Mark,
+    brief = false,
 ): string | null {
     const parts: string[] = [];
     const place = stats?.place ? placeParam(stats.place) : null;
@@ -71,7 +72,8 @@ function summaryLine(
     if (stats?.steps != null && stats.steps > 0) {
         parts.push(say(pluralKey('answer.steps', stats.steps), { n: stats.steps }));
     }
-    return parts.length ? parts.join(' · ') : null;
+    if (!parts.length) return null;
+    return brief ? parts[0] : parts.join(' · ');
 }
 
 function composeSummary(
@@ -80,9 +82,10 @@ function composeSummary(
     ended: TurnEnding | undefined,
     t: Translate,
     mark: Mark,
+    brief = false,
 ): string | null {
     if (summaryLine(latencyMs, stats, ended, tEn.bare, plain) === null) return null;
-    return t.compose((say) => summaryLine(latencyMs, stats, ended, say, mark) ?? '');
+    return t.compose((say) => summaryLine(latencyMs, stats, ended, say, mark, brief) ?? '');
 }
 
 /** "Answered in 40 s on your GPU · first word in 1 s", or null with nothing to say.
@@ -123,11 +126,12 @@ export function exactStats(
     return lines;
 }
 
-/** The answer footer in plain words; a click shows the exact numbers. */
+/** The answer footer: how long it took in plain words, the rest on hover, every number on a click. */
 export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; stats?: InferenceStats; ended?: TurnEnding }) {
     const t = useT();
     const [open, setOpen] = useState(false);
-    const summary = composeSummary(latencyMs, stats, ended, t, marked);
+    const summary = composeSummary(latencyMs, stats, ended, t, marked, !open);
+    const full = composeSummary(latencyMs, stats, ended, t, plain);
     const exact = exactStats(latencyMs, stats, t, marked);
     if (!summary && exact.length === 0) return null;
     return (
@@ -137,7 +141,7 @@ export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; s
                     type="button"
                     className="msg-stats-summary"
                     aria-expanded={open}
-                    title={exactStats(latencyMs, stats, t).join('\n')}
+                    title={[full, ...exactStats(latencyMs, stats, t)].filter(Boolean).join('\n')}
                     onClick={() => setOpen((v) => !v)}
                 >
                     {summary ? <MarkedText text={summary} /> : t('answer.details')}

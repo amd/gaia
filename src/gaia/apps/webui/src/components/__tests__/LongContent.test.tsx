@@ -42,30 +42,31 @@ describe('long user messages', () => {
     it('collapses a 700-line paste and expands it on click', () => {
         const { container } = render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
 
-        const body = container.querySelector('.msg-collapsible')!;
-        expect(body).toHaveClass('is-collapsed');
+        const excerpt = container.querySelector('.msg-excerpt')!;
         const toggle = screen.getByRole('button', { name: 'Show all (700 lines)' });
         expect(toggle).toHaveAttribute('aria-expanded', 'false');
-        expect(toggle).toHaveAttribute('aria-controls', body.id);
+        expect(toggle).toHaveAttribute('aria-controls', excerpt.id);
 
         fireEvent.click(toggle);
 
+        const body = container.querySelector('.msg-collapsible')!;
         expect(body).not.toHaveClass('is-collapsed');
+        expect(body.id).toBe(excerpt.id);
+        expect(body.textContent).toContain('line 350');
         expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
 
         fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
-        expect(body).toHaveClass('is-collapsed');
+        expect(container.querySelector('.msg-excerpt')).not.toBeNull();
         expect(screen.getByRole('button', { name: 'Show all (700 lines)' })).toHaveAttribute('aria-expanded', 'false');
     });
 
     it('scrolls the message back into view only after it collapses', () => {
         const scroll = vi.fn();
-        const { container } = render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
-        const body = container.querySelector('.msg-collapsible') as HTMLElement;
-        Object.defineProperty(body, 'scrollIntoView', {
-            value: () => scroll(body.classList.contains('is-collapsed')),
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+            value(this: HTMLElement) { scroll(this.classList.contains('msg-excerpt')); },
             configurable: true,
         });
+        render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
 
         fireEvent.click(screen.getByRole('button', { name: 'Show all (700 lines)' }));
         expect(scroll).not.toHaveBeenCalled();
@@ -73,6 +74,19 @@ describe('long user messages', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
         expect(scroll).toHaveBeenCalledTimes(1);
         expect(scroll).toHaveBeenCalledWith(true);
+    });
+
+    it('shows the start and the end of a long paste, so a question typed last is seen (#7379)', () => {
+        const content = `${numbered(200)}\nSo which line is longest?`;
+        const { container } = render(<MessageBubble message={{ ...base, content }} />);
+
+        const shown = container.querySelector('.msg-excerpt')!.textContent ?? '';
+        expect(shown).toContain('line 1');
+        expect(shown).toContain('line 3');
+        expect(shown).not.toContain('line 4\n');
+        expect(shown).toContain('… 195 more lines');
+        expect(shown).toContain('line 199');
+        expect(shown).toContain('So which line is longest?');
     });
 
     it('counts characters when the length is in one long line', () => {
@@ -89,11 +103,10 @@ describe('long user messages', () => {
         expect(container.textContent).toContain('line 15');
     });
 
-    it('keeps the whole message in the page and copies all of it', () => {
+    it('copies the whole message while it is collapsed', () => {
         const content = numbered(700);
-        const { container } = render(<MessageBubble message={{ ...base, content }} />);
+        render(<MessageBubble message={{ ...base, content }} />);
 
-        expect(container.querySelector('.msg-collapsible')!.textContent).toContain('line 700');
         fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
         expect(writeText).toHaveBeenCalledWith(content);
     });

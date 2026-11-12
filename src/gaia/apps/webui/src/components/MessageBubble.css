@@ -243,26 +243,30 @@
 }
 
 /* Headers */
+/* A step of the scale apart from 15 px prose, with room above to start a section. */
 .md-h2 {
-    font-size: 18px;
+    font-size: 21px;
     font-weight: 700;
     font-family: var(--font-sans);
-    margin: 20px 0 10px;
+    line-height: 1.3;
+    margin: 28px 0 10px;
     color: var(--text-primary);
     letter-spacing: -0.3px;
 }
 .md-h3 {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 650;
     font-family: var(--font-sans);
-    margin: 16px 0 8px;
+    line-height: 1.35;
+    margin: 24px 0 8px;
     color: var(--text-primary);
 }
 .md-h4 {
-    font-size: 14.5px;
+    font-size: 16px;
     font-weight: 600;
     font-family: var(--font-sans);
-    margin: 14px 0 6px;
+    line-height: 1.4;
+    margin: 20px 0 6px;
     color: var(--text-primary);
 }
 
@@ -422,11 +426,8 @@
     background: var(--tint-subtle);
 }
 
-/* Right-align numeric columns */
-.md-table td:last-child,
-.md-table th:last-child {
-    text-align: end;
-}
+/* A column of numbers lines up on the end edge (remarkNumericColumns marks it). */
+.md-table .is-numeric { text-align: end; }
 
 /* ── Collapsible sections (<details><summary>) ───────────────── */
 .md-content details {
@@ -635,7 +636,7 @@
     margin-top: 6px;
     padding-top: 5px;
     border-top: 1px solid var(--border);
-    font-size: 10.5px;
+    font-size: var(--fs-label);
     color: var(--text-muted);
     font-family: var(--font-sans);
     opacity: 0;

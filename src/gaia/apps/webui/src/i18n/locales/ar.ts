@@ -316,11 +316,13 @@ const messages: Messages = {
     'turnChanges.loadError': 'تعذّر التحقق من تغييرات الملفات في هذا الدور: {error}',
     'msg.showAll': 'عرض الكل',
     'msg.showLess': 'عرض أقل',
+    'msg.moreLines.one': '… سطر آخر',
+    'msg.moreLines.other': '… أسطر أخرى: {n}',
     'msg.stopped': 'تم الإيقاف',
     'msg.stoppedUnconfirmed': 'تم الإيقاف. لم يؤكد GAIA الإيقاف، لذا قد تنقص بعض الخطوات هنا. أعد تحميل المحادثة لترى ما حفظه.',
     'msg.stoppedError': 'تم الإيقاف. أبلغ GAIA عن خطأ أثناء الإيقاف: {error}',
     'msg.about': 'حول هذه الإجابة',
-    'msg.timestamp': 'وقت الرسالة',
+    'msg.yesterdayAt': 'أمس، {time}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'اكتملت الإجابة خلال {time}',
