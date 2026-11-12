@@ -766,9 +766,13 @@ def _measure_turn_context(
     pushed: List[Dict[str, Any]],
     query: str,
     result: Optional[Dict[str, Any]],
+    received_turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """What the next model call holds: the pushed history plus this turn.
 
+    With *received_turns* (a caller that sends ``turns``), the measurement is
+    over those whole turns plus this turn as recorded, tool results included:
+    the same turns, in the same budget, the next ``/query`` is fitted from.
     None for a turn with no answer (stopped, or the model failed), which adds
     nothing the caller's next push would carry.
     """
@@ -777,11 +781,15 @@ def _measure_turn_context(
     answer = _run_answer(result)
     if answer is None:
         return None
-    messages = list(pushed) + [
+    exchange = [
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
-    turns = pushed_turns(messages)
+    if received_turns is not None:
+        recorded = result.get("model_messages") if isinstance(result, dict) else None
+        turns = list(received_turns) + _as_model_turns(agent, [recorded or exchange])
+    else:
+        turns = pushed_turns(list(pushed) + exchange)
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
@@ -1321,21 +1329,26 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
 _TURN_RECORD_WAIT_SECONDS = 15.0
 
 
+def _as_model_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]]
+) -> List[List[Dict[str, Any]]]:
+    """*turns* as *agent*'s model reads them: tool calls as text without native tools."""
+    from gaia.agents.base.history import text_tool_history
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        return text_tool_history(turns)
+    return turns
+
+
 def _history_from_turns(
     agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
 ) -> List[Dict[str, Any]]:
     """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
-    from gaia.agents.base.history import (
-        history_budget,
-        select_history,
-        text_tool_history,
-    )
+    from gaia.agents.base.history import history_budget, select_history
 
-    uses_native = getattr(agent, "_uses_native_tool_calls", None)
-    if callable(uses_native) and not uses_native():
-        turns = text_tool_history(turns)
     return select_history(
-        turns,
+        _as_model_turns(agent, turns),
         history_budget(agent, query),
         lambda cut: handler._emit({"type": "status", "message": cut.notice}),
     )
@@ -1673,6 +1686,11 @@ async def query(request: QueryRequest):
                 lambda cut: handler.print_warning(cut.notice),
             )
         pushed = list(getattr(agent, "conversation_history", None) or [])
+        received_turns = (
+            _as_model_turns(agent, request.turns)
+            if request.turns is not None and hasattr(agent, "conversation_history")
+            else None
+        )
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1682,7 +1700,7 @@ async def query(request: QueryRequest):
                 run.result = agent.process_query(request.query)
             try:
                 run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result
+                    agent, pushed, request.query, run.result, received_turns
                 )
             except Exception as exc:  # the answer stands; the meter says why it's blank
                 logger.exception("Context measurement failed for run_id=%s", run.run_id)

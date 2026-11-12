@@ -188,7 +188,11 @@ list are resolved, and leaves out any further older turns they no longer leave
 room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
-history budget; the newest turn is retained if it fits. The full stored trace
+history budget; the newest turn is retained if it fits. The oldest turn still
+replayed then opens with `HIDDEN_TURNS_NOTE` (`gaia.agents.base.history`), one
+sentence telling the model that earlier turns exist and are no longer shown, so
+it does not deny what they said. The note is added to the copy sent to the
+model, never to the stored turn. The full stored trace
 remains in SQLite, and exclusions produce a warning in the backend log. When a
 streamed turn hides more turns than the session's last streamed turn did (a
 longer chat, or a smaller model's budget), the stream sends one `status` event
@@ -717,7 +721,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -2503,6 +2507,10 @@ plan and make one set of choices.
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+    `initialized` is true once setup was seen ready on this PC. With it, a
+    `"server"` stage (the model server isn't answering) is an outage, not a
+    first run: the app keeps its chats, says so, and re-checks when the server
+    answers.
 
     **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
     only the embedding model is needed locally), `load` (also check that the

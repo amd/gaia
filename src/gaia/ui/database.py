@@ -1492,6 +1492,15 @@ class ChatDatabase:
                 ),
             )
 
+    def touch_turn(self, question_id: int) -> None:
+        """Note that this process's turn is still running, with nothing new to keep."""
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE unfinished_turns SET updated_at = ? "
+                "WHERE question_id = ? AND owner = ?",
+                (self._now(), question_id, current_owner()),
+            )
+
     def discard_turn(self, question_id: int) -> None:
         """Forget this process's turn, whose outcome the caller reported."""
         with self._transaction():
@@ -1514,8 +1523,13 @@ class ChatDatabase:
         notice: str,
         owner: Optional[str] = None,
         tools_notice: Optional[Callable[[List[str]], str]] = None,
+        dated_last_alive: bool = False,
     ) -> Optional[int]:
         """Save *notice* as the reply of an unfinished turn, and end it.
+
+        *dated_last_alive* dates the reply when the turn last recorded
+        anything rather than now, for a turn whose process ended some unknown
+        time ago.
 
         *owner* is the process the turn must belong to, this one by default,
         so one server never closes another's live turn. Whatever the turn had
@@ -1528,7 +1542,8 @@ class ChatDatabase:
         owner = owner or current_owner()
         with self._transaction():
             row = self._conn.execute(
-                "SELECT session_id, partial_content, tools_run FROM unfinished_turns "
+                "SELECT session_id, partial_content, tools_run, started_at, "
+                "updated_at FROM unfinished_turns "
                 "WHERE question_id = ? AND owner = ?",
                 (question_id, owner),
             ).fetchone()
@@ -1551,10 +1566,13 @@ class ChatDatabase:
                     "streamed text nor a notice to save as its reply"
                 )
             now = self._now()
+            replied_at = now
+            if dated_last_alive:
+                replied_at = row["updated_at"] or row["started_at"]
             cursor = self._conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at) "
                 "VALUES (?, 'assistant', ?, ?)",
-                (row["session_id"], content, now),
+                (row["session_id"], content, replied_at),
             )
             self._conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",

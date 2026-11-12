@@ -57,7 +57,7 @@ describe('Test step', () => {
             row('chat', 'passed', { subject: QWEN.id, seconds: 12.6 }),
             row('vision', 'running', { subject: GEMMA.id }),
         ], 'verifying', ['server', 'chat', 'vision', 'embedding', 'agent']);
-        expect(rowOf(/AI engine answers/)).toHaveTextContent('Passed, 0 s');
+        expect(rowOf(/Model server answers/)).toHaveTextContent('Passed, 0 s');
         expect(rowOf(/Chat: loads and answers/)).toHaveTextContent(QWEN.name);
         expect(rowOf(/Chat: loads and answers/)).toHaveTextContent('Passed, 13 s');
         expect(rowOf(/Reading images/)).toHaveTextContent(GEMMA.name);
@@ -139,7 +139,7 @@ describe('Test step', () => {
 
     it("on the user's own server, a broken model gets no re-download and no advice to download", () => {
         show([row('chat', 'failed', { subject: QWEN.id, kind: 'broken', error: 'bad file' })], 'failed', [], true);
-        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent("didn't load on your AI engine");
+        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent("didn't load on your model server");
         expect(rowOf(/Chat: loads and answers/)).not.toHaveTextContent('Downloading it again');
         expect(screen.queryByRole('button', { name: /Download .*again/ })).not.toBeInTheDocument();
     });
