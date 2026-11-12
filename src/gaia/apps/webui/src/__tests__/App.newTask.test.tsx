@@ -653,3 +653,38 @@ describe('sidebar destinations', () => {
         expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });
+
+describe('New chat right after sending a first message', () => {
+    // v0.26.0-rc18: New chat clicked ~20 ms after Enter dropped the prompt.
+    // The chat existed but had not sent it yet, so it was cleaned up as an
+    // empty draft with the prompt inside, and nothing said so.
+    it('keeps the unsent message in the new chat box', async () => {
+        mocked.getMessages.mockImplementation(() => new Promise(() => { /* history still loading */ }));
+        mocked.deleteSession.mockResolvedValue({ deleted: true } as never);
+        // Earlier tests leave queued sends behind, which would keep the draft.
+        useChatStore.setState({ messageQueues: {} });
+        render(<App />);
+        await sendFirstMessage('Reply with exactly: RACE-LOST-1');
+        await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
+
+        await userEvent.click(await screen.findByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+        expect(await screen.findByLabelText('Message')).toHaveValue('Reply with exactly: RACE-LOST-1');
+        expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The chat it came from is now an empty draft, and is cleaned up as one.
+        await waitFor(() => expect(mocked.deleteSession).toHaveBeenCalledWith('sess-new-0001'));
+    });
+
+    it("leaves another chat's unsent message where it is", async () => {
+        render(<App />);
+        await screen.findByRole('button', { name: 'New chat' });
+        useChatStore.getState().setPendingPrompt({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+
+        await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().pendingPrompt).toEqual({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+        expect(await screen.findByLabelText('Message')).toHaveValue('');
+    });
+});

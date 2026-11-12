@@ -663,6 +663,8 @@ class SSEOutputHandler(OutputHandler):
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
         self.relay_context: Optional[Dict[str, Any]] = None
+        # Turns this relay left out to fit; the sidecar never sees them.
+        self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by

@@ -383,6 +383,9 @@ class CanonicalTranslator:
             out = [{"type": "status", "message": message, "retracts_answer": True}]
         else:
             out = self._user_status(message)
+        if out and event.get("status") == "warning":
+            # The one sub-field kept: a client shows a warning, not just a live line.
+            out[0]["level"] = "warning"
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase

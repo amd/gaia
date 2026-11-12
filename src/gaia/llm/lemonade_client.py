@@ -58,6 +58,7 @@ from gaia.llm.lemonade_launcher import (
     get_installed_version,
     resolve_lemonade,
 )
+from gaia.llm.lemonade_tls import explain_tls_failure
 from gaia.llm.local_only import guard_inference
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
@@ -8010,7 +8011,7 @@ class LemonadeClient:
             self.log.info(f"Installed {model_name} successfully: response={response}")
             return response
         except Exception as e:
-            message = f"Failed to install {model_name}: {e}"
+            message = explain_tls_failure(f"Failed to install {model_name}: {e}")
             self.log.error(message)
             raise LemonadeClientError(message)
 
@@ -8048,7 +8049,9 @@ class LemonadeClient:
             self.log.info(f"Installed backend {spec}: {response}")
             return response
         except Exception as e:
-            raise LemonadeClientError(f"Failed to install backend {spec}: {e}") from e
+            raise LemonadeClientError(
+                explain_tls_failure(f"Failed to install backend {spec}: {e}")
+            ) from e
 
     def ensure_npu_backend(self, model_name: str) -> None:
         """Install the FLM backend *model_name* needs, if it is an FLM model.
@@ -8334,6 +8337,10 @@ class LemonadeClient:
                         try:
                             data = json.loads(data_str)
                             data["event"] = event_type or "progress"
+                            if event_type == "error" and isinstance(
+                                data.get("error"), str
+                            ):
+                                data["error"] = explain_tls_failure(data["error"])
 
                             # Yield all events - let the consumer handle throttling
                             yield data
