@@ -57,8 +57,9 @@ export function tooBigText(e: SetupCatalogEntry, t: Translate): string {
 
 /** The caveat under an unticked model that turns a feature off. In Settings an
  *  unticked model on disk stays there, so it says that instead of "add it later". */
-function skipCaveat(e: SetupCatalogEntry, t: Translate, place: 'setup' | 'settings'): string | null {
+function skipCaveat(e: SetupCatalogEntry, t: Translate, place: 'setup' | 'settings', imagesCovered: boolean): string | null {
     if (!isVision(e) && !isEmbedding(e)) return null;
+    if (isVision(e) && !e.downloaded && imagesCovered) return null;
     if (place === 'settings') {
         if (e.downloaded) return t('settings.models.warn.kept', { name: e.name });
         return t(isVision(e) ? 'settings.models.warn.vision' : 'settings.models.warn.documents', { name: e.name });
@@ -76,13 +77,15 @@ interface RowProps {
     /** Extra controls at the row's end, e.g. Remove in Settings. */
     actions?: ReactNode;
     place: 'setup' | 'settings';
+    /** Another image-reading model is ticked or on this PC. */
+    imagesCovered: boolean;
 }
 
-function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, place }: RowProps) {
+function ModelRow({ entry: e, ticked, onToggle, disabled, progress, actions, place, imagesCovered }: RowProps) {
     const t = useT();
     const id = useId();
     const big = e.fits === false;
-    const caveat = !ticked ? skipCaveat(e, t, place) : null;
+    const caveat = !ticked ? skipCaveat(e, t, place, imagesCovered) : null;
     const downloading = progress?.state === 'downloading' && progress.bytes_total > 0;
     const warning = big ? tooBigText(e, t) : caveat;
     const describedBy = [`${id}-status`, `${id}-note`, warning ? `${id}-warn` : null].filter(Boolean).join(' ');
@@ -253,6 +256,7 @@ export function ModelChecklist({ plan, selection, onToggle, onDefaultChat, label
             progress={progress?.[e.id]}
             actions={rowActions?.(e)}
             place={place}
+            imagesCovered={catalog.some((o) => o.id !== e.id && isVision(o) && (selection.ticked.has(o.id) || o.downloaded === true))}
         />
     );
 
