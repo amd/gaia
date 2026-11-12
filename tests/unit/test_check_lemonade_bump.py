@@ -339,6 +339,37 @@ MALICIOUS = {
         lambda r: edit(r, "src/gaia/version.py", f'"{TARGET}"', '"2026.99.9"'),
         f"LEMONADE_VERSION must be '{TARGET}'",
     ),
+    "a raised minimum version": (
+        lambda r: edit(
+            r,
+            "src/gaia/version.py",
+            'LEMONADE_MIN_VERSION = "',
+            'LEMONADE_MIN_VERSION = "9',
+        ),
+        "changes a line that is not a pin",
+    ),
+    "a comment after the version": (
+        lambda r: edit(
+            r,
+            "src/gaia/version.py",
+            f'LEMONADE_VERSION = "{TARGET}"',
+            f'LEMONADE_VERSION = "{TARGET}"  # noqa',
+        ),
+        "changes a line that is not a pin",
+    ),
+    "an upper-case digest": (
+        lambda r: edit(
+            r,
+            EMBEDDED,
+            digest(target_keys("EMBEDDABLE_SHA256")[0]),
+            digest(target_keys("EMBEDDABLE_SHA256")[0]).upper(),
+        ),
+        "changes a line that is not a pin",
+    ),
+    "a comment after the appended tags": (
+        lambda r: edit(r, TAGS, f"v{TARGET}\n", f"v{TARGET}\n# pinned by hand\n"),
+        "must gain one or more vX.Y.Z tags",
+    ),
 }
 
 
