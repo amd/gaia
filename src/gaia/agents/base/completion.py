@@ -155,7 +155,7 @@ _COUNTERFACTUAL = re.compile(
     # The clause's own ";" or dash goes too, or the save after it reads as
     # a second clause that destination_paths never reaches.
     r"(?:\s*(?:[;—–]|-(?=\s)))?"
-    rf"(?P<join>(?:\s*\b(?:and|so|then|instead)\b)+\s+(?={_WRITE_VERB}\b))?",
+    rf"(?P<join>,?(?:\s*\b(?:and|but|so|then|instead|yet)\b)+\s+(?={_WRITE_VERB}\b))?",
     re.I,
 )
 
@@ -474,6 +474,9 @@ class FileEvidence:
     inferred: bool = False
     # Read in full and matched exactly by the framework; a rewrite clears it.
     verified: bool = False
+    # Last written by a file-editing tool (WRITE_TOOLS), not by a generator such
+    # as generate_image or by an executor. Any later change replaces the entry.
+    edited: bool = False
     # Written by a script, which may produce more than any reader can page through.
     by_script: bool = False
     # Shown in part since its latest write: a range read, head/tail, a summary.
@@ -767,6 +770,7 @@ class CompletionEvidence:
                 key,
                 self.sequence if successful else 0,
                 tool in WRITE_TOOLS or tool in _EXEC_TOOLS,
+                edited=tool in WRITE_TOOLS,
                 by_script=tool in _EXEC_TOOLS,
             )
         if tool in _EXEC_TOOLS and successful:

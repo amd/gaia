@@ -406,7 +406,7 @@ export function ModelChip() {
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
                         : place.description?.replace(/`/g, '')
-                            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : 'Runs on this PC');
+                            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : t('modelStatus.runsHere'));
 
     return (
         <div className="composer-chip-wrap">
@@ -426,7 +426,7 @@ export function ModelChip() {
                 {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end" className="model-menu">
                 {turnRunning && (
                     <div className="popover-message" role="status">
                         {chipModel

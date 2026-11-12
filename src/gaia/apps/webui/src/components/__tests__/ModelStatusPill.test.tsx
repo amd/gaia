@@ -219,7 +219,7 @@ describe('ModelStatusPill', () => {
         useChatStore.setState({ locale: 'ar' });
         mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, active_remote: true, active_display_name: 'DeepSeek V4' });
         render(<ModelStatusPill />);
-        fireEvent.click(screen.getByRole('button', { name: /Local · Gemma 4 E4B/ }));
+        fireEvent.click(screen.getByRole('button', { name: /محلي · Gemma 4 E4B/ }));
         const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
         await within(dialog).findByText(/محمّل/);
         const labels = [...dialog.querySelectorAll('dt')].map((dt) => stripIsolates(dt.textContent ?? ''));

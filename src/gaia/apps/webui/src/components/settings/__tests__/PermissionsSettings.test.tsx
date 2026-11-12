@@ -123,7 +123,9 @@ describe('PermissionsSettings', () => {
             const toggle = await screen.findByRole('checkbox', { name: TOGGLE });
             await waitFor(() => expect(toggle).toBeEnabled());
             fireEvent.click(toggle);
-            expect(await screen.findByRole('alert')).toHaveTextContent(/without asking you first/);
+            const warning = await screen.findByRole('alert');
+            expect(warning).toHaveTextContent(/without asking you first/);
+            expect(warning).not.toHaveTextContent(/TUI|\/full-access/);
             expect(toggle).not.toBeChecked();
             expect(mockedApi.setDefaultPermissionMode).not.toHaveBeenCalled();
 

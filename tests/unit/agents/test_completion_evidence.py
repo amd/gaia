@@ -1625,6 +1625,8 @@ def test_a_write_that_did_happen_is_still_a_claim(tmp_path):
         "I would have written a.txt — I saved it to `{other}`.",
         "I would have written a.txt; then I saved it to `{other}`.",
         "I would have exported a.txt then saved the totals to `{other}`.",
+        "I would have written it to a.txt, but saved the totals to `{other}`.",
+        "I would have written it to a.txt but saved it to `{other}` instead.",
     ],
 )
 def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path, sentence):
@@ -1643,6 +1645,8 @@ def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path, senten
         "I would have written it to a.txt and then saved a copy to `{other}`.",
         "Normally I would have saved it as a.txt - instead I saved `{other}`.",
         "I could have created a.txt so I saved the totals to `{other}` instead.",
+        "I would have written it to a.txt, but saved the totals to `{other}`.",
+        "I would have written it to a.txt but saved it to `{other}` instead.",
     ],
 )
 def test_a_real_save_after_a_would_have_clause_counts_on_a_read_only_turn(
